@@ -287,8 +287,10 @@ keep:
 `IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
 list of devices, wrap a finder in a `ContinuousDeviceFinder`. It owns the scan cadence,
 keeps a deduplicated set across passes, raises `DeviceDiscovered` the first time each device
-appears, and raises `DeviceLost` once a device has been absent for a configurable number of
-consecutive passes:
+appears, raises `DeviceUpdated` when a device it already holds comes back with different
+metadata (a new port after a replug, a new IP, a new firmware version after a flash), and
+raises `DeviceLost` once a device has been absent for a configurable number of consecutive
+passes:
 
 ```csharp
 using Daqifi.Core.Device.Discovery;
@@ -303,6 +305,8 @@ var continuous = new ContinuousDeviceFinder(
     });
 
 continuous.DeviceDiscovered += (_, e) => devices.Add(e.DeviceInfo);     // bind to your UI list
+continuous.DeviceUpdated += (_, e) =>                                   // same device, new metadata
+    devices.Replace(e.PreviousDeviceInfo, e.DeviceInfo);
 continuous.DeviceLost += (_, e) => devices.RemoveBySerial(e.DeviceInfo);
 continuous.ScanError += (_, e) => logger.LogWarning(e.Exception, "Discovery pass failed");
 

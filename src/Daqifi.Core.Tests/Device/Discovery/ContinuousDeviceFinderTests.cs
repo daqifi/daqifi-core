@@ -480,16 +480,16 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public void Reconcile_RefreshesMetadataForExistingDevice_WithoutRediscovering()
     {
-        // A metadata-only change raises NO event of any kind: not Discovered (the device is
-        // already known), not Lost (it is still there), not ScanError. The live set quietly
-        // carries the newer instance. This is half of what issue #725 is about — the other half
-        // is the timed-out pass below — so the assertions name every channel, not just the one
-        // the original version of this test checked.
+        // A metadata-only change is not an arrival and not a departure: Discovered stays silent
+        // (the device is already known), so does Lost (it is still there) and so does ScanError.
+        // It raises DeviceUpdated instead (#725), and the live set carries the newer instance.
         using var finder = NewFinder(new StubDeviceFinder());
         var discovered = new List<IDeviceInfo>();
+        var updated = new List<DeviceUpdatedEventArgs>();
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
         finder.ScanError += (_, e) => errors.Add(e.Exception);
 
@@ -502,6 +502,9 @@ public class ContinuousDeviceFinderTests
         Assert.Single(discovered);
         Assert.Empty(lost);
         Assert.Empty(errors);
+        var update = Assert.Single(updated);
+        Assert.Same(first, update.PreviousDeviceInfo);
+        Assert.Same(renumbered, update.DeviceInfo);
         Assert.Single(finder.Devices);
         Assert.Same(renumbered, finder.Devices[0]);
         Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IPAddress);
@@ -510,14 +513,17 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public void Reconcile_APassThatRepeatsTheSameDeviceUnchanged_RaisesNothingAtAll()
     {
-        // The quiet pass. A device that is simply still there produces no event, which is
-        // correct and is also why a consumer cannot tell this pass from one that never ran.
+        // The quiet pass. A device that is simply still there produces no event — including no
+        // DeviceUpdated, because nothing about it changed. That is what keeps the new event
+        // usable as a redraw trigger: it fires on a change, not on every sighting.
         var device = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
         using var finder = NewFinder(new StubDeviceFinder());
         var discovered = new List<IDeviceInfo>();
+        var updated = new List<DeviceUpdatedEventArgs>();
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
         finder.ScanError += (_, e) => errors.Add(e.Exception);
 
@@ -528,9 +534,162 @@ public class ContinuousDeviceFinderTests
         finder.Reconcile(new[] { device });
 
         Assert.Empty(discovered);
+        Assert.Empty(updated);
         Assert.Empty(lost);
         Assert.Empty(errors);
         Assert.Single(finder.Devices);
+    }
+
+    #endregion
+
+    #region Reconcile: metadata updates (issue #725)
+
+    private static DeviceInfo SerialRunning(string sn, string firmware, string port = "COM3")
+        => new()
+        {
+            ConnectionType = ConnectionType.Serial,
+            SerialNumber = sn,
+            PortName = port,
+            Name = "serial",
+            FirmwareVersion = firmware
+        };
+
+    [Fact]
+    public void Reconcile_SerialDeviceRepluggedOntoANewPort_RaisesUpdatedAndKeepsOneRow()
+    {
+        // The first case from issue #725. The default identity is serial-number-first on
+        // purpose, so a replug onto a different COM port is the SAME device: it is neither lost
+        // nor rediscovered, and a consumer's row would go on advertising COM3 forever. The
+        // update says which device moved and where to.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var discovered = new List<IDeviceInfo>();
+        var updated = new List<DeviceUpdatedEventArgs>();
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM7") });
+
+        var update = Assert.Single(updated);
+        Assert.Equal("COM3", update.PreviousDeviceInfo.PortName);
+        Assert.Equal("COM7", update.DeviceInfo.PortName);
+        Assert.Equal("SN-1", update.DeviceInfo.SerialNumber);
+
+        // The default identity still does its job: one row, not a loss and a rediscovery.
+        Assert.Single(discovered);
+        Assert.Empty(lost);
+        Assert.Single(finder.Devices);
+        Assert.Equal("COM7", finder.Devices[0].PortName);
+    }
+
+    [Fact]
+    public void Reconcile_FirmwareVersionChangesOnAStablePort_RaisesUpdated()
+    {
+        // The second case from issue #725, and the one no identity selector can work around: the
+        // device never moved, so keying the live set by port name would not turn this into a
+        // loss and a rediscovery either. Only an update event reports it.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var updated = new List<DeviceUpdatedEventArgs>();
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialRunning("SN-1", "3.7.2") });
+        finder.Reconcile(new[] { SerialRunning("SN-1", "3.8.0") });
+
+        var update = Assert.Single(updated);
+        Assert.Equal("3.7.2", update.PreviousDeviceInfo.FirmwareVersion);
+        Assert.Equal("3.8.0", update.DeviceInfo.FirmwareVersion);
+        Assert.Equal("COM3", update.DeviceInfo.PortName);
+        Assert.Empty(lost);
+        Assert.Equal("3.8.0", finder.Devices[0].FirmwareVersion);
+    }
+
+    [Fact]
+    public void Reconcile_SeveralDevicesChangeInOnePass_RaisesUpdatedForEachOne()
+    {
+        // One event per changed device, and nothing for the device that did not change.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var updated = new List<DeviceUpdatedEventArgs>();
+
+        var unchanged = Serial("SN-3", port: "COM9");
+        finder.Reconcile(new IDeviceInfo[]
+        {
+            Serial("SN-1", port: "COM1"),
+            Serial("SN-2", port: "COM2"),
+            unchanged
+        });
+
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
+
+        finder.Reconcile(new IDeviceInfo[]
+        {
+            Serial("SN-1", port: "COM4"),
+            Serial("SN-2", port: "COM5"),
+            unchanged
+        });
+
+        Assert.Equal(2, updated.Count);
+        Assert.Contains(updated, u => u.DeviceInfo.SerialNumber == "SN-1" && u.DeviceInfo.PortName == "COM4");
+        Assert.Contains(updated, u => u.DeviceInfo.SerialNumber == "SN-2" && u.DeviceInfo.PortName == "COM5");
+        Assert.DoesNotContain(updated, u => u.DeviceInfo.SerialNumber == "SN-3");
+    }
+
+    [Fact]
+    public void Reconcile_RaisesUpdatedAfterDiscoveredAndBeforeLost()
+    {
+        // Arrivals, then changes, then departures. A consumer applying the events in order is
+        // never told about a change to a device it has not been told about yet.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 1);
+        var order = new List<string>();
+
+        finder.Reconcile(new IDeviceInfo[] { Serial("SN-1", port: "COM1"), Serial("SN-2", port: "COM2") });
+
+        finder.DeviceDiscovered += (_, e) => order.Add("discovered:" + e.DeviceInfo.SerialNumber);
+        finder.DeviceUpdated += (_, e) => order.Add("updated:" + e.DeviceInfo.SerialNumber);
+        finder.DeviceLost += (_, e) => order.Add("lost:" + e.DeviceInfo.SerialNumber);
+
+        // SN-1 moved, SN-2 went away, SN-3 arrived — all in the same pass.
+        finder.Reconcile(new IDeviceInfo[] { Serial("SN-1", port: "COM4"), Serial("SN-3", port: "COM3") });
+
+        Assert.Equal(["discovered:SN-3", "updated:SN-1", "lost:SN-2"], order);
+    }
+
+    [Fact]
+    public void Reconcile_ThrowingUpdatedHandler_DoesNotSuppressOtherDevicesOrThrow()
+    {
+        // Same discipline as the DeviceDiscovered guard above: a faulty subscriber neither kills
+        // reconciliation nor suppresses the notifications for the other devices in the pass, and
+        // the fault is surfaced via ScanError.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var errors = new List<Exception>();
+        var updated = new List<IDeviceInfo>();
+
+        finder.Reconcile(new IDeviceInfo[] { Serial("BAD", port: "COM1"), Serial("GOOD", port: "COM2") });
+
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.DeviceUpdated += (_, e) =>
+        {
+            if (e.DeviceInfo.SerialNumber == "BAD")
+            {
+                throw new InvalidOperationException("handler boom");
+            }
+
+            updated.Add(e.DeviceInfo);
+        };
+
+        // "BAD" is processed first, so without per-callback guarding its throw would
+        // suppress "GOOD".
+        finder.Reconcile(new IDeviceInfo[] { Serial("BAD", port: "COM7"), Serial("GOOD", port: "COM8") });
+
+        Assert.Contains(updated, d => d.SerialNumber == "GOOD");
+        Assert.Single(errors);
+
+        // Both refreshes landed in the live set regardless of the handler fault.
+        Assert.Equal(2, finder.Devices.Count);
+        Assert.All(finder.Devices, d => Assert.Contains(d.PortName, new[] { "COM7", "COM8" }));
     }
 
     #endregion
@@ -961,6 +1120,36 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public async Task Start_ThrowingUpdatedHandler_RaisesScanErrorAndKeepsRunning()
+    {
+        // The new event gets the same guarantee as the others: a consumer whose redraw code
+        // throws loses its own notification, not the scan loop. The device also keeps moving in
+        // the live set, so the fault costs nothing but the handler's own work.
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.Finds(Serial("SN-1", port: "COM3")),
+            ScriptedPassFinder.Finds(Serial("SN-1", port: "COM7")));
+        using var finder = NewFinder(inner);
+
+        var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.DeviceUpdated += (_, _) => throw new InvalidOperationException("redraw boom");
+
+        finder.Start();
+        var error = await AwaitSignal(errorSignal);
+
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.True(finder.IsRunning); // a throwing DeviceUpdated handler must not kill the loop
+
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted >= 3,
+            () => $"the loop stopped after {inner.PassesStarted} passes",
+            WaitTimeout);
+        Assert.Equal("COM7", finder.Devices[0].PortName);
+
+        await finder.StopAsync();
+    }
+
+    [Fact]
     public async Task Start_WhenEveryLaterPassTimesOut_KeepsTheLiveSetAndRaisesNothing()
     {
         // The degraded pass. The first pass finds the device; every later pass runs out of its
@@ -1294,10 +1483,11 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
-    public async Task Start_WhenOnlyMetadataChanged_ReportsTheUpdateAndStillRaisesNoEvent()
+    public async Task Start_WhenOnlyMetadataChanged_ReportsTheUpdateAndRaisesDeviceUpdated()
     {
-        // The report is additive, not a replacement: the metadata refresh is still silent on the
-        // event channels, exactly as the guarding test above pins it.
+        // The count and the event agree: the pass that changed the port reports one metadata
+        // update and raises exactly one DeviceUpdated, and the pass that found the device
+        // unchanged reports and raises nothing.
         var device = Serial("SN-1", port: "COM3");
         var moved = Serial("SN-1", port: "COM7");
         var progress = new RecordingPassProgress();
@@ -1308,9 +1498,11 @@ public class ContinuousDeviceFinderTests
 
         using var finder = NewReportingFinder(inner, progress);
         var discovered = new List<IDeviceInfo>();
+        var updated = new List<DeviceUpdatedEventArgs>();
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
         finder.ScanError += (_, e) => errors.Add(e.Exception);
 
@@ -1331,6 +1523,9 @@ public class ContinuousDeviceFinderTests
         Assert.Single(discovered);
         Assert.Empty(lost);
         Assert.Empty(errors);
+        var update = Assert.Single(updated);
+        Assert.Same(device, update.PreviousDeviceInfo);
+        Assert.Same(moved, update.DeviceInfo);
         Assert.Equal("COM7", finder.Devices[0].PortName);
     }
 
@@ -1519,6 +1714,31 @@ public class ContinuousDeviceFinderTests
     public void DeviceLostEventArgs_NullDevice_Throws()
     {
         Assert.Throws<ArgumentNullException>(() => new DeviceLostEventArgs(null!));
+    }
+
+    #endregion
+
+    #region DeviceUpdatedEventArgs
+
+    [Fact]
+    public void DeviceUpdatedEventArgs_NullDevice_Throws()
+    {
+        var device = Serial("SN-1");
+
+        Assert.Throws<ArgumentNullException>(() => new DeviceUpdatedEventArgs(null!, device));
+        Assert.Throws<ArgumentNullException>(() => new DeviceUpdatedEventArgs(device, null!));
+    }
+
+    [Fact]
+    public void DeviceUpdatedEventArgs_CarriesBothSidesOfTheChange()
+    {
+        var previous = Serial("SN-1", port: "COM3");
+        var current = Serial("SN-1", port: "COM7");
+
+        var args = new DeviceUpdatedEventArgs(previous, current);
+
+        Assert.Same(previous, args.PreviousDeviceInfo);
+        Assert.Same(current, args.DeviceInfo);
     }
 
     #endregion

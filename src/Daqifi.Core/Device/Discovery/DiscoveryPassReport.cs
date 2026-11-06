@@ -46,15 +46,17 @@ public enum DiscoveryPassOutcome
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="ContinuousDeviceFinder"/> raises an event when a device arrives and when a device
-/// goes away. It raises nothing for a pass that found the same devices as the pass before it, and
-/// nothing for a pass that ran out of time. Those two cases look the same to a consumer, and both
-/// look the same as a finder that has stopped running (#725). This report separates them:
-/// <see cref="Outcome"/> says whether the pass worked, and the counts say what it changed.
+/// <see cref="ContinuousDeviceFinder"/> raises an event when a device arrives, when its metadata
+/// changes and when it goes away. It raises nothing for a pass that found the same devices,
+/// unchanged, as the pass before it, and nothing for a pass that ran out of time. Those two cases
+/// look the same to a consumer, and both look the same as a finder that has stopped running
+/// (#725). This report separates them: <see cref="Outcome"/> says whether the pass worked, and
+/// the counts say what it changed.
 /// </para>
 /// <para>
 /// One report arrives per pass, in pass order, after that pass's
-/// <see cref="ContinuousDeviceFinder.DeviceDiscovered"/> and
+/// <see cref="ContinuousDeviceFinder.DeviceDiscovered"/>,
+/// <see cref="ContinuousDeviceFinder.DeviceUpdated"/> and
 /// <see cref="ContinuousDeviceFinder.DeviceLost"/> events. A pass that
 /// <see cref="ContinuousDeviceFinder.StopAsync"/> or
 /// <see cref="ContinuousDeviceFinder.Dispose"/> cuts short reports nothing: the consumer asked
@@ -73,8 +75,9 @@ public enum DiscoveryPassOutcome
 /// </param>
 /// <param name="MetadataUpdates">
 /// How many devices the live set already held came back with different metadata — a new IP
-/// address, a new port name, a new power state, and so on. This is the change that raises no
-/// event of its own, so a consumer that wants to redraw a row has only this count to go by.
+/// address, a new port name, a new power state, and so on. Each one also raised
+/// <see cref="ContinuousDeviceFinder.DeviceUpdated"/>, which is what a consumer redrawing one
+/// row binds to; this count is the summary of them.
 /// </param>
 /// <param name="LostDevices">
 /// How many devices this pass removed from the live set, after
