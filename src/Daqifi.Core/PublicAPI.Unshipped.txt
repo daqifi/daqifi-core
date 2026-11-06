@@ -27,8 +27,17 @@ Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.get -> Daqifi.Core.Devi
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
+Daqifi.Core.Firmware.FirmwareUpdateCheckResult.Status.get -> Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.set -> void
+Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateStatus.DeviceNewerThanLatest = 4 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateStatus.DeviceVersionUnknown = 0 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateStatus.NoReleaseAvailable = 1 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateStatus.UpToDate = 2 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateStatus.UpdateAvailable = 3 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareVersion.Revision.get -> int
+Daqifi.Core.Firmware.FirmwareVersion.Revision.init -> void
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool

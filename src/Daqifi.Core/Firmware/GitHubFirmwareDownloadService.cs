@@ -85,7 +85,12 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             };
         }
 
-        var updateAvailable = !hasCurrent || latest.Version > deviceVersion;
+        // An unreadable device version is NOT grounds to flash. A half-flashed PIC32 image
+        // boots garbage and needs a physical button-hold to recover, and the newest release can
+        // be older than the firmware already on the board, so "I do not know what is installed"
+        // must not become "install this". The caller reads
+        // FirmwareUpdateCheckResult.Status == DeviceVersionUnknown and decides for itself.
+        var updateAvailable = hasCurrent && latest.Version > deviceVersion;
 
         return new FirmwareUpdateCheckResult
         {

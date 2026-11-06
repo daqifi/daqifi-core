@@ -37,6 +37,17 @@ public class FirmwareVersionTests
     [InlineData("3.2.0B1", 3, 2, 0, "B", 1)]
     [InlineData("1.0.0dev2", 1, 0, 0, "dev", 2)]
     [InlineData("v2.0.0RC1", 2, 0, 0, "RC", 1)]
+    // A hyphen before the label is the shape GitHub tags and semver use, and the shape the
+    // device reported in issue #906. It used to be rejected outright, which put the device in
+    // the "installed version unknown" state and got it offered a downgrade.
+    [InlineData("3.8.0-rc1", 3, 8, 0, "rc", 1)]
+    [InlineData("v3.8.0-rc1", 3, 8, 0, "rc", 1)]
+    [InlineData("3.8.0-beta2", 3, 8, 0, "beta", 2)]
+    [InlineData("3.8.0-rc", 3, 8, 0, "rc", 0)]
+    // An underscore or a dot in the same place reads the same way.
+    [InlineData("3.8.0_rc1", 3, 8, 0, "rc", 1)]
+    [InlineData("3.8.0-rc.1", 3, 8, 0, "rc", 1)]
+    [InlineData("3.8.0.rc1", 3, 8, 0, "rc", 1)]
     public void TryParse_ValidPreRelease_ParsesCorrectly(
         string input, int major, int minor, int patch, string? label, int preNum)
     {
@@ -64,9 +75,116 @@ public class FirmwareVersionTests
     // it must not silently truncate to 0. (An ABSENT minor/patch still defaults to 0, e.g. "3".)
     [InlineData("3.999999999999999999.0")]
     [InlineData("3.0.999999999999999999")]
+    // The fourth, revision component is handled the same way.
+    [InlineData("3.0.0.999999999999999999")]
+    // A separator with no label behind it is not a version.
+    [InlineData("3.8.0-")]
+    [InlineData("3.8.0-1")]
+    [InlineData("3.8.0 rc1")]
+    [InlineData("3.8.0.1.2")]
     public void TryParse_Invalid_ReturnsFalse(string? input)
     {
         Assert.False(FirmwareVersion.TryParse(input, out _));
+    }
+
+    /// <summary>
+    /// A four-part version is a build number on a three-part release ("3.8.0.1" is build 1 of
+    /// 3.8.0). It used to be rejected, which left the device's installed version unknown.
+    /// </summary>
+    [Theory]
+    [InlineData("3.8.0.1", 3, 8, 0, 1, null, 0)]
+    [InlineData("v3.8.0.1", 3, 8, 0, 1, null, 0)]
+    [InlineData("3.8.0.42", 3, 8, 0, 42, null, 0)]
+    [InlineData("3.8.0.1-rc2", 3, 8, 0, 1, "rc", 2)]
+    // A three-part version has a revision of 0, so nothing about existing versions moves.
+    [InlineData("3.8.0", 3, 8, 0, 0, null, 0)]
+    [InlineData("3.8", 3, 8, 0, 0, null, 0)]
+    public void TryParse_FourPart_ParsesTheBuildNumber(
+        string input, int major, int minor, int patch, int revision, string? label, int preNum)
+    {
+        Assert.True(FirmwareVersion.TryParse(input, out var v));
+        Assert.Equal(major, v.Major);
+        Assert.Equal(minor, v.Minor);
+        Assert.Equal(patch, v.Patch);
+        Assert.Equal(revision, v.Revision);
+        Assert.Equal(label, v.PreLabel);
+        Assert.Equal(preNum, v.PreNumber);
+    }
+
+    /// <summary>
+    /// Keeping the suffix is the point: an rc must sort BEFORE the release it is a candidate
+    /// for, so a device on "3.8.0-rc1" is never read as already having 3.8.0. The pre-release
+    /// rank already did this for "3.8.0rc1"; the hyphen shape now joins it.
+    /// </summary>
+    [Theory]
+    [InlineData("3.8.0-rc1", "3.8.0")]
+    [InlineData("3.8.0-rc1", "3.8.0-rc2")]
+    [InlineData("3.8.0-beta1", "3.8.0-rc1")]
+    [InlineData("3.8.0-alpha1", "3.8.0-beta1")]
+    [InlineData("3.8.0", "3.8.0.1")]
+    [InlineData("3.8.0.1", "3.8.0.2")]
+    [InlineData("3.7.9", "3.8.0-rc1")]
+    public void CompareTo_OlderSortsFirst(string older, string newer)
+    {
+        Assert.True(FirmwareVersion.TryParse(older, out var o));
+        Assert.True(FirmwareVersion.TryParse(newer, out var n));
+        Assert.True(o < n, $"expected '{older}' < '{newer}'");
+        Assert.True(n > o);
+        Assert.NotEqual(o, n);
+    }
+
+    /// <summary>
+    /// A pre-release suffix separated by a hyphen ranks exactly like the same label run
+    /// straight on, so the two spellings name one version.
+    /// </summary>
+    [Theory]
+    [InlineData("3.8.0-rc1", "3.8.0rc1")]
+    [InlineData("3.8.0-beta2", "3.8.0b2")]
+    [InlineData("3.8.0-rc.1", "3.8.0rc1")]
+    public void Equals_SeparatorSpellings_AreOneVersion(string left, string right)
+    {
+        Assert.True(FirmwareVersion.TryParse(left, out var l));
+        Assert.True(FirmwareVersion.TryParse(right, out var r));
+        Assert.Equal(l, r);
+        Assert.Equal(l.GetHashCode(), r.GetHashCode());
+    }
+
+    /// <summary>
+    /// The four-part revision only breaks a tie, so it never reorders three-part versions.
+    /// </summary>
+    [Fact]
+    public void CompareTo_RevisionOnlyBreaksATie()
+    {
+        Assert.True(FirmwareVersion.TryParse("3.8.0.9", out var build9));
+        Assert.True(FirmwareVersion.TryParse("3.9.0", out var next));
+        Assert.True(build9 < next);
+    }
+
+    /// <summary>
+    /// Pins which capability gates a newly parseable version string opens. Every gate in the
+    /// library is a <c>parsed &gt;= floor</c> test against a plain three-part floor, so this
+    /// records the gating decisions that move now that these strings parse at all. Before, they
+    /// did not parse, and every gate failed closed.
+    /// </summary>
+    [Theory]
+    // "3.8.0-rc1" clears an older floor: an rc of 3.8.0 certainly has the 3.5.0-era features.
+    [InlineData("3.8.0-rc1", 3, 5, 0, true)]
+    [InlineData("3.8.0-rc1", 3, 7, 0, true)]
+    // It does NOT clear its own floor. The pre-release rank puts it before the release, so a
+    // feature that needs 3.8.0 stays gated off on a 3.8.0 release candidate. That is the
+    // fail-closed answer, and it is why keeping the suffix matters.
+    [InlineData("3.8.0-rc1", 3, 8, 0, false)]
+    [InlineData("3.8.0-rc1", 3, 9, 0, false)]
+    // A four-part build of 3.8.0 is 3.8.0 plus a build number, so it clears the 3.8.0 floor.
+    [InlineData("3.8.0.1", 3, 8, 0, true)]
+    [InlineData("3.8.0.1", 3, 9, 0, false)]
+    public void FeatureGate_MovesOnlyWhereTheVersionIsGenuinelyAtOrAboveTheFloor(
+        string deviceVersion, int floorMajor, int floorMinor, int floorPatch, bool expectedAtOrAbove)
+    {
+        var floor = new FirmwareVersion(floorMajor, floorMinor, floorPatch, null, 0);
+
+        Assert.True(FirmwareVersion.TryParse(deviceVersion, out var parsed));
+        Assert.Equal(expectedAtOrAbove, parsed >= floor);
     }
 
     [Theory]
@@ -173,6 +291,14 @@ public class FirmwareVersionTests
     [InlineData("3.2.0beta2", "3.2.0beta2")]
     [InlineData("1.0.0B2", "1.0.0B2")]
     [InlineData("v2.0.0RC1", "2.0.0RC1")]
+    // The separator is normalized away, the same way the leading "v" always has been. The
+    // label and the number themselves are still the raw text the device sent.
+    [InlineData("3.8.0-rc1", "3.8.0rc1")]
+    [InlineData("3.8.0-RC1", "3.8.0RC1")]
+    // A revision of 0 is not printed, so every three-part version prints as it always did.
+    [InlineData("3.8.0.1", "3.8.0.1")]
+    [InlineData("3.8.0.1-rc2", "3.8.0.1rc2")]
+    [InlineData("3.8.0.0", "3.8.0")]
     public void ToString_FormatsCorrectly(string input, string expected)
     {
         FirmwareVersion.TryParse(input, out var v);
