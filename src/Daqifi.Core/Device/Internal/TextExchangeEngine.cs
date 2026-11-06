@@ -44,6 +44,22 @@ internal sealed class TextExchangeEngine
     /// </summary>
     private static readonly TimeSpan TextConsumerSettleDelay = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// Read timeout a raw capture holds the stream at, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// The one production caller of <see cref="ExecuteRawCaptureAsync"/> is the SD file download,
+    /// and it reads the stream itself rather than through a consumer. Over USB serial a read that
+    /// times out returns zero bytes rather than throwing, and the receiver reads zero bytes as
+    /// "the device went quiet" and fails the transfer — so the stream's read timeout <i>is</i> that
+    /// transfer's stall tolerance, and a short one would abort a download over an ordinary gap in
+    /// the device's reply. That tolerance used to be the serial transport's post-open 500 ms,
+    /// implicitly; #900 shortened that value to keep consumer stops immediate. The capture asks
+    /// for the same 500 ms here instead, where the reason it needs a long read is written down,
+    /// so the two can move independently.
+    /// </remarks>
+    private const int RawCaptureReadTimeoutMs = 500;
+
     private readonly ITextExchangeHost _host;
 
     internal TextExchangeEngine(ITextExchangeHost host)
@@ -176,16 +192,28 @@ internal sealed class TextExchangeEngine
             // time and dispatching every frame twice.
             await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
+            var capturedStream = transport.Stream;
+            int? originalCaptureReadTimeout = null;
             try
             {
                 // Stop the protobuf consumer so it doesn't compete for stream bytes
                 SuspendInboundConsumer();
 
+                // Lengthen the read only now the consumer is down. Doing it first would hand the
+                // reader a long read and the stop above would have to wait that read out, which
+                // is the cost #900 removed.
+                originalCaptureReadTimeout =
+                    TrySetReadTimeout(capturedStream, RawCaptureReadTimeoutMs, onlyWhenShorter: true);
+
                 // Hand the stream to the caller for raw I/O
-                await rawAction(transport.Stream, cancellationToken).ConfigureAwait(false);
+                await rawAction(capturedStream, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
+                // Restored before the consumer restarts, so the restarted reader is the one that
+                // sees the short operational timeout and stays promptly stoppable.
+                RestoreReadTimeout(capturedStream, originalCaptureReadTimeout);
+
                 RestartMessageConsumerAfterSwap();
             }
         }
@@ -455,23 +483,21 @@ internal sealed class TextExchangeEngine
 
             try
             {
-                if (stream.CanTimeout)
-                {
-                    try
-                    {
-                        originalReadTimeout = stream.ReadTimeout;
-                        stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
-                    }
-                    catch
-                    {
-                        // Some streams may not allow setting read timeout; ignore.
-                        originalReadTimeout = null;
-                    }
-                }
+                // A ceiling on how long the text consumer's own read may park, so that the stop
+                // at the end of this exchange returns promptly. Only ever lowers: raising a
+                // stream that is already quicker to stop would re-add the join latency this
+                // exchange is being measured on (#900). The transports set a read timeout well
+                // under this after connect, so on a real device this changes nothing and
+                // originalReadTimeout stays null.
+                originalReadTimeout = TrySetReadTimeout(
+                    stream,
+                    Math.Min(500, Math.Max(100, responseTimeoutMs / 4)),
+                    onlyWhenShorter: false);
 
-                // Stop the protobuf consumer so it doesn't compete for stream bytes.
-                // The serial transport sets ReadTimeout=500ms after connect, so the
-                // consumer thread's blocking Read will unblock within 500ms.
+                // Stop the protobuf consumer so it doesn't compete for stream bytes. It checks
+                // its stop flag at the top of its loop and is otherwise parked in a blocking
+                // Read, so this returns one read timeout later at worst — which is why the
+                // transports keep that timeout short (#900).
                 SuspendInboundConsumer();
 
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", ElapsedMs()));
@@ -876,17 +902,7 @@ internal sealed class TextExchangeEngine
             }
             finally
             {
-                if (originalReadTimeout.HasValue && stream.CanTimeout)
-                {
-                    try
-                    {
-                        stream.ReadTimeout = originalReadTimeout.Value;
-                    }
-                    catch
-                    {
-                        // Ignore failures when restoring timeout.
-                    }
-                }
+                RestoreReadTimeout(stream, originalReadTimeout);
 
                 // Restart the protobuf consumer
                 RestartMessageConsumerAfterSwap();
@@ -989,6 +1005,81 @@ internal sealed class TextExchangeEngine
                     + "unwinding. The original failure is being surfaced to the caller; the device "
                     + "may be left in the state the prepare phase established."));
             }
+        }
+    }
+
+    /// <summary>
+    /// Sets the stream's read timeout for the duration of a swap, in one direction only, and
+    /// returns the value it replaced so <see cref="RestoreReadTimeout"/> can put it back.
+    /// </summary>
+    /// <param name="stream">The transport stream.</param>
+    /// <param name="timeoutMs">The read timeout to apply, in milliseconds.</param>
+    /// <param name="onlyWhenShorter">
+    /// <c>true</c> to apply <paramref name="timeoutMs"/> only when the stream's current timeout is
+    /// shorter (a swap that needs a longer read); <c>false</c> to apply it only when the current
+    /// timeout is longer (a swap that needs a promptly stoppable reader). Either way the
+    /// direction is one-way: a stream already on the right side of the value is left alone, so a
+    /// swap can never make a stop slower than the transport chose.
+    /// </param>
+    /// <returns>
+    /// The timeout that was replaced, or <c>null</c> when nothing was changed — because the stream
+    /// cannot time out, because it was already on the right side of the value, or because it
+    /// refused the assignment.
+    /// </returns>
+    private static int? TrySetReadTimeout(Stream stream, int timeoutMs, bool onlyWhenShorter)
+    {
+        if (!stream.CanTimeout)
+        {
+            return null;
+        }
+
+        try
+        {
+            var current = stream.ReadTimeout;
+
+            // Timeout.Infinite is longer than any finite value, not shorter than all of them,
+            // which a plain numeric comparison against -1 gets backwards.
+            var currentIsLonger = current == Timeout.Infinite || current > timeoutMs;
+            if (onlyWhenShorter ? !currentIsLonger : currentIsLonger)
+            {
+                stream.ReadTimeout = timeoutMs;
+                return current;
+            }
+
+            return null;
+        }
+        catch
+        {
+            // Some streams expose CanTimeout and still refuse the assignment; leave it alone.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Puts back a read timeout that <see cref="TrySetReadTimeout"/> replaced. A <c>null</c>
+    /// original means nothing was changed, so nothing is restored.
+    /// </summary>
+    /// <remarks>
+    /// Never throws: both callers run it from a <c>finally</c>, where an exception would mask the
+    /// failure already unwinding.
+    /// </remarks>
+    private static void RestoreReadTimeout(Stream stream, int? originalReadTimeout)
+    {
+        if (originalReadTimeout is not { } original)
+        {
+            return;
+        }
+
+        try
+        {
+            if (stream.CanTimeout)
+            {
+                stream.ReadTimeout = original;
+            }
+        }
+        catch
+        {
+            // Ignore failures when restoring timeout.
         }
     }
 
