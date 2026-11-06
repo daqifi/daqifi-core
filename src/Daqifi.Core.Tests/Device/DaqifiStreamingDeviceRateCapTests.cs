@@ -221,9 +221,59 @@ public class DaqifiStreamingDeviceRateCapTests
         Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_ChannelSetUnchanged_DoesNotPayForASecondCapabilityRead()
+    {
+        // A text exchange costs about a second on the bench device. The cap only falls as analog
+        // inputs are enabled, so a set no larger than the one the document was read for cannot
+        // have a cap above the known one, and there is nothing to learn by asking again.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1);
+
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+        await device.StartStreamingAsync();
+
+        Assert.Equal(1, device.CapabilityDocumentReads);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_ChannelSetGrew_ReadsTheCapabilityDocumentAgain()
+    {
+        // The one direction that matters: more analog inputs means a lower cap, so the figure in
+        // hand can now be too high — which is what produces a stream that sends nothing.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1);
+        device.StreamingFrequency = 10000;
+
+        await device.StartStreamingAsync();
+        Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
+
+        await device.StopStreamingAsync();
+        EnableAnalog(device, 2);
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        await device.StartStreamingAsync();
+
+        Assert.Equal(2, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
     #endregion
 
     #region Helpers
+
+    private static void EnableAnalog(DaqifiStreamingDevice device, params int[] channelNumbers)
+    {
+        foreach (var channelNumber in channelNumbers)
+        {
+            device.EnableChannel(device.Channels.First(
+                c => c.Type == ChannelType.Analog && c.ChannelNumber == channelNumber));
+        }
+    }
 
     /// <summary>
     /// A connected NQ1 with sixteen analog and sixteen digital channels populated, the board

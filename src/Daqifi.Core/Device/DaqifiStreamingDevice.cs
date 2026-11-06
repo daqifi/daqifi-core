@@ -62,6 +62,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     private const int StartConfirmationErrorQueueReads = 4;
 
     /// <summary>
+    /// How many analog inputs were enabled when <see cref="StartStreamingAsync"/> last read the
+    /// capability document, or <c>-1</c> before its first read. The device computes its rate cap
+    /// for the set enabled at the moment of the read, so this is what says whether that figure
+    /// still describes the device — see <see cref="RefreshSampleRateCapAsync"/>. A read made by
+    /// anyone else does not update it, which can cost one redundant read and cannot cost
+    /// correctness: a count that is too low only ever asks again.
+    /// </summary>
+    private int _capabilityReadAnalogInputCount = -1;
+
+    /// <summary>
     /// Raised when a stream frame was withheld from consumers because the device should not have
     /// sent it — a malformed leading frame, or one latched from the previous session.
     /// </summary>
@@ -374,6 +384,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// known. Skipped entirely while a stream is running, both because the start is then a
     /// no-op and because the read is a text exchange that would interrupt the live stream.
     /// </para>
+    /// <para>
+    /// <b>Why only when the analog-input count has grown.</b> A text exchange on the bench NQ1
+    /// costs about a second, which is far too much to add to every start. It is also only ever
+    /// needed in one direction: the cap falls as analog inputs are enabled, so a set no larger
+    /// than the one the document was read for has a true cap no lower than the known one, and
+    /// clamping to the known figure is safe — at worst conservative. A set that has <i>grown</i>
+    /// is the one case where the known figure can be too high, which is exactly the case that
+    /// produces a dead stream, and that is when the read is paid for. In practice that is the
+    /// first start after channels are enabled, and not the ones after it.
+    /// </para>
     /// </remarks>
     /// <param name="cancellationToken">A cancellation token to observe while reading.</param>
     private async Task RefreshSampleRateCapAsync(CancellationToken cancellationToken)
@@ -383,9 +403,20 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             return;
         }
 
+        if (EnabledAnalogInputCount() <= _capabilityReadAnalogInputCount)
+        {
+            return;
+        }
+
         try
         {
             await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+
+            // Recorded whether or not the device answered. A device that supplied no document
+            // has still been asked with this channel set, and asking it again with the same set
+            // would cost the same second and learn the same nothing. Not recorded when the read
+            // threw, so a transient failure is retried on the next start.
+            _capabilityReadAnalogInputCount = EnabledAnalogInputCount();
         }
         catch (OperationCanceledException)
         {
@@ -549,6 +580,32 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
 
         return last;
+    }
+
+    /// <summary>
+    /// How many analog <i>input</i> channels are enabled right now — the one figure the device's
+    /// sample-rate cap moves with.
+    /// </summary>
+    /// <remarks>
+    /// Analog outputs are not streamed and digital pins are captured on the analog sample tick
+    /// rather than driving one of their own, which is why neither counts here; see
+    /// <see cref="SampleRateCap"/>.
+    /// </remarks>
+    private int EnabledAnalogInputCount()
+    {
+        var count = 0;
+
+        foreach (var channel in GetChannelsSnapshot())
+        {
+            if (channel.Type == ChannelType.Analog
+                && channel.Direction == ChannelDirection.Input
+                && channel.IsEnabled)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     /// <inheritdoc cref="IStreamingDevice.StopStreamingAsync" />
