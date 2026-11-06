@@ -21,6 +21,30 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => versionStatus.GetAsync(cancellationToken));
 
+    [McpServerTool(Name = "get_hardware_info", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Published specifications of the Nyquist boards: analog input count, ADC resolution, input range, whether sampling is simultaneous, the single-channel rate ceiling, and the analog outputs. Call it to interpret a reading or to plan a rate before provoking a rejection. Static reference data about the model, not a reading from the device — list_channels reports what a connected device has.")]
+    public static IReadOnlyList<HardwareProfile> GetHardwareInfo(
+        [Description("A board to describe, as discovery reports it in deviceType (e.g. 'Nyquist3'); 'nyquist 3' and 'nyquist-3' also work. Omit for every board.")] string? deviceType = null)
+    {
+        if (string.IsNullOrWhiteSpace(deviceType))
+        {
+            return HardwareCatalog.All;
+        }
+
+        // An unrecognized board is an error rather than an empty list: the agent asked about a
+        // specific board, and silence reads as "this board has no analog outputs" just as easily
+        // as "ask about a different name". Listing the known ones makes the retry obvious —
+        // discovery reports "Unknown" for a device whose type it could not establish, and that is
+        // the name most likely to land here.
+        var profile = HardwareCatalog.Find(deviceType)
+            ?? throw new McpException(
+                $"No published specifications for device type '{deviceType}'. Known device types: "
+                + string.Join(", ", HardwareCatalog.All.Select(p => p.DeviceType))
+                + ". A connected device's own channel counts come from list_channels.");
+
+        return [profile];
+    }
+
     [McpServerTool(Name = "discover_devices", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns device_id values used by the other tools; call this first.")]
     public static Task<IReadOnlyList<DiscoveredDevice>> DiscoverDevices(

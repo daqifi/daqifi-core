@@ -59,7 +59,12 @@ builder.Services
         o.ServerInstructions = options.Instructions;
     })
     .WithStdioServerTransport()
-    .WithDaqifiTools();
+    .WithDaqifiTools()
+    // The published board specifications (resources) and the ready-made measurement jobs
+    // (prompts). Both are listed in the same handshake as the tools, so a client that supports
+    // them offers them without any further configuration.
+    .WithDaqifiResources()
+    .WithDaqifiPrompts();
 
 var host = builder.Build();
 

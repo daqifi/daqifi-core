@@ -4,7 +4,7 @@
   "title": "DAQiFi",
   "description": "Discover, configure and read DAQiFi Nyquist data-acquisition hardware from an AI agent",
   "version": "1.7.0",
-  "websiteUrl": "https://github.com/daqifi/daqifi-core/tree/main/src/Daqifi.Mcp",
+  "websiteUrl": "https://daqifi.com/mcp/",
   "repository": {
     "url": "https://github.com/daqifi/daqifi-core",
     "source": "github",
