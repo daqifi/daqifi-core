@@ -135,6 +135,24 @@ public sealed class SdCardLogSampleSource : ISampleSource
     }
 
     /// <summary>
+    /// The unit the analog values are in, named in the exported column headers, or
+    /// <see langword="null"/> when the log states none.
+    /// </summary>
+    /// <remarks>
+    /// An SD-card export used to carry raw ADC counts where a live recording of the same channel
+    /// carried volts, and neither file said which (issue #903). This is what puts the answer in
+    /// the file. <see cref="SdCardLogSessionExtensions.AsSampleSource"/> derives it from the
+    /// parse; <see cref="SdCardLogEntry.SourceAnalogValueUnit"/> is the per-entry detail behind
+    /// it.
+    /// </remarks>
+    /// <value>
+    /// One of <see cref="SampleValueUnits"/>, or <see langword="null"/> for a source that states
+    /// none. Set through an object initializer rather than a constructor argument, so that a
+    /// consumer compiled against the four-argument constructor keeps working.
+    /// </value>
+    public string? ValueUnit { get; init; }
+
+    /// <summary>
     /// Gets the number of analog columns this source was built with, excluding the digital column.
     /// </summary>
     /// <remarks>
@@ -219,7 +237,8 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// for that timestamp rather than filling them with zeros, which the exporter writes as blank
     /// cells; an entry with more is truncated to the columns that exist and reported through
     /// <see cref="DroppedAnalogColumns"/>. Values are passed through as parsed, since the SD
-    /// parsers have already applied the log's calibration and scaling.
+    /// parsers have already applied whatever calibration and scaling the parse had — which is
+    /// what <see cref="ValueUnit"/> names.
     /// <para>
     /// The counters accumulate over the lifetime of the source rather than resetting per call, so
     /// a source enumerated twice reports both passes. One source per export is the normal use.

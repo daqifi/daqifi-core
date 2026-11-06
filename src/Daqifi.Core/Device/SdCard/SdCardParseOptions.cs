@@ -113,6 +113,44 @@ public sealed class SdCardParseOptions
     public SdCardIntegerValueUnits? IntegerValueUnits { get; set; }
 
     /// <summary>
+    /// Options for parsing a log downloaded from <paramref name="device"/>, carrying that
+    /// device's own calibration, resolution, port range, and timestamp clock as the
+    /// <see cref="ConfigurationOverride"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the one call a caller that is connected to the device should make. Firmware 3.8.0
+    /// writes no calibration into an SD-card log, so a parse without the device's figures hands
+    /// back the log's raw ADC codes untouched — the same channel then exported as counts from the
+    /// card and as volts from a live recording, with nothing in either file to say which (issue
+    /// #903). The device has those figures while the download is happening, and this is how they
+    /// reach the parse.
+    /// </para>
+    /// <para>
+    /// The log still wins field by field. Nothing supplied here overrides a figure the file
+    /// itself states.
+    /// </para>
+    /// </remarks>
+    /// <param name="device">
+    /// A connected and initialized device, normally the one the log was downloaded from.
+    /// </param>
+    /// <returns>
+    /// Options carrying the device's configuration, or carrying none when the device reports no
+    /// analog channels — which is what <see cref="SdCardDeviceConfiguration.FromDevice"/> answers
+    /// for a device with nothing to calibrate.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="device"/> is null.</exception>
+    public static SdCardParseOptions ForDevice(DaqifiDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+
+        return new SdCardParseOptions
+        {
+            ConfigurationOverride = SdCardDeviceConfiguration.FromDevice(device)
+        };
+    }
+
+    /// <summary>
     /// Throws if <paramref name="options"/> asks for something no parser can honour. Called by
     /// every public parse entry point, before it touches the file.
     /// </summary>
