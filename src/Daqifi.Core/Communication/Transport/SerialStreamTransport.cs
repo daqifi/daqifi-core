@@ -94,7 +94,46 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// keeps consumer threads stoppable (StopSafely). It is a shutdown-latency knob, not a CPU one
     /// — see the idle-CPU paragraph on the class for why changing it does not move idle cost.
     /// </summary>
-    private const int OperationalReadTimeoutMs = 500;
+    /// <remarks>
+    /// <para>
+    /// This value <b>is</b> how long it takes to stop a reader, and nothing else. A
+    /// <see cref="Consumers.StreamMessageConsumer{T}"/> checks its stop flag at the top of its
+    /// loop and is otherwise parked inside <see cref="Stream.Read(byte[], int, int)"/>, and every
+    /// stop path joins that thread — so a stop cannot return until the in-flight read gives up.
+    /// At the 500 ms this used to be, the three text exchanges a connect runs each paid
+    /// 482–499 ms to put the protobuf consumer down before they sent a single byte. Measured on a
+    /// bench Nq1 running firmware 3.8.0: those three stops cost 49 / 34 / 32 ms at this value, a
+    /// USB connect went from 3.48–3.57 s to 1.63–1.69 s, and <c>*IDN?</c> went from 1.05 s to
+    /// 0.42 s (issue #900).
+    /// </para>
+    /// <para>
+    /// It costs a little CPU, and the cost is small because of what the idle-CPU paragraph on this
+    /// class measured: the Unix helper thread polls for a read's <i>duration</i>, so most of the
+    /// idle cost follows time spent with a read pending rather than the number of reads issued —
+    /// which is why an infinite read timeout measured slightly <i>worse</i> there rather than
+    /// better. What a shorter timeout does add is the consumer loop's own per-read work, ten times
+    /// as often on a line with nothing on it. Measured on a bench Nq1 over two channels, as CPU
+    /// seconds across a 15 s window, two runs each way, alternated: at 5 kHz <b>11.0% of one core
+    /// before, 11.8% after</b>; at 10 Hz (an all-but-silent link, where the timeout fires on
+    /// nearly every read) <b>3.3% before, 4.2% after</b>. Sample counts were identical run for
+    /// run, with no discards and no decode failures. Under one point of a core, for 1.9 s off a
+    /// connect and 0.64 s off every query.
+    /// </para>
+    /// <para>
+    /// It is the same value, chosen for the same reason, as
+    /// <see cref="Device.Discovery.SerialDeviceFinder"/>'s post-identify read timeout: a reader
+    /// that is about to be joined should be holding a read it can give up on quickly.
+    /// </para>
+    /// <para>
+    /// One caller reads this stream directly rather than through a consumer, and it does depend on
+    /// a long read: an SD file download treats a zero-length read as "the device went quiet" over
+    /// USB serial, so the read timeout is its stall tolerance. That dependency used to be this
+    /// constant, implicitly. It is now stated where it is relied on —
+    /// <c>TextExchangeEngine.RawCaptureReadTimeoutMs</c> raises the timeout for the duration of a
+    /// raw capture and restores it afterwards — so the two can move independently.
+    /// </para>
+    /// </remarks>
+    private const int OperationalReadTimeoutMs = 50;
 
     /// <summary>
     /// Blocking-write timeout applied once the port is open. Everything written over this

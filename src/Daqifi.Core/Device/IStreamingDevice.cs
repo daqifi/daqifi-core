@@ -81,7 +81,21 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// the live rate no longer fits under it — as it will not, once the channel set grows after
     /// the rate was chosen.
     /// </summary>
-    /// <returns>The rate that was live before the adjustment, or <c>null</c> when none was needed.</returns>
+    /// <remarks>
+    /// Nothing needs this any more. The cap was opt-in when this was added, so a caller who did
+    /// not know to call it got a stream that reported itself as running and delivered no samples
+    /// (issue #899); <see cref="StartStreaming"/> now applies the cap itself, at the one moment
+    /// it has to hold. <see cref="MaximumStreamingFrequencyHz"/> is the single figure a caller
+    /// reads.
+    /// </remarks>
+    /// <returns>
+    /// The rate that was live <i>before</i> the adjustment — not the rate it was lowered to,
+    /// which is <see cref="StreamingFrequency"/> once this returns. <c>null</c> when no
+    /// adjustment was needed.
+    /// </returns>
+    [Obsolete("Starting a stream applies the cap itself, so this call is no longer needed. "
+              + "Read MaximumStreamingFrequencyHz to see the limit. This member will be removed "
+              + "in a future major version.")]
     int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
 
     /// <summary>
@@ -90,8 +104,15 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     bool IsStreaming { get; }
 
     /// <summary>
-    /// Starts streaming data from the device.
+    /// Starts streaming data from the device, at no more than
+    /// <see cref="MaximumStreamingFrequencyHz"/>.
     /// </summary>
+    /// <remarks>
+    /// A rate above what the enabled channels sustain is lowered to the cap rather than sent.
+    /// The device would otherwise answer the start with SCPI <c>-222</c> and stream nothing,
+    /// which a caller cannot tell apart from a quiet signal (issue #899). Read
+    /// <see cref="StreamingFrequency"/> afterwards for the rate the stream is running at.
+    /// </remarks>
     void StartStreaming();
 
     /// <summary>

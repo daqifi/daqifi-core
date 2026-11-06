@@ -106,7 +106,9 @@ public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bo
             ch.Name,
             ch.IsEnabled,
             ch.Direction.ToString(),
+#pragma warning disable CS0618 // IDigitalChannel.OutputValue is obsolete; this wire field follows it out (#901)
             digital?.OutputValue,
+#pragma warning restore CS0618
             digital?.IsPwmCapable,
             digital?.IsPwmEnabled,
             (ch as IScaledChannel)?.Unit);
@@ -147,7 +149,9 @@ public sealed record DigitalPinResult(string DeviceId, int Channel, string Direc
         deviceId,
         ch.ChannelNumber,
         ch.Direction.ToString(),
+#pragma warning disable CS0618 // IDigitalChannel.OutputValue is obsolete; this wire field follows it out (#901)
         ch is IDigitalChannel digital && digital.OutputValue);
+#pragma warning restore CS0618
 }
 
 /// <summary>

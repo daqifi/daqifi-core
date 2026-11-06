@@ -365,6 +365,18 @@ public class ScpiMessageProducer
     }
 
     /// <summary>
+    /// Creates a query message asking the device to identify itself.
+    /// </summary>
+    /// <remarks>
+    /// Command: *IDN?
+    ///
+    /// The device answers this in text mode whatever its stream routing or stream format is, so
+    /// it is the cheapest way to tell a device that is not there from one that is answering but
+    /// sending its output somewhere else (issue #911).
+    /// </remarks>
+    public static IOutboundMessage<string> GetDeviceIdentity => new ScpiMessage("*IDN?");
+
+    /// <summary>
     /// Creates a query message to get the current streaming target interface.
     /// </summary>
     /// <remarks>

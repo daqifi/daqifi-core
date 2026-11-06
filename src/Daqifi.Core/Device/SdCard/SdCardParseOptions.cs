@@ -63,17 +63,19 @@ public sealed class SdCardParseOptions
     /// this fallback applies only when neither is available.
     /// </para>
     /// <para>
-    /// Defaults to 50 MHz. That figure is a historical default and does <b>not</b> match
-    /// shipped Nyquist firmware, which reports a 42 MHz timestamp clock — converting 42 MHz
-    /// ticks as though they were 50 MHz makes every reconstructed timestamp roughly 19% fast.
-    /// Prefer supplying <see cref="ConfigurationOverride"/> from the connected device so this
-    /// guess is never needed, and check
-    /// <see cref="SdCardLogSession.TimestampFrequencySource"/> on the parsed session to see
-    /// whether it was. Set to 0 to disable the fallback entirely, which leaves tick counts
-    /// unconverted rather than converted with a guess.
+    /// Defaults to 42 MHz, the timestamp clock shipped Nyquist firmware reports. It was 50 MHz
+    /// — a historical figure that matched no shipped device — and a log that stated no clock
+    /// was therefore converted as though its 42 MHz ticks were 50 MHz, which made every
+    /// timestamp in the file roughly 19% fast (issue #902). Prefer supplying
+    /// <see cref="ConfigurationOverride"/> from the connected device so this default is never
+    /// needed, and check <see cref="SdCardLogSession.TimestampFrequencySource"/> on the parsed
+    /// session to see whether it was: <see cref="SdCardTimestampSource.Fallback"/> means the
+    /// rate is this default rather than a figure the file or the device reported. Set to 0 to
+    /// disable the fallback entirely, which leaves tick counts unconverted rather than
+    /// converted with a default.
     /// </para>
     /// </summary>
-    public uint FallbackTimestampFrequency { get; set; } = 50_000_000;
+    public uint FallbackTimestampFrequency { get; set; } = 42_000_000;
 
     /// <summary>
     /// Gets or sets a device configuration override. When set, fields from this

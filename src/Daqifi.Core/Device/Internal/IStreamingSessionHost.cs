@@ -49,6 +49,19 @@ internal interface IStreamingSessionHost
     int MaxSamplingRate { get; }
 
     /// <summary>
+    /// The highest rate the channel set enabled <i>right now</i> can sustain
+    /// (<see cref="DaqifiStreamingDevice.MaximumStreamingFrequencyHz"/>), read fresh on each
+    /// access.
+    /// </summary>
+    /// <remarks>
+    /// This is the bound a start request is actually judged by, and it moves with the enabled
+    /// set — unlike <see cref="MaxSamplingRate"/>, which is the board's absolute ceiling. The
+    /// device answers a start above it with SCPI <c>-222</c> and streams nothing, so
+    /// <see cref="StreamingSessionController.StartStreaming"/> reads it on the way in.
+    /// </remarks>
+    int MaximumStreamingFrequencyHz { get; }
+
+    /// <summary>
     /// Resets everything the frame decoder scopes to one streaming session — the timestamp
     /// anchor and tick frequency, the gap detector, the warmup guard, and the discard and
     /// decode-failure counters — for a session about to run at

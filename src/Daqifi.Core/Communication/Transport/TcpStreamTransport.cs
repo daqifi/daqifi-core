@@ -67,9 +67,16 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// consumer-swap window used by the text-exchange path, which surfaced as a spurious
     /// "a previous consumer thread has not yet exited" failure on connect (issue #383).
     /// A short operational timeout bounds that wait, matching the serial transport's post-open
-    /// <c>ReadTimeout = 500</c>.
+    /// <c>ReadTimeout</c>.
+    /// <para>
+    /// Bounding that wait is not the same as making it short. At the 500 ms this used to be, a
+    /// text exchange paid up to half a second to put the protobuf consumer down before it sent
+    /// anything, and it paid it again on the way out — the serial half of issue #900, measured on
+    /// the same wire. The two transports are kept at the same value so neither path carries a
+    /// stop latency the other does not.
+    /// </para>
     /// </remarks>
-    internal const int OperationalReceiveTimeoutMs = 500;
+    internal const int OperationalReceiveTimeoutMs = 50;
 
     private readonly IPEndPoint _endPoint;
     private readonly IPAddress? _localInterface;

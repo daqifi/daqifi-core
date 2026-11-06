@@ -293,7 +293,12 @@ public class SampleRateCapTests
 
     #endregion
 
-    #region EnforceStreamingFrequencyCap — the device-level enforcement
+    #region EnforceStreamingFrequencyCap — the deprecated opt-in enforcement
+
+    // These cover the [Obsolete] opt-in path, which stays until the next major version (#899).
+    // Starting a stream now applies the cap itself, so nothing needs to call these members; the
+    // cases are kept so the behaviour they still have is the behaviour they are documented with.
+#pragma warning disable CS0618 // Type or member is obsolete
 
     [Fact]
     public void EnforceStreamingFrequencyCap_RateAboveTheCap_LowersItAndReportsThePreviousRate()
@@ -313,10 +318,10 @@ public class SampleRateCapTests
     }
 
     [Fact]
-    public void StreamingFrequency_AboveAnAlreadyReportedCap_IsKeptUntilEnforced()
+    public void StreamingFrequency_AboveAnAlreadyReportedCap_IsKeptUntilTheStream()
     {
         // The setter checks only the board ceiling, so "set the rate, then enable the
-        // channels" keeps working; lowering to the cap is EnforceStreamingFrequencyCap's job.
+        // channels" keeps working; lowering to the cap is StartStreaming's job (#899).
         var device = CreateDevice();
         device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
 
@@ -352,6 +357,8 @@ public class SampleRateCapTests
     {
         Assert.Throws<ArgumentNullException>(() => SampleRateCap.EnforceOn(null!));
     }
+
+#pragma warning restore CS0618 // Type or member is obsolete
 
     #endregion
 

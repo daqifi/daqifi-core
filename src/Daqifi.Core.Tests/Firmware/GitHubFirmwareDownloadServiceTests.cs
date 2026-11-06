@@ -165,6 +165,7 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
         Assert.Equal(new FirmwareVersion(3, 1, 0, null, 0), result.DeviceVersion);
         Assert.NotNull(result.LatestRelease);
         Assert.Equal("v3.2.0", result.LatestRelease.TagName);
+        Assert.Equal(FirmwareUpdateStatus.UpdateAvailable, result.Status);
     }
 
     [Fact]
@@ -180,6 +181,7 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
         var result = await service.CheckForUpdateAsync("3.2.0");
 
         Assert.False(result.UpdateAvailable);
+        Assert.Equal(FirmwareUpdateStatus.UpToDate, result.Status);
     }
 
     [Fact]
@@ -195,22 +197,28 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
         var result = await service.CheckForUpdateAsync("4.0.0");
 
         Assert.False(result.UpdateAvailable);
+        Assert.Equal(FirmwareUpdateStatus.DeviceNewerThanLatest, result.Status);
     }
 
-    [Fact]
-    public async Task CheckForUpdateAsync_UpdateAvailable_WhenDeviceVersionUnparseable()
+    /// <summary>
+    /// A device whose version cannot be read must NOT be offered an update. A flash can leave
+    /// the board unbootable, and the release on offer here (3.7.2) is older than the firmware
+    /// the bench device actually runs (3.8.0), so the old behaviour offered a downgrade.
+    /// </summary>
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("garbage")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CheckForUpdateAsync_NoUpdate_WhenDeviceVersionUnparseable(string deviceVersion)
     {
-        var releases = BuildReleasesJson(
-            MakeRelease("v3.2.0", draft: false, prerelease: false, hexAsset: "firmware.hex"));
+        var service = ServiceWithLiveReleaseSet();
 
-        _handler.SetResponse("https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases",
-            HttpStatusCode.OK, releases);
+        var result = await service.CheckForUpdateAsync(deviceVersion);
 
-        var service = CreateService();
-        var result = await service.CheckForUpdateAsync("unknown");
-
-        Assert.True(result.UpdateAvailable);
+        Assert.False(result.UpdateAvailable);
         Assert.Null(result.DeviceVersion);
+        Assert.Equal(FirmwareUpdateStatus.DeviceVersionUnknown, result.Status);
     }
 
     [Fact]
@@ -224,6 +232,91 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
 
         Assert.False(result.UpdateAvailable);
         Assert.Null(result.LatestRelease);
+        Assert.Equal(FirmwareUpdateStatus.NoReleaseAvailable, result.Status);
+    }
+
+    /// <summary>
+    /// An unreadable version wins over a missing release: it is true whatever the release
+    /// lookup returned, and it is the state a caller must never read as "update available".
+    /// </summary>
+    [Fact]
+    public async Task CheckForUpdateAsync_ReportsUnknownVersion_WhenNoReleasesEither()
+    {
+        _handler.SetResponse("https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases",
+            HttpStatusCode.OK, "[]");
+
+        var service = CreateService();
+        var result = await service.CheckForUpdateAsync("garbage");
+
+        Assert.False(result.UpdateAvailable);
+        Assert.Equal(FirmwareUpdateStatus.DeviceVersionUnknown, result.Status);
+    }
+
+    /// <summary>
+    /// Every row of the table measured against the live GitHub releases in issue #906, with
+    /// that release set faked so the test needs no network. The newest release that is not
+    /// marked pre-release is 3.7.2, which is older than the 3.8.0 the bench device runs.
+    /// </summary>
+    [Theory]
+    // installed, offered -> does Core offer an update, and why
+    [InlineData("3.8.0", false, "3.8.0", FirmwareUpdateStatus.DeviceNewerThanLatest)]
+    [InlineData("3.7.2", false, "3.7.2", FirmwareUpdateStatus.UpToDate)]
+    [InlineData("3.7.1", true, "3.7.1", FirmwareUpdateStatus.UpdateAvailable)]
+    // These two used to report "update available" with a null installed version.
+    [InlineData("3.8.0-rc1", false, "3.8.0rc1", FirmwareUpdateStatus.DeviceNewerThanLatest)]
+    [InlineData("3.8.0.1", false, "3.8.0.1", FirmwareUpdateStatus.DeviceNewerThanLatest)]
+    [InlineData("", false, null, FirmwareUpdateStatus.DeviceVersionUnknown)]
+    [InlineData("garbage", false, null, FirmwareUpdateStatus.DeviceVersionUnknown)]
+    public async Task CheckForUpdateAsync_MatchesTheMeasuredTable(
+        string deviceVersion,
+        bool expectedUpdateAvailable,
+        string? expectedDeviceVersion,
+        FirmwareUpdateStatus expectedStatus)
+    {
+        var service = ServiceWithLiveReleaseSet();
+
+        var result = await service.CheckForUpdateAsync(deviceVersion);
+
+        Assert.Equal(expectedUpdateAvailable, result.UpdateAvailable);
+        Assert.Equal(expectedDeviceVersion, result.DeviceVersion?.ToString());
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.Equal("v3.7.2", result.LatestRelease?.TagName);
+    }
+
+    /// <summary>
+    /// UpdateAvailable and Status can never disagree for a result this service produces.
+    /// </summary>
+    [Theory]
+    [InlineData("3.7.1")]
+    [InlineData("3.7.2")]
+    [InlineData("3.8.0")]
+    [InlineData("3.8.0-rc1")]
+    [InlineData("garbage")]
+    public async Task CheckForUpdateAsync_UpdateAvailableAgreesWithStatus(string deviceVersion)
+    {
+        var service = ServiceWithLiveReleaseSet();
+
+        var result = await service.CheckForUpdateAsync(deviceVersion);
+
+        Assert.Equal(result.Status == FirmwareUpdateStatus.UpdateAvailable, result.UpdateAvailable);
+    }
+
+    /// <summary>
+    /// The release set the live check sees: 3.7.3 and 3.8.0 are tagged pre-release, so the
+    /// newest release on offer by default is 3.7.2.
+    /// </summary>
+    private GitHubFirmwareDownloadService ServiceWithLiveReleaseSet()
+    {
+        var releases = BuildReleasesJson(
+            MakeRelease("v3.8.0", draft: false, prerelease: true, hexAsset: "firmware-3.8.0.hex"),
+            MakeRelease("v3.7.3", draft: false, prerelease: true, hexAsset: "firmware-3.7.3.hex"),
+            MakeRelease("v3.7.2", draft: false, prerelease: false, hexAsset: "firmware-3.7.2.hex"),
+            MakeRelease("v3.7.1", draft: false, prerelease: false, hexAsset: "firmware-3.7.1.hex"));
+
+        _handler.SetResponse("https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases",
+            HttpStatusCode.OK, releases);
+
+        return CreateService();
     }
 
     #endregion

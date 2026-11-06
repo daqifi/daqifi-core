@@ -158,7 +158,14 @@ public sealed class SdCardFileParser
             // A status message that stated the timestamp clock settles it: the embedded-field
             // scan below is skipped entirely in that case, so what the rest of the file says is
             // never consulted and there is nothing left to read for.
-            if (statusConfig is { TimestampFrequency: not 0 })
+            //
+            // It has to have settled the analog width too. A status message that states
+            // AnalogInPortNum settles it; one that does not leaves the width of the data as the
+            // only answer, and that takes one entry carrying values — which a status message
+            // never does. Stopping before that entry is what left an export with no analog
+            // columns and no analog readings in it (issue #902).
+            if (statusConfig is { TimestampFrequency: not 0 } settled
+                && (settled.AnalogPortCount != 0 || scanner.HasAnalogWidth))
             {
                 break;
             }
@@ -221,7 +228,8 @@ public sealed class SdCardFileParser
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
             TimestampFrequency = timestampFrequency,
-            TimestampFrequencySource = timestampSource
+            TimestampFrequencySource = timestampSource,
+            ObservedAnalogValueCount = scanner.MaxAnalogValueCount
         };
     }
 
@@ -565,6 +573,20 @@ public sealed class SdCardFileParser
         private uint _resolution;
         private IReadOnlyList<double>? _portRange;
         private IReadOnlyList<double>? _internalScaleM;
+        private int _maxAnalogValueCount;
+
+        /// <summary>
+        /// Gets the widest analog payload any scanned message carried, which is how many analog
+        /// columns an export of this log needs when nothing states a port count (issue #902).
+        /// </summary>
+        public int MaxAnalogValueCount => _maxAnalogValueCount;
+
+        /// <summary>
+        /// Gets a value indicating whether the analog width is settled: a stated port count, or
+        /// one message seen carrying values. Until it is, neither the file nor the data has said
+        /// how wide the log is.
+        /// </summary>
+        public bool HasAnalogWidth => _analogPortNum != 0 || _maxAnalogValueCount != 0;
 
         /// <summary>
         /// Gets a value indicating whether every field has been found, so no further message
@@ -581,6 +603,18 @@ public sealed class SdCardFileParser
         /// </summary>
         public void Add(DaqifiOutMessage msg)
         {
+            // Read from the payload, not from a configuration field: this is what the data
+            // carries, and it is the only width a log that states no port count has. The widest
+            // payload wins rather than the first, so a short leading message cannot narrow the
+            // export below the log's real width.
+            var analogValues = msg.AnalogInDataFloat.Count > 0
+                ? msg.AnalogInDataFloat.Count
+                : msg.AnalogInData.Count;
+            if (analogValues > _maxAnalogValueCount)
+            {
+                _maxAnalogValueCount = analogValues;
+            }
+
             if (_timestampFreq == 0 && msg.TimestampFreq != 0)
             {
                 _timestampFreq = msg.TimestampFreq;

@@ -83,7 +83,7 @@ public class DeviceMetadataTests
         metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
-        Assert.Equal(0, metadata.Capabilities.AnalogOutputChannels);
+        Assert.Equal(8, metadata.Capabilities.AnalogOutputChannels);
     }
 
     [Fact]
@@ -139,8 +139,8 @@ public class DeviceMetadataTests
         metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Null(metadata.CapabilityDocument);
-        Assert.Equal(1000, metadata.Capabilities.MaxSamplingRate);
-        Assert.Equal(0, metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(16000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
     }
 
     [Theory]

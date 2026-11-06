@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
 using Daqifi.Core.Channel;
 
+// IDigitalChannel.OutputValue is obsolete (#901); these tests keep covering it until it
+// is removed in a major version.
+#pragma warning disable CS0618
+
 namespace Daqifi.Core.Tests.Channel;
 
 public class DigitalChannelTests

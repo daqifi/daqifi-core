@@ -28,6 +28,54 @@ namespace Daqifi.Core.Device;
 public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
+    /// Shortest time <see cref="StartStreamingAsync"/> gives the device to send its first stream
+    /// frame before it asks the device why it has not. Covers a fast stream's first frame with
+    /// room for host-side scheduling jitter.
+    /// </summary>
+    private const double MinStartConfirmationMs = 150;
+
+    /// <summary>
+    /// Longest that wait, whatever the rate. A 1 Hz stream has not necessarily failed after two
+    /// seconds, but a caller must not be made to wait three sample periods for a start either;
+    /// the cost of asking early is one text exchange on a stream that was going to be slow
+    /// anyway.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the bench NQ1 at firmware 3.8.0, two analog channels, as the time
+    /// <see cref="StartStreamingAsync"/> itself takes: 10–23 ms at 100 Hz and above, 213 ms at
+    /// 10 Hz. Those starts see their first frame immediately and never reach the queue read. A
+    /// 1 Hz start does not: the device's first frame took longer than this bound, so such a
+    /// start spends the full budget and then one <c>SYSTem:ERRor?</c> exchange, finds the queue
+    /// clean, and carries on — about 2.7 s in all, on top of the capability read. Raising the
+    /// bound to cover 1 Hz would buy that one case a faster start and cost every genuinely dead
+    /// start a slower diagnosis, which is the case this exists for.
+    /// </remarks>
+    private const double MaxStartConfirmationMs = 2000;
+
+    /// <summary>
+    /// How often <see cref="WaitForFirstStreamFrameAsync"/> looks for the first frame.
+    /// </summary>
+    private static readonly TimeSpan StartConfirmationPollInterval = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// How many <c>SYSTem:ERRor?</c> queries <see cref="StartStreamingAsync"/> will spend
+    /// looking for a refusal of the start. Far below <see cref="DaqifiDevice.DrainErrorQueueAsync"/>'s
+    /// own default: this runs on a device that may yet begin streaming, so the exchange count is
+    /// bounded tightly rather than generously.
+    /// </summary>
+    private const int StartConfirmationErrorQueueReads = 4;
+
+    /// <summary>
+    /// How many analog inputs were enabled when <see cref="StartStreamingAsync"/> last read the
+    /// capability document, or <c>-1</c> before its first read. The device computes its rate cap
+    /// for the set enabled at the moment of the read, so this is what says whether that figure
+    /// still describes the device — see <see cref="RefreshSampleRateCapAsync"/>. A read made by
+    /// anyone else does not update it, which can cost one redundant read and cannot cost
+    /// correctness: a count that is too low only ever asks again.
+    /// </summary>
+    private int _capabilityReadAnalogInputCount = -1;
+
+    /// <summary>
     /// Raised when a stream frame was withheld from consumers because the device should not have
     /// sent it — a malformed leading frame, or one latched from the previous session.
     /// </summary>
@@ -114,12 +162,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Deliberately separate from the <see cref="StreamingFrequency"/> setter's own validation,
     /// which stays on the absolute board ceiling: this figure moves with the channel set, and a
     /// setter that rejected against it would fail a perfectly reasonable
-    /// "set the rate, then enable the channels" ordering. Call
-    /// <see cref="EnforceStreamingFrequencyCap"/> after changing the channel set instead.
+    /// "set the rate, then enable the channels" ordering. Nothing needs to be called to have it
+    /// applied — <see cref="StartStreaming"/> lowers the rate to this figure itself, so a rate
+    /// above it can no longer reach the device.
     /// </remarks>
     public int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
 
     /// <inheritdoc cref="IStreamingDevice.EnforceStreamingFrequencyCap" />
+    [Obsolete("Starting a stream applies the cap itself, so this call is no longer needed. "
+              + "Read MaximumStreamingFrequencyHz to see the limit. This member will be removed "
+              + "in a future major version.")]
     public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
 
     /// <summary>
@@ -239,8 +291,15 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// Starts streaming data from the device at the configured frequency.
+    /// Starts streaming data from the device at the configured frequency, lowered first to what
+    /// the enabled channel set can sustain (<see cref="MaximumStreamingFrequencyHz"/>).
     /// </summary>
+    /// <remarks>
+    /// The cap is applied from the figures the device has already reported. Prefer
+    /// <see cref="StartStreamingAsync"/>, which re-reads them for the channel set about to
+    /// stream and then reads the device's verdict on the start; this overload sends no text
+    /// command and so can do neither.
+    /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     public void StartStreaming() => _session.StartStreaming();
 
@@ -250,12 +309,291 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     public void StopStreaming() => _session.StopStreaming();
 
-    /// <inheritdoc cref="IStreamingDevice.StartStreamingAsync" />
-    public Task StartStreamingAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Starts streaming data from the device without blocking the calling thread, and confirms
+    /// with the device that the stream actually started.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three steps, and the first two are what keep the third from ever firing. The capability
+    /// document is re-read so <see cref="MaximumStreamingFrequencyHz"/> describes the channel
+    /// set about to stream rather than the one enabled at the last read;
+    /// <see cref="StartStreaming"/> then lowers the rate to it. Only after that is the device's
+    /// error queue read, so a start the firmware refused for any other reason reaches the
+    /// caller as a <see cref="DeviceCommandFailedException"/> instead of being left on the
+    /// device for the next connect to trip over (issues #899 and #898).
+    /// </para>
+    /// <para>
+    /// Reading the error queue is a text exchange, which takes the protobuf consumer off the
+    /// wire — so it runs only once the device has had its chance to send a frame and has sent
+    /// none. A stream that is delivering data is never interrupted by it. See
+    /// <see cref="ConfirmStreamStartedAsync"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device sent no frame and its error queue holds a refusal of the start.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    public async Task StartStreamingAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        var alreadyStreaming = IsStreaming;
+
+        await RefreshSampleRateCapAsync(cancellationToken).ConfigureAwait(false);
+
         StartStreaming();
-        return Task.CompletedTask;
+
+        if (!alreadyStreaming)
+        {
+            await ConfirmStreamStartedAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Re-reads the capability document so the sample-rate cap describes the channel set that
+    /// is about to stream.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The device computes <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> for the set
+    /// enabled at the moment of the read, so the figure goes stale the moment a caller enables
+    /// or disables a channel — which is exactly what a caller does just before starting a
+    /// stream. Without this the cap applied at the start could be the one from connect time.
+    /// </para>
+    /// <para>
+    /// Best-effort, and silent when it cannot be done: a device whose firmware predates the
+    /// document (v3.5.0) does not even send the query, and a read that fails leaves the
+    /// previously-known figures in place, which is a worse cap than a fresh one but a far
+    /// better one than none. The start itself still runs, and still applies whatever cap is
+    /// known. Skipped entirely while a stream is running, both because the start is then a
+    /// no-op and because the read is a text exchange that would interrupt the live stream.
+    /// </para>
+    /// <para>
+    /// <b>Why only when the analog-input count has grown.</b> A text exchange on the bench NQ1
+    /// costs about a second, which is far too much to add to every start. It is also only ever
+    /// needed in one direction: the cap falls as analog inputs are enabled, so a set no larger
+    /// than the one the document was read for has a true cap no lower than the known one, and
+    /// clamping to the known figure is safe — at worst conservative. A set that has <i>grown</i>
+    /// is the one case where the known figure can be too high, which is exactly the case that
+    /// produces a dead stream, and that is when the read is paid for. In practice that is the
+    /// first start after channels are enabled, and not the ones after it.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe while reading.</param>
+    private async Task RefreshSampleRateCapAsync(CancellationToken cancellationToken)
+    {
+        if (IsStreaming || Transport == null)
+        {
+            return;
+        }
+
+        if (EnabledAnalogInputCount() <= _capabilityReadAnalogInputCount)
+        {
+            return;
+        }
+
+        try
+        {
+            await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+
+            // Recorded whether or not the device answered. A device that supplied no document
+            // has still been asked with this channel set, and asking it again with the same set
+            // would cost the same second and learn the same nothing. Not recorded when the read
+            // threw, so a transient failure is retried on the next start.
+            _capabilityReadAnalogInputCount = EnabledAnalogInputCount();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            SafeTrace(() =>
+                $"[{nameof(StartStreamingAsync)}] Could not re-read the capability document; "
+                + $"the sample-rate cap may describe an earlier channel set: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Waits for the device to prove the stream started, and reads its error queue when it does
+    /// not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The start command is fire-and-forget, so a refusal used to be invisible: the device
+    /// answered SCPI <c>-222</c>, Core reported <see cref="IsStreaming"/> as <c>true</c>, and
+    /// not one sample ever arrived (issue #899). The refusal then sat in the queue and broke the
+    /// next connect (issue #898).
+    /// </para>
+    /// <para>
+    /// The queue read cannot simply follow the start command, because it is a text exchange and
+    /// a text exchange takes the protobuf consumer off the wire — on a healthy stream that
+    /// would throw away the samples the caller asked for, and the binary frames arriving
+    /// meanwhile would be read as reply lines. So the arrival of a single frame is taken as
+    /// proof and ends the wait, and only a device that sent nothing at all is questioned. A
+    /// refused start sends nothing, so it is always questioned.
+    /// </para>
+    /// <para>
+    /// The budget scales with the rate, because "nothing yet" only means something after a
+    /// sample period or two: three periods, held between
+    /// <see cref="MinStartConfirmationMs"/> and <see cref="MaxStartConfirmationMs"/>. A
+    /// delivering stream returns from here as soon as its first frame lands, which at any rate
+    /// above a few hertz is a handful of milliseconds.
+    /// </para>
+    /// <para>
+    /// Only a reply that parses as a non-zero SCPI error counts as a refusal. A device with no
+    /// analog channels enabled does not always start a stream and does not always say why, and
+    /// a queue read that comes back with nothing readable is not evidence of anything — neither
+    /// is turned into an exception.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
+    /// <exception cref="DeviceCommandFailedException">Thrown when the device refused the start.</exception>
+    private async Task ConfirmStreamStartedAsync(CancellationToken cancellationToken)
+    {
+        // Without a transport there is no error queue to read: the device is being driven by a
+        // test double or an in-process stand-in, and there is nothing to confirm against.
+        if (Transport == null)
+        {
+            return;
+        }
+
+        if (await WaitForFirstStreamFrameAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        IReadOnlyList<string> queued;
+        try
+        {
+            queued = await DrainErrorQueueAsync(StartConfirmationErrorQueueReads, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A queue that cannot be read says nothing about the start. Report the silent
+            // stream through the trace and leave the session as the caller set it up.
+            SafeTrace(() =>
+                $"[{nameof(StartStreamingAsync)}] The device sent no stream frame and its error "
+                + $"queue could not be read: {ex.Message}");
+            return;
+        }
+
+        var refusal = LastScpiErrorReply(queued);
+        if (refusal == null)
+        {
+            return;
+        }
+
+        // The device is not streaming, whatever the flag says, so put the session back before
+        // the exception leaves: a device reported as streaming while it sits idle also makes
+        // the next StartStreaming() a silent no-op.
+        _session.IsStreaming = false;
+
+        var command = ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim();
+        throw ScpiResponseClassifier.TryParseSystemErrorReplyCode(refusal, out var code) && code != 0
+            ? new DeviceCommandFailedException(command, code, refusal)
+            : new DeviceCommandFailedException(command, refusal);
+    }
+
+    /// <summary>
+    /// Waits until the device has sent at least one stream frame, or the confirmation budget for
+    /// the current rate runs out.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
+    /// <returns><c>true</c> when a frame arrived; <c>false</c> when the budget ran out first.</returns>
+    private async Task<bool> WaitForFirstStreamFrameAsync(CancellationToken cancellationToken)
+    {
+        var budgetMs = Math.Clamp(
+            3000.0 / Math.Max(1, StreamingFrequency),
+            MinStartConfirmationMs,
+            MaxStartConfirmationMs);
+
+        var startedAt = Clock.GetTimestamp();
+
+        while (true)
+        {
+            if (_frameDecoder.ReceivedStreamFrameCount > 0)
+            {
+                return true;
+            }
+
+            // A stream stopped from another thread while this waited is not a refused start, so
+            // stop asking the device about it.
+            if (!IsStreaming)
+            {
+                return true;
+            }
+
+            if (Clock.GetElapsedTime(startedAt).TotalMilliseconds >= budgetMs)
+            {
+                return false;
+            }
+
+            await Task.Delay(StartConfirmationPollInterval, Clock, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The last line in <paramref name="lines"/> that is a <c>SYSTem:ERRor?</c> reply reporting
+    /// a real error, or <c>null</c> when none is.
+    /// </summary>
+    /// <remarks>
+    /// Every line is classified rather than the first one taken, because a drained queue can
+    /// hand back more than one entry and because an unreadable line must never be reported as a
+    /// refusal. The last is chosen for the same reason
+    /// <see cref="ScpiResponseClassifier.GetLastScpiErrorLine"/> does: the most recent entry is
+    /// the one closest to the command that was just sent.
+    /// </remarks>
+    private static string? LastScpiErrorReply(IReadOnlyList<string> lines)
+    {
+        string? last = null;
+
+        foreach (var line in lines)
+        {
+            if (ScpiResponseClassifier.IsSystemErrorReplyLine(line)
+                && ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code)
+                && code != 0)
+            {
+                last = line;
+            }
+        }
+
+        return last;
+    }
+
+    /// <summary>
+    /// How many analog <i>input</i> channels are enabled right now — the one figure the device's
+    /// sample-rate cap moves with.
+    /// </summary>
+    /// <remarks>
+    /// Analog outputs are not streamed and digital pins are captured on the analog sample tick
+    /// rather than driving one of their own, which is why neither counts here; see
+    /// <see cref="SampleRateCap"/>.
+    /// </remarks>
+    private int EnabledAnalogInputCount()
+    {
+        var count = 0;
+
+        foreach (var channel in GetChannelsSnapshot())
+        {
+            if (channel.Type == ChannelType.Analog
+                && channel.Direction == ChannelDirection.Input
+                && channel.IsEnabled)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     /// <inheritdoc cref="IStreamingDevice.StopStreamingAsync" />
@@ -1159,6 +1497,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
+
+    int IStreamingSessionHost.MaximumStreamingFrequencyHz => MaximumStreamingFrequencyHz;
 
     // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
     // own report of its tick rate, read at exactly the moment the old BeginStreamingSession
