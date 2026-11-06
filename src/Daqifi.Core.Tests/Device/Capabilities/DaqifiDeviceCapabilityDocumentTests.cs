@@ -74,8 +74,8 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.Null(document);
         Assert.Null(device.Metadata.CapabilityDocument);
         Assert.Empty(device.SentCommands);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
-        Assert.Equal(0, device.Metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
     [Theory]
@@ -114,7 +114,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
     [Theory]
@@ -150,7 +150,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
         Assert.True(device.Metadata.Capabilities.HasSdCard);
     }
 
