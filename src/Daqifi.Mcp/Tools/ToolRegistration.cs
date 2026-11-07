@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
+using ModelContextProtocol.Server;
 
 namespace Daqifi.Mcp.Tools;
 
@@ -21,9 +22,22 @@ internal static class ToolRegistration
     /// </summary>
     internal static JsonSerializerOptions SerializerOptions { get; } = CreateSerializerOptions();
 
-    /// <summary>Registers every tool in this assembly with <see cref="SerializerOptions"/>.</summary>
+    /// <summary>
+    /// Registers every tool in this assembly with <see cref="SerializerOptions"/>, and the
+    /// <c>tools/call</c> filter that explains an argument-binding failure (issue #917).
+    /// </summary>
+    /// <remarks>
+    /// The tools are registered exactly as the SDK builds them. An earlier attempt wrapped each
+    /// one in a <c>DelegatingMcpServerTool</c>, which costs the wire contract: the SDK reshapes
+    /// <c>outputSchema</c> for the protocol version a client negotiates by testing the
+    /// registered instance's concrete type, so a wrapped tool silently skipped the reshaping and
+    /// six tools advertised a non-object <c>outputSchema</c> while still returning the
+    /// <c>{"result": ...}</c> envelope. The filter leaves the instances alone.
+    /// </remarks>
     internal static IMcpServerBuilder WithDaqifiTools(this IMcpServerBuilder builder) =>
-        builder.WithToolsFromAssembly(typeof(DaqifiTools).Assembly, SerializerOptions);
+        builder
+            .WithToolsFromAssembly(typeof(DaqifiTools).Assembly, SerializerOptions)
+            .ExplainArgumentBindingFailures();
 
     private static JsonSerializerOptions CreateSerializerOptions()
     {
