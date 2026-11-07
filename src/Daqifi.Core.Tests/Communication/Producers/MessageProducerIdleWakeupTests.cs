@@ -126,8 +126,7 @@ public class MessageProducerIdleWakeupTests
 
     /// <summary>
     /// The counter spans the instance, not a run: a restarted producer keeps counting from where it
-    /// was. Pinned because the alternative — zeroing it in <c>Start()</c> — races a previous
-    /// background thread that a timed-out join left alive and still incrementing.
+    /// was.
     /// </summary>
     [Fact]
     public void WakeCount_IsCumulativeAcrossRestarts()
