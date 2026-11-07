@@ -7,8 +7,13 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> Sy
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DeviceUpdated -> System.EventHandler<Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs!>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
+Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs
+Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs.DeviceInfo.get -> Daqifi.Core.Device.Discovery.IDeviceInfo!
+Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs.DeviceUpdatedEventArgs(Daqifi.Core.Device.Discovery.IDeviceInfo! previousDeviceInfo, Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
+Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs.PreviousDeviceInfo.get -> Daqifi.Core.Device.Discovery.IDeviceInfo!
 Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
 Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Completed = 0 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
 Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Failed = 2 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
@@ -63,5 +68,6 @@ static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.SdCard.SdCardParseOptions.ForDevice(Daqifi.Core.Device.DaqifiDevice! device) -> Daqifi.Core.Device.SdCard.SdCardParseOptions!
 virtual Daqifi.Core.Device.DaqifiDevice.OnSendingInitializationCommands() -> void
+virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnDeviceUpdated(Daqifi.Core.Device.Discovery.IDeviceInfo! previousDeviceInfo, Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string

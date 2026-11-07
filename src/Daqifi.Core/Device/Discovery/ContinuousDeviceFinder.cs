@@ -10,8 +10,9 @@ namespace Daqifi.Core.Device.Discovery;
 /// Wraps an <see cref="IDeviceFinder"/> and turns its per-call discovery into a
 /// continuous, stateful scan. The finder repeatedly runs discovery passes on a
 /// configurable cadence, maintains a deduplicated live set of devices across
-/// passes, and raises <see cref="DeviceDiscovered"/> when a device first appears
-/// and <see cref="DeviceLost"/> when a device has been absent for
+/// passes, and raises <see cref="DeviceDiscovered"/> when a device first appears,
+/// <see cref="DeviceUpdated"/> when a device it already holds comes back with different
+/// metadata, and <see cref="DeviceLost"/> when a device has been absent for
 /// <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive passes. A UI
 /// can bind directly to <see cref="Devices"/> plus these events instead of writing
 /// its own polling loop and stale-removal logic.
@@ -100,9 +101,23 @@ public class ContinuousDeviceFinder : IDisposable
 
     /// <summary>
     /// Occurs when a device first enters the live set. Unlike the wrapped finder's
-    /// own event, this fires only once per device until it is lost and rediscovered.
+    /// own event, this fires only once per device until it is lost and rediscovered —
+    /// a later pass that changes the device's metadata raises
+    /// <see cref="DeviceUpdated"/> instead.
     /// </summary>
     public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+
+    /// <summary>
+    /// Occurs when a device already in the live set comes back from a pass with different
+    /// metadata — a new port name after a replug, a new IP address, a new firmware version
+    /// after a flash. The device neither arrived nor went away, so
+    /// <see cref="DeviceDiscovered"/> (which fires once per device) and
+    /// <see cref="DeviceLost"/> both stay silent; this is the event that lets a consumer
+    /// holding its own row for the device learn that the row is out of date, without
+    /// polling <see cref="Devices"/> and without trading away the default identity's
+    /// survival of a port reassignment (#725).
+    /// </summary>
+    public event EventHandler<DeviceUpdatedEventArgs>? DeviceUpdated;
 
     /// <summary>
     /// Occurs when a device leaves the live set after being absent for
@@ -277,7 +292,8 @@ public class ContinuousDeviceFinder : IDisposable
 
     /// <summary>
     /// Reconciles the live set against the devices returned by a single discovery pass:
-    /// adds and announces newly seen devices, refreshes metadata for devices still present,
+    /// adds and announces newly seen devices, refreshes and announces changed metadata for
+    /// devices still present,
     /// and increments the miss count for absent devices — removing and announcing those that
     /// have now missed <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive passes.
     /// A pass whose results are only partial counts no misses at all, because absence from an
@@ -309,9 +325,9 @@ public class ContinuousDeviceFinder : IDisposable
         bool resultsMayBePartial = false)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
+        var updated = new List<(IDeviceInfo Previous, IDeviceInfo Current)>();
         var lost = new List<IDeviceInfo>();
         int devicesSeen;
-        var metadataUpdates = 0;
 
         lock (_devicesLock)
         {
@@ -332,13 +348,16 @@ public class ContinuousDeviceFinder : IDisposable
                     // Already known — refresh metadata (IP, port, power state, etc. can
                     // change between passes) and clear the miss counter.
                     //
-                    // The refresh raises no event, by design: the device neither arrived nor
-                    // went away. That is exactly why it is counted. A consumer holding a row
-                    // for this device has no other way to learn the row is now out of date
-                    // (#725).
+                    // The device neither arrived nor went away, so neither DeviceDiscovered nor
+                    // DeviceLost says what happened and a consumer holding its own row for this
+                    // device would otherwise have to poll Devices to notice the row went stale.
+                    // So the refresh raises DeviceUpdated, carrying both the metadata the live
+                    // set held and the metadata the pass returned (#725). The pending list is
+                    // also what the pass report counts, so the number of DeviceUpdated events a
+                    // pass raised and its MetadataUpdates count cannot drift apart.
                     if (MetadataDiffers(tracked.Info, device))
                     {
-                        metadataUpdates++;
+                        updated.Add((tracked.Info, device));
                     }
 
                     tracked.Info = device;
@@ -449,9 +468,17 @@ public class ContinuousDeviceFinder : IDisposable
         // so one throwing subscriber neither suppresses sibling notifications nor kills
         // the continuous scan loop (matching the finders' "swallow subscriber exceptions"
         // contract); the exception is surfaced via ScanError instead.
+        //
+        // Within a pass the order is arrivals, then changes, then departures, so a consumer
+        // applying them in order never sees an update for a device it has not been told about.
         foreach (var device in newlyDiscovered)
         {
             SafeRaise(() => OnDeviceDiscovered(device));
+        }
+
+        foreach (var change in updated)
+        {
+            SafeRaise(() => OnDeviceUpdated(change.Previous, change.Current));
         }
 
         foreach (var device in lost)
@@ -462,7 +489,7 @@ public class ContinuousDeviceFinder : IDisposable
         return new DiscoveryPassChanges(
             devicesSeen,
             newlyDiscovered.Count,
-            metadataUpdates,
+            updated.Count,
             lost.Count);
     }
 
@@ -470,11 +497,23 @@ public class ContinuousDeviceFinder : IDisposable
     /// Whether a device the live set already holds came back from a pass with different metadata.
     /// </summary>
     /// <remarks>
-    /// Every member of <see cref="IDeviceInfo"/> is compared, because every one of them can
-    /// change between passes without the device arriving or going away: a WiFi device gets a new
-    /// IP from the router, a serial device gets a new port name after a re-enumeration, a device
-    /// reports itself powered off. A finder that hands back the same instance twice — the common
-    /// case for a cached pass result — is settled by the reference check and costs nothing.
+    /// Every member of <see cref="IDeviceInfo"/> that describes the device is compared, because
+    /// each of them can change between passes without the device arriving or going away: a WiFi
+    /// device gets a new IP from the router, a serial device gets a new port name after a
+    /// re-enumeration, a device reports itself powered off. A finder that hands back the same
+    /// instance twice — the common case for a cached pass result — is settled by the reference
+    /// check and costs nothing.
+    /// <para>
+    /// <see cref="IDeviceInfo.LocalInterfaceAddress"/> is deliberately excluded, because it
+    /// records which local NIC happened to hear the device rather than anything about the device.
+    /// <see cref="WiFiDeviceFinder"/> broadcasts on every interface in parallel and keeps
+    /// whichever reply arrives first, so on a multi-homed host — a laptop on Wi-Fi with a wired
+    /// dock, say — the winner is a race and the field flips from pass to pass while the device
+    /// sits still. Comparing it would raise <see cref="DeviceUpdated"/> on every pass and make
+    /// the event useless as the redraw trigger it exists to be. A consumer that wants the current
+    /// binding hint reads it from <see cref="Devices"/>, which always carries the newest pass's
+    /// value.
+    /// </para>
     /// </remarks>
     private static bool MetadataDiffers(IDeviceInfo previous, IDeviceInfo current)
     {
@@ -491,7 +530,6 @@ public class ContinuousDeviceFinder : IDisposable
             || !string.Equals(previous.DevicePath, current.DevicePath, StringComparison.Ordinal)
             || !string.Equals(previous.LocationKey, current.LocationKey, StringComparison.Ordinal)
             || !Equals(previous.IPAddress, current.IPAddress)
-            || !Equals(previous.LocalInterfaceAddress, current.LocalInterfaceAddress)
             || previous.Port != current.Port
             || previous.Type != current.Type
             || previous.IsPowerOn != current.IsPowerOn
@@ -668,8 +706,8 @@ public class ContinuousDeviceFinder : IDisposable
 
             // Every outcome above meets here, so there is exactly one report per pass and they
             // arrive in pass order. It sits after reconciliation on purpose: a consumer sees the
-            // pass's DeviceDiscovered and DeviceLost events first, then the summary that explains
-            // them. A pass that stop or dispose cut short never reaches this point, which is why
+            // pass's DeviceDiscovered, DeviceUpdated and DeviceLost events first, then the
+            // summary that explains them. A pass that stop or dispose cut short never reaches this point, which is why
             // the reports simply end when discovery ends.
             //
             // The live-set size is read here rather than taken from the reconciliation, so that a
@@ -705,7 +743,8 @@ public class ContinuousDeviceFinder : IDisposable
     /// </summary>
     /// <remarks>
     /// A faulty report handler is routed to <see cref="ScanError"/>, which is where this class
-    /// already sends a faulty <see cref="DeviceDiscovered"/> or <see cref="DeviceLost"/> handler,
+    /// already sends a faulty <see cref="DeviceDiscovered"/>, <see cref="DeviceUpdated"/> or
+    /// <see cref="DeviceLost"/> handler,
     /// and <see cref="SafeScanError"/> swallows a faulty <see cref="ScanError"/> handler in turn.
     /// So a consumer drawing a status line can neither stop discovery nor lose the devices the
     /// pass found; the events for them were raised before this runs.
@@ -860,6 +899,16 @@ public class ContinuousDeviceFinder : IDisposable
         }
 
         return sawNameOnly ? BusyRescue.NameOnly : BusyRescue.None;
+    }
+
+    /// <summary>
+    /// Raises the <see cref="DeviceUpdated"/> event.
+    /// </summary>
+    /// <param name="previousDeviceInfo">The metadata the live set held before this pass.</param>
+    /// <param name="deviceInfo">The metadata the pass returned, now held by the live set.</param>
+    protected virtual void OnDeviceUpdated(IDeviceInfo previousDeviceInfo, IDeviceInfo deviceInfo)
+    {
+        DeviceUpdated?.Invoke(this, new DeviceUpdatedEventArgs(previousDeviceInfo, deviceInfo));
     }
 
     /// <summary>
