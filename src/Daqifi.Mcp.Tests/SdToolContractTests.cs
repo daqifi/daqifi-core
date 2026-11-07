@@ -215,6 +215,90 @@ public class SdCardToolContractTests
         Assert.True(card.IsLoggingToSdCard);
     }
 
+    // #919: the firmware deletes a name that is not on the card without complaint, and the result
+    // record says only which name was asked for — so a model handed "the old log" with one
+    // character wrong was told the file was gone while it was still there. The listing is the only
+    // thing on this device that knows better, and delete_sd_file was the one tool not asking it.
+    [Fact]
+    public async Task DeleteSdFile_ForANameTheCardDoesNotHave_IsRefusedAndNamesWhatIsThere()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.SdFiles.Add(new SdCardFileInfo("log_20261103_204314.bin"));
+        device.SdFiles.Add(new SdCardFileInfo("log_20261103_210512.bin"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DeleteSdFileAsync(AgentHarness.DeviceId, "no_such_file.bin", CancellationToken.None));
+
+        Assert.Contains("no file named 'no_such_file.bin'", ex.Message);
+        Assert.Contains("log_20261103_204314.bin", ex.Message);
+        Assert.Contains("log_20261103_210512.bin", ex.Message);
+
+        // The refusal has to stop short of the wire, and both files have to still be there.
+        Assert.Empty(device.DeletedFiles);
+        Assert.Equal(2, device.SdFiles.Count);
+    }
+
+    [Fact]
+    public async Task DeleteSdFile_OnAnEmptyCard_SaysTheCardIsEmptyRatherThanReportingASuccess()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DeleteSdFileAsync(AgentHarness.DeviceId, "log_a.bin", CancellationToken.None));
+
+        Assert.Contains("card is empty", ex.Message);
+        Assert.Empty(device.DeletedFiles);
+    }
+
+    [Fact]
+    public async Task DeleteSdFile_ForAFileThatIsThere_DeletesItAndReportsTheCardsOwnSpelling()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.SdFiles.Add(new SdCardFileInfo("LOG_A.BIN"));
+        device.SdFiles.Add(new SdCardFileInfo("log_b.bin"));
+
+        // FAT is case-insensitive, so the caller's spelling matches; what goes to the firmware is
+        // the card's own.
+        var result = await agent.DeleteSdFileAsync(AgentHarness.DeviceId, "log_a.bin", CancellationToken.None);
+
+        Assert.Equal("LOG_A.BIN", result.FileName);
+        Assert.Equal(AgentHarness.DeviceId, result.DeviceId);
+        Assert.Equal(new[] { "LOG_A.BIN" }, device.DeletedFiles);
+        Assert.Equal(new[] { "log_b.bin" }, device.SdFiles.Select(f => f.FileName));
+    }
+
+    // A listing that cannot be read is where the delete differs from the download: the download's
+    // own transfer would fail loudly, this would not, so an unverifiable delete is refused.
+    [Fact]
+    public async Task DeleteSdFile_WhenTheCardWillNotList_RefusesRatherThanDeleteUnverified()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.SdFailure = new SdCardBusyException(new[] { "busy" });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DeleteSdFileAsync(AgentHarness.DeviceId, "log_a.bin", CancellationToken.None));
+
+        Assert.Contains("stop_sd_logging", ex.Message);
+        Assert.IsType<SdCardBusyException>(ex.InnerException);
+        Assert.Empty(device.DeletedFiles);
+    }
+
+    [Fact]
+    public async Task DeleteSdFile_InReadOnlyMode_IsRefusedBeforeTheCardIsEvenListed()
+    {
+        // The permission refusal must win over everything below it: a read-only server that first
+        // answered "there is no file named ..." would be telling the caller to fix the wrong thing.
+        var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
+        device.SdFiles.Add(new SdCardFileInfo("log_a.bin"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DeleteSdFileAsync(AgentHarness.DeviceId, "log_a.bin", CancellationToken.None));
+
+        Assert.Contains("read-only", ex.Message);
+        Assert.Empty(device.DeletedFiles);
+        Assert.Single(device.SdFiles);
+    }
+
     [Fact]
     public async Task ShutdownAsync_StopsALiveRecordingBeforeReleasingTheDevice()
     {

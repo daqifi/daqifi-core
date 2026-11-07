@@ -213,11 +213,11 @@ public static class DaqifiTools
         => GuardAsync(() => agent.DownloadSdFileAsync(deviceId, fileName, exportCsv, cancellationToken));
 
     [McpServerTool(Name = "delete_sd_file", ReadOnly = false, Destructive = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Permanently delete a file from the device's SD card. No undo — download first if the data matters. Refused in --read-only mode and while logging.")]
+    [Description("Permanently delete a file from the device's SD card. No undo — download first if the data matters. A name the card does not list is refused, naming the files that are there, so a success means that file was found and removed. Refused in --read-only mode and while logging.")]
     public static Task<SdDeleteResult> DeleteSdFile(
         DaqifiAgent agent,
         [Description("The device_id to delete from.")] string deviceId,
-        [Description("The on-card file name, exactly as list_sd_files reports it.")] string fileName,
+        [Description("The on-card file name, exactly as list_sd_files reports it. A name that is not on the card is rejected rather than reported as deleted.")] string fileName,
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.DeleteSdFileAsync(deviceId, fileName, cancellationToken));
 

@@ -926,7 +926,10 @@ public sealed class DaqifiAgent
         // and every reconstructed timestamp comes out ~19% fast.
         var liveConfig = exportCsv ? SdCardDeviceConfiguration.FromDevice(device) : null;
 
-        name = await ResolveFileNameAsync(sd, name, cancellationToken).ConfigureAwait(false);
+        // listingIsAuthoritative: false — a download that cannot be satisfied fails loudly on its
+        // own, so an unreadable listing must never be the reason a retrievable file is refused.
+        name = await ResolveFileNameAsync(sd, name, listingIsAuthoritative: false, cancellationToken)
+            .ConfigureAwait(false);
 
         SdCardDownloadResult download;
         try
@@ -983,8 +986,20 @@ public sealed class DaqifiAgent
 
     /// <summary>
     /// Deletes a file from the device's SD card. Destructive, so it is refused under
-    /// <c>--read-only</c>.
+    /// <c>--read-only</c>, and refused outright for a name the card does not list.
     /// </summary>
+    /// <remarks>
+    /// The firmware accepts a delete for a name that is not on the card without complaint, and the
+    /// result record carries nothing that could tell the two apart — so a caller that mistyped a
+    /// name used to be told its file was gone while the file was still there. The listing is
+    /// consulted first, and a name that is not in it is refused with the names that are, which is
+    /// what a caller needs to correct itself.
+    /// <para>
+    /// Unlike the download, this passes <c>listingIsAuthoritative: true</c>: there is no later step
+    /// that would fail loudly, so a listing that cannot be read has to fail the call rather than
+    /// wave an unverifiable delete through.
+    /// </para>
+    /// </remarks>
     public async Task<SdDeleteResult> DeleteSdFileAsync(
         string deviceId, string fileName, CancellationToken cancellationToken)
     {
@@ -992,6 +1007,16 @@ public sealed class DaqifiAgent
         var name = RequireFileName(fileName);
         var device = Require(deviceId);
         var sd = RequireSdCard(device);
+
+        try
+        {
+            name = await ResolveFileNameAsync(sd, name, listingIsAuthoritative: true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (Rewrite(ex, deviceId) is { } rewritten)
+        {
+            throw rewritten;
+        }
 
         try
         {
@@ -1021,8 +1046,17 @@ public sealed class DaqifiAgent
     /// absent from a stale snapshot.
     /// </para>
     /// </remarks>
+    /// <param name="sd">The card to ask.</param>
+    /// <param name="fileName">The name the caller supplied.</param>
+    /// <param name="listingIsAuthoritative">
+    /// Whether a listing that cannot be read should fail the call. <c>false</c> for the download,
+    /// whose own transfer fails loudly, so the check can never be the reason a retrievable file is
+    /// refused. <c>true</c> for the delete, where nothing later would notice: the firmware accepts
+    /// a delete for an absent name silently, so an unverifiable delete must not proceed.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the listing refresh.</param>
     internal static async Task<string> ResolveFileNameAsync(
-        ISdCardOperations sd, string fileName, CancellationToken cancellationToken)
+        ISdCardOperations sd, string fileName, bool listingIsAuthoritative, CancellationToken cancellationToken)
     {
         var match = Match(sd.SdCardFiles, fileName);
         if (match is not null)
@@ -1039,7 +1073,7 @@ public sealed class DaqifiAgent
         {
             throw;
         }
-        catch
+        catch when (!listingIsAuthoritative)
         {
             // The listing is a courtesy, not a gate. If it cannot be taken — a busy card, a
             // firmware that will not answer — let the download itself be the thing that fails, so
@@ -1194,6 +1228,11 @@ public sealed class DaqifiAgent
     /// here, not just in Core: the listing pre-flight runs first and would otherwise answer a name
     /// full of newlines with "there is no file called &lt;several lines of garbage&gt;" instead of
     /// the plain "that is not a valid file name" the caller can act on.
+    /// <para>
+    /// Path separators are refused for the same reason. The card is a flat list — the firmware has
+    /// no notion of a directory — so <c>logs/old.bin</c> can only ever be a caller that assumed one,
+    /// and saying that is more use than the listing pre-flight's "there is no file named ...".
+    /// </para>
     /// </remarks>
     private static string RequireFileName(string? fileName)
     {
@@ -1211,6 +1250,14 @@ public sealed class DaqifiAgent
                 throw new InvalidOperationException(
                     "That is not a valid SD file name: quotes, semicolons and control characters "
                     + "(including newlines and tabs) are not allowed. Call list_sd_files and pass a "
+                    + "name exactly as it is listed.");
+            }
+
+            if (c is '/' or '\\')
+            {
+                throw new InvalidOperationException(
+                    $"'{trimmed}' is not a valid SD file name: the card is a flat list with no "
+                    + "folders, so a name cannot contain '/' or '\\'. Call list_sd_files and pass a "
                     + "name exactly as it is listed.");
             }
         }

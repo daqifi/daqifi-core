@@ -195,6 +195,13 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     /// <summary>The logging session the last <c>start_sd_logging</c> opened, if any.</summary>
     internal SdCardLoggingSession? StartedSession { get; private set; }
 
+    /// <summary>
+    /// The names <c>delete_sd_file</c> actually put on the wire, in order. The firmware accepts a
+    /// delete for a name that is not on the card without complaint, so what the card was asked to
+    /// remove is the only way a test can see that a refusal stopped short of the wire.
+    /// </summary>
+    internal List<string> DeletedFiles { get; } = new();
+
     private bool _logging;
 
     bool ISdCardOperations.IsLoggingToSdCard => _logging;
@@ -226,6 +233,21 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     Task ISdCardOperations.StopSdCardLoggingAsync(CancellationToken cancellationToken)
     {
         _logging = false;
+        return Task.CompletedTask;
+    }
+
+    // Deliberately forgiving, exactly like the firmware: a name that is not on the card is
+    // accepted and reported as a success. Anything that keeps a mistyped name from reaching the
+    // card has to be above this line.
+    Task ISdCardOperations.DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken)
+    {
+        if (SdFailure is { } failure)
+        {
+            return Task.FromException(failure);
+        }
+
+        DeletedFiles.Add(fileName);
+        SdFiles.RemoveAll(f => string.Equals(f.FileName, fileName, StringComparison.OrdinalIgnoreCase));
         return Task.CompletedTask;
     }
 
