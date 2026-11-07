@@ -692,6 +692,60 @@ public class ContinuousDeviceFinderTests
         Assert.All(finder.Devices, d => Assert.Contains(d.PortName, new[] { "COM7", "COM8" }));
     }
 
+    [Fact]
+    public void Reconcile_OnlyTheLocalInterfaceChanged_RaisesNothing()
+    {
+        // LocalInterfaceAddress says which of the host's NICs heard the device, not anything
+        // about the device. WiFiDeviceFinder broadcasts on every interface at once and keeps
+        // whichever reply arrives first, so on a multi-homed host it flips between passes while
+        // the device sits still. Comparing it would fire DeviceUpdated on every pass and make
+        // the event worthless as a redraw trigger, which is the opposite of what #725 wants.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var updated = new List<DeviceUpdatedEventArgs>();
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        var ip = IPAddress.Parse("192.168.1.50");
+        var viaWifi = Wifi("AA:BB", ip: ip);
+        viaWifi.LocalInterfaceAddress = IPAddress.Parse("192.168.1.10");
+        var viaEthernet = Wifi("AA:BB", ip: ip);
+        viaEthernet.LocalInterfaceAddress = IPAddress.Parse("192.168.1.11");
+
+        finder.Reconcile(new IDeviceInfo[] { viaWifi });
+        var changes = finder.Reconcile(new IDeviceInfo[] { viaEthernet });
+
+        Assert.Empty(updated);
+        Assert.Empty(lost);
+        Assert.Equal(0, changes.MetadataUpdates);
+
+        // The live set still carries the newest pass's value, so a consumer that actually needs
+        // the binding hint reads it from Devices rather than from an event.
+        Assert.Equal(IPAddress.Parse("192.168.1.11"), finder.Devices[0].LocalInterfaceAddress);
+    }
+
+    [Fact]
+    public void Reconcile_TheIpChangedAlongsideTheLocalInterface_StillRaisesUpdated()
+    {
+        // The guard above must not swallow a real change that happens to arrive on a different
+        // NIC: the device's own IP moving is exactly what a consumer has to redraw for.
+        using var finder = NewFinder(new StubDeviceFinder());
+        var updated = new List<DeviceUpdatedEventArgs>();
+        finder.DeviceUpdated += (_, e) => updated.Add(e);
+
+        var before = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.50"));
+        before.LocalInterfaceAddress = IPAddress.Parse("192.168.1.10");
+        var after = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.51"));
+        after.LocalInterfaceAddress = IPAddress.Parse("192.168.1.11");
+
+        finder.Reconcile(new IDeviceInfo[] { before });
+        finder.Reconcile(new IDeviceInfo[] { after });
+
+        var update = Assert.Single(updated);
+        Assert.Equal(IPAddress.Parse("192.168.1.50"), update.PreviousDeviceInfo.IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.51"), update.DeviceInfo.IPAddress);
+    }
+
     #endregion
 
     #region Reconcile: stale removal

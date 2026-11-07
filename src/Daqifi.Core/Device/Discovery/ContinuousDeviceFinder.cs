@@ -497,11 +497,23 @@ public class ContinuousDeviceFinder : IDisposable
     /// Whether a device the live set already holds came back from a pass with different metadata.
     /// </summary>
     /// <remarks>
-    /// Every member of <see cref="IDeviceInfo"/> is compared, because every one of them can
-    /// change between passes without the device arriving or going away: a WiFi device gets a new
-    /// IP from the router, a serial device gets a new port name after a re-enumeration, a device
-    /// reports itself powered off. A finder that hands back the same instance twice — the common
-    /// case for a cached pass result — is settled by the reference check and costs nothing.
+    /// Every member of <see cref="IDeviceInfo"/> that describes the device is compared, because
+    /// each of them can change between passes without the device arriving or going away: a WiFi
+    /// device gets a new IP from the router, a serial device gets a new port name after a
+    /// re-enumeration, a device reports itself powered off. A finder that hands back the same
+    /// instance twice — the common case for a cached pass result — is settled by the reference
+    /// check and costs nothing.
+    /// <para>
+    /// <see cref="IDeviceInfo.LocalInterfaceAddress"/> is deliberately excluded, because it
+    /// records which local NIC happened to hear the device rather than anything about the device.
+    /// <see cref="WiFiDeviceFinder"/> broadcasts on every interface in parallel and keeps
+    /// whichever reply arrives first, so on a multi-homed host — a laptop on Wi-Fi with a wired
+    /// dock, say — the winner is a race and the field flips from pass to pass while the device
+    /// sits still. Comparing it would raise <see cref="DeviceUpdated"/> on every pass and make
+    /// the event useless as the redraw trigger it exists to be. A consumer that wants the current
+    /// binding hint reads it from <see cref="Devices"/>, which always carries the newest pass's
+    /// value.
+    /// </para>
     /// </remarks>
     private static bool MetadataDiffers(IDeviceInfo previous, IDeviceInfo current)
     {
@@ -518,7 +530,6 @@ public class ContinuousDeviceFinder : IDisposable
             || !string.Equals(previous.DevicePath, current.DevicePath, StringComparison.Ordinal)
             || !string.Equals(previous.LocationKey, current.LocationKey, StringComparison.Ordinal)
             || !Equals(previous.IPAddress, current.IPAddress)
-            || !Equals(previous.LocalInterfaceAddress, current.LocalInterfaceAddress)
             || previous.Port != current.Port
             || previous.Type != current.Type
             || previous.IsPowerOn != current.IsPowerOn
