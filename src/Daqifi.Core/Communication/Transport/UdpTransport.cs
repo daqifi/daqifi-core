@@ -7,6 +7,15 @@ namespace Daqifi.Core.Communication.Transport;
 /// UDP implementation of IUdpTransport that provides broadcast and unicast communication.
 /// Handles UDP socket lifecycle and provides both async and sync methods.
 /// </summary>
+/// <remarks>
+/// Unused and scheduled for removal — see issue #924. The library's own UDP code
+/// (<c>WiFiDeviceFinder</c> and <c>MDnsDeviceFinder</c>) opens
+/// <see cref="UdpClient"/> directly instead of going through this wrapper.
+/// </remarks>
+[Obsolete("Unused: DAQiFi Core's own UDP discovery opens System.Net.Sockets.UdpClient directly "
+          + "rather than through this wrapper, and nothing else uses it. Use "
+          + "System.Net.Sockets.UdpClient for UDP, or IStreamTransport for a TCP/serial stream. "
+          + "This type will be removed in a future major version (#924).")]
 public class UdpTransport : IUdpTransport
 {
     private readonly int _localPort;

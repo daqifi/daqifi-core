@@ -3,9 +3,11 @@ namespace Daqifi.Core.Communication.Transport;
 /// <summary>
 /// Represents a transport mechanism that provides stream-based communication.
 /// Abstracts the underlying connection type (TCP or serial) and provides
-/// a unified Stream interface for message producers and consumers. UDP
-/// (<see cref="IUdpTransport"/>) and HID (<see cref="IHidTransport"/>) are separate,
-/// non-stream transports.
+/// a unified Stream interface for message producers and consumers. HID
+/// (<see cref="IHidTransport"/>) is a separate, non-stream transport. UDP has no
+/// transport abstraction to point at: device discovery uses
+/// <see cref="System.Net.Sockets.UdpClient"/> directly, and the <c>IUdpTransport</c> seam that
+/// was once meant for it is obsolete and scheduled for removal (issue #924).
 /// </summary>
 public interface IStreamTransport : IDisposable
 {

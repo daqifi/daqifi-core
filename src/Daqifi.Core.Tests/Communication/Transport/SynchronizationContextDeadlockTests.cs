@@ -202,6 +202,9 @@ public class SynchronizationContextDeadlockTests
         Assert.False(transport.IsConnected);
     }
 
+    // UdpTransport is [Obsolete] (#924) but still shipped public API, so its deadlock-safety is
+    // still worth pinning for as long as a consumer can call it.
+#pragma warning disable CS0618 // Type or member is obsolete
     [Fact]
     public void UdpTransport_OpenAndClose_UnderBlockedContext_Complete()
     {
@@ -217,6 +220,7 @@ public class SynchronizationContextDeadlockTests
         Assert.Null(run.Error);
         Assert.False(transport.IsOpen);
     }
+#pragma warning restore CS0618
 
     #endregion
 

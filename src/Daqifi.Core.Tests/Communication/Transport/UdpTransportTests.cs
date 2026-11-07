@@ -1,10 +1,15 @@
 using Daqifi.Core.Communication.Transport;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
+
+// UdpTransport is [Obsolete] (#924) but still shipped public API, so it stays covered while it is
+// public. These tests go out with the type.
+#pragma warning disable CS0618 // Type or member is obsolete
 
 public class UdpTransportTests
 {
@@ -188,5 +193,25 @@ public class UdpTransportTests
 
         await transport.OpenAsync();
         Assert.Contains("Open", transport.ConnectionInfo);
+    }
+
+    /// <summary>
+    /// <c>UdpTransport</c> and <c>IUdpTransport</c> are an unused seam: DAQiFi Core's own UDP
+    /// discovery opens <see cref="System.Net.Sockets.UdpClient"/> directly and never goes through
+    /// them (#924). They are shipped public API, so ADR 0002 says they get obsoleted before they
+    /// get deleted — and <c>[Obsolete]</c> is not recorded in <c>PublicAPI.*.txt</c>, so nothing
+    /// but this test notices if the attribute is dropped and the deprecation quietly stops
+    /// telling anyone.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(UdpTransport))]
+    [InlineData(typeof(IUdpTransport))]
+    public void UdpTransportType_IsStillPublicAndMarkedObsolete(Type type)
+    {
+        Assert.True(type.IsPublic, $"{type.Name} must stay public until a major version removes it (ADR 0002).");
+
+        var obsolete = type.GetCustomAttribute<ObsoleteAttribute>();
+        Assert.NotNull(obsolete);
+        Assert.Contains("924", obsolete!.Message, StringComparison.Ordinal);
     }
 }
