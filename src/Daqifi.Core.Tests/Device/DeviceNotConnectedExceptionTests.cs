@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Network;
 using System;
 using System.Collections.Generic;
@@ -203,11 +204,13 @@ public class DeviceNotConnectedExceptionTests
     [Fact]
     public async Task TextCommand_WhenDisconnecting_ThrowsWithIsShuttingDownTrue()
     {
-        // The real disconnect race the issue describes: Disconnect() sets _isDisconnecting
+        // The real disconnect race the issue describes: Disconnect() marks the teardown
         // before the transport check further down is ever reached, so this guard is what an
         // in-flight caller actually sees.
         var device = new TextCommandTestableDevice("TestDevice");
-        SetPrivateField(device, "_isDisconnecting", true);
+        Assert.True(device.TryTransition(DeviceLifecycle.Connecting));
+        Assert.True(device.TryTransition(DeviceLifecycle.Connected));
+        Assert.True(device.TryTransition(DeviceLifecycle.Disconnecting));
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.CallExecuteTextCommandAsync());
@@ -220,7 +223,7 @@ public class DeviceNotConnectedExceptionTests
     public async Task TextCommand_WhenDisposed_ThrowsWithIsShuttingDownTrue()
     {
         var device = new TextCommandTestableDevice("TestDevice");
-        SetPrivateField(device, "_disposed", true);
+        Assert.True(device.TryTransition(DeviceLifecycle.Disposed));
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.CallExecuteTextCommandAsync());
@@ -309,13 +312,6 @@ public class DeviceNotConnectedExceptionTests
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
-
-    private static void SetPrivateField(DaqifiDevice device, string fieldName, object value)
-    {
-        typeof(DaqifiDevice)
-            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(device, value);
-    }
 
     /// <summary>
     /// Exposes the protected <c>ExecuteTextCommandAsync</c> so the text-path guards can be

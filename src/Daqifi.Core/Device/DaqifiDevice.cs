@@ -409,9 +409,15 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public uint TimestampFrequency { get; private set; }
 
     /// <summary>
-    /// Gets or sets the current operational state of the device.
+    /// Gets the current operational state of the device.
     /// </summary>
-    public DeviceState State { get; private set; } = DeviceState.Disconnected;
+    /// <remarks>
+    /// Calculated from the same value as <see cref="Status"/>, so the two always agree. A device
+    /// whose <see cref="Status"/> is <see cref="ConnectionStatus.Lost"/>,
+    /// <see cref="ConnectionStatus.Retrying"/> or <see cref="ConnectionStatus.Failed"/> reports
+    /// <see cref="DeviceState.Disconnected"/>: it has no session.
+    /// </remarks>
+    public DeviceState State => DeviceLifecycleTable.ToState(_lifecycle);
 
     /// <summary>
     /// When <c>true</c>, <see cref="InitializeAsync"/> omits the initialization commands that
@@ -452,7 +458,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     public bool PreserveActiveStream { get; set; }
 
-    private ConnectionStatus _status;
+    /// <summary>
+    /// Where this device is in its life: the single source of <see cref="Status"/> and
+    /// <see cref="State"/>. Written only by <see cref="TryCommitTransition"/>.
+    /// </summary>
+    private volatile DeviceLifecycle _lifecycle = DeviceLifecycle.Disconnected;
+
+    /// <summary>Makes checking a lifecycle change against the table and writing it one step.</summary>
+    private readonly object _lifecycleTransitionLock = new();
 
     /// <summary>
     /// Sink for this device's diagnostics. Defaults to <see cref="NullLogger.Instance"/> when the
@@ -476,16 +489,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     private ProtobufProtocolHandler? _protocolHandler;
 
-    // "Teardown has finished" — read by ExecuteTextCommandCoreAsync to reject work on a dead
-    // device. Distinct from _disposeClaimed below, which marks teardown as *started*.
-    private bool _disposed;
-
     // Disposal gate, 0 until a caller claims teardown. Interlocked rather than a bool because
     // Dispose() and DisposeAsync() are documented as interchangeable and DisposeAsync spends
     // real awaited time inside the window a plain flag would leave open. See TryClaimDisposal.
+    //
+    // Not part of _lifecycle, and neither is _callerWantsDisconnected: neither is a state the
+    // device is in. This one says who runs the disposal, which then still has to walk the device
+    // through its ordinary disconnect. DeviceLifecycle.Disposed marks that teardown as finished.
     private int _disposeClaimed;
-    private bool _isDisconnecting;
-    private bool _isInitialized;
     private readonly List<IChannel> _channels = new();
 
     // Guards structural access to _channels: the consumer thread repopulates it
@@ -631,15 +642,95 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <summary>
     /// Gets the current connection status of the device.
     /// </summary>
-    public ConnectionStatus Status
+    /// <remarks>
+    /// Calculated from the same value as <see cref="State"/>, so the two always agree.
+    /// </remarks>
+    public ConnectionStatus Status => DeviceLifecycleTable.ToStatus(_lifecycle);
+
+    /// <summary>The device's lifecycle value, for tests that walk the transition table.</summary>
+    internal DeviceLifecycle Lifecycle => _lifecycle;
+
+    /// <summary>
+    /// Moves the device to <paramref name="next"/> if <see cref="DeviceLifecycleTable"/> permits it,
+    /// then tells consumers if that changed <see cref="Status"/>.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> if the device is now on <paramref name="next"/>, which includes already being
+    /// there; <c>false</c> if the table refused the change and the device stayed where it was.
+    /// </returns>
+    internal bool TryTransition(DeviceLifecycle next)
     {
-        get => _status;
-        private set
+        if (!TryCommitTransition(next, out var previous))
         {
-            if (_status == value) return;
-            _status = value;
-            RaiseConnectionStatusChanged(_status);
-            RaiseStatusChanged(_status);
+            return false;
+        }
+
+        NotifyStatusChange(previous, next);
+        return true;
+    }
+
+    /// <summary>
+    /// The first half of <see cref="TryTransition"/>: writes the value and raises nothing, for a
+    /// caller with more of its own state to settle before a handler can run. A handler is free to
+    /// connect or disconnect from inside the event, so anything written after raising it would land
+    /// on top of whatever that handler did (issue #931).
+    /// </summary>
+    private bool TryCommitTransition(DeviceLifecycle next, out DeviceLifecycle previous)
+    {
+        DeviceLifecycle current;
+        lock (_lifecycleTransitionLock)
+        {
+            current = _lifecycle;
+            previous = current;
+
+            if (current == next)
+            {
+                return true;
+            }
+
+            if (DeviceLifecycleTable.IsAllowed(current, next))
+            {
+                _lifecycle = next;
+                return true;
+            }
+        }
+
+        SafeLog(() => _logger.LogDebug(
+            "[Lifecycle] Device '{DeviceName}' stayed on {Current}: the transition table does not permit {Next}.",
+            Name,
+            current,
+            next));
+
+        return false;
+    }
+
+    /// <summary>
+    /// The second half of <see cref="TryTransition"/>: raises the status events, if the change moved
+    /// <see cref="Status"/> at all. Passes the status of this transition rather than reading the
+    /// property, which a handler earlier in the same call may have moved on already.
+    /// </summary>
+    private void NotifyStatusChange(DeviceLifecycle previous, DeviceLifecycle next)
+    {
+        var status = DeviceLifecycleTable.ToStatus(next);
+        if (status == DeviceLifecycleTable.ToStatus(previous))
+        {
+            return;
+        }
+
+        RaiseConnectionStatusChanged(status);
+        RaiseStatusChanged(status);
+    }
+
+    /// <summary>
+    /// Marks a live session as being torn down, so nothing new starts on it and a drop during the
+    /// teardown is not reported as a lost connection. <see cref="Status"/> does not move, so this
+    /// raises nothing.
+    /// </summary>
+    private void BeginTeardown()
+    {
+        if (DeviceLifecycleTable.IsLive(_lifecycle))
+        {
+            TryTransition(DeviceLifecycle.Disconnecting);
         }
     }
 
@@ -900,7 +991,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         Name = name;
         IpAddress = ipAddress;
-        _status = ConnectionStatus.Disconnected;
         _logger = logger ?? NullLogger.Instance;
         _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         _lifecycleGate = new LifecycleGate(
@@ -924,7 +1014,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         Name = name;
         IpAddress = ipAddress;
-        _status = ConnectionStatus.Disconnected;
         _logger = logger ?? NullLogger.Instance;
         _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         _lifecycleGate = new LifecycleGate(
@@ -949,7 +1038,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
     {
         Name = name;
-        _status = ConnectionStatus.Disconnected;
         _logger = logger ?? NullLogger.Instance;
         _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         _lifecycleGate = new LifecycleGate(
@@ -1204,7 +1292,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     private void HonourTeardownRaisedDuringConnect()
     {
-        if (!_callerWantsDisconnected && !_disposed)
+        if (!_callerWantsDisconnected && _lifecycle != DeviceLifecycle.Disposed)
         {
             return;
         }
@@ -1219,6 +1307,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     private void ConnectCoreUnsynchronized()
     {
+        // A lost connection leaves the pumps bound to the dead stream (see DeviceLifecycle.Lost).
+        // Tear that session down the way the reconnect loop does, so this connect builds new pumps
+        // over the stream it is about to open and does not keep sending to the old one.
+        if (_lifecycle == DeviceLifecycle.Lost)
+        {
+            DisconnectCoreUnsynchronized(ConnectionStatus.Lost);
+        }
+
         BeginConnect();
 
         try
@@ -1268,6 +1364,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // See ConnectCoreUnsynchronized.
+        if (_lifecycle == DeviceLifecycle.Lost)
+        {
+            await DisconnectCoreUnsynchronizedAsync(ConnectionStatus.Lost, cancellationToken).ConfigureAwait(false);
+        }
+
         BeginConnect();
 
         var transportConnected = false;
@@ -1309,17 +1411,25 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Marks the device as connecting and opens a fresh error-reporting session. Shared entry
     /// point for <see cref="Connect"/> and <see cref="ConnectAsync"/>.
     /// </summary>
+    /// <exception cref="ObjectDisposedException">Thrown when the device has been disposed.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when called from inside a teardown of this device.</exception>
     private void BeginConnect()
     {
-        Status = ConnectionStatus.Connecting;
-        State = DeviceState.Connecting;
-
         // A reconnect is a new session: its first background failure should be reported
         // immediately rather than collapsed into a throttle window the previous session opened.
         // Lives here, not in Connect(), so the async path resets it too — the factory connects
         // through ConnectAsync, so leaving it on the sync path alone would mean the primary
         // connect path silently kept the previous session's throttle state (issue #378).
         _errorThrottle.Reset();
+
+        if (TryTransition(DeviceLifecycle.Connecting))
+        {
+            return;
+        }
+
+        ObjectDisposedException.ThrowIf(_lifecycle == DeviceLifecycle.Disposed, this);
+        throw new InvalidOperationException(
+            $"Device '{Name}' cannot connect while its connection is being torn down.");
     }
 
     /// <summary>
@@ -1363,8 +1473,35 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         _messageProducer?.Start();
         _messageConsumer?.Start();
 
-        Status = ConnectionStatus.Connected;
-        State = DeviceState.Connected;
+        if (!TryTransition(DeviceLifecycle.Connected))
+        {
+            CloseDisownedConnect();
+        }
+    }
+
+    /// <summary>
+    /// Closes what a connect built after the device moved on without it: a teardown gave up waiting
+    /// on the connect (<see cref="MarkDisconnectedWithoutTeardown"/>), or a handler disconnected
+    /// from inside it. The device already reports the outcome that teardown settled on, so what
+    /// this connect opened must not stay running behind that report.
+    /// </summary>
+    private void CloseDisownedConnect()
+    {
+        SafeLog(() => _logger.LogWarning(
+            "[Lifecycle] Device '{DeviceName}' moved on while this connect was in flight; "
+            + "closing the connection it established.",
+            Name));
+
+        StopMessagePumps();
+
+        try
+        {
+            _transport?.Disconnect();
+        }
+        catch (Exception ex)
+        {
+            SafeLog(() => _logger.LogDebug(ex, "Failed to close the transport of a disowned connect."));
+        }
     }
 
     /// <summary>
@@ -1373,8 +1510,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     private void FailConnect()
     {
-        Status = ConnectionStatus.Disconnected;
-        State = DeviceState.Disconnected;
+        TryTransition(DeviceLifecycle.Disconnected);
     }
 
     /// <summary>
@@ -1415,7 +1551,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// hold time with default timeouts (StopSafely up to 1s + maxWait
     /// of responseTimeoutMs*5 = 5s by default + safety margin) and
     /// most custom-timeout callers; on timeout the in-flight exchange
-    /// sees <c>_isDisconnecting == true</c> via the post-acquisition
+    /// sees the teardown via the post-acquisition
     /// validation and bails out cleanly. Callers wanting a non-blocking
     /// disconnect should use <see cref="DisconnectAsync"/>.
     /// <para>
@@ -1492,22 +1628,21 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <see cref="HonourTeardownRaisedDuringConnect"/> for a caller's own connect,
     /// <c>ReconnectSupervisor.AbandonIfSuperseded</c> for a reconnect attempt.
     /// <para>
-    /// What can still be done safely is record the caller's intent at the device level. These
-    /// are this class's own fields, not the transport, so setting them cannot corrupt anything
-    /// the stuck operation is doing — and without them the device would keep reporting itself
-    /// connected after the caller had asked it not to.
+    /// What can still be done safely is record the caller's intent at the device level. That is
+    /// this class's own value, not the transport, so setting it cannot corrupt anything the stuck
+    /// operation is doing — and without it the device would keep reporting itself connected after
+    /// the caller had asked it not to.
     /// </para>
     /// </remarks>
     private void MarkDisconnectedWithoutTeardown(ConnectionStatus finalStatus)
     {
-        State = DeviceState.Disconnected;
-        _isInitialized = false;
-        Status = finalStatus;
+        BeginTeardown();
+        TryTransition(DeviceLifecycleTable.FromSettledStatus(finalStatus));
     }
 
     private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
     {
-        _isDisconnecting = true;
+        BeginTeardown();
         var lockAcquired = AcquireTextExchangeLockForTeardown();
 
         try
@@ -1562,7 +1697,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         ConnectionStatus finalStatus,
         CancellationToken cancellationToken)
     {
-        _isDisconnecting = true;
+        BeginTeardown();
         var lockAcquired = await AcquireTextExchangeLockForTeardownAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -1590,7 +1725,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// the lock so the transport is not torn out from under an in-flight text exchange. The
     /// lock IS released by <see cref="FinishDisconnect"/> when acquired (so a future
     /// <see cref="Connect"/> followed by <c>ExecuteTextCommandAsync</c> isn't blocked); a stuck
-    /// exchange that holds past the timeout drops to the <c>_isDisconnecting</c> validation
+    /// exchange that holds past the timeout drops to the shutting-down validation
     /// path inside the exchange.
     /// </summary>
     /// <returns><c>true</c> when the lock was acquired and must be released after teardown.</returns>
@@ -1600,7 +1735,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <inheritdoc cref="AcquireTextExchangeLockForTeardown"/>
     /// <param name="cancellationToken">
     /// Shortens the wait. A cancellation is swallowed rather than propagated: teardown must
-    /// still run, and the in-flight exchange sees <c>_isDisconnecting == true</c> and bails out
+    /// still run, and the in-flight exchange sees the teardown and bails out
     /// on its own — the same outcome as letting the wait time out.
     /// </param>
     private Task<bool> AcquireTextExchangeLockForTeardownAsync(CancellationToken cancellationToken) =>
@@ -1692,10 +1827,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </param>
     private void FinishDisconnect(bool lockAcquired, ConnectionStatus finalStatus)
     {
-        Status = finalStatus;
-        State = DeviceState.Disconnected;
-        _isInitialized = false;
-        _isDisconnecting = false;
+        var settled = DeviceLifecycleTable.FromSettledStatus(finalStatus);
+        var moved = TryCommitTransition(settled, out var previous);
 
         // Deferral goes back to its resting state with the session. Both halves — the parked
         // commands and the "an operation owns the device" flag — or the next session defers
@@ -1704,6 +1837,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         if (lockAcquired)
         {
             _operations.ReleaseAfterTeardown();
+        }
+
+        // Last, with nothing after it: a handler may connect from inside this event and initialize
+        // the new session, which needs the state above settled and must not be written over.
+        if (moved)
+        {
+            NotifyStatusChange(previous, settled);
         }
     }
 
@@ -2087,7 +2227,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     bool ITextExchangeHost.IsConnected => IsConnected;
 
     /// <inheritdoc />
-    bool ITextExchangeHost.IsShuttingDown => _disposed || _isDisconnecting;
+    bool ITextExchangeHost.IsShuttingDown => _lifecycle is DeviceLifecycle.Disposed or DeviceLifecycle.Disconnecting;
 
     /// <inheritdoc />
     IStreamTransport? ITextExchangeHost.Transport => _transport;
@@ -2653,7 +2793,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         // Transport disconnected — only report Lost for unexpected drops,
         // not during an intentional Disconnect() call
-        if (Status != ConnectionStatus.Connected || _isDisconnecting)
+        if (!DeviceLifecycleTable.IsLive(_lifecycle))
         {
             return;
         }
@@ -2664,9 +2804,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // carries the full reasoning.
         var epochAtDrop = _reconnect.PrepareForDrop();
 
-        Status = ConnectionStatus.Lost;
-
-        _reconnect.BeginIfEnabled(epochAtDrop);
+        // Refused when a teardown started in the moment since the check above: then this is not
+        // an unexpected drop after all.
+        if (TryTransition(DeviceLifecycle.Lost))
+        {
+            _reconnect.BeginIfEnabled(epochAtDrop);
+        }
     }
 
     #region Automatic reconnection (issue #379)
@@ -2840,10 +2983,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     ConnectionStatus IReconnectHost.Status => Status;
 
     /// <inheritdoc />
-    bool IReconnectHost.IsDisposed => _disposed;
+    bool IReconnectHost.IsDisposed => _lifecycle == DeviceLifecycle.Disposed;
 
     /// <inheritdoc />
-    bool IReconnectHost.IsDisconnecting => _isDisconnecting;
+    bool IReconnectHost.IsDisconnecting => _lifecycle == DeviceLifecycle.Disconnecting;
 
     /// <inheritdoc />
     bool IReconnectHost.HasTransport => _transport != null;
@@ -3118,7 +3261,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // because OperationSerializer is built for it: every one of its touchpoints already
             // catches ObjectDisposedException. This gate has no such contract, and the object
             // is collected with the device anyway.
-            _disposed = true;
+            TryTransition(DeviceLifecycle.Disposed);
         }
     }
 
@@ -3187,7 +3330,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             throw new DeviceNotConnectedException("Device must be connected before initialization.");
         }
 
-        if (_isInitialized)
+        if (_lifecycle == DeviceLifecycle.Ready)
         {
             return; // Already initialized
         }
@@ -3206,7 +3349,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 "Channel population timeout must be positive.");
         }
 
-        State = DeviceState.Initializing;
+        if (!TryTransition(DeviceLifecycle.Initializing))
+        {
+            throw new DeviceNotConnectedException(
+                "The device cannot be initialized while its connection is being torn down.",
+                isShuttingDown: true);
+        }
 
         try
         {
@@ -3391,7 +3539,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
             // Run any derived-class initialization (e.g. routing the stream to USB) as part of
             // this try/catch so a failure there leaves the device in a consistent terminal state
-            // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
+            // rather than a falsely-ready device. Ready is only reached after it succeeds,
             // so a failed init can be safely retried.
             await OnDeviceInitializingAsync(preserveActiveStream, cancellationToken).ConfigureAwait(false);
 
@@ -3404,20 +3552,28 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // on every path and every override to check for itself.
             cancellationToken.ThrowIfCancellationRequested();
 
-            _isInitialized = true;
-            State = DeviceState.Ready;
+            // Refused when the session this initialized is gone: disconnected, lost or replaced
+            // while the sequence ran. Reporting success would hand back a device that is not ready.
+            if (!TryTransition(DeviceLifecycle.Ready))
+            {
+                throw new DeviceNotConnectedException(
+                    "The connection changed while the device was initializing, so it is not ready.");
+            }
         }
         catch (OperationCanceledException)
         {
             // Caller-initiated cancellation is not a device fault. Revert to a
             // non-error state so upstream logic that treats Error as a hardware or
-            // connection failure isn't misled into reporting a phantom failure.
-            State = IsConnected ? DeviceState.Connected : DeviceState.Disconnected;
+            // connection failure isn't misled into reporting a phantom failure. Refused, and
+            // rightly, when the session has already gone.
+            TryTransition(DeviceLifecycle.Connected);
             throw;
         }
         catch (Exception)
         {
-            State = DeviceState.Error;
+            // Refused, and rightly, when the session has already gone: a drop or a disconnect is
+            // then the truth about the device, not this failure.
+            TryTransition(DeviceLifecycle.Error);
             throw;
         }
     }

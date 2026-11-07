@@ -938,7 +938,7 @@ public class DaqifiDeviceInitializeTests
     /// A testable DaqifiDevice that captures sent messages without needing a real transport.
     /// Overrides ExecuteTextCommandAsync to bypass transport requirements in unit tests.
     /// </summary>
-    private class TestableDaqifiDevice : DaqifiDevice
+    internal class TestableDaqifiDevice : DaqifiDevice
     {
         private readonly IReadOnlyList<string> _textCommandResponse;
 
@@ -1088,8 +1088,32 @@ public class DaqifiDeviceInitializeTests
             PopulateChannelsOnDeviceInfo = populateChannelsOnDeviceInfo;
         }
 
+        /// <summary>
+        /// Builds the double over a transport, so the real connect, disconnect and lost-connection
+        /// paths run and the real message pumps are built. The text exchange stays bypassed, so
+        /// <see cref="DaqifiDevice.InitializeAsync"/> still reaches
+        /// <see cref="DeviceState.Ready"/>.
+        /// </summary>
+        public TestableDaqifiDevice(string name, Daqifi.Core.Communication.Transport.IStreamTransport transport)
+            : base(name, transport)
+        {
+            _textCommandResponse = Array.Empty<string>();
+            PopulateChannelsOnDeviceInfo = true;
+        }
+
+        /// <summary>
+        /// When true, <see cref="Send{T}"/> also takes the production path, so a test can see
+        /// which stream the real message producer writes to.
+        /// </summary>
+        public bool SendThroughProducer { get; set; }
+
         public override void Send<T>(IOutboundMessage<T> message)
         {
+            if (SendThroughProducer)
+            {
+                base.Send(message);
+            }
+
             if (message is IOutboundMessage<string> stringMessage)
             {
                 DirectSentMessages.Add(stringMessage);

@@ -6,7 +6,10 @@ namespace Daqifi.Core.Device;
 public enum DeviceState
 {
     /// <summary>
-    /// Device is not connected or has been disconnected.
+    /// Device has no session: it was never connected, was disconnected, or lost its connection.
+    /// <see cref="DaqifiDevice.Status"/> says which, including
+    /// <see cref="ConnectionStatus.Lost"/>, <see cref="ConnectionStatus.Retrying"/> and
+    /// <see cref="ConnectionStatus.Failed"/>.
     /// </summary>
     Disconnected,
 
@@ -36,10 +39,11 @@ public enum DeviceState
     /// initialized device reports <see cref="Ready"/> while it streams. Live acquisition state
     /// is <see cref="IStreamingDevice.IsStreaming"/>.
     /// </summary>
+    [Obsolete("No code sets this value, so waiting for it waits forever. Use IStreamingDevice.IsStreaming.")]
     Streaming,
 
     /// <summary>
-    /// Device has encountered an error.
+    /// Device is connected and its initialization failed. The initialization can be retried.
     /// </summary>
     Error
 }
