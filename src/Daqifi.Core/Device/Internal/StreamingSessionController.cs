@@ -9,9 +9,27 @@ using static Daqifi.Core.Internal.DiagnosticGuard;
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
+/// The session a streaming device is in. There is one acquisition on the device, so there is one
+/// value: it is what <see cref="DaqifiStreamingDevice.IsStreaming"/> and
+/// <see cref="DaqifiStreamingDevice.IsLoggingToSdCard"/> are both read from, which is what stops
+/// them disagreeing (issue #932).
+/// </summary>
+internal enum StreamingSessionKind
+{
+    /// <summary>Nothing is running.</summary>
+    None,
+
+    /// <summary>The stream is running and its data comes to this machine.</summary>
+    LiveStream,
+
+    /// <summary>The stream is running and its data goes to the SD card.</summary>
+    SdCardLog,
+}
+
+/// <summary>
 /// Owns what a streaming device knows about the streaming session it is in: whether one is
-/// running, the rate it runs at, how a session begins and ends, how a session driven by raw
-/// commands is kept in step, and what is restored after an automatic reconnect.
+/// running and of which kind, the rate it runs at, how a session begins and ends, how a session
+/// driven by raw commands is kept in step, and what is restored after an automatic reconnect.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,13 +55,30 @@ internal sealed class StreamingSessionController
         _host = host;
     }
 
+    private StreamingSessionKind _kind;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.IsStreaming"/>
     /// <remarks>
     /// Settable from outside because the SD operations defensively stop streaming before they
     /// touch the card and must record that they did (issue #118); the device exposes that
-    /// through <see cref="IDeviceOperationHost.IsStreaming"/>.
+    /// through <see cref="IDeviceOperationHost.IsStreaming"/>. Setting it to <c>false</c> ends the
+    /// session of either kind. Setting it to <c>true</c> leaves a running SD log an SD log.
     /// </remarks>
-    internal bool IsStreaming { get; set; }
+    internal bool IsStreaming
+    {
+        get => _kind != StreamingSessionKind.None;
+        set => _kind = !value
+            ? StreamingSessionKind.None
+            : _kind == StreamingSessionKind.SdCardLog ? StreamingSessionKind.SdCardLog : StreamingSessionKind.LiveStream;
+    }
+
+    /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
+    internal bool IsLoggingToSdCard => _kind == StreamingSessionKind.SdCardLog;
+
+    /// <summary>
+    /// Records that the stream now running is going to the SD card.
+    /// </summary>
+    internal void BeginSdCardLogSession() => _kind = StreamingSessionKind.SdCardLog;
 
     private int _streamingFrequency;
 
@@ -189,6 +224,12 @@ internal sealed class StreamingSessionController
 
         if (!IsStreaming) return;
 
+        if (IsLoggingToSdCard)
+        {
+            _host.EndSdCardLogSession();
+            return;
+        }
+
         IsStreaming = false;
         _host.Send(ScpiMessageProducer.StopStreaming);
     }
@@ -227,8 +268,12 @@ internal sealed class StreamingSessionController
     /// happened.
     /// </description></item>
     /// <item><description>
-    /// <see cref="StopStreaming"/> — does nothing beyond clearing the flag, so clearing it here
-    /// is complete.
+    /// <see cref="StopStreaming"/> — for a live stream, does nothing beyond ending the session, so
+    /// ending it here is complete. For an SD log it also restores the device's configuration, and
+    /// that is deliberately not replayed: a raw command sends what it was given and no more. The
+    /// session still ends, because a stop that reached the device has closed the log and left the
+    /// card free (issue #932), and <see cref="DaqifiDevice.InitializeAsync"/> relies on that: it
+    /// sends its stop through <c>Send</c> and repairs the format and routing itself.
     /// </description></item>
     /// <item><description>
     /// <see cref="DaqifiStreamingDevice.EnableChannels"/> — assigns <see cref="IChannel.IsEnabled"/>
@@ -365,7 +410,14 @@ internal sealed class StreamingSessionController
         // StopStreamData. The flag, though, is still set from before the drop — nothing stopped
         // the stream, the connection simply ended — and leaving it that way would report a
         // device as streaming while it sits idle, and make StartStreaming() a silent no-op.
-        IsStreaming = false;
+        //
+        // An SD log still recorded here is the exception. Re-initialization's stop would have
+        // cleared it, so one that survived means an observing initialization sent no stop
+        // (PreserveActiveStream), and the log is still running on the device.
+        if (!IsLoggingToSdCard)
+        {
+            IsStreaming = false;
+        }
 
         var snapshot = _sessionSnapshot;
         if (snapshot == null)

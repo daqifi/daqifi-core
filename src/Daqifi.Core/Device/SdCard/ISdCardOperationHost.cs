@@ -36,6 +36,19 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// </remarks>
     bool IsUsbConnection { get; }
 
+    /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
+    /// <remarks>
+    /// Read from the device's one session value, so it cannot disagree with
+    /// <see cref="IDeviceOperationHost.IsStreaming"/>. Setting that to <c>false</c> is what ends
+    /// the session (issue #932).
+    /// </remarks>
+    bool IsLoggingToSdCard { get; }
+
+    /// <summary>
+    /// Records that the stream just started is going to the SD card.
+    /// </summary>
+    void BeginSdCardLogSession();
+
     /// <summary>
     /// Overall wall-clock budget for one SD card download, read through the device so a
     /// subclass's override of it still applies.

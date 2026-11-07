@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
@@ -495,6 +496,304 @@ public class SdCardOperationsTests
         Assert.False(device.IsLoggingToSdCard);
         Assert.False(device.IsStreaming);
     }
+
+    #region One session state, however the session ends (issue #932)
+
+    private const string StopStreamCommand = "SYSTem:StopStreamData";
+
+    /// <summary>What ending a logging session sends over USB, in order.</summary>
+    private static readonly string[] SdLogTeardownOverUsb =
+    {
+        StopStreamCommand,
+        "SYSTem:STReam:FORmat 0",
+        "SYSTem:STORage:SD:ENAble 0",
+        "SYSTem:STReam:INTerface 0",
+        "SYSTem:COMMunicate:LAN:ENAbled 1",
+    };
+
+    /// <summary>
+    /// What ending a logging session sends over WiFi. LAN:ENAbled 1 would re-initialize the module
+    /// carrying this very connection (#327).
+    /// </summary>
+    private static readonly string[] SdLogTeardownOverWifi =
+    {
+        StopStreamCommand,
+        "SYSTem:STReam:FORmat 0",
+        "SYSTem:STORage:SD:ENAble 0",
+    };
+
+    private static List<string> Sent(TestableSdCardStreamingDevice device) =>
+        device.SentMessages.Select(m => m.Data).ToList();
+
+    [Fact]
+    public async Task StopStreaming_DuringAnSdLog_EndsTheSession()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+
+        device.StopStreaming();
+
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StopStreaming_DuringAnSdLog_SendsWhatStopSdCardLoggingAsyncSends(bool overUsb)
+    {
+        var stoppedByStopStreaming = new TestableSdCardStreamingDevice("TestDevice");
+        stoppedByStopStreaming.Connect();
+        await stoppedByStopStreaming.StartSdCardLoggingAsync("test.bin");
+        stoppedByStopStreaming.UsbConnection = overUsb;
+        stoppedByStopStreaming.SentMessages.Clear();
+
+        var stoppedByStopSdCardLogging = new TestableSdCardStreamingDevice("TestDevice");
+        stoppedByStopSdCardLogging.Connect();
+        await stoppedByStopSdCardLogging.StartSdCardLoggingAsync("test.bin");
+        stoppedByStopSdCardLogging.UsbConnection = overUsb;
+        stoppedByStopSdCardLogging.SentMessages.Clear();
+
+        stoppedByStopStreaming.StopStreaming();
+        await stoppedByStopSdCardLogging.StopSdCardLoggingAsync();
+
+        // Pinned against the literal list as well as the sibling, so the two cannot pass by both
+        // losing the same step.
+        var expected = overUsb ? SdLogTeardownOverUsb : SdLogTeardownOverWifi;
+        Assert.Equal(expected, Sent(stoppedByStopSdCardLogging));
+        Assert.Equal(expected, Sent(stoppedByStopStreaming));
+    }
+
+    [Fact]
+    public async Task StopStreaming_AfterAnSdLogAlreadyEnded_SendsNothingMore()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.StopStreaming();
+        device.SentMessages.Clear();
+
+        device.StopStreaming();
+
+        Assert.Empty(device.SentMessages);
+    }
+
+    [Fact]
+    public void StopStreaming_DuringALiveStream_SendsOnlyTheStop()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+        device.SentMessages.Clear();
+
+        device.StopStreaming();
+
+        Assert.Equal(new[] { StopStreamCommand }, Sent(device));
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task StartStreaming_AfterStopStreamingEndedAnSdLog_StartsALiveStream()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.StopStreaming();
+        device.SentMessages.Clear();
+
+        device.StartStreaming();
+
+        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
+        Assert.True(device.IsStreaming);
+        Assert.False(device.IsLoggingToSdCard);
+    }
+
+    [Fact]
+    public async Task SdOperations_AfterStopStreamingEndedAnSdLog_AreNotBusy()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+
+        device.StopStreaming();
+
+        Assert.Empty(await device.GetSdCardFilesAsync());
+    }
+
+    [Fact]
+    public async Task InitializeAsync_AfterAnSdLogAndAReconnect_ClearsTheSessionAndTheCardIsUsable()
+    {
+        // The session was never stopped, only walked away from: the state goes when the connect
+        // sends the device StopStreamData, because that is what really ends the log.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+
+        device.Disconnect();
+        device.Connect();
+        Assert.True(device.IsLoggingToSdCard); // Nothing has told the device to stop yet.
+
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains(StopStreamCommand, Sent(device));
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+
+        // The device has now reported firmware 3.8.0, which ends a finished listing with a marker.
+        device.CannedTextResponse = new List<string> { "__END_OF_LIST__ OK" };
+        Assert.Empty(await device.GetSdCardFilesAsync());
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WithPreserveActiveStream_LeavesAnSdLogRunning()
+    {
+        // An observing session sends no stop, so the log is still running and the card still busy.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.Disconnect();
+        device.SentMessages.Clear();
+        device.Connect();
+        device.PreserveActiveStream = true;
+
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain(StopStreamCommand, Sent(device));
+        Assert.True(device.IsLoggingToSdCard);
+        Assert.True(device.IsStreaming);
+        await Assert.ThrowsAsync<SdCardBusyException>(() => device.GetSdCardFilesAsync());
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WithPreserveActiveStream_LeavesALiveStreamRunning()
+    {
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+        device.Disconnect();
+        device.SentMessages.Clear();
+        device.Connect();
+        device.PreserveActiveStream = true;
+
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain(StopStreamCommand, Sent(device));
+        Assert.True(device.IsStreaming);
+        Assert.False(device.IsLoggingToSdCard);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AutomaticReconnect_AfterAnSdLog_DoesNotRestoreTheLog(bool resumeStreaming)
+    {
+        // The snapshot has never restored SD logging: it records only that data was flowing, so
+        // the policy resumes an interrupted log as a live stream, or not at all.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+
+        device.CaptureSessionAtTheDrop();
+        device.Disconnect();
+        device.Connect();
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        device.SentMessages.Clear();
+
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = resumeStreaming });
+
+        Assert.Equal(resumeStreaming, resumed);
+        Assert.Equal(resumeStreaming, device.IsStreaming);
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.DoesNotContain(Sent(device), c => c.StartsWith("SYSTem:STORage:SD", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AutomaticReconnect_DuringALiveStream_ResumesTheStream()
+    {
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+
+        device.CaptureSessionAtTheDrop();
+        device.Disconnect();
+        device.Connect();
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        Assert.False(device.IsStreaming);
+        device.SentMessages.Clear();
+
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+
+        Assert.True(resumed);
+        Assert.True(device.IsStreaming);
+        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AutomaticReconnect_WithPreserveActiveStream_LeavesAnSdLogRunning()
+    {
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+
+        device.CaptureSessionAtTheDrop();
+        device.Disconnect();
+        device.Connect();
+        device.PreserveActiveStream = true;
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+
+        await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+
+        Assert.True(device.IsLoggingToSdCard);
+    }
+
+    [Fact]
+    public async Task RawStopCommand_DuringAnSdLog_EndsTheSession()
+    {
+        // A stop sent through Send really does end the log, so the state follows it. Send is raw:
+        // it sends what it was given and no more, so the rest of the teardown stays the caller's.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.SentMessages.Clear();
+
+        device.Send(ScpiMessageProducer.StopStreaming);
+
+        Assert.Equal(new[] { StopStreamCommand }, Sent(device));
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("storage")]
+    [InlineData("delete")]
+    [InlineData("format")]
+    [InlineData("download")]
+    public async Task SdOperations_DuringAnSdLog_ThrowBusyAndSendNothing(string operation)
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.SentMessages.Clear();
+
+        Func<Task> act = operation switch
+        {
+            "list" => () => device.GetSdCardFilesAsync(),
+            "storage" => () => device.GetSdCardStorageAsync(),
+            "delete" => () => device.DeleteSdCardFileAsync("old.bin"),
+            "format" => () => device.FormatSdCardAsync(),
+            "download" => () => device.DownloadSdCardFileAsync("old.bin", new MemoryStream()),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        await Assert.ThrowsAsync<SdCardBusyException>(act);
+
+        Assert.Empty(device.SentMessages);
+        Assert.True(device.IsLoggingToSdCard);
+    }
+
+    #endregion
 
     [Fact]
     public void IsLoggingToSdCard_DefaultsToFalse()
@@ -3340,12 +3639,26 @@ public class SdCardOperationsTests
         public int UnterminatedAttempts { get; set; }
 
         /// <summary>
-        /// Simulates a USB connection so SD card operations are allowed.
+        /// Simulates a USB connection so SD card operations are allowed. A test sets it to false
+        /// after the session has started to reach a session that came back over WiFi: logging
+        /// itself refuses to start on anything but USB.
         /// </summary>
-        public override bool IsUsbConnection => true;
+        public bool UsbConnection { get; set; } = true;
+
+        public override bool IsUsbConnection => UsbConnection;
 
         public TestableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
             : base(name, ipAddress)
+        {
+        }
+
+        /// <summary>
+        /// A device on a real transport, so <see cref="Send{T}"/> reaches the production
+        /// <c>Send</c> as well as being recorded. That is where a stop command is tracked, so a
+        /// test about what a sent stop does to the session has to use this one.
+        /// </summary>
+        public TestableSdCardStreamingDevice(string name, IStreamTransport transport)
+            : base(name, transport)
         {
         }
 
@@ -3354,6 +3667,11 @@ public class SdCardOperationsTests
             if (message is IOutboundMessage<string> stringMessage)
             {
                 SentMessages.Add(stringMessage);
+            }
+
+            if (Transport != null)
+            {
+                base.Send(message);
             }
         }
 
@@ -3405,6 +3723,75 @@ public class SdCardOperationsTests
             _executeTextCommandCallCount++;
             return SdCardTestResponses.AnswerErrorQuery(
                 CannedTextResponse, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="TestableSdCardStreamingDevice"/> that runs the production
+    /// <see cref="DaqifiDevice.InitializeAsync"/> and <c>Send</c>: it answers the status request
+    /// the way a real device does, and exposes the reconnect hooks so a test can run them in the
+    /// order the reconnect loop does.
+    /// </summary>
+    private sealed class InitializingSdCardDevice : TestableSdCardStreamingDevice
+    {
+        public InitializingSdCardDevice(string name)
+            : base(name, new DiscardingTransport())
+        {
+        }
+
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+            base.Send(message);
+
+            if (message is IOutboundMessage<string> command && command.Data.Contains("SYSInfoPB"))
+            {
+                OnStatusMessageReceived(new DaqifiOutMessage
+                {
+                    DevicePn = "Nq1",
+                    DeviceSn = 9090539562006014104,
+                    DeviceFwRev = "3.8.0",
+                    AnalogInPortNum = 2,
+                    DigitalPortNum = 2
+                });
+            }
+        }
+
+        public void CaptureSessionAtTheDrop() => CaptureSessionSnapshot();
+
+        public Task<bool> RestoreSessionAfterTheReconnect(ReconnectOptions options) =>
+            RestoreSessionSnapshotAsync(options, CancellationToken.None);
+    }
+
+    /// <summary>A connected transport whose stream discards writes and has nothing to read.</summary>
+    private sealed class DiscardingTransport : IStreamTransport
+    {
+        public Stream Stream => Stream.Null;
+        public bool IsConnected { get; private set; }
+        public string ConnectionInfo => IsConnected ? "Mock: Connected" : "Mock: Disconnected";
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            IsConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            IsConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
+
+        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
+
+        public void Dispose()
+        {
         }
     }
 

@@ -83,7 +83,6 @@ internal sealed class SdCardOperations
 
     private readonly ISdCardOperationHost _host;
 
-    private bool _isLoggingToSdCard;
     private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
     /// <summary>
@@ -129,9 +128,6 @@ internal sealed class SdCardOperations
     /// that was built during the device's own construction.
     /// </remarks>
     private TimeSpan SdInterfaceSettleDelay => _host.SdInterfaceSettleDelay;
-
-    /// <inheritdoc cref="ISdCardOperations.IsLoggingToSdCard" />
-    internal bool IsLoggingToSdCard => _isLoggingToSdCard;
 
     /// <inheritdoc cref="ISdCardOperations.SdCardFiles" />
     internal IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardFiles;
@@ -287,7 +283,7 @@ internal sealed class SdCardOperations
         // mode to NONE, which tears down a write session, and SD:LIST? is answered with -200
         // while the manager is busy. So there is no command order that lists during a session
         // without ending it.
-        if (_isLoggingToSdCard)
+        if (_host.IsLoggingToSdCard)
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -701,7 +697,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_isLoggingToSdCard)
+        if (_host.IsLoggingToSdCard)
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -935,8 +931,7 @@ internal sealed class SdCardOperations
 
         _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
 
-        _isLoggingToSdCard = true;
-        _host.IsStreaming = true;
+        _host.BeginSdCardLogSession();
 
         return new SdCardLoggingSession(logFileName, format);
     }
@@ -952,6 +947,27 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected(cancellationToken);
 
+        EndLoggingSession();
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Sends everything that ends a logging session and puts the device back as live streaming
+    /// and the other SD operations expect it. The one path for
+    /// <see cref="StopSdCardLoggingAsync"/> and for
+    /// <see cref="DaqifiStreamingDevice.StopStreaming"/> during a log, so the two cannot drift
+    /// (issue #932).
+    /// </summary>
+    /// <remarks>
+    /// The session ends as soon as the stop has gone out, not after the last command: the firmware
+    /// closes the log on the stop itself, so from there the card is free. If a later command
+    /// fails, the connection has failed with it. <see cref="StopSdCardLoggingAsync"/> sends the
+    /// whole sequence again however often it is called, and the next initialization repairs the
+    /// format and the routing. A stop that fails leaves the session as it was.
+    /// </remarks>
+    internal void EndLoggingSession()
+    {
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
         _host.Send(ScpiMessageProducer.StopStreaming);
         _host.IsStreaming = false;
@@ -993,10 +1009,6 @@ internal sealed class SdCardOperations
             // and cut itself off (#327).
             _host.Send(ScpiMessageProducer.EnableNetworkLan);
         }
-
-        _isLoggingToSdCard = false;
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -1013,7 +1025,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_isLoggingToSdCard)
+        if (_host.IsLoggingToSdCard)
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -1253,7 +1265,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_isLoggingToSdCard)
+        if (_host.IsLoggingToSdCard)
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -1379,7 +1391,7 @@ internal sealed class SdCardOperations
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_isLoggingToSdCard)
+        if (_host.IsLoggingToSdCard)
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
