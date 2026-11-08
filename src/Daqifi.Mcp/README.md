@@ -116,8 +116,10 @@ call, in what order, to answer "is this signal noisy?". That is what these carry
 
 A **`--read-only` server lists only `summarize_sd_log`**. Every other job opens by enabling
 channels or setting a rate, which read-only refuses on the first tool call, so offering them
-would advertise four dead ends. The board resources are all still served — reading a
-specification changes nothing.
+would advertise four dead ends. Retrieving a log survives because `list_sd_files` and
+`download_sd_file` are both allowed, and neither is refused while a log is running; only the
+opening `stop_sd_logging` is, so that prompt tells the agent to say so and summarize the file as
+it stands. The board resources are all still served — reading a specification changes nothing.
 
 ## Run it
 
