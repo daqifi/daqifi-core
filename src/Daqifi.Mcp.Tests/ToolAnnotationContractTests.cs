@@ -41,6 +41,8 @@ public class ToolAnnotationContractTests
     private static readonly (string Name, bool ReadOnly, bool Destructive, bool OpenWorld)[] Expected =
     {
         ("get_server_info", true, false, false),
+        // Static published specifications, so it touches neither the device nor the network.
+        ("get_hardware_info", true, false, false),
         ("discover_devices", true, false, false),
         ("connect_device", false, false, false),
         ("disconnect_device", false, false, false),

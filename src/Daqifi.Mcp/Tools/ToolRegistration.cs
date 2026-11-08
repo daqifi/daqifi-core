@@ -39,6 +39,40 @@ internal static class ToolRegistration
             .WithToolsFromAssembly(typeof(DaqifiTools).Assembly, SerializerOptions)
             .ExplainArgumentBindingFailures();
 
+    /// <summary>
+    /// Registers every MCP resource in this assembly — the published board specifications a user
+    /// can attach to a session.
+    /// </summary>
+    /// <remarks>
+    /// No serializer options to pass: these resources return JSON they serialized themselves, so
+    /// that the resource and <c>get_hardware_info</c> spell the same field the same way.
+    /// </remarks>
+    internal static IMcpServerBuilder WithDaqifiResources(this IMcpServerBuilder builder) =>
+        builder.WithResourcesFromAssembly(typeof(DaqifiTools).Assembly);
+
+    /// <summary>
+    /// Registers the ready-made measurement jobs a client offers as starting points — only the
+    /// ones <paramref name="options"/> allows.
+    /// </summary>
+    /// <remarks>
+    /// Registered class by class rather than from the assembly, which is the whole point: a
+    /// <c>--read-only</c> server must not list a job that opens by enabling channels, because it
+    /// will refuse that on the first tool call. See <see cref="Prompts.ReadOnlyPrompts"/>.
+    /// </remarks>
+    internal static IMcpServerBuilder WithDaqifiPrompts(this IMcpServerBuilder builder, ServerOptions options)
+    {
+        // The Type overload rather than WithPrompts<T>: these are static classes, which cannot be
+        // type arguments. Typed as IEnumerable<Type> on purpose — a Type[] binds instead to
+        // WithPrompts<TPromptType>(builder, instance, options), taking the array itself as a
+        // prompt instance. That compiles, registers nothing, and leaves prompts/list answering
+        // "method not available".
+        IEnumerable<Type> promptTypes = options.ReadOnly
+            ? [typeof(Prompts.ReadOnlyPrompts)]
+            : [typeof(Prompts.ReadOnlyPrompts), typeof(Prompts.DaqifiPrompts)];
+
+        return builder.WithPrompts(promptTypes, SerializerOptions);
+    }
+
     private static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions)

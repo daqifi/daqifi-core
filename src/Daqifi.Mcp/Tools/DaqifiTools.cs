@@ -21,6 +21,30 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => versionStatus.GetAsync(cancellationToken));
 
+    [McpServerTool(Name = "get_hardware_info", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Published specifications of the Nyquist boards: the single-channel sample-rate ceiling, whether the analog inputs sample simultaneously, which board's analog outputs this server drives, and the nominal resolution and range. Call it to plan a rate before provoking a rejection, or for a board nobody has connected. For a connected device prefer list_channels, which reports the resolution and range the device itself declared.")]
+    public static IReadOnlyList<HardwareProfile> GetHardwareInfo(
+        [Description("A board to describe, as discovery reports it in deviceType (e.g. 'Nyquist3'); 'nyquist 3' and 'nyquist-3' also work. Omit for every board.")] string? deviceType = null)
+    {
+        if (string.IsNullOrWhiteSpace(deviceType))
+        {
+            return HardwareCatalog.All;
+        }
+
+        // An unrecognized board is an error rather than an empty list: the agent asked about a
+        // specific board, and silence reads as "this board has no analog outputs" just as easily
+        // as "ask about a different name". Listing the known ones makes the retry obvious —
+        // discovery reports "Unknown" for a device whose type it could not establish, and that is
+        // the name most likely to land here.
+        var profile = HardwareCatalog.Find(deviceType)
+            ?? throw new McpException(
+                $"No published specifications for device type '{deviceType}'. Known device types: "
+                + string.Join(", ", HardwareCatalog.All.Select(p => p.DeviceType))
+                + ". A connected device's own channel counts come from list_channels.");
+
+        return [profile];
+    }
+
     [McpServerTool(Name = "discover_devices", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns device_id values used by the other tools; call this first.")]
     public static Task<IReadOnlyList<DiscoveredDevice>> DiscoverDevices(
@@ -60,7 +84,7 @@ public static class DaqifiTools
         => Guard(() => agent.GetStatus(deviceId));
 
     [McpServerTool(Name = "list_channels", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
-    [Description("List all channels on a connected device with their type, enabled state, and direction.")]
+    [Description("List all channels on a connected device with their type, enabled state, and direction. Analog channels also carry what the device said about itself: ADC resolution (as a max raw count and a bit depth) and the port range in volts, which is how a reading is interpreted. resolutionIsAssumed=true means the device did not report its resolution and scaled values may be systematically wrong.")]
     public static IReadOnlyList<ChannelInfo> ListChannels(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)
