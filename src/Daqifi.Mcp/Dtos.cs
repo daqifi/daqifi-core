@@ -95,11 +95,33 @@ public sealed record DeviceStatus(
 /// device's own (typically <c>"V"</c>) until a caller configures a transducer conversion, and
 /// <c>null</c> until the capability document has been read.
 /// </summary>
-public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue, bool? PwmCapable, bool? PwmEnabled, string? Unit = null)
+/// <remarks>
+/// <see cref="Resolution"/>, <see cref="ResolutionBits"/>, <see cref="ResolutionIsAssumed"/> and
+/// <see cref="PortRangeVolts"/> are the analog counterparts, and they are what tells an agent how
+/// to read a value: 2.47 V means something different from a 12-bit converter than from a 24-bit
+/// one. The device reports all of them in its capability document
+/// (<c>analog_in_res</c>, <c>analog_in_port_range</c>), and Core divides by exactly these numbers
+/// to scale a sample, so they describe the unit on the bench rather than its product page.
+/// </remarks>
+public sealed record ChannelInfo(
+    int ChannelNumber,
+    string Type,
+    string Name,
+    bool Enabled,
+    string Direction,
+    bool? OutputValue,
+    bool? PwmCapable,
+    bool? PwmEnabled,
+    string? Unit = null,
+    uint? Resolution = null,
+    int? ResolutionBits = null,
+    bool? ResolutionIsAssumed = null,
+    double? PortRangeVolts = null)
 {
     public static ChannelInfo From(IChannel ch)
     {
         var digital = ch as IDigitalChannel;
+        var analog = ch as IAnalogChannel;
         return new(
             ch.ChannelNumber,
             ch.Type.ToString(),
@@ -111,7 +133,38 @@ public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bo
 #pragma warning restore CS0618
             digital?.IsPwmCapable,
             digital?.IsPwmEnabled,
-            (ch as IScaledChannel)?.Unit);
+            (ch as IScaledChannel)?.Unit,
+            analog?.Resolution,
+            analog is null ? null : ResolutionToBits(analog.Resolution),
+            // Surfaced rather than hidden: when the device omitted its resolution Core scales
+            // every sample on this channel by an assumed 65535, which can be systematically
+            // wrong. An agent reporting a voltage deserves to know that.
+            analog?.ResolutionIsAssumed,
+            analog?.PortRange);
+    }
+
+    /// <summary>
+    /// The bit depth behind a maximum raw count, or null when the count is not one bit depth
+    /// short of a power of two.
+    /// </summary>
+    /// <remarks>
+    /// The device reports resolution as a maximum count (4095, 262143), which is the divisor Core
+    /// actually uses; bit depth is the form a person and a model both think in. Derived rather
+    /// than stored so the two can never disagree, and left null rather than rounded when the
+    /// count is not 2^n - 1 — a device reporting something else is reporting something this
+    /// cannot describe honestly, and <see cref="Resolution"/> is still there to be read.
+    /// </remarks>
+    internal static int? ResolutionToBits(uint resolution)
+    {
+        var counts = (ulong)resolution + 1;
+
+        // A power of two has exactly one bit set, so n & (n-1) clears it to zero.
+        if (counts < 2 || (counts & (counts - 1)) != 0)
+        {
+            return null;
+        }
+
+        return System.Numerics.BitOperations.Log2(counts);
     }
 }
 

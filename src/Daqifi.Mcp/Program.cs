@@ -64,7 +64,7 @@ builder.Services
     // (prompts). Both are listed in the same handshake as the tools, so a client that supports
     // them offers them without any further configuration.
     .WithDaqifiResources()
-    .WithDaqifiPrompts();
+    .WithDaqifiPrompts(options);
 
 var host = builder.Build();
 

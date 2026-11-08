@@ -8,20 +8,29 @@ namespace Daqifi.Mcp;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Nothing a device reports over the wire says how many bits its ADC has, what input range it
-/// accepts, or how fast it can be driven. An agent could therefore read a value and have no way
-/// to tell a 12-bit measurement from a 24-bit one, and had to discover the sample-rate ceiling by
-/// provoking a rejection from <c>set_sample_rate</c>. The product pages carry those facts; this
-/// is the same data where the server can serve it, as MCP resources and
-/// <c>get_hardware_info</c>.
+/// What a device cannot tell you about itself is how fast it can go and what this server will do
+/// with it: there is no field in the capability document for the single-channel sample-rate
+/// ceiling, so an agent had to find it by provoking a rejection from <c>set_sample_rate</c>, and
+/// none for whether the analog inputs are sampled simultaneously or multiplexed, which decides
+/// whether two values in one captured row share an instant. Nor can an unconnected device answer
+/// anything at all, and "which board should I buy for ±10 V?" is a fair question to put to this
+/// server. The product pages carry those facts; this is the same data where the server can serve
+/// it, as MCP resources and <c>get_hardware_info</c>.
+/// </para>
+/// <para>
+/// Resolution and range are a different matter, and the nominal figures here are the weaker
+/// source. The device does report both — <c>analog_in_res</c> and <c>analog_in_port_range</c> in
+/// its capability document — and Core scales every sample by exactly those numbers, so
+/// <c>list_channels</c> is the authority for a device that is actually connected. They are named
+/// <c>Nominal…</c> here to say so. A board whose firmware reports something else is not wrong,
+/// and the agent should believe the device over this table.
 /// </para>
 /// <para>
 /// This is a catalog, not a measurement: it describes the board model, not the particular unit on
-/// the bench. Anything the connected device can actually answer for itself — its channel counts,
-/// which digital channels are PWM-capable, which DAC channels its capability document described —
-/// is deliberately left out and stays with <c>list_channels</c> and
-/// <c>list_connected_devices</c>, so there is one source of truth per fact. A field this catalog
-/// does not know is null rather than guessed.
+/// the bench. Anything the connected device can answer for itself — its channel counts, its
+/// resolution and range, which digital channels are PWM-capable, which DAC channels its
+/// capability document described — stays with <c>list_channels</c> and
+/// <c>list_connected_devices</c>. A field this catalog does not know is null rather than guessed.
 /// </para>
 /// </remarks>
 public static class HardwareCatalog
@@ -32,7 +41,8 @@ public static class HardwareCatalog
     /// </summary>
     public const string Provenance =
         "Static published specifications for the board model, not a reading from the connected unit; "
-        + "call list_channels for the channels a connected device actually reports.";
+        + "for a connected device call list_channels, which reports the channels, resolution and "
+        + "range the device itself declared.";
 
     /// <summary>Every board this server has specifications for, in model order.</summary>
     public static IReadOnlyList<HardwareProfile> All { get; } =
@@ -43,8 +53,8 @@ public static class HardwareCatalog
             ProductUrl: "https://daqifi.com/products/nyquist-1/",
             AnalogInputs: new AnalogInputSpec(
                 ChannelCount: 16,
-                ResolutionBits: 12,
-                Range: "0 to 5 V",
+                NominalResolutionBits: 12,
+                NominalRange: "0 to 5 V",
                 AdcPart: null,
                 SimultaneousSampling: false,
                 MaxSampleRateHz: 19250),
@@ -65,8 +75,8 @@ public static class HardwareCatalog
             ProductUrl: "https://daqifi.com/products/nyquist-2/",
             AnalogInputs: new AnalogInputSpec(
                 ChannelCount: 16,
-                ResolutionBits: 24,
-                Range: "0 to 5 V",
+                NominalResolutionBits: 24,
+                NominalRange: "0 to 5 V",
                 AdcPart: "AD7173",
                 SimultaneousSampling: false,
                 MaxSampleRateHz: null),
@@ -88,8 +98,8 @@ public static class HardwareCatalog
             ProductUrl: "https://daqifi.com/products/nyquist-3/",
             AnalogInputs: new AnalogInputSpec(
                 ChannelCount: 8,
-                ResolutionBits: 18,
-                Range: "-10 to +10 V",
+                NominalResolutionBits: 18,
+                NominalRange: "-10 to +10 V",
                 AdcPart: "AD7609",
                 SimultaneousSampling: true,
                 MaxSampleRateHz: null),
@@ -201,8 +211,14 @@ public sealed record HardwareProfile(
 
 /// <summary>The analog inputs of a board: what it measures, how finely, and how fast.</summary>
 /// <param name="ChannelCount">How many analog input channels the board has.</param>
-/// <param name="ResolutionBits">ADC resolution in bits, e.g. 12, 18 or 24.</param>
-/// <param name="Range">The input range as published, e.g. <c>0 to 5 V</c>.</param>
+/// <param name="NominalResolutionBits">
+/// ADC resolution in bits as published for the model, e.g. 12, 18 or 24. The connected device
+/// reports its own, which <c>list_channels</c> carries and Core scales by; believe that one.
+/// </param>
+/// <param name="NominalRange">
+/// The input range as published, e.g. <c>0 to 5 V</c>. Per-channel truth is the
+/// <c>portRangeVolts</c> of <c>list_channels</c>.
+/// </param>
 /// <param name="AdcPart">The ADC part number, where it is published; otherwise null.</param>
 /// <param name="SimultaneousSampling">
 /// True when every channel is sampled at the same instant, false when they are multiplexed, so
@@ -214,8 +230,8 @@ public sealed record HardwareProfile(
 /// </param>
 public sealed record AnalogInputSpec(
     int ChannelCount,
-    int ResolutionBits,
-    string Range,
+    int NominalResolutionBits,
+    string NominalRange,
     string? AdcPart,
     bool SimultaneousSampling,
     int? MaxSampleRateHz);

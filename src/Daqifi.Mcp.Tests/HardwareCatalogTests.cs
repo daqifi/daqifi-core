@@ -9,10 +9,11 @@ namespace Daqifi.Mcp.Tests;
 /// two ways they are served: the <c>get_hardware_info</c> tool and the MCP resources.
 /// </summary>
 /// <remarks>
-/// This data is the server asserting hardware facts that no device reports over the wire, so a
-/// wrong number here is not a caught exception — it is an agent confidently describing a 12-bit
-/// reading as 24-bit, or planning a rate the board cannot reach. The figures are pinned against
-/// the published specifications on daqifi.com/products, which is where they came from.
+/// A wrong number here is not a caught exception — it is an agent planning a rate the board
+/// cannot reach, or telling someone the wrong board has drivable analog outputs. The figures are
+/// pinned against the published specifications on daqifi.com/products, which is where they came
+/// from. The nominal resolution and range are the weaker source by design: a connected device
+/// declares its own, and ChannelResolutionContractTests covers that path.
 /// </remarks>
 public class HardwareCatalogTests
 {
@@ -30,8 +31,8 @@ public class HardwareCatalogTests
         var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist1"));
 
         Assert.Equal(16, board.AnalogInputs.ChannelCount);
-        Assert.Equal(12, board.AnalogInputs.ResolutionBits);
-        Assert.Equal("0 to 5 V", board.AnalogInputs.Range);
+        Assert.Equal(12, board.AnalogInputs.NominalResolutionBits);
+        Assert.Equal("0 to 5 V", board.AnalogInputs.NominalRange);
         Assert.False(board.AnalogInputs.SimultaneousSampling);
         // The ceiling with one channel enabled. The point of publishing it is that an agent can
         // plan a rate instead of discovering the limit from a set_sample_rate rejection.
@@ -45,7 +46,7 @@ public class HardwareCatalogTests
         var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist2"));
 
         Assert.Equal(16, board.AnalogInputs.ChannelCount);
-        Assert.Equal(24, board.AnalogInputs.ResolutionBits);
+        Assert.Equal(24, board.AnalogInputs.NominalResolutionBits);
         Assert.Equal("AD7173", board.AnalogInputs.AdcPart);
 
         // The board has the DAC hardware; this server does not drive it. Reporting the count as 0
@@ -61,8 +62,8 @@ public class HardwareCatalogTests
         var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist3"));
 
         Assert.Equal(8, board.AnalogInputs.ChannelCount);
-        Assert.Equal(18, board.AnalogInputs.ResolutionBits);
-        Assert.Equal("-10 to +10 V", board.AnalogInputs.Range);
+        Assert.Equal(18, board.AnalogInputs.NominalResolutionBits);
+        Assert.Equal("-10 to +10 V", board.AnalogInputs.NominalRange);
         Assert.Equal("AD7609", board.AnalogInputs.AdcPart);
         // The only board where the values in one captured row share an instant.
         Assert.True(board.AnalogInputs.SimultaneousSampling);

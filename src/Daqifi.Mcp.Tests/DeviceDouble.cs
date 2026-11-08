@@ -88,14 +88,20 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     /// <see cref="DeviceType.Unknown"/> either way, so the analog-output feature gate lets a write
     /// through (an unidentified board is not a refusal — see <c>DaqifiDevice.Supports</c>).
     /// </param>
+    /// <param name="analogResolution">
+    /// The <c>analog_in_res</c> the capability document states, as a maximum raw count. 0 models
+    /// a device that omits it, which makes Core fall back to an assumed resolution and mark the
+    /// channels <c>ResolutionIsAssumed</c>.
+    /// </param>
     internal static FakeStreamingDevice CreateConnected(
-        int analogChannels = 4, int digitalChannels = 8, int analogOutputs = 0)
+        int analogChannels = 4, int digitalChannels = 8, int analogOutputs = 0,
+        uint analogResolution = 65535)
     {
         var device = new FakeStreamingDevice("Fake Nq1");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = (uint)analogChannels,
-            AnalogInRes = 65535,
+            AnalogInRes = analogResolution,
             DigitalPortNum = (uint)digitalChannels,
         });
 
@@ -274,7 +280,8 @@ internal static class AgentHarness
         int? maxSampleRateHz = null,
         int analogChannels = 4,
         int digitalChannels = 8,
-        int analogOutputs = 0)
+        int analogOutputs = 0,
+        uint analogResolution = 65535)
     {
         var agent = new DaqifiAgent(new ServerOptions
         {
@@ -282,7 +289,8 @@ internal static class AgentHarness
             MaxSampleRateHz = maxSampleRateHz,
         });
 
-        var device = FakeStreamingDevice.CreateConnected(analogChannels, digitalChannels, analogOutputs);
+        var device = FakeStreamingDevice.CreateConnected(
+            analogChannels, digitalChannels, analogOutputs, analogResolution);
         agent.RegisterConnectedDevice(DeviceId, device);
         return (agent, device);
     }

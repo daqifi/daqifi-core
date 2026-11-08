@@ -19,13 +19,13 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | Tool | Purpose |
 |---|---|
 | `get_server_info` | This server's own version, and whether a newer `Daqifi.Mcp` is published. |
-| `get_hardware_info` | Published board specifications: ADC resolution, input range, rate ceiling, analog outputs. |
+| `get_hardware_info` | Published board specifications: rate ceiling, simultaneous sampling, analog outputs, nominal resolution and range. |
 | `discover_devices` | Find devices on USB/serial and WiFi. Call first; returns `device_id`s. |
 | `connect_device` | Connect to a discovered `device_id`. |
 | `list_connected_devices` | List currently-connected devices. |
 | `disconnect_device` | Disconnect and release a device. |
 | `get_device_status` | Connection state, streaming/logging flags, sample rate, enabled channels. |
-| `list_channels` | All channels with type/enabled/direction. |
+| `list_channels` | All channels with type/enabled/direction; analog channels also carry the ADC resolution and port range the device declared. |
 | `configure_analog_channels` | Enable exactly the given analog channels; disable the rest. |
 | `configure_digital_channels` | Enable exactly the given digital channels; disable the rest. |
 | `set_digital_direction` | Set a digital channel to `input` or `output`. |
@@ -73,21 +73,26 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 
 ## Resources
 
-The server also publishes the **specifications of each board** as MCP resources. Nothing a device
-reports over the wire says how many bits its ADC has or what input range it accepts, so without
-these an agent can read a value with no way to tell a 12-bit measurement from a 24-bit one, and
-has to find the sample-rate ceiling by provoking a rejection.
+The server also publishes the **specifications of each board** as MCP resources. What a device
+cannot tell you about itself is how fast it can go — there is no capability field for the
+single-channel sample-rate ceiling, so without this an agent finds it by provoking a rejection —
+or whether its analog inputs sample simultaneously, which decides whether two values in one
+captured row share an instant. An unconnected device cannot answer anything at all, and "which
+board do I need for ±10 V?" is a fair question to put to this server.
 
 | Resource | Board |
 |---|---|
-| `daqifi://hardware/nyquist1` | 16 analog inputs, 12-bit, 0 to 5 V, up to 19,250 Hz on one channel, 16 digital I/O. |
-| `daqifi://hardware/nyquist2` | 16 analog inputs, 24-bit (AD7173), 0 to 5 V; 8 DAC outputs this server does not drive. |
-| `daqifi://hardware/nyquist3` | 8 simultaneously-sampled analog inputs, 18-bit (AD7609), -10 to +10 V; 8 drivable DAC outputs. |
+| `daqifi://hardware/nyquist1` | 16 analog inputs, nominally 12-bit over 0 to 5 V, up to 19,250 Hz on one channel, 16 digital I/O. |
+| `daqifi://hardware/nyquist2` | 16 analog inputs, nominally 24-bit (AD7173) over 0 to 5 V; 8 DAC outputs this server does not drive. |
+| `daqifi://hardware/nyquist3` | 8 simultaneously-sampled analog inputs, nominally 18-bit (AD7609) over -10 to +10 V; 8 drivable DAC outputs. |
 
-These describe the **board model**, not the unit on your bench: what a connected device reports
-for itself — its channel counts, which digital channels are PWM-capable, which DAC channels its
-capability document described — stays with `list_channels` and `list_connected_devices`, so there
-is one source of truth per fact. A value the catalog does not know is `null` rather than guessed.
+These describe the **board model**, not the unit on your bench, and for resolution and range they
+are the weaker source. A device declares both in its capability document (`analog_in_res`,
+`analog_in_port_range`) and `Daqifi.Core` scales every sample by exactly those numbers, so
+**`list_channels` is the authority** for anything connected — which is why the catalog's fields
+are named `nominal…`. The same goes for channel counts, PWM capability and DAC ranges. A value
+the catalog does not know is `null` rather than guessed: only Nyquist 1 publishes a rate ceiling,
+so the other two report `maxSampleRateHz: null`.
 
 Resources are how a *person* hands this data to an agent: you attach one in your client. Most
 clients will not let the model fetch one on its own, which is why the same catalog is also the
@@ -108,6 +113,11 @@ supports MCP prompts:
 
 The tool descriptions say what each tool does on its own; what they cannot say is which four to
 call, in what order, to answer "is this signal noisy?". That is what these carry.
+
+A **`--read-only` server lists only `summarize_sd_log`**. Every other job opens by enabling
+channels or setting a rate, which read-only refuses on the first tool call, so offering them
+would advertise four dead ends. The board resources are all still served — reading a
+specification changes nothing.
 
 ## Run it
 

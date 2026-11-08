@@ -51,28 +51,6 @@ public static class DaqifiPrompts
             device is writing to, because I will need it to download the log later.
             """;
 
-    [McpServerPrompt(Name = "summarize_sd_log", Title = "Download and summarize an SD log")]
-    [Description("Stop SD-card logging if it is running, download a log file, and summarize the data in it.")]
-    public static string SummarizeSdLog(
-        [Description("The log file on the card. Leave empty to list the card and use the most recent one.")] string fileName = "",
-        [Description("The channel to summarize, e.g. 'AI0'. Leave empty to summarize every channel.")] string channel = "")
-    {
-        var which = string.IsNullOrWhiteSpace(fileName)
-            ? "list the files on the card and take the most recent one"
-            : $"download '{fileName}'";
-        var what = string.IsNullOrWhiteSpace(channel)
-            ? "every channel in it"
-            : channel;
-
-        return $"""
-            Stop the log if one is running, then {which} and tell me the average on {what}.
-
-            Download with the CSV export on so you can read the values back. Also tell me how many samples
-            arrived versus how many the duration and sample rate imply, and say so plainly if the file came
-            back empty rather than reporting an average of nothing.
-            """;
-    }
-
     [McpServerPrompt(Name = "read_voltage_now", Title = "Read a voltage now")]
     [Description("Read the voltage currently on one analog input of a DAQiFi device.")]
     public static string ReadVoltageNow(

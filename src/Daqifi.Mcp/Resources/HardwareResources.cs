@@ -16,7 +16,9 @@ namespace Daqifi.Mcp.Resources;
 /// Resources are how a <em>person</em> reaches this data — they pick it in the client and it
 /// enters the conversation. A model cannot fetch one on its own in most clients, which is why the
 /// same catalog is also a tool (<c>get_hardware_info</c>). Both read
-/// <see cref="HardwareCatalog"/>, so neither can drift from the other.
+/// <see cref="HardwareCatalog"/>, so neither can drift from the other. Neither is the authority
+/// on a connected device's resolution or range: the device declares those and
+/// <c>list_channels</c> reports them.
 /// </para>
 /// </remarks>
 [McpServerResourceType]
@@ -28,7 +30,7 @@ public static class HardwareResources
         Name = "nyquist1_hardware",
         Title = "Nyquist 1 hardware",
         MimeType = "application/json")]
-    [Description("DAQiFi Nyquist 1 specifications: 16 analog inputs, 12-bit, 0 to 5 V, up to 19,250 Hz on one channel, 16 digital I/O, no analog outputs. " + HardwareCatalog.Provenance)]
+    [Description("DAQiFi Nyquist 1 specifications: 16 analog inputs, nominally 12-bit over 0 to 5 V, up to 19,250 Hz on one channel, 16 digital I/O, no analog outputs. " + HardwareCatalog.Provenance)]
     public static string Nyquist1() => Json("Nyquist1");
 
     /// <summary>The published specifications of the Nyquist 2.</summary>
@@ -37,7 +39,7 @@ public static class HardwareResources
         Name = "nyquist2_hardware",
         Title = "Nyquist 2 hardware",
         MimeType = "application/json")]
-    [Description("DAQiFi Nyquist 2 specifications: 16 analog inputs, 24-bit (AD7173), 0 to 5 V, and 8 DAC outputs this server does not drive. " + HardwareCatalog.Provenance)]
+    [Description("DAQiFi Nyquist 2 specifications: 16 analog inputs, nominally 24-bit (AD7173) over 0 to 5 V, and 8 DAC outputs this server does not drive. " + HardwareCatalog.Provenance)]
     public static string Nyquist2() => Json("Nyquist2");
 
     /// <summary>The published specifications of the Nyquist 3.</summary>
@@ -46,7 +48,7 @@ public static class HardwareResources
         Name = "nyquist3_hardware",
         Title = "Nyquist 3 hardware",
         MimeType = "application/json")]
-    [Description("DAQiFi Nyquist 3 specifications: 8 simultaneously-sampled analog inputs, 18-bit (AD7609), -10 to +10 V, and 8 DAC outputs this server can drive. " + HardwareCatalog.Provenance)]
+    [Description("DAQiFi Nyquist 3 specifications: 8 simultaneously-sampled analog inputs, nominally 18-bit (AD7609) over -10 to +10 V, and 8 DAC outputs this server can drive. " + HardwareCatalog.Provenance)]
     public static string Nyquist3() => Json("Nyquist3");
 
     /// <summary>

@@ -11,12 +11,17 @@ namespace Daqifi.Mcp.Tests;
 /// </summary>
 internal static class AdvertisedMcpPrompts
 {
-    internal static IReadOnlyList<McpServerPrompt> All { get; } = BuildAdvertisedPrompts();
+    /// <summary>What a writable server lists.</summary>
+    internal static IReadOnlyList<McpServerPrompt> All { get; } = Advertised(new ServerOptions());
 
-    private static IReadOnlyList<McpServerPrompt> BuildAdvertisedPrompts()
+    /// <summary>What a <c>--read-only</c> server lists, which is deliberately less.</summary>
+    internal static IReadOnlyList<McpServerPrompt> ReadOnly { get; } =
+        Advertised(new ServerOptions { ReadOnly = true });
+
+    private static IReadOnlyList<McpServerPrompt> Advertised(ServerOptions options)
     {
         var services = new ServiceCollection();
-        services.AddMcpServer().WithDaqifiPrompts();
+        services.AddMcpServer().WithDaqifiPrompts(options);
         using var provider = services.BuildServiceProvider();
         return provider.GetServices<McpServerPrompt>().ToList();
     }

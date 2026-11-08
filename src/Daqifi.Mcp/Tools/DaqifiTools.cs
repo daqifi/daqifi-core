@@ -22,7 +22,7 @@ public static class DaqifiTools
         => GuardAsync(() => versionStatus.GetAsync(cancellationToken));
 
     [McpServerTool(Name = "get_hardware_info", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Published specifications of the Nyquist boards: analog input count, ADC resolution, input range, whether sampling is simultaneous, the single-channel rate ceiling, and the analog outputs. Call it to interpret a reading or to plan a rate before provoking a rejection. Static reference data about the model, not a reading from the device — list_channels reports what a connected device has.")]
+    [Description("Published specifications of the Nyquist boards: the single-channel sample-rate ceiling, whether the analog inputs sample simultaneously, which board's analog outputs this server drives, and the nominal resolution and range. Call it to plan a rate before provoking a rejection, or for a board nobody has connected. For a connected device prefer list_channels, which reports the resolution and range the device itself declared.")]
     public static IReadOnlyList<HardwareProfile> GetHardwareInfo(
         [Description("A board to describe, as discovery reports it in deviceType (e.g. 'Nyquist3'); 'nyquist 3' and 'nyquist-3' also work. Omit for every board.")] string? deviceType = null)
     {
@@ -84,7 +84,7 @@ public static class DaqifiTools
         => Guard(() => agent.GetStatus(deviceId));
 
     [McpServerTool(Name = "list_channels", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
-    [Description("List all channels on a connected device with their type, enabled state, and direction.")]
+    [Description("List all channels on a connected device with their type, enabled state, and direction. Analog channels also carry what the device said about itself: ADC resolution (as a max raw count and a bit depth) and the port range in volts, which is how a reading is interpreted. resolutionIsAssumed=true means the device did not report its resolution and scaled values may be systematically wrong.")]
     public static IReadOnlyList<ChannelInfo> ListChannels(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)

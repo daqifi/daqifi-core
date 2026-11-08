@@ -62,8 +62,9 @@ public class ResourceAndPromptSurfaceTests
         // The facts an agent cannot get from the device: how many bits, what range, and that this
         // is the board whose channels are sampled at one instant.
         var inputs = parsed.RootElement.GetProperty("analogInputs");
-        Assert.Equal(18, inputs.GetProperty("resolutionBits").GetInt32());
-        Assert.Equal("-10 to +10 V", inputs.GetProperty("range").GetString());
+        // Nominal, because the connected device declares its own and list_channels reports that.
+        Assert.Equal(18, inputs.GetProperty("nominalResolutionBits").GetInt32());
+        Assert.Equal("-10 to +10 V", inputs.GetProperty("nominalRange").GetString());
         Assert.True(inputs.GetProperty("simultaneousSampling").GetBoolean());
     }
 
@@ -123,13 +124,54 @@ public class ResourceAndPromptSurfaceTests
         Assert.Contains("every channel", text);
     }
 
-    private static async Task<McpClient> ConnectAsync(CancellationToken cancellationToken)
+    [Fact]
+    public async Task AReadOnlyServer_OnlyListsTheJobItCanActuallyDo()
+    {
+        using var timeout = new CancellationTokenSource(HandshakeBudget);
+        await using var client = await ConnectAsync(timeout.Token, "--read-only");
+
+        var prompts = await client.ListPromptsAsync(cancellationToken: timeout.Token);
+
+        // Everything else opens by enabling channels or setting a rate, which --read-only
+        // refuses on the first tool call. Listing them would advertise four dead ends.
+        Assert.Equal(new[] { "summarize_sd_log" }, prompts.Select(p => p.Name));
+    }
+
+    [Fact]
+    public async Task AReadOnlyServer_StillServesEveryBoardResource()
+    {
+        using var timeout = new CancellationTokenSource(HandshakeBudget);
+        await using var client = await ConnectAsync(timeout.Token, "--read-only");
+
+        // Reading a specification changes nothing, so read-only has no reason to withhold it.
+        var resources = await client.ListResourcesAsync(cancellationToken: timeout.Token);
+
+        Assert.Equal(3, resources.Count);
+    }
+
+    [Fact]
+    public void ReadOnly_DropsExactlyTheJobsThatNeedToWrite()
+    {
+        // In process, so the split is pinned without paying for a server start. The wire tests
+        // above prove the registration actually reaches a client.
+        var writable = AdvertisedMcpPrompts.All.Select(p => p.ProtocolPrompt.Name).ToList();
+        var readOnly = AdvertisedMcpPrompts.ReadOnly.Select(p => p.ProtocolPrompt.Name).ToList();
+
+        Assert.Equal(5, writable.Count);
+        Assert.Equal(new[] { "summarize_sd_log" }, readOnly);
+        // A read-only server lists a subset, never a prompt of its own that the writable one
+        // lacks: two divergent sets would be two things to keep correct.
+        Assert.All(readOnly, name => Assert.Contains(name, writable));
+    }
+
+    private static async Task<McpClient> ConnectAsync(
+        CancellationToken cancellationToken, params string[] extraArgs)
     {
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = "daqifi-mcp",
             Command = ServerProcess.DotnetHost(),
-            Arguments = [ServerProcess.ServerAssembly(), "--no-version-check"],
+            Arguments = [ServerProcess.ServerAssembly(), "--no-version-check", .. extraArgs],
             // On dispose the SDK waits this long for the server to exit before it closes stdin,
             // the thing that would make it exit, and then kills it. Nothing here needs a graceful
             // shutdown, so do not pay the 5 s default on every test.
