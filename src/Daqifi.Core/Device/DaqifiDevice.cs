@@ -463,6 +463,29 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private readonly object _lifecycleTransitionLock = new();
 
     /// <summary>
+    /// Counts the lifecycle changes this device has made. Written with <see cref="_lifecycle"/>,
+    /// under <see cref="_lifecycleTransitionLock"/>.
+    /// </summary>
+    /// <remarks>
+    /// The value an initialization entered <see cref="DeviceLifecycle.Initializing"/> on is its
+    /// ticket (issue #943). Any later change — a cancel, a drop, a reconnect — moves the count
+    /// on, so a ticket that still equals it proves the device is in the very
+    /// <c>Initializing</c> that call began, and not one a later call or a later connection owns.
+    /// </remarks>
+    private long _lifecycleVersion;
+
+    /// <summary>
+    /// The ticket of the initialization that last entered <see cref="DeviceLifecycle.Initializing"/>,
+    /// and the task a second caller waits on for its result. Both guarded by
+    /// <see cref="_lifecycleTransitionLock"/>. They describe a running initialization only while
+    /// the ticket equals <see cref="_lifecycleVersion"/>.
+    /// </summary>
+    private long _initializationTicket;
+
+    /// <inheritdoc cref="_initializationTicket"/>
+    private TaskCompletionSource? _initializationCompletion;
+
+    /// <summary>
     /// Sink for this device's diagnostics. Defaults to <see cref="NullLogger.Instance"/> when the
     /// caller opts out — the safety-relevant warnings (bad calibration/resolution → wrong scaled
     /// samples) are then simply discarded, as they were effectively invisible via the previous
@@ -534,8 +557,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <remarks>
     /// Invoked before the message is applied, on the same consumer thread that applies it, so
     /// what it records is already in place when that event is raised further down the same call.
-    /// Only one such wait runs at a time -- a second concurrent <see cref="InitializeAsync"/> on
-    /// the same instance returns early -- so a single field is enough.
+    /// Only one such wait runs at a time on a connection -- a second concurrent
+    /// <see cref="InitializeAsync"/> on the same instance waits for the first and takes its
+    /// result, see <see cref="TryBeginInitialization"/> -- so a single field is enough. A wait
+    /// left over from a connection that has since been replaced clears the field only if it
+    /// still holds its own watcher.
     /// </remarks>
     private Action<DaqifiOutMessage>? _initialStatusWatcher;
 
@@ -682,7 +708,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// connect or disconnect from inside the event, so anything written after raising it would land
     /// on top of whatever that handler did (issue #931).
     /// </summary>
-    private bool TryCommitTransition(DeviceLifecycle next, out DeviceLifecycle previous)
+    /// <param name="next">The value to move to.</param>
+    /// <param name="previous">The value the device was on.</param>
+    /// <param name="ticket">
+    /// When given, the change is a report from the initialization holding that ticket, and is
+    /// refused unless the device is still in the <see cref="DeviceLifecycle.Initializing"/> that
+    /// call began (issue #943).
+    /// </param>
+    private bool TryCommitTransition(DeviceLifecycle next, out DeviceLifecycle previous, long? ticket = null)
     {
         DeviceLifecycle current;
         lock (_lifecycleTransitionLock)
@@ -690,16 +723,31 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             current = _lifecycle;
             previous = current;
 
-            if (current == next)
+            if (ticket is { } held && held != _lifecycleVersion)
+            {
+                // Falls through to the refusal below: the state belongs to someone else now.
+            }
+            else if (current == next)
             {
                 return true;
             }
-
-            if (DeviceLifecycleTable.IsAllowed(current, next))
+            else if (DeviceLifecycleTable.IsAllowed(current, next))
             {
                 _lifecycle = next;
+                _lifecycleVersion++;
                 return true;
             }
+        }
+
+        if (ticket.HasValue)
+        {
+            SafeLog(() => _logger.LogDebug(
+                "[Lifecycle] Device '{DeviceName}' stayed on {Current}: the initialization reporting {Next} no longer owns the state.",
+                Name,
+                current,
+                next));
+
+            return false;
         }
 
         SafeLog(() => _logger.LogDebug(
@@ -709,6 +757,73 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             next));
 
         return false;
+    }
+
+    /// <summary>
+    /// Starts an initialization: moves the device to <see cref="DeviceLifecycle.Initializing"/> and
+    /// hands the caller the ticket its result must be reported with (issue #943).
+    /// </summary>
+    /// <param name="ticket">The ticket for <see cref="TryReportInitialization"/>, when this returns <c>true</c>.</param>
+    /// <param name="completion">What the caller completes with its result, when this returns <c>true</c>.</param>
+    /// <param name="inFlight">
+    /// When this returns <c>false</c> because another call is already initializing this
+    /// connection, that call's result. <c>null</c> when the table refused the change.
+    /// </param>
+    /// <returns><c>true</c> if the caller now owns the initialization of this connection.</returns>
+    private bool TryBeginInitialization(
+        out long ticket,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TaskCompletionSource? completion,
+        out Task? inFlight)
+    {
+        ticket = 0;
+        completion = null;
+        inFlight = null;
+
+        lock (_lifecycleTransitionLock)
+        {
+            if (_lifecycle == DeviceLifecycle.Initializing)
+            {
+                if (_initializationCompletion is { } running && _initializationTicket == _lifecycleVersion)
+                {
+                    inFlight = running.Task;
+                    return false;
+                }
+
+                // Initializing with no call behind it: nothing to wait for, so take it over.
+            }
+            else if (DeviceLifecycleTable.IsAllowed(_lifecycle, DeviceLifecycle.Initializing))
+            {
+                // Status reads Connected on both sides of this change, so there is nothing to raise.
+                _lifecycle = DeviceLifecycle.Initializing;
+                _lifecycleVersion++;
+            }
+            else
+            {
+                return false;
+            }
+
+            ticket = _lifecycleVersion;
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _initializationTicket = ticket;
+            _initializationCompletion = completion;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reports the result of the initialization holding <paramref name="ticket"/>. Refused, and
+    /// nothing changes, when the device has moved since that call began: it was cancelled or
+    /// dropped, or it is on another connection by now.
+    /// </summary>
+    private bool TryReportInitialization(DeviceLifecycle next, long ticket)
+    {
+        if (!TryCommitTransition(next, out var previous, ticket))
+        {
+            return false;
+        }
+
+        NotifyStatusChange(previous, next);
+        return true;
     }
 
     /// <summary>
@@ -3424,6 +3539,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// their first status message, so <c>GetDeviceInfo</c> is re-sent periodically until
     /// channels populate or <paramref name="channelPopulationTimeout"/> elapses (which
     /// surfaces a <see cref="TimeoutException"/>).
+    ///
+    /// <b>One initialization runs per connection.</b> A call made while another is already
+    /// initializing the same connection sends nothing: it waits for that call and completes with
+    /// its result, success or failure, and that call's <paramref name="channelPopulationTimeout"/>
+    /// and <see cref="PreserveActiveStream"/> decision are the ones in effect. Its own
+    /// <paramref name="cancellationToken"/> ends only its own wait. If the call it is waiting on
+    /// is cancelled, it runs the sequence itself instead of reporting a cancellation its caller
+    /// never asked for.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
@@ -3458,11 +3581,35 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 "Channel population timeout must be positive.");
         }
 
-        if (!TryTransition(DeviceLifecycle.Initializing))
+        // One initialization runs per connection (issue #943). A call that finds one already
+        // running waits for it and takes its result, so the setup commands go out once. The
+        // exception is a first call that was cancelled: that was its caller's choice, not an
+        // answer about the device, so this call takes its own turn.
+        long ticket;
+        TaskCompletionSource? completion;
+        while (!TryBeginInitialization(out ticket, out completion, out var inFlight))
         {
-            throw new DeviceNotConnectedException(
-                "The device cannot be initialized while its connection is being torn down.",
-                isShuttingDown: true);
+            if (inFlight == null)
+            {
+                if (_lifecycle == DeviceLifecycle.Ready)
+                {
+                    return;
+                }
+
+                throw new DeviceNotConnectedException(
+                    "The device cannot be initialized while its connection is being torn down.",
+                    isShuttingDown: true);
+            }
+
+            try
+            {
+                await inFlight.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The other call was cancelled. Go round again and start our own.
+            }
         }
 
         try
@@ -3655,26 +3802,33 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
             // Refused when the session this initialized is gone: disconnected, lost or replaced
             // while the sequence ran. Reporting success would hand back a device that is not ready.
-            if (!TryTransition(DeviceLifecycle.Ready))
+            if (!TryReportInitialization(DeviceLifecycle.Ready, ticket))
             {
                 throw new DeviceNotConnectedException(
                     "The connection changed while the device was initializing, so it is not ready.");
             }
+
+            completion.TrySetResult();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException canceled)
         {
             // Caller-initiated cancellation is not a device fault. Revert to a
             // non-error state so upstream logic that treats Error as a hardware or
             // connection failure isn't misled into reporting a phantom failure. Refused, and
             // rightly, when the session has already gone.
-            TryTransition(DeviceLifecycle.Connected);
+            TryReportInitialization(DeviceLifecycle.Connected, ticket);
+            completion.TrySetCanceled(canceled.CancellationToken);
             throw;
         }
-        catch (Exception)
+        catch (Exception failure)
         {
             // Refused, and rightly, when the session has already gone: a drop or a disconnect is
             // then the truth about the device, not this failure.
-            TryTransition(DeviceLifecycle.Error);
+            TryReportInitialization(DeviceLifecycle.Error, ticket);
+            completion.TrySetException(failure);
+
+            // Reading it marks it observed: with no second caller waiting, nobody else will.
+            _ = completion.Task.Exception;
             throw;
         }
     }
@@ -3966,7 +4120,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         // Subscribe before sending so a fast response cannot fire the event in the
         // window between Send() and subscription.
-        _initialStatusWatcher = OnStatusMessage;
+        Action<DaqifiOutMessage> watcher = OnStatusMessage;
+        _initialStatusWatcher = watcher;
         ChannelsPopulated += OnChannelsPopulated;
         try
         {
@@ -4052,7 +4207,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         finally
         {
             ChannelsPopulated -= OnChannelsPopulated;
-            _initialStatusWatcher = null;
+
+            // Only our own: a wait that outlived its connection must not take away the watcher
+            // of the initialization running on the next one (issue #943).
+            Interlocked.CompareExchange(ref _initialStatusWatcher, null, watcher);
         }
     }
 
