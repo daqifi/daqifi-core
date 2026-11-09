@@ -1119,7 +1119,7 @@ public class SdCardOperationsTests
     {
         // The realistic shape of a refused delete: the card still holds
         // other files, so the reply carries an error line AND real entries.
-        // ThrowIfSdCardListError returns silently on that (its content
+        // The listing's verdict does not hold the error against it (its content
         // escape is right for the read path), so the delete's own error is
         // what has to be judged -- otherwise the caller is told the delete
         // worked while the file is still listed.
@@ -1547,6 +1547,112 @@ public class SdCardOperationsTests
         var files = await device.GetSdCardFilesAsync();
 
         Assert.Empty(files);
+    }
+
+    private static int CountDeletesSent(RetryableSdCardStreamingDevice device) =>
+        device.SentMessages.Count(
+            m => m.Data.StartsWith("SYSTem:STORage:SD:DELete", StringComparison.Ordinal));
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_MarkerCapableFirmwareRelistsWithNoMarker_ThrowsAndKeepsTheCache()
+    {
+        // #942. The relist that follows a delete used to judge its reply with its own copy of
+        // the rules, and that copy never got the #887 check: a walk that stopped early -- real
+        // entries, a transport terminator, no __END_OF_LIST__ -- replaced the cached list, so
+        // SdCardFiles reported fewer files than the card held and the method returned success.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "Daqifi/a.bin 100",
+            "Daqifi/b.bin 200",
+            "Daqifi/c.bin 300",
+            "__END_OF_LIST__ OK",
+        });
+        var shortWalk = new List<string> { "Daqifi/b.bin 200" };
+        device.ResponseSequence.Enqueue(new List<string>(shortWalk));
+        device.ResponseSequence.Enqueue(new List<string>(shortWalk));
+        device.Connect();
+        await device.GetSdCardFilesAsync();
+
+        await Assert.ThrowsAsync<SdCardListIncompleteException>(
+            () => device.DeleteSdCardFileAsync("a.bin"));
+
+        // The cache is what it was before the delete, not the short list.
+        Assert.Equal(
+            new[] { "a.bin", "b.bin", "c.bin" },
+            device.SdCardFiles.Select(f => f.FileName));
+
+        // Read again once before giving up, as the list path does -- and the delete itself
+        // was sent once only: nothing said it failed, so re-sending it would turn a short walk
+        // into "delete operation failed" for a file that is already gone.
+        Assert.Equal(3, device.ExecuteTextCommandCallCount);
+        Assert.Equal(1, CountDeletesSent(device));
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_MarkerCapableFirmwareMissesTheMarkerOnce_RelistsAndCaches()
+    {
+        // One short walk is a transient. The delete path reads the list again, as the list
+        // path does, and caches the listing that did reach its end.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string> { "Daqifi/b.bin 200" });
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "Daqifi/b.bin 200",
+            "Daqifi/c.bin 300",
+            "__END_OF_LIST__ OK",
+        });
+        device.Connect();
+
+        await device.DeleteSdCardFileAsync("a.bin");
+
+        Assert.Equal(new[] { "b.bin", "c.bin" }, device.SdCardFiles.Select(f => f.FileName));
+        Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        Assert.Equal(1, CountDeletesSent(device));
+    }
+
+    [Fact]
+    public async Task ListAndDelete_PreMarkerFirmwareWithNoMarker_AcceptTheListingWithoutRetrying()
+    {
+        // Below v3.8.0 the device never emits a marker, so its absence says nothing. Both
+        // paths go on accepting a terminated listing with no marker, in one exchange each.
+        var device = new RetryableSdCardStreamingDevice("TestDevice");
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.FirmwareVersion = "3.7.2";
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.ResponseSequence.Enqueue(new List<string> { "Daqifi/a.bin 100", "Daqifi/b.bin 200" });
+        device.ResponseSequence.Enqueue(new List<string> { "Daqifi/b.bin 200" });
+        device.Connect();
+
+        var listed = await device.GetSdCardFilesAsync();
+
+        Assert.Equal(new[] { "a.bin", "b.bin" }, listed.Select(f => f.FileName));
+        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+
+        await device.DeleteSdCardFileAsync("a.bin");
+
+        Assert.Equal("b.bin", Assert.Single(device.SdCardFiles).FileName);
+        Assert.Equal(2, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_WhenTheDirectoryIsNotOnTheCard_StillThrows()
+    {
+        // The one intended difference between the two paths (#730): the list path reports a
+        // missing log directory as an empty card, but after a delete it leaves "is the file I
+        // named gone?" unanswered, so the delete path keeps the exception and the cache.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "[Error:4]Failed to open directory [DAQiFi]",
+            "__END_OF_LIST__ FAILED",
+        });
+        device.Connect();
+
+        await Assert.ThrowsAsync<SdCardDirectoryNotFoundException>(
+            () => device.DeleteSdCardFileAsync("a.bin"));
+
+        Assert.Empty(device.SdCardFiles);
     }
 
     #endregion

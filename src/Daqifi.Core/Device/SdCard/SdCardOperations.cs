@@ -46,7 +46,7 @@ internal sealed class SdCardOperations
     /// <summary>
     /// Firmware status text for a missing card. Not SCPI-shaped, so
     /// <see cref="ScpiResponseClassifier.IsErrorResponseLine"/> is what classifies it and this
-    /// is the substring both <see cref="ThrowIfSdCardListError"/> and
+    /// is the substring both <see cref="GetSdCardListError"/> and
     /// <see cref="ExplainsItsOwnMissingEndMarker"/> look for — single-sourced so the two cannot
     /// disagree about which replies already account for themselves.
     /// </summary>
@@ -262,7 +262,7 @@ internal sealed class SdCardOperations
     /// retries it once and then raises <see cref="SdCardListIncompleteException"/> rather than
     /// hand back the entries it did get as the card's contents. A reply that explains its own
     /// missing marker — no card, an unreadable directory, any firmware status text — keeps its
-    /// more specific answer from <see cref="ThrowIfSdCardListError"/> instead, and is not
+    /// more specific answer from <see cref="GetSdCardListError"/> instead, and is not
     /// retried (closes #887).
     /// </para>
     /// </remarks>
@@ -296,14 +296,7 @@ internal sealed class SdCardOperations
 
         try
         {
-            IReadOnlyList<string> lines = Array.Empty<string>();
-            IReadOnlyList<string> listing = Array.Empty<string>();
-            var isComplete = false;
-            var listingStatus = SdCardListingStatus.Unterminated;
-
-            // Evaluated once per attempt and carried out of the loop, so the firmware gate is
-            // consulted exactly as often as the device is asked.
-            var isMissingRequiredEndMarker = false;
+            SdListVerdict verdict = default;
 
             // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
             // timing issue, and an unterminated response can be a one-off stall, so both are
@@ -329,7 +322,7 @@ internal sealed class SdCardOperations
                 // Each attempt therefore leaves the bus back on LAN, including across the retry
                 // delay above — the pairing is per exchange rather than per call so that gap, which
                 // is outside the lock, is not one in which the device sits switched to the card.
-                lines = await _host.ExecuteTextCommandAsync(
+                var lines = await _host.ExecuteTextCommandAsync(
                     () =>
                     {
                         _host.Send(ScpiMessageProducer.GetSdFileList);
@@ -344,33 +337,20 @@ internal sealed class SdCardOperations
                     prepareAsync: PrepareSdInterfaceAndSettleAsync,
                     finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
-                isComplete = TrySplitAtSdListTerminator(lines, out listing);
-                listingStatus = SdCardFileListParser.GetListingStatus(listing);
-                isMissingRequiredEndMarker =
-                    IsUnexplainedMissingListingEndMarker(listing, listingStatus);
-
-                // An unexplained missing marker is retried for the same reason a SCPI error is:
+                // One verdict for the reply, from the same method the delete path's relist
+                // uses, so the two cannot disagree about what a good listing is (#942). An
+                // unexplained missing marker is read again for the same reason a SCPI error is:
                 // on firmware that emits one it means the directory walk did not finish, and a
                 // walk cut short by the shared SPI bus being briefly unavailable is exactly the
                 // transient this loop exists for.
-                if (isComplete
-                    && !ScpiResponseClassifier.ContainsScpiError(listing)
-                    && !isMissingRequiredEndMarker)
+                verdict = ClassifySdListReply(lines);
+                if (!verdict.ShouldReadAgain)
                 {
                     break;
                 }
             }
 
-            if (!isComplete)
-            {
-                throw new SdCardListIncompleteException(lines);
-            }
-
-            try
-            {
-                ThrowIfSdCardListError(listing);
-            }
-            catch (SdCardDirectoryNotFoundException)
+            if (verdict.Kind == SdListVerdictKind.DirectoryNotFound)
             {
                 // A log directory that is not on the card is an empty card, and that is
                 // what this method reports: no files. A new card has no log directory
@@ -378,54 +358,25 @@ internal sealed class SdCardOperations
                 // normal state of a new card look like a fault, and a caller had to
                 // catch to learn there was nothing to list (closes #730).
                 //
-                // Here rather than in ThrowIfSdCardListError, because the helper has a
+                // Here rather than in ClassifySdListReply, because the verdict has a
                 // second caller: DeleteSdCardFileAsync relists in the delete's own
                 // exchange, and there the missing directory leaves "is the file I named
                 // gone?" unanswered. That caller still needs the exception, so the
-                // helper keeps throwing for both and the read path decides for itself.
+                // verdict carries it for both and the read path decides for itself.
                 //
-                // Catching the helper's own answer rather than testing the lines first:
-                // the helper already ranks the conditions, so a reply that says both "no
-                // SD card" and "no directory" still raises SdCardNotPresentException. A
-                // separate pre-check would have to repeat that order to stay correct.
-                //
-                // The return is immediate. The device's end-of-listing marker below reads
-                // FAILED on this reply, which is right -- the walk could not open the
-                // directory -- but there is no directory to walk, so it has nothing left
-                // to tell us.
+                // The verdict already ranks the conditions, so a reply that says both "no
+                // SD card" and "no directory" is NoCard and still raises
+                // SdCardNotPresentException.
                 _sdCardFiles = Array.Empty<SdCardFileInfo>();
                 return _sdCardFiles;
             }
 
-            // The device's own end-of-listing marker (firmware #794), when it sends
-            // one. FAILED means the walk could not open the directory at all, so an
-            // empty result would report "there is nothing there" for what was really
-            // "I could not look" -- the exact confusion the terminator above exists
-            // to prevent, one level deeper.
-            if (listingStatus == SdCardListingStatus.Failed
-                || listingStatus == SdCardListingStatus.Incomplete)
+            if (!verdict.IsUsable)
             {
-                // INCOMPLETE throws for the same reason a missing transport
-                // terminator does, a few lines above: the caller is about to
-                // cache this list and answer "is my file on the card?" from it.
-                // A device-truncated listing and a transport-truncated one are
-                // the same class of wrong answer, so they raise the same
-                // exception -- a client that handles one already handles this.
-                throw new SdCardListIncompleteException(lines);
+                throw verdict.Error!;
             }
 
-            // No marker at all, on firmware that emits one, and nothing in the reply to
-            // explain why. The transport terminator proves the device answered, so the
-            // marker's absence is not a lost reply -- it is a walk that never reached its
-            // own end, and the entries in hand (often none) are not the card's contents.
-            // Reporting them as the answer is how a card holding five files was rendered
-            // as "SD card OK, 0 files" with nothing raising a problem (closes #887).
-            if (isMissingRequiredEndMarker)
-            {
-                throw new SdCardListIncompleteException(lines);
-            }
-
-            var files = SdCardFileListParser.ParseFileList(listing);
+            var files = SdCardFileListParser.ParseFileList(verdict.Listing);
             _sdCardFiles = files;
             return files;
         }
@@ -630,7 +581,7 @@ internal sealed class SdCardOperations
     /// something: below firmware v3.8.0 a listing simply stops, so every reply on those
     /// versions is unterminated and an empty card would otherwise start throwing. And a reply
     /// that already explains itself — <c>Error !! No SD Card Detected</c>, a filesystem error,
-    /// any other firmware status text — is left to <see cref="ThrowIfSdCardListError"/>, which
+    /// any other firmware status text — is left to <see cref="GetSdCardListError"/>, which
     /// has a more specific answer than "incomplete" and reaches it without a retry.
     /// </para>
     /// <para>
@@ -661,7 +612,7 @@ internal sealed class SdCardOperations
 
     /// <summary>
     /// True when a reply already says why it carries no end-of-listing marker, so
-    /// <see cref="ThrowIfSdCardListError"/> has a more specific answer than "incomplete" and
+    /// <see cref="GetSdCardListError"/> has a more specific answer than "incomplete" and
     /// reaches it without a retry. Covers every condition that helper ranks: the two
     /// firmware status texts, which are not SCPI-shaped and so have to be matched by substring
     /// (<see cref="DirectoryOpenFailureMarker"/> is prefixed <c>[Error:n]</c> and matches no
@@ -674,6 +625,160 @@ internal sealed class SdCardOperations
             && (ScpiResponseClassifier.IsErrorResponseLine(line)
                 || line.IndexOf(NoSdCardMarker, StringComparison.OrdinalIgnoreCase) >= 0
                 || line.IndexOf(DirectoryOpenFailureMarker, StringComparison.OrdinalIgnoreCase) >= 0));
+    }
+
+    /// <summary>
+    /// What a reply to <c>SYSTem:STORage:SD:LISt?</c> turned out to be. One value per way
+    /// a listing can be judged, in the order <see cref="ClassifySdListReply"/> tests them.
+    /// </summary>
+    private enum SdListVerdictKind
+    {
+        /// <summary>The <c>SYSTem:ERRor?</c> terminator never arrived: the reply is missing or cut short.</summary>
+        NoTerminator = 0,
+
+        /// <summary>The device said there is no SD card.</summary>
+        NoCard,
+
+        /// <summary>The device said the directory is not on the card.</summary>
+        DirectoryNotFound,
+
+        /// <summary>The device could not open the directory for another reason.</summary>
+        FilesystemError,
+
+        /// <summary>The reply holds a device error and no listing entries.</summary>
+        DeviceError,
+
+        /// <summary>The device's end-of-listing marker says the walk failed.</summary>
+        DeviceFailed,
+
+        /// <summary>The device's end-of-listing marker says the walk stopped early.</summary>
+        DeviceIncomplete,
+
+        /// <summary>No end-of-listing marker, on firmware that sends one, and nothing in the reply explains why.</summary>
+        MarkerMissing,
+
+        /// <summary>The listing is whole.</summary>
+        Complete,
+    }
+
+    /// <summary>
+    /// The verdict on one SD listing reply, as given by <see cref="ClassifySdListReply"/>.
+    /// </summary>
+    private readonly struct SdListVerdict
+    {
+        internal SdListVerdict(
+            SdListVerdictKind kind,
+            IReadOnlyList<string> listing,
+            bool hasScpiError,
+            SdCardOperationException? error)
+        {
+            Kind = kind;
+            Listing = listing;
+            HasScpiError = hasScpiError;
+            Error = error;
+        }
+
+        internal SdListVerdictKind Kind { get; }
+
+        /// <summary>The reply's lines ahead of the transport terminator.</summary>
+        internal IReadOnlyList<string> Listing { get; }
+
+        /// <summary>Whether the listing holds a SCPI error line, with or without entries.</summary>
+        private bool HasScpiError { get; }
+
+        /// <summary>
+        /// The exception that reports this verdict; null only when <see cref="IsUsable"/>.
+        /// </summary>
+        internal SdCardOperationException? Error { get; }
+
+        /// <summary>The listing is the card's contents and may be parsed and cached.</summary>
+        internal bool IsUsable => Kind == SdListVerdictKind.Complete;
+
+        /// <summary>
+        /// The reply is of a kind that is often transient, so it is worth one more read before
+        /// it is acted on: a reply that did not finish, a walk that did not reach its end, or a
+        /// SCPI error (frequently the -200 of a bus that was still settling). A usable listing
+        /// that carries a stray SCPI error is read again too, and accepted if the error persists.
+        /// </summary>
+        internal bool ShouldReadAgain =>
+            Kind == SdListVerdictKind.NoTerminator
+            || Kind == SdListVerdictKind.MarkerMissing
+            || HasScpiError;
+    }
+
+    /// <summary>
+    /// Examines the reply to an SD listing and gives the one verdict on it. The single place
+    /// that decides whether a listing is good, used by <see cref="GetSdCardFilesAsync"/> and by
+    /// the relist in <see cref="DeleteSdCardFileAsync"/> so a rule added here applies to both
+    /// (#942; #887 had gone into one copy only).
+    /// </summary>
+    /// <param name="lines">
+    /// The raw reply, including the <c>SYSTem:ERRor?</c> terminator the exchange asked for.
+    /// </param>
+    private SdListVerdict ClassifySdListReply(IReadOnlyList<string> lines)
+    {
+        // Prove the EXCHANGE finished before judging what it contained. A reply cut short by
+        // the completion window loses the device's marker too, so nothing else in it can be
+        // trusted (#396).
+        if (!TrySplitAtSdListTerminator(lines, out var listing))
+        {
+            return new SdListVerdict(
+                SdListVerdictKind.NoTerminator,
+                listing,
+                hasScpiError: false,
+                new SdCardListIncompleteException(lines));
+        }
+
+        var hasScpiError = ScpiResponseClassifier.ContainsScpiError(listing);
+
+        // What the device said in words comes next, because it is the more specific answer:
+        // "no card" beats "incomplete".
+        var deviceError = GetSdCardListError(listing);
+        if (deviceError != null)
+        {
+            var kind = deviceError switch
+            {
+                SdCardNotPresentException => SdListVerdictKind.NoCard,
+                SdCardDirectoryNotFoundException => SdListVerdictKind.DirectoryNotFound,
+                SdCardFilesystemException => SdListVerdictKind.FilesystemError,
+                _ => SdListVerdictKind.DeviceError,
+            };
+            return new SdListVerdict(kind, listing, hasScpiError, deviceError);
+        }
+
+        // The device's own end-of-listing marker (firmware #794), when it sends one. FAILED
+        // means the walk could not open the directory at all; INCOMPLETE means it stopped
+        // early. Either way the caller is about to cache this list and answer "is my file on
+        // the card?" from it, and a device-truncated listing is the same class of wrong answer
+        // as a transport-truncated one, so it raises the same exception.
+        var status = SdCardFileListParser.GetListingStatus(listing);
+        if (status == SdCardListingStatus.Failed || status == SdCardListingStatus.Incomplete)
+        {
+            return new SdListVerdict(
+                status == SdCardListingStatus.Failed
+                    ? SdListVerdictKind.DeviceFailed
+                    : SdListVerdictKind.DeviceIncomplete,
+                listing,
+                hasScpiError,
+                new SdCardListIncompleteException(lines));
+        }
+
+        // No marker at all, on firmware that emits one, and nothing in the reply to explain
+        // why. The transport terminator proves the device answered, so the marker's absence is
+        // not a lost reply -- it is a walk that never reached its own end, and the entries in
+        // hand (often none) are not the card's contents. Reporting them as the answer is how a
+        // card holding five files was rendered as "SD card OK, 0 files" with nothing raising a
+        // problem (closes #887).
+        if (IsUnexplainedMissingListingEndMarker(listing, status))
+        {
+            return new SdListVerdict(
+                SdListVerdictKind.MarkerMissing,
+                listing,
+                hasScpiError,
+                new SdCardListIncompleteException(lines));
+        }
+
+        return new SdListVerdict(SdListVerdictKind.Complete, listing, hasScpiError, error: null);
     }
 
     /// <summary>
@@ -1021,6 +1126,11 @@ internal sealed class SdCardOperations
     /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
     /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    /// <exception cref="SdCardListIncompleteException">
+    /// Thrown when the listing that follows the delete cannot be trusted as complete, by the
+    /// same rules <see cref="GetSdCardFilesAsync"/> applies. <see cref="SdCardFiles"/> keeps the
+    /// value it had before the call.
+    /// </exception>
     internal async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
     {
         _host.EnsureConnected();
@@ -1067,10 +1177,9 @@ internal sealed class SdCardOperations
                 // command. Without it this exchange takes the 250 ms default,
                 // and the firmware walks the directory tree between chunks --
                 // so a merely-slow listing is cut off BEFORE its terminator
-                // arrives, reads as Unterminated (which by design does not
-                // throw) and slips past the guard below to overwrite the cache
-                // with a partial list. The guard can only judge a marker it
-                // was given time to receive.
+                // arrives. That reply is refused (NoTerminator), never cached,
+                // so too short a window would make a delete report an
+                // incomplete listing for a card that answered correctly.
                 completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
@@ -1119,26 +1228,22 @@ internal sealed class SdCardOperations
                 ? ScpiResponseClassifier.GetLastScpiErrorLine(lines)
                 : null;
 
-            // Prove the EXCHANGE finished before judging what it contained. A
-            // reply cut short by the completion window loses the device's
-            // marker too, so it would otherwise read as Unterminated -- which
-            // is legitimate on pre-#796 firmware and therefore cannot be
-            // treated as an error on its own. The transport terminator is what
-            // separates the two, and the read path has always required it.
-            var refreshComplete = TrySplitAtSdListTerminator(lines, out var refreshListing);
+            // The verdict on the listing that came back with the delete, from the
+            // same method the read path uses (#942).
+            var verdict = ClassifySdListReply(lines);
 
-            if (!refreshComplete && !ScpiResponseClassifier.ContainsScpiError(lines))
+            if (deleteExchangeError == null)
             {
-                // An unterminated reply with no error is a one-off stall, and
-                // the read path gives that a second attempt for the same
-                // reason. Re-LIST only: the DELETE was accepted -- nothing
-                // reported otherwise -- so re-sending it would ask the device
-                // to remove a file that is already gone and turn a transient
-                // stall into a hard error. That is also why this is a separate
-                // loop from the error retry above, which re-sends both
-                // deliberately because there the delete itself may not have
-                // landed.
-                for (var retry = 0; retry < SD_LIST_MAX_RETRIES && !refreshComplete; retry++)
+                // A reply that did not finish, or a walk that did not reach its
+                // end, with no error to explain it, is a one-off stall, and the
+                // read path gives that a second attempt for the same reason.
+                // Re-LIST only: the DELETE was accepted -- nothing reported
+                // otherwise -- so re-sending it would ask the device to remove a
+                // file that is already gone and turn a transient stall into a
+                // hard error. That is also why this is a separate loop from the
+                // error retry above, which re-sends both deliberately because
+                // there the delete itself may not have landed.
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES && verdict.ShouldReadAgain; retry++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -1156,16 +1261,15 @@ internal sealed class SdCardOperations
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
                         finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
-                    refreshComplete = TrySplitAtSdListTerminator(lines, out refreshListing)
-                                      && !ScpiResponseClassifier.ContainsScpiError(refreshListing);
+                    verdict = ClassifySdListReply(lines);
                 }
             }
 
             // The DELETE's own outcome, judged before anything about the
             // listing. The retry loop above exits either way, so a delete the
             // device refused on BOTH attempts arrives here with its error line
-            // intact -- and ThrowIfSdCardListError alone will not catch it: its
-            // hasContentLine escape returns silently whenever the reply carries
+            // intact -- and the listing's verdict alone will not catch it: a
+            // SCPI error is not held against a reply that also carries
             // real entries, which is the normal case (you deleted one file, the
             // others are still there). That escape is right for the read path,
             // where a stray error has no bearing on the listing; it is wrong
@@ -1189,21 +1293,20 @@ internal sealed class SdCardOperations
                 // whatever the error line was about. Verifying the outcome
                 // beats attributing the error, which the wire format does not
                 // let us do.
-                // Absence only proves anything if the listing is WHOLE.
-                // refreshComplete says the transport delivered a terminated
-                // reply; it says nothing about whether the device's walk
-                // reached the end of the tree. A listing the device called
-                // INCOMPLETE, or an Unterminated one, can be missing the
-                // target because it stopped early -- reading that as "deleted"
-                // is the same wrong answer pointed the other way. Only the
-                // device's own Complete marker rules it out, so against
-                // firmware that sends no marker the error stands, exactly as
-                // it did before this check existed.
+                // Absence only proves anything if the listing is WHOLE. A
+                // usable verdict on firmware that sends no marker says the
+                // exchange finished, not that the device's walk reached the
+                // end of the tree, and a listing can be missing the target
+                // because it stopped early -- reading that as "deleted" is the
+                // same wrong answer pointed the other way. Only the device's
+                // own Complete marker rules it out, so against firmware that
+                // sends no marker the error stands, exactly as it did before
+                // this check existed.
                 var target = System.IO.Path.GetFileName(fileName);
-                var goneFromCard = refreshComplete
-                    && SdCardFileListParser.GetListingStatus(refreshListing)
+                var goneFromCard = verdict.IsUsable
+                    && SdCardFileListParser.GetListingStatus(verdict.Listing)
                         == SdCardListingStatus.Complete
-                    && !SdCardFileListParser.ParseFileList(refreshListing).Any(
+                    && !SdCardFileListParser.ParseFileList(verdict.Listing).Any(
                         f => string.Equals(f.FileName, target,
                                            StringComparison.OrdinalIgnoreCase));
                 if (!goneFromCard)
@@ -1215,37 +1318,21 @@ internal sealed class SdCardOperations
                 }
             }
 
-            if (!refreshComplete)
+            // Same rule as the read path, with one intended difference: a
+            // directory that is not on the card is an empty list there and an
+            // exception here, because it leaves "is the file I named gone?"
+            // unanswered. Anything short of a whole listing must not become the
+            // cached answer to "what is on the card?". This refresh follows a
+            // DELETE, so the cache it overwrites is exactly what a caller
+            // consults next to decide whether the file is gone -- and a partial
+            // list makes every absence look confirmed. The cache is left
+            // untouched rather than replaced with a list we know is short.
+            if (!verdict.IsUsable)
             {
-                throw new SdCardListIncompleteException(lines);
+                throw verdict.Error!;
             }
 
-
-            // And the error guard the read path has always applied to its own
-            // listing. Without it a delete that FAILED on the device twice --
-            // the retry above exhausts without throwing -- came back here with
-            // an "**ERROR: -200" line, a valid transport terminator and no
-            // device marker, so nothing fired: ParseFileList skips the error
-            // line, the cache became an EMPTY list, and the method returned
-            // success. The caller was told the delete worked and the card is
-            // empty, in the one case where the device had said neither.
-            ThrowIfSdCardListError(refreshListing);
-
-            // Same guard as the read path: a listing the device itself called
-            // INCOMPLETE or FAILED must not become the cached answer to "what
-            // is on the card?". This refresh follows a DELETE, so the cache it
-            // overwrites is exactly what a caller consults next to decide
-            // whether the file is gone -- and a partial list makes every
-            // absence look confirmed. The cache is left untouched rather than
-            // replaced with a list we know is short.
-            var refreshStatus = SdCardFileListParser.GetListingStatus(refreshListing);
-            if (refreshStatus == SdCardListingStatus.Failed
-                || refreshStatus == SdCardListingStatus.Incomplete)
-            {
-                throw new SdCardListIncompleteException(lines);
-            }
-
-            _sdCardFiles = SdCardFileListParser.ParseFileList(refreshListing);
+            _sdCardFiles = SdCardFileListParser.ParseFileList(verdict.Listing);
         }
         finally
         {
@@ -1851,13 +1938,15 @@ internal sealed class SdCardOperations
 
     /// <summary>
     /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
-    /// and throws a typed <see cref="SdCardOperationException"/> when the device
-    /// reported a real failure (no SD card, filesystem error, generic SCPI error).
+    /// and returns the typed <see cref="SdCardOperationException"/> for a real failure the
+    /// device reported (no SD card, filesystem error, generic SCPI error), or null when
+    /// there is none. Returned rather than thrown so <see cref="ClassifySdListReply"/> can
+    /// rank it and each caller can decide what to do with it.
     /// If any non-error/non-empty line is present, callers proceed to parse — even
     /// if SCPI error lines are interleaved — so a successful directory listing is
     /// never masked by stray transient errors.
     /// </summary>
-    private static void ThrowIfSdCardListError(IReadOnlyList<string> lines)
+    private static SdCardOperationException? GetSdCardListError(IReadOnlyList<string> lines)
     {
         // LastScpiError must only carry a real SCPI-formatted error so callers
         // can rely on its shape. Firmware status text ("Error !! ...") is
@@ -1870,7 +1959,7 @@ internal sealed class SdCardOperations
         // and pass garbage to the parser.
         if (lines.Any(l => l.IndexOf(NoSdCardMarker, StringComparison.OrdinalIgnoreCase) >= 0))
         {
-            throw new SdCardNotPresentException(lines, lastScpiError);
+            return new SdCardNotPresentException(lines, lastScpiError);
         }
 
         var filesystemErrorLine = lines.FirstOrDefault(l =>
@@ -1888,11 +1977,11 @@ internal sealed class SdCardOperations
             // that did not exist created it and reported it empty.
             if (IsDirectoryNotFound(trimmed))
             {
-                throw new SdCardDirectoryNotFoundException(
+                return new SdCardDirectoryNotFoundException(
                     lines, lastScpiError, trimmed, ExtractBracketedPath(trimmed));
             }
 
-            throw new SdCardFilesystemException(lines, lastScpiError, trimmed);
+            return new SdCardFilesystemException(lines, lastScpiError, trimmed);
         }
 
         // If any line looks like a real result (non-empty, not an error or
@@ -1911,12 +2000,12 @@ internal sealed class SdCardOperations
             && !SdCardFileListParser.IsListEndMarker(line, out _));
         if (hasContentLine)
         {
-            return;
+            return null;
         }
 
         if (lastScpiError != null)
         {
-            throw new SdCardOperationException(
+            return new SdCardOperationException(
                 "The SD card list operation failed: " + lastScpiError,
                 lines,
                 lastScpiError);
@@ -1930,7 +2019,7 @@ internal sealed class SdCardOperations
             !string.IsNullOrWhiteSpace(l) && ScpiResponseClassifier.IsErrorResponseLine(l))?.Trim();
         if (nonResultLine != null)
         {
-            throw new SdCardOperationException(
+            return new SdCardOperationException(
                 "The SD card list operation failed: " + nonResultLine,
                 lines,
                 lastScpiError: null);
@@ -1939,5 +2028,6 @@ internal sealed class SdCardOperations
         // No error lines and no content lines — empty directory. Caller continues.
         // Safe to treat as empty rather than as a lost reply: GetSdCardFilesAsync only reaches
         // this point once the device has answered the end-of-listing terminator (#396).
+        return null;
     }
 }
