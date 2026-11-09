@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -354,7 +355,7 @@ public class DaqifiDeviceWithTransportTests
 
         device.Connect();
         var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
-        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        var consumer = PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer");
         Assert.NotNull(producer);
         Assert.NotNull(consumer);
         Assert.False(IsDisposed(producer));
@@ -363,7 +364,8 @@ public class DaqifiDeviceWithTransportTests
         device.Disconnect();
 
         Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
-        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<DeviceWireParser>(device, "_wireParser"));
         Assert.True(IsDisposed(producer));
         Assert.True(IsDisposed(consumer));
         Assert.Throws<ObjectDisposedException>(() => producer.Send(ScpiMessageProducer.GetDeviceInfo));
@@ -372,7 +374,7 @@ public class DaqifiDeviceWithTransportTests
         // Reconnect builds a fresh pair. The previous instances stay disposed.
         device.Connect();
         var reconnectedProducer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
-        var reconnectedConsumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        var reconnectedConsumer = PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer");
         Assert.NotNull(reconnectedProducer);
         Assert.NotNull(reconnectedConsumer);
         Assert.NotSame(producer, reconnectedProducer);
@@ -380,7 +382,7 @@ public class DaqifiDeviceWithTransportTests
 
         device.Disconnect();
         Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
-        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer"));
         Assert.True(IsDisposed(reconnectedProducer));
         Assert.True(IsDisposed(reconnectedConsumer));
 
@@ -402,14 +404,14 @@ public class DaqifiDeviceWithTransportTests
 
         device.Connect();
         var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
-        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        var consumer = PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer");
         Assert.NotNull(producer);
         Assert.NotNull(consumer);
 
         await device.DisconnectAsync();
 
         Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
-        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer"));
         Assert.True(IsDisposed(producer));
         Assert.True(IsDisposed(consumer));
 
@@ -443,7 +445,7 @@ public class DaqifiDeviceWithTransportTests
 
         Assert.Equal(1, consumer.DisposeCount);
         Assert.Equal(1, producer.DisposeCount);
-        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer"));
         Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
         Assert.False(transport.IsConnected);
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
@@ -491,7 +493,7 @@ public class DaqifiDeviceWithTransportTests
     /// Records the calls the device makes on its consumer, and can throw from
     /// <see cref="Dispose"/>. Its events are never raised, so they need no backing field.
     /// </summary>
-    private sealed class RecordingConsumer : IMessageConsumer<DaqifiOutMessage>
+    private sealed class RecordingConsumer : IMessageConsumer<WireMessage>
     {
         private readonly Exception? _disposeFailure;
 
@@ -505,7 +507,7 @@ public class DaqifiDeviceWithTransportTests
 
         public int QueuedMessageCount => 0;
 
-        public event EventHandler<MessageReceivedEventArgs<DaqifiOutMessage>>? MessageReceived
+        public event EventHandler<MessageReceivedEventArgs<WireMessage>>? MessageReceived
         {
             add { }
             remove { }

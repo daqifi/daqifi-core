@@ -40,7 +40,7 @@ namespace Daqifi.Core.Device;
 /// <c>void</c> commands remain the right choice while streaming or when a silent no-op is
 /// acceptable. Nothing here changes what goes on the wire for those. Measured on the bench
 /// Nyquist (fw 3.7.2, USB CDC), one confirming command costs about <b>3 seconds</b> — a drain
-/// exchange plus the confirming exchange, each of which pauses the protobuf consumer and holds
+/// exchange plus the confirming exchange, each of which stops decoding protobuf frames and holds
 /// the device's operation lock. Budget for that before putting one in a loop over 16 channels.
 /// </para>
 /// </remarks>
@@ -71,7 +71,7 @@ public interface IConfirmingDeviceAdministration
     /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> beforehand if those entries matter.
     /// </para>
     /// <para>
-    /// This costs two or more text exchanges, each of which pauses the protobuf consumer and takes the
+    /// This costs two or more text exchanges, each of which stops decoding protobuf frames and takes the
     /// device's operation lock. Do not call it during active streaming or concurrently with another device
     /// operation; the <c>void</c> command remains the one to use in those situations.
     /// </para>

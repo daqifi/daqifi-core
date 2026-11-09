@@ -61,6 +61,14 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     private volatile bool _disposed;
 
     /// <summary>
+    /// 1 while the reader thread is dispatching a batch it parsed, 0 otherwise. Raised inside the
+    /// same <see cref="_bufferLock"/> section that parsed the batch, so a <see cref="Reframe"/> —
+    /// which takes that lock — can never observe "not dispatching" for a batch parsed before it.
+    /// See <see cref="WaitForDispatchToFinishAsync"/>.
+    /// </summary>
+    private int _dispatching;
+
+    /// <summary>
     /// Initializes a new instance of the StreamMessageConsumer class.
     /// </summary>
     /// <param name="stream">The stream to read messages from.</param>
@@ -311,6 +319,46 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
+    /// Changes how the bytes that arrive from now on are framed, without stopping the reader.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="applyFraming"/> runs under the buffer lock the reader holds while it appends
+    /// and parses, so the change falls exactly between two batches and never inside one: every
+    /// complete message in what has been read so far was already parsed the old way, and
+    /// everything read afterwards is parsed the new way. The bytes still buffered at that instant
+    /// — a message the old framing had begun and not finished — are discarded with it, because the
+    /// new framing could only misread them.
+    /// </para>
+    /// <para>
+    /// This is what lets the device keep one reader for both its protobuf frames and its SCPI text
+    /// replies, instead of stopping one reader and starting another around every text exchange
+    /// (issue #900). It touches neither the stream nor the reader thread, so it is immediate
+    /// whether or not the consumer is running, and works on a disposed consumer too.
+    /// </para>
+    /// <para>
+    /// Messages parsed before the change but not yet dispatched are still dispatched, after it.
+    /// A caller that must tell them apart has to tag them while parsing, which is what the device's
+    /// parser does.
+    /// </para>
+    /// <para>
+    /// <paramref name="applyFraming"/> must be quick and must not call back into this consumer or
+    /// take any lock a message handler takes: it runs with the reader's buffer lock held.
+    /// </para>
+    /// </remarks>
+    /// <param name="applyFraming">Changes the parser's framing.</param>
+    internal void Reframe(Action applyFraming)
+    {
+        ArgumentNullException.ThrowIfNull(applyFraming);
+
+        lock (_bufferLock)
+        {
+            applyFraming();
+            _messageBuffer.Clear();
+        }
+    }
+
+    /// <summary>
     /// Resets the message buffer and drains any residual bytes from the stream. Must only run on
     /// the thread that currently owns the stream/buffer (the consumer thread while running, or the
     /// caller of <see cref="ClearBuffer"/> when it is not).
@@ -456,17 +504,8 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 // a stream that glitches and recovers is never mistaken for a disconnected device.
                 SafeReportIoSuccess();
 
-                // Add received data to message buffer (guarded: a caller may be reading
-                // QueuedMessageCount and ClearBuffer's drain runs on this same thread).
-                // Bulk-appended: the byte-at-a-time loop this replaced re-checked the list's
-                // capacity once per byte, on every read, for the life of the connection (#490).
-                lock (_bufferLock)
-                {
-                    _messageBuffer.AddRange(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
-                }
-
-                // Try to parse complete messages from buffer
-                ProcessMessageBuffer();
+                // Append what was read and parse complete messages out of the buffer.
+                ProcessMessageBuffer(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
             }
             catch (Exception ex)
             {
@@ -643,17 +682,27 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
-    /// Processes the message buffer and extracts complete messages.
+    /// Appends what a read returned to the message buffer and extracts complete messages from it.
     /// </summary>
-    private void ProcessMessageBuffer()
+    /// <param name="received">The bytes the read returned.</param>
+    private void ProcessMessageBuffer(ReadOnlySpan<byte> received)
     {
         byte[] bufferData;
         IEnumerable<IInboundMessage<T>> messages;
 
-        // Snapshot, parse, and drain the buffer under the lock; dispatch events outside it so a
-        // subscriber callback never runs while the lock is held.
+        // Append, snapshot, parse, and drain the buffer under the lock; dispatch events outside it
+        // so a subscriber callback never runs while the lock is held.
+        //
+        // The append shares the parse's lock section rather than taking one of its own, so there
+        // is no instant at which bytes have been buffered but not yet parsed. Reframe depends on
+        // that: a framing change can then only ever fall between two whole batches, and nothing
+        // a read returned before the change can be swept away unparsed by it (issue #900).
         lock (_bufferLock)
         {
+            // Bulk-appended: the byte-at-a-time loop this replaced re-checked the list's capacity
+            // once per byte, on every read, for the life of the connection (#490).
+            _messageBuffer.AddRange(received);
+
             // Parse from a view over the accumulation buffer rather than a copy of it. The copy
             // this replaced was the wire throughput duplicated as garbage on every single read
             // (issue #490); it existed only because the parser entry point demanded an array.
@@ -672,24 +721,83 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             {
                 _messageBuffer.RemoveRange(0, Math.Min(consumedBytes, _messageBuffer.Count));
             }
+
+            // Raised as the last step under the lock, for WaitForDispatchToFinishAsync — see the
+            // remarks on _dispatching. Last, so nothing that can throw sits between it and the
+            // finally that clears it.
+            Interlocked.Exchange(ref _dispatching, 1);
         }
 
-        // Fire events for parsed messages
-        foreach (var message in messages)
+        try
         {
-            try
+            // Fire events for parsed messages
+            foreach (var message in messages)
             {
-                OnMessageReceived(message, bufferData);
-            }
-            catch (Exception ex)
-            {
-                // A throwing MessageReceived subscriber is reported rather than propagated, so one
-                // bad handler cannot starve the others of this batch. The report itself is isolated
-                // too: raising it from inside a catch block leaves nowhere for a second throw to go
-                // (see SafeRaiseError).
-                SafeRaiseError(ex);
+                try
+                {
+                    OnMessageReceived(message, bufferData);
+                }
+                catch (Exception ex)
+                {
+                    // A throwing MessageReceived subscriber is reported rather than propagated, so
+                    // one bad handler cannot starve the others of this batch. The report itself is
+                    // isolated too: raising it from inside a catch block leaves nowhere for a
+                    // second throw to go (see SafeRaiseError).
+                    SafeRaiseError(ex);
+                }
             }
         }
+        finally
+        {
+            Interlocked.Exchange(ref _dispatching, 0);
+        }
+    }
+
+    /// <summary>
+    /// Waits, for at most <paramref name="timeout"/>, until the reader has finished handing out the
+    /// batch it is dispatching now, if any.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reader parses a batch under its buffer lock and dispatches it afterwards, outside the
+    /// lock, on its own thread. So <see cref="Reframe"/> can return while subscribers are still
+    /// processing the last batch framed the old way, and the reader reads nothing new until they
+    /// finish. A caller that is about to time a window over what the reader reads next — the text
+    /// exchange's stale-line window — has to wait for that first, or a slow subscriber stretches
+    /// bytes that arrived before the window into it (issue #900).
+    /// </para>
+    /// <para>
+    /// Asynchronous, so the wait never blocks the caller's thread, which may be a UI thread. It
+    /// completes at once when nothing is being dispatched — the usual case — and otherwise looks
+    /// again every millisecond or so; the poll only runs while a subscriber is busy. Bounded, like
+    /// the stop join it replaces, so a subscriber that never returns cannot hold the caller
+    /// forever. Completes at once on the reader thread itself (a subscriber that runs an exchange),
+    /// which could otherwise only wait on itself.
+    /// </para>
+    /// </remarks>
+    /// <param name="timeout">The longest to wait.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
+    /// <returns><c>true</c> when no dispatch is in progress; <c>false</c> when the wait timed out.</returns>
+    /// <exception cref="OperationCanceledException">Thrown when cancelled while waiting.</exception>
+    internal async Task<bool> WaitForDispatchToFinishAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (ReferenceEquals(_consumerThread, Thread.CurrentThread))
+        {
+            return true;
+        }
+
+        var startedAt = Environment.TickCount64;
+        while (Volatile.Read(ref _dispatching) != 0)
+        {
+            if (Environment.TickCount64 - startedAt >= (long)timeout.TotalMilliseconds)
+            {
+                return false;
+            }
+
+            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     /// <summary>

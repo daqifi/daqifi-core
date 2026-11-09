@@ -184,8 +184,8 @@ internal sealed class StreamFrameDecoder
     /// frame is discarded both end with zero decoded samples, but only the first leaves this at
     /// zero — and that is what
     /// <see cref="DaqifiStreamingDevice.StartStreamingAsync"/> needs to know before it reads the
-    /// device's error queue, because reading it while frames are flowing would take the stream's
-    /// own consumer off the wire.
+    /// device's error queue, because reading it while frames are flowing would switch the
+    /// device's reader to framing text, and the frames arriving meanwhile would be lost.
     /// </remarks>
     internal long ReceivedStreamFrameCount => Interlocked.Read(ref _receivedStreamFrameCount);
 

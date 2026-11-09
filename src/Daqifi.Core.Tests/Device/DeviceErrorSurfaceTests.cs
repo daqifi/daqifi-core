@@ -121,12 +121,13 @@ public class DeviceErrorSurfaceTests
     }
 
     [Fact]
-    public async Task AStuckTextConsumerThatOutlivesItsExchange_CanNoLongerRaiseOnTheDevice()
+    public async Task AStuckReaderThatOutlivesItsConnection_CanNoLongerRaiseOnTheDevice()
     {
-        // The text exchange binds a temporary consumer to the device's error surface. Stopping and
-        // disposing that consumer are both time-bounded, so a reader parked in an un-returning read
-        // outlives the exchange — and a still-subscribed zombie would both retain the device and
-        // report failures against an exchange (and a connection) that ended long ago.
+        // A reader parked in an un-returning read during a text exchange outlives the disconnect:
+        // stopping and disposing it are both time-bounded. Its read eventually fails, and that
+        // failure belongs to a connection that has ended — it must not reach the device. (Before
+        // #900 this was a temporary text reader with its own per-exchange subscription; it is now
+        // the device's one reader, whose failures after a stop are teardown.)
         using var stream = new StallingStream();
         using var transport = new StreamBackedTransport(stream);
         using var device = new TextCommandTestableDevice("Stalling Device", transport);
@@ -142,12 +143,11 @@ public class DeviceErrorSurfaceTests
 
         device.Connect();
 
-        // The setup action runs once the text consumer is reading, so this is what parks its
-        // in-flight read past the exchange's stop and dispose windows.
+        // The setup action runs while the reader is framing the exchange's reply, so this is
+        // what parks its in-flight read past the disconnect's stop and dispose windows.
         await device.CallTextCommandAsync(() => stream.StallThenFail());
 
-        // Detach the protobuf consumer too, so the only thing that could still report is the
-        // abandoned text reader.
+        // Disconnect, so the only thing that could still report is the abandoned reader.
         device.Disconnect();
 
         // Outlast the stalled read, which fails when it finally returns.
@@ -338,8 +338,8 @@ public class DeviceErrorSurfaceTests
     }
 
     /// <summary>
-    /// A <see cref="DaqifiStreamingDevice"/> exposing the protected text exchange, so the temporary
-    /// text consumer's lifetime can be exercised.
+    /// A <see cref="DaqifiStreamingDevice"/> exposing the protected text exchange, so a reader that
+    /// stalls during one can be exercised.
     /// </summary>
     private sealed class TextCommandTestableDevice : DaqifiStreamingDevice
     {
@@ -404,14 +404,14 @@ public class DeviceErrorSurfaceTests
 
     /// <summary>
     /// A stream that idles quietly until told to stall, after which a read parks for
-    /// <see cref="StallDuration"/> — long enough to outlast the exchange's bounded stop and dispose
+    /// <see cref="StallDuration"/> — long enough to outlast the disconnect's bounded stop and dispose
     /// joins — and then fails. This reproduces the reader that is still alive after its consumer has
     /// been disposed.
     /// </summary>
     internal sealed class StallingStream : Stream
     {
         /// <summary>
-        /// Comfortably longer than the text exchange's <c>StopSafely</c> join plus the consumer's
+        /// Comfortably longer than the reader's <c>StopSafely</c> join plus the consumer's
         /// dispose-time grace (1 s each), so the reader provably outlives both.
         /// </summary>
         public static readonly TimeSpan StallDuration = TimeSpan.FromSeconds(3);

@@ -107,6 +107,11 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// 0.42 s (issue #900).
     /// </para>
     /// <para>
+    /// A text exchange no longer stops the reader at all — it switches the reader's framing
+    /// instead (issue #900) — so this value now bounds the stops that remain: a raw capture's
+    /// (the SD download) and a disconnect's.
+    /// </para>
+    /// <para>
     /// It costs a little CPU, and the cost is small because of what the idle-CPU paragraph on this
     /// class measured: the Unix helper thread polls for a read's <i>duration</i>, so most of the
     /// idle cost follows time spent with a read pending rather than the number of reads issued —

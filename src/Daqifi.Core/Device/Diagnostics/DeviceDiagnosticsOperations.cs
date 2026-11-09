@@ -16,8 +16,8 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each method issues a single SCPI query/command as a text command (the protobuf consumer is
-/// paused for the exchange, same as the SD and LAN-chip queries) and hands the response to a
+/// Each method issues a single SCPI query/command as a text command (the device's reader frames
+/// reply lines instead of protobuf for the exchange, same as the SD and LAN-chip queries) and hands the response to a
 /// tolerant parser. Unlike the SD operations these do not switch the SPI bus, so there is no
 /// PrepareSdInterface / settle delay; and they deliberately do not stop streaming, so they can
 /// be issued mid-capture.

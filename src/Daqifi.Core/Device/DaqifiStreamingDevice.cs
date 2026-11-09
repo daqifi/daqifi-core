@@ -336,9 +336,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// device for the next connect to trip over (issues #899 and #898).
     /// </para>
     /// <para>
-    /// Reading the error queue is a text exchange, which takes the protobuf consumer off the
-    /// wire — so it runs only once the device has had its chance to send a frame and has sent
-    /// none. A stream that is delivering data is never interrupted by it. See
+    /// Reading the error queue is a text exchange, which stops the reader decoding protobuf
+    /// frames for its duration — so it runs only once the device has had its chance to send a
+    /// frame and has sent none. A stream that is delivering data is never interrupted by it. See
     /// <see cref="ConfirmStreamStartedAsync"/>.
     /// </para>
     /// </remarks>
@@ -443,11 +443,19 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </para>
     /// <para>
     /// The queue read cannot simply follow the start command, because it is a text exchange and
-    /// a text exchange takes the protobuf consumer off the wire — on a healthy stream that
-    /// would throw away the samples the caller asked for, and the binary frames arriving
-    /// meanwhile would be read as reply lines. So the arrival of a single frame is taken as
-    /// proof and ends the wait, and only a device that sent nothing at all is questioned. A
-    /// refused start sends nothing, so it is always questioned.
+    /// a text exchange switches the device's reader from decoding protobuf to framing reply
+    /// lines — on a healthy stream that would throw away the samples the caller asked for, and
+    /// the binary frames arriving meanwhile would be read as reply lines. So the arrival of a
+    /// single frame is taken as proof and ends the wait, and only a device that sent nothing at
+    /// all is questioned. A refused start sends nothing, so it is always questioned.
+    /// </para>
+    /// <para>
+    /// This ordering survived the removal of the consumer swap (issue #900) on purpose. One
+    /// reader now serves both kinds of traffic, but it frames one kind at a time: the exchange
+    /// tells it which, rather than letting it guess from the bytes, because a wrong guess on this
+    /// wire destroys data (#268). So the reader still cannot decode a stream frame and a reply
+    /// line in the same instant, and an error-queue read on a delivering stream would still cost
+    /// that stream its frames for the exchange's duration.
     /// </para>
     /// <para>
     /// The budget scales with the rate, because "nothing yet" only means something after a

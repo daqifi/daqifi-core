@@ -91,8 +91,8 @@ internal sealed class SdCardOperations
     /// so the gate is released only when that worker actually finishes, however long that
     /// takes. Without it, a caller retrying against a device that stays wedged (an "import
     /// all" loop, say) would start a second reader on the same stream, which is the framing
-    /// corruption <see cref="DaqifiDevice"/> already refuses to risk when restarting the
-    /// protobuf consumer, and would stack another permanently blocked thread each time (#399).
+    /// corruption <see cref="DaqifiDevice"/> already refuses to risk when restarting its
+    /// reader, and would stack another permanently blocked thread each time (#399).
     /// </summary>
     /// <remarks>
     /// Deliberately not disposed: we only ever call <see cref="SemaphoreSlim.Wait(int)"/> and
@@ -977,7 +977,7 @@ internal sealed class SdCardOperations
         // nothing else). StartSdCardLoggingSessionAsync sets SYSTem:STReam:FORmat to the session's
         // log format, and the firmware holds ONE encoding for every interface
         // (SCPIInterface.c, streaming.c), so a JSON or CSV session left live streaming emitting
-        // text that the protobuf consumer silently dropped until the next reconnect (closes #851).
+        // text that the protobuf framing silently dropped until the next reconnect (closes #851).
         //
         // Protobuf rather than "whatever the format was before the session": the library keeps no
         // record of the device's previous encoding, and it cannot read one back here — the query
@@ -1347,8 +1347,8 @@ internal sealed class SdCardOperations
     /// its next token check — but that check is only reached once whatever it is blocked in
     /// returns, which may be never. Two consequences for callers: it can still write to
     /// <paramref name="destinationStream"/> after this method has thrown, so the stream must
-    /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
-    /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
+    /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with its
+    /// reader stopped, so reconnecting (or power-cycling, if its SD subsystem is
     /// genuinely wedged) is the reliable way to resume normal operation.
     /// </para>
     /// <para>

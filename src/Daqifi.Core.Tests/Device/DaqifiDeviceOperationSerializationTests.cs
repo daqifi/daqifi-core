@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -417,12 +418,12 @@ public class DaqifiDeviceOperationSerializationTests
     }
 
     [Fact]
-    public async Task TextExchange_CancelledWhileTheOutboundQueueDrains_DoesNotResubscribeTheConsumer()
+    public async Task TextExchange_CancelledWhileTheOutboundQueueDrains_LeavesTheReaderAsItFoundIt()
     {
-        // The drain added for #342 is the one step before the consumer swap that can throw. If it
-        // threw from inside the swap's try/finally, that finally would "restart" a consumer that
-        // was never stopped — Start() early-returns, but the inbound handler is subscribed again,
-        // and every frame from then on is dispatched twice.
+        // The drain added for #342 is the one step before the text capture that can throw. It
+        // used to sit just outside a consumer swap whose finally would have subscribed the inbound
+        // handler a second time; it now sits just outside the capture, and a throw from it must
+        // leave the reader exactly as it was: still framing protobuf, subscribed once.
         using var transport = new BlockedWriteTransport();
         using var device = new TextExchangeDevice("Draining Device", transport);
         device.Connect();
@@ -440,8 +441,9 @@ public class DaqifiDeviceOperationSerializationTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => device.RunTextExchangeAsync(() => { }, cts.Token));
 
-        // A restart that never should have run adds a subscriber; the count must be untouched.
+        Assert.Equal(1, before);
         Assert.Equal(before, InboundSubscriberCount(device));
+        Assert.True(ReaderStillFramesProtobuf(device));
 
         transport.ReleaseWrites();
         device.Disconnect();
@@ -453,8 +455,10 @@ public class DaqifiDeviceOperationSerializationTests
             .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(device)!;
 
+        // MessageParsed is the event the device rides; MessageReceived is the public one it
+        // leaves alone (#490).
         var handler = (Delegate?)consumer.GetType()
-            .GetField("MessageReceived", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetField("MessageParsed", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(consumer);
 
         return handler?.GetInvocationList().Length ?? 0;
@@ -1010,9 +1014,9 @@ public class DaqifiDeviceOperationSerializationTests
     [Fact]
     public async Task TextExchange_DoesNotTakeTheStreamWhileAWriteIsStillInFlight()
     {
-        // The device-level consequence: swapping the stream's reader mid-write means that
+        // The device-level consequence: switching the reader to text mid-write means that
         // command's reply is collected into the exchange's answer. The exchange must still be
-        // waiting — protobuf consumer running, stream not taken — while the write is blocked.
+        // waiting — reader still framing protobuf — while the write is blocked.
         using var transport = new GatedWriteTransport();
         using var device = new SlowDrainTextExchangeDevice("Draining Device", transport);
         device.Connect();
@@ -1023,15 +1027,15 @@ public class DaqifiDeviceOperationSerializationTests
         var exchange = Task.Run(() => device.RunTextExchangeAsync(() => { }));
 
         // Sampled across the whole window rather than once at the end: a drain that returns early
-        // swaps within a few tens of milliseconds and then restarts the consumer when the exchange
-        // finishes, so a single late sample would see it running again and prove nothing. The
-        // write stays blocked throughout, so with the barrier working the consumer is never
-        // stopped at any point here.
+        // switches the reader to text within a few milliseconds and back when the exchange
+        // finishes, so a single late sample would see it on protobuf again and prove nothing. The
+        // write stays blocked throughout, so with the barrier working the reader never leaves
+        // protobuf at any point here.
         for (var i = 0; i < 12; i++)
         {
             await Task.Delay(25);
             Assert.True(
-                ConsumerIsRunning(device),
+                ReaderStillFramesProtobuf(device),
                 $"The text exchange took the stream while a command was still being written (sample {i}).");
         }
 
@@ -1243,13 +1247,17 @@ public class DaqifiDeviceOperationSerializationTests
         device.Disconnect();
     }
 
-    private static bool ConsumerIsRunning(DaqifiDevice device)
+    private static bool ReaderStillFramesProtobuf(DaqifiDevice device)
     {
         var consumer = typeof(DaqifiDevice)
             .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(device);
+        var parser = (DeviceWireParser?)typeof(DaqifiDevice)
+            .GetField("_wireParser", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
 
-        return consumer is IMessageConsumer<DaqifiOutMessage> { IsRunning: true };
+        return consumer is IMessageConsumer<WireMessage> { IsRunning: true }
+               && parser is { Capture: null };
     }
 
     /// <summary>A message whose payload is a short ASCII tag, so write order is readable.</summary>

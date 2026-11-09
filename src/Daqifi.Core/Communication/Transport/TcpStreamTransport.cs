@@ -73,7 +73,8 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// text exchange paid up to half a second to put the protobuf consumer down before it sent
     /// anything, and it paid it again on the way out — the serial half of issue #900, measured on
     /// the same wire. The two transports are kept at the same value so neither path carries a
-    /// stop latency the other does not.
+    /// stop latency the other does not. A text exchange no longer stops the reader at all
+    /// (issue #900); the value now bounds a raw capture's stop and a disconnect's.
     /// </para>
     /// </remarks>
     internal const int OperationalReceiveTimeoutMs = 50;

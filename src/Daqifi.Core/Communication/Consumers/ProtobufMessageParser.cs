@@ -127,11 +127,11 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         => StepFrame(new ReadOnlySpan<byte>(data), offset, anyFrameRead, out frame, out nextOffset);
 
     /// <summary>
-    /// The single frame-boundary implementation, shared by <see cref="ParseMessages(ReadOnlySpan{byte}, out int)"/>
-    /// and <see cref="TryReadFrame"/> so the resync and partial-frame rules below have exactly
-    /// one definition.
+    /// The single frame-boundary implementation, shared by <see cref="ParseMessages(ReadOnlySpan{byte}, out int)"/>,
+    /// <see cref="TryReadFrame"/> and the device's own reader (<c>DeviceWireParser</c>, issue
+    /// #900) so the resync and partial-frame rules below have exactly one definition.
     /// </summary>
-    private static ProtobufFrameStep StepFrame(
+    internal static ProtobufFrameStep StepFrame(
         ReadOnlySpan<byte> data,
         int offset,
         bool anyFrameRead,

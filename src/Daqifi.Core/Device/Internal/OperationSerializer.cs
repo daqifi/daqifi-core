@@ -622,8 +622,8 @@ internal sealed class OperationSerializer : IDisposable
     /// <para>
     /// New sends from other threads are already parked by the time this runs, but anything
     /// queued just before the exchange opened is still on its way out. Written after the
-    /// consumer swap, its reply would land in this exchange's lines instead of the protobuf
-    /// consumer's — a reply matched to the wrong request. Letting the outbound side go quiet
+    /// reader has switched to text, its reply would land in this exchange's lines instead of
+    /// being framed as protobuf — a reply matched to the wrong request. Letting the outbound side go quiet
     /// first puts those replies back where they belong.
     /// </para>
     /// <para>

@@ -13,23 +13,32 @@ using static Daqifi.Core.Internal.DiagnosticGuard;
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
-/// Runs a text (SCPI) exchange on the device's stream: takes the operation lock, swaps the
-/// protobuf consumer out for a line-based one, collects the reply lines, and puts everything
-/// back — extracted from <see cref="DaqifiDevice"/> so the device delegates rather than hosts it
-/// (issue #344).
+/// Runs a text (SCPI) exchange on the device's stream: takes the operation lock, switches the
+/// device's reader from framing protobuf to framing reply lines, collects those lines, and
+/// switches it back — extracted from <see cref="DaqifiDevice"/> so the device delegates rather
+/// than hosts it (issue #344).
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is the primitive nearly every non-streaming device operation is built on: the SD card
 /// operations, the diagnostics, the LAN chip info and the confirming administration commands all
 /// reach it through <see cref="IDeviceOperationHost.ExecuteTextCommandAsync"/>. It is also the
-/// most order-sensitive code in the device — the prepare/finalize pairing, the outbound drain,
-/// the stale-line boundary and the consumer restart each close a specific reported defect, and
-/// the comments below say which. Read them before moving anything.
+/// most order-sensitive code in the device — the prepare/finalize pairing, the outbound drain and
+/// the stale-line boundaries each close a specific reported defect, and the comments below say
+/// which. Read them before moving anything.
+/// </para>
+/// <para>
+/// An exchange used to stop the protobuf reader, start a separate line reader for the reply, and
+/// then stop that one and restart the first — about 135 ms of every exchange, and a restart that a
+/// stuck stream could refuse, leaving the device with no reader on the wire (issues #383, #900).
+/// The device now
+/// keeps one reader for its whole connection and the exchange only changes how that reader frames
+/// what it reads (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>). A raw capture still stops the
+/// reader, because it reads the stream itself.
 /// </para>
 /// <para>
 /// The engine holds no state of its own beyond its host. Everything it coordinates —
-/// the operation lock, the re-entrancy flag, the consumer, the transport — belongs to the device
+/// the operation lock, the re-entrancy flag, the reader, the transport — belongs to the device
 /// and is reached through <see cref="ITextExchangeHost"/>, whose remarks explain why three of
 /// those members must stay synchronous.
 /// </para>
@@ -37,12 +46,18 @@ namespace Daqifi.Core.Device.Internal;
 internal sealed class TextExchangeEngine
 {
     /// <summary>
-    /// How long the exchange lets the freshly started text consumer settle before it takes the
-    /// stale-line boundary. Was an unnamed <c>50</c>; named here because it is now one of the
-    /// waits driven by <see cref="ITextExchangeHost.TimeProvider"/> and a reader needs to know
-    /// which one (issue #637). The duration is unchanged.
+    /// How long the exchange listens in text mode before it takes the stale-line boundary, so that
+    /// a late reply to an earlier command which lands just as the exchange opens is counted as
+    /// stale rather than as this exchange's answer.
     /// </summary>
-    private static readonly TimeSpan TextConsumerSettleDelay = TimeSpan.FromMilliseconds(50);
+    /// <remarks>
+    /// Was an unnamed <c>50</c> that also covered starting a separate text reader; named because it
+    /// is one of the waits driven by <see cref="ITextExchangeHost.TimeProvider"/> (issue #637).
+    /// Kept at 50 ms when the separate reader went away (issue #900): the reader no longer needs to
+    /// start, but the window it gives the stale-line boundary is what the boundary's guarantees were
+    /// measured against, and shortening it is a change to that boundary, not to the reader.
+    /// </remarks>
+    private static readonly TimeSpan TextModeSettleDelay = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// Read timeout a raw capture holds the stream at, in milliseconds.
@@ -69,7 +84,7 @@ internal sealed class TextExchangeEngine
 
     /// <summary>
     /// Takes exclusive use of the device and hands the transport stream to the caller for raw
-    /// byte access, with the protobuf consumer paused for the duration. Everything is restored
+    /// byte access, with the device's reader stopped for the duration. Everything is restored
     /// when the action completes, however it completes.
     /// </summary>
     /// <remarks>
@@ -87,10 +102,15 @@ internal sealed class TextExchangeEngine
     /// exchange now waits that long rather than corrupting the transfer. Callers who cannot
     /// wait should pass a cancellation token: it is observed while queueing for the lock.
     /// </para>
+    /// <para>
+    /// This is the one path that still stops and restarts the device's reader. A text exchange
+    /// only changes how the reader frames what it reads (issue #900), but a raw capture reads the
+    /// stream itself, so the reader has to be off it.
+    /// </para>
     /// </remarks>
     /// <param name="rawAction">
     /// An async function that receives the transport stream and performs raw I/O.
-    /// The protobuf consumer will not read from the stream while this action is executing.
+    /// The device's reader will not read from the stream while this action is executing.
     /// </param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
@@ -104,16 +124,18 @@ internal sealed class TextExchangeEngine
     {
         _host.EnsureConnected(cancellationToken);
 
-        // A capture is a consumer swap, so it obeys the same nesting rule an exchange does: one
-        // swap at a time per flow. The lock does not cover this — a nested call runs nested by
-        // design — and without the guard the inner swap's finally would restart the protobuf
-        // consumer while the outer capture still owns the stream, putting a second reader on it.
+        // A capture takes the device's reader off the stream, so it obeys the same nesting rule
+        // an exchange does: one at a time per flow. The lock does not cover this — a nested call
+        // runs nested by design — and without the guard an inner capture's finally would restart
+        // the reader while the outer capture still owns the stream, putting a second reader on it.
+        // A capture opened inside a text exchange would stop the reader that exchange is
+        // collecting its reply from.
         if (_host.IsInsideTextExchange)
         {
             throw new InvalidOperationException(
-                "ExecuteRawCaptureAsync is not re-entrant: this flow is already inside a "
-                + "consumer swap — another raw capture, or a text exchange — and both take "
-                + "the device's message consumer and its stream.");
+                "ExecuteRawCaptureAsync is not re-entrant: this flow is already inside "
+                + "another raw capture or a text exchange, and both depend on the device's "
+                + "message reader and its stream.");
         }
 
         // A flow that already owns the lock — an exclusive block, or the SD operations' own
@@ -144,9 +166,9 @@ internal sealed class TextExchangeEngine
             _host.EnterOperationLockOwnership();
         }
 
-        // Claims the swap for this flow, so anything the raw action calls that would swap the
-        // consumer again is caught by the guard above (or by ExecuteAsync's) rather than
-        // restarting the consumer underneath this capture.
+        // Claims the stream for this flow, so anything the raw action calls that would take the
+        // reader again is caught by the guard above (or by ExecuteAsync's) rather than
+        // restarting or reframing the reader underneath this capture.
         _host.IsInsideTextExchange = true;
 
         try
@@ -185,36 +207,34 @@ internal sealed class TextExchangeEngine
             // arrive from here on; a command queued microseconds earlier would otherwise be
             // written mid-capture and its reply read as captured content.
             //
-            // Deliberately OUTSIDE the swap's try/finally below, for the same reason as in
-            // ExecuteAsync: this is the one step that can throw (a cancelled token) before the
-            // consumer has been stopped, and that finally restarts the consumer — which on a
-            // consumer that was never stopped means subscribing the inbound handler a second
-            // time and dispatching every frame twice.
+            // Deliberately OUTSIDE the try/finally below: this is the one step that can throw (a
+            // cancelled token) before the reader has been stopped, and a throw from here then
+            // leaves the reader exactly as it found it, with nothing to restart.
             await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
             var capturedStream = transport.Stream;
             int? originalCaptureReadTimeout = null;
             try
             {
-                // Stop the protobuf consumer so it doesn't compete for stream bytes
-                SuspendInboundConsumer();
+                // Stop the device's reader so it doesn't compete for stream bytes
+                StopReaderForRawCapture();
 
-                // Lengthen the read only now the consumer is down. Doing it first would hand the
+                // Lengthen the read only now the reader is down. Doing it first would hand the
                 // reader a long read and the stop above would have to wait that read out, which
-                // is the cost #900 removed.
+                // is the cost #916 removed.
                 originalCaptureReadTimeout =
-                    TrySetReadTimeout(capturedStream, RawCaptureReadTimeoutMs, onlyWhenShorter: true);
+                    TryLengthenReadTimeout(capturedStream, RawCaptureReadTimeoutMs);
 
                 // Hand the stream to the caller for raw I/O
                 await rawAction(capturedStream, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                // Restored before the consumer restarts, so the restarted reader is the one that
+                // Restored before the reader restarts, so the restarted reader is the one that
                 // sees the short operational timeout and stays promptly stoppable.
                 RestoreReadTimeout(capturedStream, originalCaptureReadTimeout);
 
-                RestartMessageConsumerAfterSwap();
+                RestartReaderAfterRawCapture();
             }
         }
         finally
@@ -232,8 +252,8 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Executes a text-based command by temporarily switching from the protobuf consumer to a
-    /// line-based text consumer, collecting text responses, then restoring the protobuf consumer.
+    /// Executes a text-based command by switching the device's reader to framing reply lines,
+    /// collecting the lines the device sends, then switching it back to protobuf.
     /// </summary>
     /// <remarks>
     /// The parameter contract — including what the prepare and finalize phases guarantee — is
@@ -257,8 +277,9 @@ internal sealed class TextExchangeEngine
         cancellationToken.ThrowIfCancellationRequested();
 
         // Async-context re-entrancy detection: a setupAction that calls
-        // ExecuteTextCommandAsync on the same device would corrupt the
-        // consumer swap mid-flight. Surface as a clean exception rather
+        // ExecuteTextCommandAsync on the same device would install its own
+        // capture on the reader and then switch the reader back to protobuf
+        // underneath the outer exchange. Surface as a clean exception rather
         // than wedging on the operation lock forever.
         // AsyncLocal flows across await thread hops so this catches
         // re-entry even when the inner call resumes on a different
@@ -362,9 +383,9 @@ internal sealed class TextExchangeEngine
 
             // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
             // exchange can interleave between it and the setup action below and undo the state
-            // it establishes; and before the consumer swap, so the wait it typically needs
-            // cannot widen the stale-line boundary taken further down. Any device output it
-            // provokes goes to the protobuf consumer, which is still running at this point.
+            // it establishes; and before the reader is switched to text, so the wait it typically
+            // needs cannot widen the stale-line boundary taken further down. Any device output it
+            // provokes is still framed as protobuf at this point, exactly as before the exchange.
             if (prepareAsync != null)
             {
                 await prepareAsync(cancellationToken).ConfigureAwait(false);
@@ -372,26 +393,24 @@ internal sealed class TextExchangeEngine
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", ElapsedMs()));
             }
 
-            // Let anything queued before this exchange opened reach the wire while the protobuf
-            // consumer is still the one reading, so its reply is not mistaken for an answer to
-            // a command this exchange is about to send (issue #342). New sends from other
-            // threads are already parked by this point, so the queue can only shrink.
+            // Let anything queued before this exchange opened reach the wire while the reader still
+            // frames protobuf, so its reply is not mistaken for an answer to a command this
+            // exchange is about to send (issue #342). New sends from other threads are already
+            // parked by this point, so the queue can only shrink.
             //
-            // Deliberately OUTSIDE the swap's try/finally below: this is the one step here that
-            // can throw (a cancelled token) before the consumer has been stopped, and that
-            // finally restarts the consumer — which on a consumer that was never stopped means
-            // subscribing the inbound handler a second time and dispatching every frame twice.
+            // Deliberately before the text capture below begins: this is the one step here that
+            // can throw (a cancelled token), and a throw from here then leaves the reader exactly
+            // as it found it, with nothing to put back.
             await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
             var collectedLines = new List<CollectedLine>();
 
-            // The list is appended to from the text consumer's reader thread and read from
-            // this one, so every touch of it goes through this gate. Stopping the consumer is
-            // not enough on its own: StopSafely and Dispose are both time-bounded and can
-            // return with the reader still parked in an un-returning read, which the remarks
-            // on RestartMessageConsumerAfterSwap already say out loud. Without the gate, a
-            // line arriving in that window while the result is being projected throws
-            // "collection was modified" out of an exchange that had otherwise succeeded.
+            // The list is appended to from the device's reader thread and read from this one, so
+            // every touch of it goes through this gate. Ending the capture is not enough on its
+            // own: the reader frames a batch under its buffer lock and delivers it afterwards, so a
+            // line framed just before the capture ended can still be handed over while the result
+            // is being projected. Without the gate that throws "collection was modified" out of an
+            // exchange that had otherwise succeeded.
             var collectedLinesGate = new object();
 
             // How the exchange learns that a line arrived, instead of asking every 50ms.
@@ -401,16 +420,15 @@ internal sealed class TextExchangeEngine
             // wait completes that wait rather than being missed by it.
             //
             // Deliberately a TaskCompletionSource rather than a SemaphoreSlim: the signal is
-            // raised on the text consumer's reader thread, which can outlive this exchange (its
-            // stop and dispose are both time-bounded, as the remarks on
-            // RestartMessageConsumerAfterSwap say). A semaphore would have to be disposed while
-            // that thread might still signal it; a TCS never needs disposing and TrySetResult
-            // on a stale one is a no-op.
+            // raised on the device's reader thread, which outlives this exchange — it runs for
+            // the whole connection. A semaphore would have to be disposed while that thread might
+            // still signal it; a TCS never needs disposing and TrySetResult on a stale one is a
+            // no-op.
             //
             // RunContinuationsAsynchronously matters as much: without it the reader thread
-            // would run this exchange's continuation itself, i.e. resume the exchange —
-            // including the consumer stop that joins that very thread — on the thread being
-            // joined.
+            // would run this exchange's continuation itself, i.e. resume the exchange on the one
+            // thread that reads the wire, and nothing — no reply line, no stream frame — would be
+            // read until the exchange next yielded.
             TaskCompletionSource<bool>? lineWaiter = null;
 
             int CollectedLineCount()
@@ -420,9 +438,6 @@ internal sealed class TextExchangeEngine
                     return collectedLines.Count;
                 }
             }
-
-            var stream = transport.Stream;
-            int? originalReadTimeout = null;
 
             // Number of lines that were already in flight when this exchange opened — see the
             // note at the point it is captured, below.
@@ -462,7 +477,7 @@ internal sealed class TextExchangeEngine
             // back to the line-count rule alone, which is what it had before.
             //
             // Declared out here rather than beside its first use because both the wait loop
-            // and the projection ask it, and they sit on opposite sides of the consumer swap's
+            // and the projection ask it, and they sit on opposite sides of the text capture's
             // try/finally.
             //
             // Split in two because the terminator short-circuit below asks the same question of
@@ -481,102 +496,54 @@ internal sealed class TextExchangeEngine
             bool IsPreSendBlank(int index, CollectedLine collected) =>
                 collected.Text.Length == 0 && ArrivedBeforeSend(index, collected);
 
+            // Called on the device's reader thread, outside its buffer lock, once per line the
+            // reader frames for this exchange — blank lines included. The framing itself (bare LF
+            // as well as CRLF, blanks kept as evidence of an answer) is DeviceWireParser's, and its
+            // remarks say why each setting exists (issue #538). The blanks are filtered out of the
+            // result below, so callers see the same lines they always did; only the wait loop's
+            // "did anything arrive?" question sees them.
+            void OnLine(string line)
+            {
+                // Each line is stamped with what the outbound writer looked like when it
+                // was framed. Read here rather than at projection time because it is a
+                // fact about the line's arrival that is gone a moment later, and it is
+                // what lets the projection recognise a line that reached the wire before
+                // this exchange's command did (issue #593). Sampling, on the reader's own
+                // thread, costs nothing and delays nothing — deliberately unlike the drain
+                // that #593 rules out.
+                var writer = _host.SampleOutboundWriter();
+
+                TaskCompletionSource<bool>? waiter;
+                lock (collectedLinesGate)
+                {
+                    collectedLines.Add(new CollectedLine(line, writer));
+
+                    // Taken and cleared under the same lock as the append, so the wait loop
+                    // either sees the new line or is woken for it — never neither.
+                    waiter = lineWaiter;
+                    lineWaiter = null;
+                }
+
+                // Completed outside the lock: the continuation is queued rather than run
+                // here, but keeping the gate while releasing it would still let the wait
+                // loop's own gated reads contend with this reader thread for no reason.
+                waiter?.TrySetResult(true);
+            }
+
+            // Switch the device's reader to framing lines for this exchange. Nothing is stopped
+            // or started: the reader that has been running since connect keeps running, keeps
+            // reporting its read failures to the device (issue #378), and keeps its transport's
+            // health sink — it only frames what it reads differently until the capture ends. That
+            // is what took the consumer swap's cost out of every exchange, and the restart a stuck
+            // stream could refuse, leaving no reader on the wire (issues #383, #900).
+            var capture = await _host.BeginTextCaptureAsync(OnLine, cancellationToken).ConfigureAwait(false);
             try
             {
-                // A ceiling on how long the text consumer's own read may park, so that the stop
-                // at the end of this exchange returns promptly. Only ever lowers: raising a
-                // stream that is already quicker to stop would re-add the join latency this
-                // exchange is being measured on (#900). The transports set a read timeout well
-                // under this after connect, so on a real device this changes nothing and
-                // originalReadTimeout stays null.
-                originalReadTimeout = TrySetReadTimeout(
-                    stream,
-                    Math.Min(500, Math.Max(100, responseTimeoutMs / 4)),
-                    onlyWhenShorter: false);
+                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Reader framing text at {ElapsedMs}ms", ElapsedMs()));
 
-                // Stop the protobuf consumer so it doesn't compete for stream bytes. It checks
-                // its stop flag at the top of its loop and is otherwise parked in a blocking
-                // Read, so this returns one read timeout later at worst — which is why the
-                // transports keep that timeout short (#900).
-                SuspendInboundConsumer();
-
-                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", ElapsedMs()));
-
-                // Create a temporary text consumer on the same stream.
-                //
-                // Both parser settings exist because this loop decides that the device has
-                // answered by counting the lines the parser produces, so any reply the parser
-                // does not turn into a line is a reply this exchange cannot see — and it then
-                // waits out its whole first-response timeout for an answer already sitting in
-                // the buffer (issue #538). The firmware sends two shapes that used to vanish:
-                //
-                //  * a bare-LF reply. Most replies are CRLF, but SYSTem:LOG:CLEar and
-                //    SYSTem:LOG:TEST answer "Log cleared\n" / "Added test log messages\n".
-                //    Splitting on "\n" reads those AND the CRLF ones — the CR ends up at the
-                //    end of the line and is trimmed off with the surrounding whitespace.
-                //  * a blank line. SYSTem:LOG? terminates its dump with one, so an empty log
-                //    arrives as a lone CRLF and nothing else.
-                //
-                // The blanks are filtered out of the result below, so callers see the same
-                // lines they always did; only this loop's "did anything arrive?" question sees
-                // them. Splitting on LF also means an embedded bare LF now ends a line rather
-                // than sitting inside one, which is what a line-based text protocol means by it.
-                using var textConsumer = new StreamMessageConsumer<string>(
-                    transport.Stream,
-                    new LineBasedMessageParser(lineEnding: "\n") { EmitEmptyLines = true },
-                    healthSink: transport as ITransportHealthSink);
-
-                // MessageParsed rather than MessageReceived: only the parsed line matters here,
-                // and the raw-buffer snapshot the other event carries is a copy per read that
-                // nothing would read (issue #490).
-                textConsumer.MessageParsed += parsed =>
-                {
-                    // Each line is stamped with what the outbound writer looked like when it
-                    // was parsed. Read here rather than at projection time because it is a
-                    // fact about the line's arrival that is gone a moment later, and it is
-                    // what lets the projection recognise a line that reached the wire before
-                    // this exchange's command did (issue #593). Sampling, on the reader's own
-                    // thread, costs nothing and delays nothing — deliberately unlike the drain
-                    // that #593 rules out.
-                    var writer = _host.SampleOutboundWriter();
-
-                    TaskCompletionSource<bool>? waiter;
-                    lock (collectedLinesGate)
-                    {
-                        collectedLines.Add(new CollectedLine(parsed.Data, writer));
-
-                        // Taken and cleared under the same lock as the append, so the wait loop
-                        // either sees the new line or is woken for it — never neither.
-                        waiter = lineWaiter;
-                        lineWaiter = null;
-                    }
-
-                    // Completed outside the lock: the continuation is queued rather than run
-                    // here, but keeping the gate while releasing it would still let the wait
-                    // loop's own gated reads contend with this reader thread for no reason.
-                    waiter?.TrySetResult(true);
-                };
-
-                // The protobuf consumer is stopped for the duration of this exchange, so
-                // without this a read failure during a text command (an unplug mid-SD-listing,
-                // say) would be the one background failure with nowhere to go (issue #378).
-                //
-                // Scoped rather than a bare '+=' because this consumer can outlive the block:
-                // its stop and dispose are both time-bounded and may return with the reader
-                // thread still parked in an un-returning read. A live thread roots the consumer,
-                // which would root the device through the handler — retaining the whole object
-                // graph and, worse, letting a zombie reader keep raising errors on a device that
-                // has since been disconnected. 'using' disposes in reverse declaration order, so
-                // this detaches before textConsumer itself is disposed, on every exit path
-                // including a cancellation or a throwing setup action.
-                using var textConsumerErrors = _host.SubscribeConsumerErrors(textConsumer);
-
-                textConsumer.Start();
                 // ConfigureAwait(false): the lock is held, so resuming on a captured
                 // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
-                await Task.Delay(TextConsumerSettleDelay, clock, cancellationToken).ConfigureAwait(false);
-
-                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", ElapsedMs()));
+                await Task.Delay(TextModeSettleDelay, clock, cancellationToken).ConfigureAwait(false);
 
                 // Mark the boundary between "already in flight" and "answers to this exchange".
                 // Anything captured before the setup action has sent anything is a late reply to
@@ -896,23 +863,20 @@ internal sealed class TextExchangeEngine
 
                 var collectedLineCount = CollectedLineCount();
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", ElapsedMs(), collectedLineCount));
-
-                // Stop the text consumer
-                textConsumer.StopSafely();
             }
             finally
             {
-                RestoreReadTimeout(stream, originalReadTimeout);
-
-                // Restart the protobuf consumer
-                RestartMessageConsumerAfterSwap();
+                // Back to protobuf, on every exit path — a cancellation and a throwing setup
+                // action included. Never throws, so it cannot mask the failure unwinding.
+                capture.Dispose();
 
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", ElapsedMs()));
             }
 
-            // The text consumer has been stopped and disposed by this point, but both are
-            // time-bounded, so the projection takes the gate rather than trusting that the
-            // reader thread is really gone — see the note where the gate is declared.
+            // The capture has ended by this point, but a line the reader framed just before it
+            // ended can still be in the middle of being handed over, so the projection takes the
+            // gate rather than trusting that delivery has stopped — see the note where the gate
+            // is declared.
             //
             // The blank lines the parser was asked to emit are dropped here. They are evidence
             // for the wait loop above and nothing more: every caller of this seam parses
@@ -953,8 +917,8 @@ internal sealed class TextExchangeEngine
             // Finalize phase, if any — the mirror of the prepare phase above, and deliberately
             // still inside the lock: an exchange that switches shared device state on the way in
             // has to switch it back before anything else can run, or the pairing is only half
-            // serialized (#407). It runs after the protobuf consumer has been restarted, just as
-            // the prepare phase ran before the consumer was swapped out.
+            // serialized (#407). It runs after the reader is back on protobuf, just as the prepare
+            // phase ran before the reader was switched to text.
             // A failure here is never thrown from this point: doing so would abandon the rest of
             // the finally, leaking the lock this exchange holds. It is held until after the
             // release below and dealt with there.
@@ -1009,24 +973,20 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Sets the stream's read timeout for the duration of a swap, in one direction only, and
-    /// returns the value it replaced so <see cref="RestoreReadTimeout"/> can put it back.
+    /// Lengthens the stream's read timeout for the duration of a raw capture, and returns the
+    /// value it replaced so <see cref="RestoreReadTimeout"/> can put it back.
     /// </summary>
+    /// <remarks>
+    /// One-way: a stream whose timeout is already at least <paramref name="timeoutMs"/> is left
+    /// alone, so a capture can never shorten a read the transport chose to make long.
+    /// </remarks>
     /// <param name="stream">The transport stream.</param>
-    /// <param name="timeoutMs">The read timeout to apply, in milliseconds.</param>
-    /// <param name="onlyWhenShorter">
-    /// <c>true</c> to apply <paramref name="timeoutMs"/> only when the stream's current timeout is
-    /// shorter (a swap that needs a longer read); <c>false</c> to apply it only when the current
-    /// timeout is longer (a swap that needs a promptly stoppable reader). Either way the
-    /// direction is one-way: a stream already on the right side of the value is left alone, so a
-    /// swap can never make a stop slower than the transport chose.
-    /// </param>
+    /// <param name="timeoutMs">The read timeout the capture needs, in milliseconds.</param>
     /// <returns>
     /// The timeout that was replaced, or <c>null</c> when nothing was changed — because the stream
-    /// cannot time out, because it was already on the right side of the value, or because it
-    /// refused the assignment.
+    /// cannot time out, because it was already long enough, or because it refused the assignment.
     /// </returns>
-    private static int? TrySetReadTimeout(Stream stream, int timeoutMs, bool onlyWhenShorter)
+    private static int? TryLengthenReadTimeout(Stream stream, int timeoutMs)
     {
         if (!stream.CanTimeout)
         {
@@ -1039,14 +999,14 @@ internal sealed class TextExchangeEngine
 
             // Timeout.Infinite is longer than any finite value, not shorter than all of them,
             // which a plain numeric comparison against -1 gets backwards.
-            var currentIsLonger = current == Timeout.Infinite || current > timeoutMs;
-            if (onlyWhenShorter ? !currentIsLonger : currentIsLonger)
+            var currentIsLongEnough = current == Timeout.Infinite || current >= timeoutMs;
+            if (currentIsLongEnough)
             {
-                stream.ReadTimeout = timeoutMs;
-                return current;
+                return null;
             }
 
-            return null;
+            stream.ReadTimeout = timeoutMs;
+            return current;
         }
         catch
         {
@@ -1056,12 +1016,12 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Puts back a read timeout that <see cref="TrySetReadTimeout"/> replaced. A <c>null</c>
+    /// Puts back a read timeout that <see cref="TryLengthenReadTimeout"/> replaced. A <c>null</c>
     /// original means nothing was changed, so nothing is restored.
     /// </summary>
     /// <remarks>
-    /// Never throws: both callers run it from a <c>finally</c>, where an exception would mask the
-    /// failure already unwinding.
+    /// Never throws: it runs from a <c>finally</c>, where an exception would mask the failure
+    /// already unwinding.
     /// </remarks>
     private static void RestoreReadTimeout(Stream stream, int? originalReadTimeout)
     {
@@ -1084,17 +1044,26 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Detaches the device's inbound handler and stops the protobuf consumer so it does not
-    /// compete for stream bytes while a swap is in progress.
+    /// Detaches the device's inbound handler and stops the device's reader so it does not compete
+    /// with a raw capture for stream bytes.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Detached first because the stop is bounded: a reader parked in a read that outlasts it is
+    /// still alive during the capture, and when that read finally returns captured bytes it frames
+    /// them as protobuf. An SD log <i>is</i> protobuf frames, so without the detach the device would
+    /// be handed old status and stream frames as if they were live.
+    /// <see cref="RestartReaderAfterRawCapture"/> re-attaches however the restart goes, because the
+    /// same subscription carries every text exchange's reply lines too.
+    /// </para>
+    /// <para>
     /// The consumer is snapshotted once. The field behind it is mutable — a teardown nulls it —
-    /// and the exchange's lock does not exclude teardown, which proceeds anyway once its bounded
-    /// courtesy wait expires. Re-reading it per step could therefore detach from one instance and
-    /// stop another, or dereference null. This mirrors what
-    /// <see cref="RestartMessageConsumerAfterSwap"/> already does for the same reason.
+    /// and the capture's lock does not exclude teardown, which proceeds anyway once its bounded
+    /// courtesy wait expires. This mirrors what <see cref="RestartReaderAfterRawCapture"/> does
+    /// for the same reason.
+    /// </para>
     /// </remarks>
-    private void SuspendInboundConsumer()
+    private void StopReaderForRawCapture()
     {
         var consumer = _host.MessageConsumer;
         if (consumer == null)
@@ -1111,31 +1080,35 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Restarts the protobuf consumer after a swap (raw capture or text exchange) has stopped it.
+    /// Restarts the device's reader after a raw capture has stopped it.
     /// </summary>
     /// <remarks>
-    /// The stop paths join the reader thread with a bounded timeout, so a reader parked in a slow
+    /// The stop joins the reader thread with a bounded timeout, so a reader parked in a slow
     /// blocking <see cref="Stream.Read(byte[], int, int)"/> can still be alive here.
     /// <see cref="StreamMessageConsumer{T}.Start"/> absorbs that case by waiting a grace period
-    /// for the stopped reader to exit, which is what keeps a normal connect from failing with
-    /// "a previous consumer thread has not yet exited" (issue #383).
+    /// for the stopped reader to exit (issue #383).
     /// <para>
     /// If it still refuses, the reader's read is not returning at all — the stream is stuck.
     /// Deliberately do <b>not</b> recover by binding a fresh consumer to that same stream: a new
     /// instance would be a second concurrent reader on it, which is exactly the framing
     /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
-    /// The consumer is left stopped; the operation's own failure (or the next
-    /// <see cref="DaqifiDevice.Connect"/>) surfaces the problem honestly.
+    /// The consumer is left stopped. The next text exchange asks it to start again before it
+    /// relies on it (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>), and fails with the same
+    /// refusal if the stream is still stuck, so the problem is surfaced rather than read as
+    /// silence.
     /// </para>
     /// <para>
-    /// Never throws: it runs from <c>finally</c> blocks, where an exception would mask the real
-    /// failure already unwinding. The consumer is also snapshotted once up front: both swap
-    /// paths hold the operation lock (which <see cref="DaqifiDevice.Disconnect"/> waits on), but
-    /// that wait is bounded and teardown proceeds anyway once it expires, so a concurrent
-    /// teardown could still null the field between reads.
+    /// The inbound handler is re-attached whether or not the start succeeds. Left detached after a
+    /// refused start, a reader that the next exchange does manage to revive would read for nobody:
+    /// no frames, and no reply lines either. Attaching is idempotent.
+    /// </para>
+    /// <para>
+    /// Never throws: it runs from a <c>finally</c> block, where an exception would mask the real
+    /// failure already unwinding. The consumer is snapshotted once up front for the reason given
+    /// on <see cref="StopReaderForRawCapture"/>.
     /// </para>
     /// </remarks>
-    private void RestartMessageConsumerAfterSwap()
+    private void RestartReaderAfterRawCapture()
     {
         var consumer = _host.MessageConsumer;
         if (consumer == null)
@@ -1146,7 +1119,6 @@ internal sealed class TextExchangeEngine
         try
         {
             consumer.Start();
-            _host.AttachInboundHandler(consumer);
         }
         catch (ConsumerThreadNotExitedException ex)
         {
@@ -1159,14 +1131,25 @@ internal sealed class TextExchangeEngine
         {
             // e.g. ObjectDisposedException from a concurrent Dispose(). Swallow rather than let
             // it escape a finally block and replace the operation's real exception.
-            Log(logger => logger.LogError(ex, "Failed to restart the message consumer after a stream swap."));
+            Log(logger => logger.LogError(ex, "Failed to restart the message consumer after a raw capture."));
+        }
+        finally
+        {
+            try
+            {
+                _host.AttachInboundHandler(consumer);
+            }
+            catch (Exception ex)
+            {
+                Log(logger => logger.LogError(ex, "Failed to re-attach the inbound handler after a raw capture."));
+            }
         }
     }
 
     private void Log(Action<ILogger> logAction) => SafeLog(() => logAction(_host.Logger));
 
     /// <summary>
-    /// One line the text consumer produced, together with what the outbound writer had already
+    /// One line the reader framed for this exchange, together with what the outbound writer had already
     /// started when the line was parsed.
     /// </summary>
     /// <param name="Text">The parsed line, exactly as the caller will see it.</param>

@@ -152,7 +152,7 @@ internal static class ScpiResponseClassifier
 
     /// <summary>
     /// The character <see cref="System.Text.Encoding.UTF8"/> substitutes for a byte sequence it
-    /// cannot decode. The text consumer decodes response bytes as UTF-8, so raw binary reaches
+    /// cannot decode. A text exchange decodes response bytes as UTF-8, so raw binary reaches
     /// the parsers as a mix of these and control characters.
     /// </summary>
     private const char UnicodeReplacementChar = '\uFFFD';
