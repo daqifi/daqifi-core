@@ -57,6 +57,23 @@ internal interface ITextExchangeHost
     IMessageConsumer<WireMessage>? MessageConsumer { get; }
 
     /// <summary>
+    /// Subscribes the device's inbound-message handler to <paramref name="consumer"/>. Idempotent:
+    /// attaching twice leaves one subscription.
+    /// </summary>
+    /// <remarks>
+    /// Attach and detach are the device's own because the handler is private to it. A raw capture
+    /// detaches for its duration, so a reader that outlives its stop cannot hand the captured bytes
+    /// — an SD log is protobuf frames — to the device as if they were live, and re-attaches however
+    /// the capture ends.
+    /// </remarks>
+    void AttachInboundHandler(IMessageConsumer<WireMessage> consumer);
+
+    /// <summary>
+    /// Unsubscribes the device's inbound-message handler from <paramref name="consumer"/>.
+    /// </summary>
+    void DetachInboundHandler(IMessageConsumer<WireMessage> consumer);
+
+    /// <summary>
     /// Switches the device's reader to framing reply lines, delivering each one to
     /// <paramref name="onLine"/>, until the returned scope is disposed — which switches it back to
     /// protobuf (issue #900).
@@ -75,6 +92,11 @@ internal interface ITextExchangeHost
     /// so rather than waiting out its timeout and reporting silence.
     /// </para>
     /// <para>
+    /// It completes only once the reader has finished handing the last protobuf batch to subscribers
+    /// (bounded at one second, without blocking a thread), so the exchange's stale-line window
+    /// starts when the reader is actually free to read the reply.
+    /// </para>
+    /// <para>
     /// <paramref name="onLine"/> is called on the reader thread, outside its buffer lock, and only
     /// for lines framed while this capture held the reader: a line framed for an earlier exchange
     /// can never reach a later one. The returned scope's <see cref="IDisposable.Dispose"/> never
@@ -82,10 +104,13 @@ internal interface ITextExchangeHost
     /// </para>
     /// </remarks>
     /// <param name="onLine">Receives each line, trimmed, blank lines included.</param>
+    /// <param name="cancellationToken">Observed while waiting for the reader to be free; the capture is ended before the cancellation propagates.</param>
     /// <returns>The scope that ends the capture.</returns>
     /// <exception cref="InvalidOperationException">Thrown when the device has no reader to switch.</exception>
+    /// <exception cref="DeviceNotConnectedException">Thrown when a teardown has already taken the reader away.</exception>
     /// <exception cref="ConsumerThreadNotExitedException">Thrown when the reader is stopped and cannot be restarted because its stream is stuck.</exception>
-    IDisposable BeginTextCapture(Action<string> onLine);
+    /// <exception cref="OperationCanceledException">Thrown when cancelled while waiting for the reader.</exception>
+    Task<IDisposable> BeginTextCaptureAsync(Action<string> onLine, CancellationToken cancellationToken);
 
     /// <summary>
     /// True when the current logical flow already holds the device's operation lock — in any

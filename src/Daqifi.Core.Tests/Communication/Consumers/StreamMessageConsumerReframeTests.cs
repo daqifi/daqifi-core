@@ -117,6 +117,61 @@ public class StreamMessageConsumerReframeTests
         Assert.Throws<ArgumentNullException>(() => consumer.Reframe(null!));
     }
 
+    [Fact]
+    public async Task WaitForDispatchToFinish_WaitsForASubscriberStillHandlingTheLastBatch()
+    {
+        using var stream = new PushStream();
+        var parser = new DeviceWireParser();
+        using var consumer = new StreamMessageConsumer<WireMessage>(stream, parser);
+        using var inHandler = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        consumer.MessageParsed += _ =>
+        {
+            inHandler.Set();
+            release.Wait(Budget);
+        };
+        consumer.Start();
+
+        Assert.True(await consumer.WaitForDispatchToFinishAsync(TimeSpan.FromMilliseconds(10), CancellationToken.None), "an idle reader should not be waited for");
+
+        stream.Push(Delimited(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 }));
+        Assert.True(inHandler.Wait(Budget), "the subscriber never ran");
+
+        Assert.False(await consumer.WaitForDispatchToFinishAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None), "the wait returned while the subscriber was still running");
+
+        using var cts = new CancellationTokenSource();
+        var cancelled = consumer.WaitForDispatchToFinishAsync(TimeSpan.FromSeconds(5), cts.Token);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+
+        var waited = consumer.WaitForDispatchToFinishAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await Task.Delay(100);
+        Assert.False(waited.IsCompleted);
+        release.Set();
+        Assert.True(await waited.WaitAsync(Budget));
+    }
+
+    [Fact]
+    public async Task WaitForDispatchToFinish_OnTheReaderThread_ReturnsAtOnce()
+    {
+        // A subscriber that runs an exchange synchronously would otherwise wait on its own thread.
+        using var stream = new PushStream();
+        using var consumer = new StreamMessageConsumer<WireMessage>(stream, new DeviceWireParser());
+        var result = new TaskCompletionSource<(bool Waited, long Ms)>();
+        consumer.MessageParsed += _ =>
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var waited = consumer.WaitForDispatchToFinishAsync(TimeSpan.FromSeconds(2), CancellationToken.None).GetAwaiter().GetResult();
+            result.TrySetResult((waited, sw.ElapsedMilliseconds));
+        };
+        consumer.Start();
+
+        stream.Push(Delimited(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 }));
+        var (waited, ms) = await result.Task.WaitAsync(Budget);
+        Assert.True(waited);
+        Assert.True(ms < 1000, $"waited {ms} ms on its own thread");
+    }
+
     private static byte[] Delimited(DaqifiOutMessage message)
     {
         using var buffer = new MemoryStream();

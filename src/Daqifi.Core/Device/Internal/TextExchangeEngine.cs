@@ -33,7 +33,7 @@ namespace Daqifi.Core.Device.Internal;
 /// stuck stream could refuse, leaving the device with no reader on the wire (issues #383, #900).
 /// The device now
 /// keeps one reader for its whole connection and the exchange only changes how that reader frames
-/// what it reads (<see cref="ITextExchangeHost.BeginTextCapture"/>). A raw capture still stops the
+/// what it reads (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>). A raw capture still stops the
 /// reader, because it reads the stream itself.
 /// </para>
 /// <para>
@@ -207,11 +207,9 @@ internal sealed class TextExchangeEngine
             // arrive from here on; a command queued microseconds earlier would otherwise be
             // written mid-capture and its reply read as captured content.
             //
-            // Deliberately OUTSIDE the swap's try/finally below, for the same reason as in
-            // ExecuteAsync: this is the one step that can throw (a cancelled token) before the
-            // consumer has been stopped, and that finally restarts the consumer — which on a
-            // consumer that was never stopped means subscribing the inbound handler a second
-            // time and dispatching every frame twice.
+            // Deliberately OUTSIDE the try/finally below: this is the one step that can throw (a
+            // cancelled token) before the reader has been stopped, and a throw from here then
+            // leaves the reader exactly as it found it, with nothing to restart.
             await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
             var capturedStream = transport.Stream;
@@ -538,7 +536,7 @@ internal sealed class TextExchangeEngine
             // health sink — it only frames what it reads differently until the capture ends. That
             // is what took the consumer swap's cost out of every exchange, and the restart a stuck
             // stream could refuse, leaving no reader on the wire (issues #383, #900).
-            var capture = _host.BeginTextCapture(OnLine);
+            var capture = await _host.BeginTextCaptureAsync(OnLine, cancellationToken).ConfigureAwait(false);
             try
             {
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Reader framing text at {ElapsedMs}ms", ElapsedMs()));
@@ -1046,14 +1044,17 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
-    /// Stops the device's reader so it does not compete with a raw capture for stream bytes.
+    /// Detaches the device's inbound handler and stops the device's reader so it does not compete
+    /// with a raw capture for stream bytes.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The reader's subscription to the device is left in place. It is attached once, at connect,
-    /// and everything the device reads — protobuf frames and text exchanges' reply lines alike —
-    /// arrives through it, so detaching it here would make a failed restart below cost the device
-    /// its replies as well as its frames, and a later successful start would not bring them back.
+    /// Detached first because the stop is bounded: a reader parked in a read that outlasts it is
+    /// still alive during the capture, and when that read finally returns captured bytes it frames
+    /// them as protobuf. An SD log <i>is</i> protobuf frames, so without the detach the device would
+    /// be handed old status and stream frames as if they were live.
+    /// <see cref="RestartReaderAfterRawCapture"/> re-attaches however the restart goes, because the
+    /// same subscription carries every text exchange's reply lines too.
     /// </para>
     /// <para>
     /// The consumer is snapshotted once. The field behind it is mutable — a teardown nulls it —
@@ -1070,6 +1071,7 @@ internal sealed class TextExchangeEngine
             return;
         }
 
+        _host.DetachInboundHandler(consumer);
         var stopped = consumer.StopSafely(timeoutMs: 1000);
         if (!stopped)
         {
@@ -1091,9 +1093,14 @@ internal sealed class TextExchangeEngine
     /// instance would be a second concurrent reader on it, which is exactly the framing
     /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
     /// The consumer is left stopped. The next text exchange asks it to start again before it
-    /// relies on it (<see cref="ITextExchangeHost.BeginTextCapture"/>), and fails with the same
+    /// relies on it (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>), and fails with the same
     /// refusal if the stream is still stuck, so the problem is surfaced rather than read as
     /// silence.
+    /// </para>
+    /// <para>
+    /// The inbound handler is re-attached whether or not the start succeeds. Left detached after a
+    /// refused start, a reader that the next exchange does manage to revive would read for nobody:
+    /// no frames, and no reply lines either. Attaching is idempotent.
     /// </para>
     /// <para>
     /// Never throws: it runs from a <c>finally</c> block, where an exception would mask the real
@@ -1125,6 +1132,17 @@ internal sealed class TextExchangeEngine
             // e.g. ObjectDisposedException from a concurrent Dispose(). Swallow rather than let
             // it escape a finally block and replace the operation's real exception.
             Log(logger => logger.LogError(ex, "Failed to restart the message consumer after a raw capture."));
+        }
+        finally
+        {
+            try
+            {
+                _host.AttachInboundHandler(consumer);
+            }
+            catch (Exception ex)
+            {
+                Log(logger => logger.LogError(ex, "Failed to re-attach the inbound handler after a raw capture."));
+            }
         }
     }
 

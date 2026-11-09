@@ -61,6 +61,14 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     private volatile bool _disposed;
 
     /// <summary>
+    /// 1 while the reader thread is dispatching a batch it parsed, 0 otherwise. Raised inside the
+    /// same <see cref="_bufferLock"/> section that parsed the batch, so a <see cref="Reframe"/> —
+    /// which takes that lock — can never observe "not dispatching" for a batch parsed before it.
+    /// See <see cref="WaitForDispatchToFinishAsync"/>.
+    /// </summary>
+    private int _dispatching;
+
+    /// <summary>
     /// Initializes a new instance of the StreamMessageConsumer class.
     /// </summary>
     /// <param name="stream">The stream to read messages from.</param>
@@ -713,24 +721,83 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             {
                 _messageBuffer.RemoveRange(0, Math.Min(consumedBytes, _messageBuffer.Count));
             }
+
+            // Raised as the last step under the lock, for WaitForDispatchToFinishAsync — see the
+            // remarks on _dispatching. Last, so nothing that can throw sits between it and the
+            // finally that clears it.
+            Interlocked.Exchange(ref _dispatching, 1);
         }
 
-        // Fire events for parsed messages
-        foreach (var message in messages)
+        try
         {
-            try
+            // Fire events for parsed messages
+            foreach (var message in messages)
             {
-                OnMessageReceived(message, bufferData);
-            }
-            catch (Exception ex)
-            {
-                // A throwing MessageReceived subscriber is reported rather than propagated, so one
-                // bad handler cannot starve the others of this batch. The report itself is isolated
-                // too: raising it from inside a catch block leaves nowhere for a second throw to go
-                // (see SafeRaiseError).
-                SafeRaiseError(ex);
+                try
+                {
+                    OnMessageReceived(message, bufferData);
+                }
+                catch (Exception ex)
+                {
+                    // A throwing MessageReceived subscriber is reported rather than propagated, so
+                    // one bad handler cannot starve the others of this batch. The report itself is
+                    // isolated too: raising it from inside a catch block leaves nowhere for a
+                    // second throw to go (see SafeRaiseError).
+                    SafeRaiseError(ex);
+                }
             }
         }
+        finally
+        {
+            Interlocked.Exchange(ref _dispatching, 0);
+        }
+    }
+
+    /// <summary>
+    /// Waits, for at most <paramref name="timeout"/>, until the reader has finished handing out the
+    /// batch it is dispatching now, if any.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reader parses a batch under its buffer lock and dispatches it afterwards, outside the
+    /// lock, on its own thread. So <see cref="Reframe"/> can return while subscribers are still
+    /// processing the last batch framed the old way, and the reader reads nothing new until they
+    /// finish. A caller that is about to time a window over what the reader reads next — the text
+    /// exchange's stale-line window — has to wait for that first, or a slow subscriber stretches
+    /// bytes that arrived before the window into it (issue #900).
+    /// </para>
+    /// <para>
+    /// Asynchronous, so the wait never blocks the caller's thread, which may be a UI thread. It
+    /// completes at once when nothing is being dispatched — the usual case — and otherwise looks
+    /// again every millisecond or so; the poll only runs while a subscriber is busy. Bounded, like
+    /// the stop join it replaces, so a subscriber that never returns cannot hold the caller
+    /// forever. Completes at once on the reader thread itself (a subscriber that runs an exchange),
+    /// which could otherwise only wait on itself.
+    /// </para>
+    /// </remarks>
+    /// <param name="timeout">The longest to wait.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
+    /// <returns><c>true</c> when no dispatch is in progress; <c>false</c> when the wait timed out.</returns>
+    /// <exception cref="OperationCanceledException">Thrown when cancelled while waiting.</exception>
+    internal async Task<bool> WaitForDispatchToFinishAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (ReferenceEquals(_consumerThread, Thread.CurrentThread))
+        {
+            return true;
+        }
+
+        var startedAt = Environment.TickCount64;
+        while (Volatile.Read(ref _dispatching) != 0)
+        {
+            if (Environment.TickCount64 - startedAt >= (long)timeout.TotalMilliseconds)
+            {
+                return false;
+            }
+
+            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     /// <summary>

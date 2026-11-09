@@ -104,7 +104,12 @@ public class TextExchangeSingleReaderTests
         var half = frame[..(frame.Length / 2)];
         Assert.DoesNotContain((byte)'\n', half);
         transport.Wire.PushToHost(half);
-        WaitUntil.That(() => transport.Wire.HostHasReadEverything, "the reader to take the half frame");
+
+        // Read is not enough: the stream counts the bytes as taken before the reader has buffered
+        // them. Waiting for the buffer itself is what puts the half frame in front of the switch.
+        WaitUntil.That(
+            () => transport.Wire.HostHasReadEverything && ReaderBufferedByteCount(device) > 0,
+            "the reader to buffer the half frame");
 
         var lines = await device.QueryAsync("*IDN?");
 
@@ -141,14 +146,24 @@ public class TextExchangeSingleReaderTests
         await device.QueryAsync("*IDN?");
         Assert.True(ReaderFramesProtobuf(device));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => device.RunAsync(() => throw new InvalidOperationException("setup failed")));
+        var framingTextDuringSetup = new List<bool>();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => device.RunAsync(() =>
+        {
+            framingTextDuringSetup.Add(!ReaderFramesProtobuf(device));
+            throw new InvalidOperationException("setup failed");
+        }));
         Assert.True(ReaderFramesProtobuf(device));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => device.RunAsync(() => { }, responseTimeoutMs: 5000, cts.Token));
+        // Cancelled from inside the setup action, so the cancellation lands while the capture is
+        // certainly installed — a timer could fire before the exchange got that far.
+        using var cts = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.RunAsync(() =>
+        {
+            framingTextDuringSetup.Add(!ReaderFramesProtobuf(device));
+            cts.Cancel();
+        }, responseTimeoutMs: 5000, cts.Token));
         Assert.True(ReaderFramesProtobuf(device));
+        Assert.Equal(new[] { true, true }, framingTextDuringSetup);
 
         await device.DisconnectAsync();
     }
@@ -161,16 +176,96 @@ public class TextExchangeSingleReaderTests
         // now because the reader that fails is the device's own.
         using var transport = new WireDeviceTransport();
         using var device = new SingleReaderTestableDevice("Failing Device", transport);
-        var errors = new ConcurrentQueue<DeviceErrorEventArgs>();
-        device.ErrorOccurred += (_, e) => errors.Enqueue(e);
+        var errors = new ConcurrentQueue<(DeviceErrorEventArgs Error, bool DuringExchange)>();
+        device.ErrorOccurred += (_, e) => errors.Enqueue((e, !ReaderFramesProtobuf(device)));
         await device.ConnectAsync();
 
-        await device.RunAsync(() => transport.Wire.FailNextRead(new IOException("cable pulled")));
+        await device.RunAsync(
+            () => transport.Wire.FailNextRead(new IOException("cable pulled")),
+            responseTimeoutMs: 3000);
 
-        WaitUntil.That(
-            () => errors.Any(e => e.Source == DeviceErrorSource.MessageConsumer && e.Error is IOException),
-            "the read failure during the exchange to reach ErrorOccurred");
+        var failure = Assert.Single(errors, e => e.Error.Source == DeviceErrorSource.MessageConsumer && e.Error.Error is IOException);
+        Assert.True(failure.DuringExchange, "the read failure was reported, but not while the exchange was listening");
         await device.DisconnectAsync();
+    }
+
+    [Fact]
+    public async Task Reconnect_FramesBeforeInitializeAsync_AreNotHandledAsTheNewSession()
+    {
+        // The reader is subscribed at connect now, so the previous session's protocol handler must
+        // not survive the disconnect: a status the board sends between a reconnect and its
+        // InitializeAsync would otherwise rewrite channels and raise events for a session that has
+        // not started. Dropped, as it was when only InitializeAsync subscribed the reader.
+        using var transport = new WireDeviceTransport();
+        using var device = new SingleReaderTestableDevice("Reconnecting Device", transport);
+        await device.ConnectAsync();
+        await device.InitializeAsync();
+
+        var statuses = new ConcurrentQueue<DaqifiOutMessage>();
+        device.StatusMessageReceived += statuses.Enqueue;
+
+        await device.DisconnectAsync();
+        await device.ConnectAsync();
+        transport.Wire.PushToHost(StatusReplyBytes(Status("before-initialize")));
+
+        WaitUntil.That(() => transport.Wire.HostHasReadEverything, "the reader to take the status frame");
+        WaitUntil.HoldsFor(
+            () => statuses.IsEmpty,
+            "a status that arrived before InitializeAsync was handled by the previous session's handler",
+            TimeSpan.FromMilliseconds(300));
+
+        // The connection itself is fine: text works, and initialization brings frames back.
+        Assert.Equal(new[] { Identity }, await device.QueryAsync("*IDN?"));
+        await device.InitializeAsync();
+        Assert.Contains(statuses, s => s.DevicePn == "Nq1");
+
+        await device.DisconnectAsync();
+    }
+
+    [Fact]
+    public async Task TextExchange_WaitsForASlowFrameSubscriberBeforeTimingItsStaleWindow()
+    {
+        // A late reply to an earlier command is already on the wire when the exchange opens, but
+        // the reader is still inside a slow subscriber for the last status frame and cannot read
+        // it. The stale-line window must start only once the reader is free, so that the late
+        // reply is read inside it and dropped; timed from the switch alone, the reply would be
+        // read after the window and returned as this exchange's answer (#396).
+        using var transport = new WireDeviceTransport();
+        using var device = new SingleReaderTestableDevice("Slow Subscriber Device", transport);
+        await device.ConnectAsync();
+        await device.InitializeAsync();
+
+        using var inSubscriber = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        device.StatusMessageReceived += status =>
+        {
+            if (status.DevicePn == "slow")
+            {
+                inSubscriber.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+            }
+        };
+
+        transport.Wire.PushToHost(StatusReplyBytes(Status("slow")));
+        Assert.True(inSubscriber.Wait(TimeSpan.FromSeconds(5)), "the slow subscriber never ran");
+
+        // Queued behind the busy reader: a reply to a command from before this exchange.
+        transport.Wire.PushToHost(Encoding.ASCII.GetBytes("LATE REPLY TO AN EARLIER COMMAND\r\n"));
+
+        var exchange = device.QueryAsync("*IDN?");
+        await Task.Delay(300);
+        release.Set();
+
+        Assert.Equal(new[] { Identity }, await exchange);
+        await device.DisconnectAsync();
+    }
+
+    private static int ReaderBufferedByteCount(DaqifiDevice device)
+    {
+        var consumer = (IMessageConsumer<WireMessage>?)typeof(DaqifiDevice)
+            .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
+        return consumer?.QueuedMessageCount ?? 0;
     }
 
     private static bool ReaderFramesProtobuf(DaqifiDevice device)

@@ -134,6 +134,46 @@ public class DaqifiDeviceConsumerRestartTests
         device.Disconnect();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RawCapture_DetachesTheInboundHandlerAndPutsItBackHoweverTheRestartGoes(bool stuckStream)
+    {
+        // Detached during the capture, so a reader that outlives its stop cannot hand the captured
+        // bytes to the device as live frames; re-attached afterwards even when the restart is
+        // refused, because the same subscription carries every later exchange's reply lines.
+        using var transport = new StallingReadMockTransport(
+            readBlock: stuckStream ? Timeout.InfiniteTimeSpan : TimeSpan.Zero);
+        using var device = new ConsumerRestartTestableDevice("Capturing Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, InboundSubscriberCount(device));
+
+        var duringCapture = -1;
+        await device.CallRawCaptureAsync((_, _) =>
+        {
+            duringCapture = InboundSubscriberCount(device);
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal(0, duringCapture);
+        Assert.Equal(1, InboundSubscriberCount(device));
+        Assert.Equal(!stuckStream, GetMessageConsumer(device)!.IsRunning);
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
+    private static int InboundSubscriberCount(DaqifiDevice device)
+    {
+        var consumer = GetMessageConsumer(device)!;
+        var handler = (Delegate?)consumer.GetType()
+            .GetField("MessageParsed", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(consumer);
+        return handler?.GetInvocationList().Length ?? 0;
+    }
+
     private static IMessageConsumer<WireMessage>? GetMessageConsumer(DaqifiDevice device)
     {
         return (IMessageConsumer<WireMessage>?)typeof(DaqifiDevice)

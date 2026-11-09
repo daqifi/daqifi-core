@@ -1481,7 +1481,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // exchange's reply lines arrive through this same subscription, and an exchange
             // can run on a device that was connected without being initialized. Frames that
             // arrive before InitializeAsync creates the protocol handler are dropped by the
-            // handler's absence, exactly as they were when nothing was subscribed yet.
+            // handler's absence, exactly as they were when nothing was subscribed yet — on a
+            // reconnect too, because StopMessagePumps clears the previous session's handler.
             DetachInboundMessages(_messageConsumer);
             AttachInboundMessages(_messageConsumer);
         }
@@ -1802,6 +1803,15 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         DisposeMessagePump(ref _messageConsumer);
         _wireParser = null;
         DisposeMessagePump(ref _messageProducer);
+
+        // The next connect subscribes its reader at once (CompleteConnect), because text replies
+        // ride that subscription. Without this, frames arriving between that connect and its
+        // InitializeAsync — a reconnect whose board kept streaming, or a Connect() the caller never
+        // initializes — would be handled by this session's protocol handler as if they were the
+        // new session's, rewriting channels and metadata and raising events nobody asked for yet.
+        // Cleared, they are dropped until InitializeAsync builds a fresh handler, which is what
+        // happened when the reader was only subscribed by InitializeAsync.
+        _protocolHandler = null;
     }
 
     /// <summary>
@@ -2267,16 +2277,37 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     IMessageConsumer<WireMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
 
     /// <inheritdoc />
+    /// <remarks>Detaches first, so attaching twice still leaves exactly one subscription.</remarks>
+    void ITextExchangeHost.AttachInboundHandler(IMessageConsumer<WireMessage> consumer)
+    {
+        DetachInboundMessages(consumer);
+        AttachInboundMessages(consumer);
+    }
+
+    /// <inheritdoc />
+    void ITextExchangeHost.DetachInboundHandler(IMessageConsumer<WireMessage> consumer) =>
+        DetachInboundMessages(consumer);
+
+    /// <inheritdoc />
     /// <remarks>
     /// The consumer and parser are snapshotted once: teardown nulls both fields, and the
     /// exchange's lock does not exclude a teardown that has given up waiting for it.
     /// </remarks>
-    IDisposable ITextExchangeHost.BeginTextCapture(Action<string> onLine)
+    async Task<IDisposable> ITextExchangeHost.BeginTextCaptureAsync(Action<string> onLine, CancellationToken cancellationToken)
     {
         var consumer = _messageConsumer as StreamMessageConsumer<WireMessage>;
         var parser = _wireParser;
         if (consumer == null || parser == null)
         {
+            // A teardown that gave up waiting for the exchange's lock nulls both. Report that as
+            // the shutdown it is, not as a device that never had a reader.
+            if (_lifecycle is DeviceLifecycle.Disposed or DeviceLifecycle.Disconnecting or DeviceLifecycle.Disconnected)
+            {
+                throw new DeviceNotConnectedException(
+                    "ExecuteTextCommandAsync cannot run because the device's connection was torn down.",
+                    isShuttingDown: true);
+            }
+
             throw new InvalidOperationException(
                 "ExecuteTextCommandAsync requires the device's message reader, and this device has none.");
         }
@@ -2285,15 +2316,45 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // not restart because its stream was stuck. Asking here either revives that reader or
         // throws ConsumerThreadNotExitedException, so an exchange on a stuck stream fails saying
         // so instead of reporting silence.
-        consumer.Start();
+        try
+        {
+            consumer.Start();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new DeviceNotConnectedException(
+                "ExecuteTextCommandAsync cannot run because the device's connection was torn down.",
+                ex,
+                isShuttingDown: true);
+        }
 
         var capture = new TextReplyCapture(onLine);
         consumer.Reframe(() => parser.Capture = capture);
-        return new TextCaptureScope(consumer, parser, capture);
+        var scope = new TextCaptureScope(consumer, parser, capture);
+
+        // The reframe falls between two parses, but the reader may still be handing the last
+        // protobuf batch to subscribers, and it reads nothing new until they return. The exchange
+        // times its stale-line window from when this returns, so a slow subscriber would otherwise
+        // stretch a late reply that arrived before the window into it, and the exchange would take
+        // it for its own answer (#396). The swap this replaced waited for the same thing by
+        // joining the reader, for up to the same second — synchronously; this does not block.
+        try
+        {
+            await consumer.WaitForDispatchToFinishAsync(TimeSpan.FromSeconds(1), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // The capture is installed; a cancelled wait must not leave the reader framing text.
+            scope.Dispose();
+            throw;
+        }
+
+        return scope;
     }
 
     /// <summary>
-    /// Ends a <see cref="ITextExchangeHost.BeginTextCapture"/>: puts the reader back on protobuf
+    /// Ends a <see cref="ITextExchangeHost.BeginTextCaptureAsync"/>: puts the reader back on protobuf
     /// and stops delivering lines to the exchange.
     /// </summary>
     private sealed class TextCaptureScope : IDisposable
