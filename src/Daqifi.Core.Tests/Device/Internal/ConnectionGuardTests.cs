@@ -162,20 +162,18 @@ public class ConnectionGuardTests
 
         public bool IsShuttingDown => throw new NotSupportedException();
         public IStreamTransport? Transport => throw new NotSupportedException();
-        public IMessageConsumer<DaqifiOutMessage>? MessageConsumer => throw new NotSupportedException();
+        public IMessageConsumer<WireMessage>? MessageConsumer => throw new NotSupportedException();
         public bool HoldsOperationLock => throw new NotSupportedException();
         public bool IsInsideTextExchange { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public ILogger Logger => throw new NotSupportedException();
         public TimeProvider TimeProvider => TimeProvider.System;
-        public void AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) => throw new NotSupportedException();
-        public void DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) => throw new NotSupportedException();
+        public IDisposable BeginTextCapture(Action<string> onLine) => throw new NotSupportedException();
         public Task WaitForOperationLockAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public void EnterOperationLockOwnership() => throw new NotSupportedException();
         public void ExitOperationLockOwnership() => throw new NotSupportedException();
         public Task DrainOutboundQueueAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public OutboundWriterSample? SampleOutboundWriter() => throw new NotSupportedException();
         public bool IsExchangeTerminatorReply(string line) => throw new NotSupportedException();
-        public IDisposable SubscribeConsumerErrors(IMessageConsumer<string> consumer) => throw new NotSupportedException();
         public void OnStaleLineBoundaryCaptured() => throw new NotSupportedException();
         public void OnSendBoundaryCaptured() => throw new NotSupportedException();
         public void OnReplyWaitCompleted(bool sawResponse) => throw new NotSupportedException();

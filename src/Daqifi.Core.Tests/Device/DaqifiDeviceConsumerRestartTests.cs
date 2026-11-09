@@ -1,31 +1,33 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Communication.Messages;
 using System.Reflection;
 
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
-/// Regression coverage for issue #383 — a connect must not fail with
-/// "a previous consumer thread has not yet exited". The text-exchange path stops the protobuf
-/// consumer and restarts it; when the reader is parked in a slow blocking read it can still be
-/// alive at restart time, which the consumer's double-reader guard rightly refuses. The device
-/// escalates instead of surfacing that as a connect failure.
+/// Regression coverage for issue #383 — a connect must not fail with "a previous consumer thread
+/// has not yet exited" — and for what replaced the restart that issue was about.
 /// </summary>
+/// <remarks>
+/// A text exchange used to stop the reader and restart it, so a reader parked in a slow read could
+/// still be alive at the restart and the double-reader guard rightly refused it. Since issue #900 a
+/// text exchange never stops the reader, so on the text path there is nothing to restart. A raw
+/// capture still stops and restarts it, and a stream stuck outright still leaves it stopped; what
+/// changed is that the next text exchange now says so instead of reporting silence.
+/// </remarks>
 public class DaqifiDeviceConsumerRestartTests
 {
     // Start()'s grace period is covered precisely in StreamMessageConsumerStallingReaderTests.
-    // It is deliberately not asserted from here: the text exchange's own internal delays add well
-    // over a second of slack before the restart, so any device-level attempt to isolate the grace
-    // would come down to timing tuning and would be flaky in CI.
 
     [Fact]
-    public async Task ExecuteTextCommand_WhenReaderNeverExits_LeavesConsumerStoppedWithoutThrowing()
+    public async Task ExecuteTextCommand_OnAStuckStream_LeavesTheSameReaderRunning()
     {
-        // A stream whose read never returns at all. The guard must hold — no replacement consumer
-        // may be bound to that stuck stream, since it would be a second concurrent reader on it —
-        // but the failure must not surface as an unactionable internal error from a finally block.
+        // A stream whose read never returns at all. The exchange has nothing to stop, so it
+        // neither waits on the stuck read nor replaces the reader parked in it: it hears
+        // nothing, says so, and leaves the reader exactly as it found it.
         using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
         using var device = new ConsumerRestartTestableDevice("Stuck Device", transport);
 
@@ -34,14 +36,12 @@ public class DaqifiDeviceConsumerRestartTests
         Assert.NotNull(original);
         Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
 
-        // Completes rather than propagating ConsumerThreadNotExitedException out of the finally.
         var lines = await device.CallExecuteTextCommandAsync(() => { });
         Assert.Empty(lines);
 
-        // Same instance, left stopped — emphatically NOT a fresh consumer racing the stuck reader.
         var after = GetMessageConsumer(device);
         Assert.Same(original, after);
-        Assert.False(after!.IsRunning);
+        Assert.True(after!.IsRunning);
 
         transport.ReleaseReaders();
         device.Disconnect();
@@ -50,8 +50,6 @@ public class DaqifiDeviceConsumerRestartTests
     [Fact]
     public async Task ExecuteTextCommand_WhenReaderExitsPromptly_KeepsSameConsumer()
     {
-        // The normal path is unchanged: a reader that exits within the stop budget is simply
-        // restarted, with no grace period needed.
         using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
         using var device = new ConsumerRestartTestableDevice("Prompt Device", transport);
 
@@ -68,16 +66,84 @@ public class DaqifiDeviceConsumerRestartTests
         device.Disconnect();
     }
 
-    private static IMessageConsumer<DaqifiOutMessage>? GetMessageConsumer(DaqifiDevice device)
+    [Fact]
+    public async Task RawCapture_OnAStuckStream_LeavesTheReaderStoppedWithoutThrowing()
     {
-        return (IMessageConsumer<DaqifiOutMessage>?)typeof(DaqifiDevice)
+        // The guard #383 is about, on the one path that still restarts the reader. No
+        // replacement may be bound to the stuck stream — it would be a second concurrent reader
+        // on it — and the refusal must not escape the capture's finally.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new ConsumerRestartTestableDevice("Stuck Device", transport);
+
+        device.Connect();
+        var original = GetMessageConsumer(device);
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+
+        var after = GetMessageConsumer(device);
+        Assert.Same(original, after);
+        Assert.False(after!.IsRunning);
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_AfterARawCaptureLeftTheReaderStuck_FailsSayingSo()
+    {
+        // The reader a raw capture could not restart is the reader every exchange now depends
+        // on. Collecting nothing from it and reporting "the device did not answer" would blame
+        // the device for a stuck host stream; the exchange asks the reader to start first, and
+        // the refusal it gets back is the honest diagnosis.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new ConsumerRestartTestableDevice("Stuck Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+
+        await Assert.ThrowsAsync<ConsumerThreadNotExitedException>(
+            () => device.CallExecuteTextCommandAsync(() => { }));
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_AfterTheStuckReadReturns_RevivesTheReader()
+    {
+        // Same stuck capture, but the stuck read returns before the next exchange. The exchange's
+        // start then succeeds, and the device has its reader back without a reconnect.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new ConsumerRestartTestableDevice("Recovering Device", transport);
+
+        device.Connect();
+        var original = GetMessageConsumer(device);
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+        Assert.False(original!.IsRunning);
+
+        transport.ReleaseReaders();
+        await device.CallExecuteTextCommandAsync(() => { });
+
+        var after = GetMessageConsumer(device);
+        Assert.Same(original, after);
+        Assert.True(after!.IsRunning);
+
+        device.Disconnect();
+    }
+
+    private static IMessageConsumer<WireMessage>? GetMessageConsumer(DaqifiDevice device)
+    {
+        return (IMessageConsumer<WireMessage>?)typeof(DaqifiDevice)
             .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(device);
     }
 
     /// <summary>
-    /// Exposes the protected text-exchange entry point so the swap can be driven directly,
-    /// without needing a device that answers SCPI.
+    /// Exposes the protected text-exchange and raw-capture entry points so they can be driven
+    /// directly, without needing a device that answers SCPI.
     /// </summary>
     private class ConsumerRestartTestableDevice : DaqifiDevice
     {
@@ -90,11 +156,16 @@ public class DaqifiDeviceConsumerRestartTests
         {
             return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 100, completionTimeoutMs: 50);
         }
+
+        public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)
+        {
+            return ExecuteRawCaptureAsync(rawAction);
+        }
     }
 
     /// <summary>
     /// Transport whose stream models a reader parked in a blocking socket read, mirroring a WiFi
-    /// connection whose receive timeout outlasts the consumer-swap stop budget. Writes are accepted
+    /// connection whose receive timeout outlasts the reader's stop budget. Writes are accepted
     /// and discarded.
     /// </summary>
     /// <remarks>

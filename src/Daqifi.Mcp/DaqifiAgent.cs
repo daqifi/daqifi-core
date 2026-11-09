@@ -918,7 +918,7 @@ public sealed class DaqifiAgent
         var device = Require(deviceId);
         var sd = RequireSdCard(device);
 
-        // Snapshotted BEFORE the download: the download suspends the protobuf consumer and can
+        // Snapshotted BEFORE the download: the download stops the device's reader and can
         // leave the transport mid-switch on a timeout, so this is the last point the live channel
         // state is guaranteed readable. It carries the calibration and — the part that actually
         // matters — the timestamp clock, which firmware 3.7.2 and earlier do not write into SD
@@ -1635,7 +1635,7 @@ public sealed class DaqifiAgent
     // fails/times out) just leaves CurrentMaximumRateHz stale or absent, and SetSampleRateAsync
     // falls back to the board-derived ceiling. Not fatal to the channel-configuration call that
     // triggered the refresh. Skipped outright while streaming/logging: ReadCapabilityDocumentAsync
-    // runs a text-mode exchange that pauses the protobuf consumer, which Core documents as unsafe
+    // runs a text-mode exchange that stops decoding protobuf frames, which Core documents as unsafe
     // to call while streaming (SD logging sets IsStreaming too) — leaving the cap stale here is
     // preferable to disrupting an active session.
     private async Task RefreshCapabilityDocumentAsync(DaqifiDevice device, IStreamingDevice streaming)

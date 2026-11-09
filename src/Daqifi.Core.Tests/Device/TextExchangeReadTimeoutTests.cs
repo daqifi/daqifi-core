@@ -5,22 +5,22 @@ using System.Text;
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
-/// Coverage for the read timeout a consumer swap leaves on the device's stream (issue #900).
+/// Coverage for the read timeout a text exchange or raw capture leaves on the device's stream
+/// (issue #900).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every text exchange stops the protobuf consumer, and every stop joins a reader thread that is
-/// parked inside a blocking read. So the stream's read timeout is the floor on how long an
-/// exchange takes before it has sent anything: on a bench Nq1 that was 483-499 ms, three times
-/// over, on every connect. The transports now set a short operational read timeout, and these
-/// tests pin the two rules that keep it short where it matters and long where it is needed.
+/// A text exchange used to stop the reader, and every stop joins a reader thread parked inside a
+/// blocking read, so the stream's read timeout was the floor on how long an exchange took before
+/// it had sent anything: 483-499 ms on a bench Nq1, three times over, on every connect. The
+/// transports set a short operational read timeout (#916), and the exchange used to shorten a
+/// slow one further for the duration. Since the reader is no longer stopped by an exchange at
+/// all, an exchange now never touches the read timeout.
 /// </para>
 /// <para>
-/// The rules are one-way on purpose. A text exchange may only <i>shorten</i> the timeout it
-/// found — raising it would re-add exactly the join latency the short value removed. A raw
-/// capture may only <i>lengthen</i> it, because its one production caller (the SD file download)
-/// reads the stream itself and treats a read that times out with no bytes as "the device went
-/// quiet".
+/// A raw capture still stops the reader, and may only <i>lengthen</i> the timeout, because its one
+/// production caller (the SD file download) reads the stream itself and treats a read that times
+/// out with no bytes as "the device went quiet".
 /// </para>
 /// </remarks>
 public class TextExchangeReadTimeoutTests
@@ -28,23 +28,15 @@ public class TextExchangeReadTimeoutTests
     private const int ResponseTimeoutMs = 1000;
     private const int CompletionTimeoutMs = 100;
 
-    /// <summary>
-    /// What <c>responseTimeoutMs / 4</c>, clamped into [100, 500], comes to for
-    /// <see cref="ResponseTimeoutMs"/>. The ceiling an exchange asks for when the stream it finds
-    /// is slower to stop than that.
-    /// </summary>
-    private const int ExchangeCeilingMs = ResponseTimeoutMs / 4;
-
     /// <summary>A read timeout a transport would set today: short enough to stop promptly.</summary>
     private const int PromptStopTimeoutMs = 50;
 
     [Fact]
     public async Task ExecuteTextCommand_WhenTheStreamAlreadyStopsPromptly_LeavesItsReadTimeoutAlone()
     {
-        // The regression this issue is about. The exchange used to assign its own ceiling
+        // The regression #900 started from. The exchange used to assign its own ceiling
         // unconditionally, so a stream the transport had already made quick to stop was pushed
-        // back up to 250ms for the duration of the exchange - and the text consumer's own stop at
-        // the end of the exchange then had to wait that out.
+        // back up to 250ms for the duration of the exchange.
         using var transport = new TimeoutRecordingTransport(PromptStopTimeoutMs, "0,\"No error\"\r\n");
         using var device = new ReadTimeoutTestableDevice("Prompt Stop Device", transport);
 
@@ -63,26 +55,29 @@ public class TextExchangeReadTimeoutTests
     }
 
     [Fact]
-    public async Task ExecuteTextCommand_WhenTheStreamParksForTooLong_ShortensItsReadTimeoutAndPutsItBack()
+    public async Task ExecuteTextCommand_WhenTheStreamParksForLong_StillLeavesItsReadTimeoutAlone()
     {
-        // The other direction, unchanged: a stream that would park a reader for 30s gets a
-        // ceiling for the exchange, so the text consumer this exchange starts is still joinable
-        // when the exchange ends. The original is restored on the way out.
+        // The exchange used to put a ceiling on a slow stream so the text reader it started
+        // would be joinable when it ended. There is no such reader any more, and nothing is
+        // joined, so a stream that parks its reader for 30s is left exactly as it was — and the
+        // exchange still completes, because nothing in it waits on that read.
         const int SlowStopTimeoutMs = 30_000;
         using var transport = new TimeoutRecordingTransport(SlowStopTimeoutMs, "0,\"No error\"\r\n");
         using var device = new ReadTimeoutTestableDevice("Slow Stop Device", transport);
 
+        IReadOnlyList<string> lines;
         device.Connect();
         try
         {
-            await device.CallAsync(() => transport.Release());
+            lines = await device.CallAsync(() => transport.Release());
         }
         finally
         {
             device.Disconnect();
         }
 
-        Assert.Equal([ExchangeCeilingMs, SlowStopTimeoutMs], transport.ReadTimeoutAssignments);
+        Assert.Equal(["0,\"No error\""], lines);
+        Assert.Empty(transport.ReadTimeoutAssignments);
         Assert.Equal(SlowStopTimeoutMs, transport.CurrentReadTimeout);
     }
 

@@ -26,24 +26,19 @@ namespace Daqifi.Core.Device;
 /// <remarks>
 /// <para>
 /// <b>Thread accounting (issue #491).</b> A connected, idle device holds exactly two dedicated
-/// background threads: the <see cref="MessageProducer{T}"/> write loop and the protobuf
+/// background threads: the <see cref="MessageProducer{T}"/> write loop and the
 /// <see cref="StreamMessageConsumer{T}"/> read loop started in <c>CompleteConnect</c>. Neither
 /// spins — the producer parks on a sticky wait with no polling timeout, and the consumer blocks
 /// in <c>Stream.Read</c> — so a fleet of N connected devices holds 2N threads regardless of
 /// traffic, not 2N busy loops.
 /// </para>
 /// <para>
-/// A text (SCPI) exchange (<see cref="TextExchangeEngine"/>) temporarily adds a third: the
-/// protobuf consumer is stopped and, on restart, gets a fresh thread rather than resuming its
-/// old one, and the transient line-based text consumer used to collect the reply is itself a
-/// new thread per exchange. That is two thread creations per exchange, not one — but each is
-/// tens of microseconds next to the exchange's own read-timeout and polling waits, so it does
-/// not move measured cost the way the idle-cost fixes in #491 items 1 and 2 did (delivered in
-/// #514). Eliminating it would require the consumer to survive a stop/start cycle by parking
-/// on an event instead of exiting, which roots the device (and its stream/transport) for as
-/// long as the thread is parked — a memory-leak risk for no measurable gain, and it overlaps
-/// the read-loop redesign #485 needs. See #491 for the full triage; this file documents the
-/// remaining known-cost rather than reworking it.
+/// A text (SCPI) exchange (<see cref="TextExchangeEngine"/>) adds none. It used to stop the read
+/// loop, start a second, line-based one for the reply, and then restart the first on a fresh
+/// thread — two thread creations and about 135 ms per exchange. The read loop now frames reply
+/// lines itself for the duration of an exchange, so the same two threads serve the whole
+/// connection (issue #900). Only a raw capture (an SD download) still stops the read loop, and
+/// it restarts it on a fresh thread afterwards.
 /// </para>
 /// </remarks>
 public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
@@ -476,7 +471,19 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private readonly ILogger _logger;
 
     private IMessageProducer<string>? _messageProducer;
-    private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
+
+    /// <summary>
+    /// The device's one reader: frames protobuf, and — while a text exchange holds it — reply
+    /// lines, through <see cref="_wireParser"/> (issue #900). Built with the parser in
+    /// <see cref="CompleteConnect"/> and dropped with it in <see cref="StopMessagePumps"/>.
+    /// </summary>
+    private IMessageConsumer<WireMessage>? _messageConsumer;
+
+    /// <summary>
+    /// The parser behind <see cref="_messageConsumer"/>, kept so a text exchange can switch its
+    /// framing. <c>null</c> whenever the consumer is, and on a consumer this device did not build.
+    /// </summary>
+    private DeviceWireParser? _wireParser;
     private readonly IStreamTransport? _transport;
     // Set only by the Stream-based constructor, so Send<T> can write non-string
     // payloads directly when there's no IStreamTransport to fall back to.
@@ -617,18 +624,18 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private readonly OperationSerializer _operations;
 
     // Async-context flag that tracks whether the current logical flow
-    // is inside a consumer swap — ExecuteTextCommandAsync's or ExecuteRawCaptureAsync's; both
-    // stop the protobuf consumer and take the stream. AsyncLocal flows across await
+    // is inside ExecuteTextCommandAsync or ExecuteRawCaptureAsync; the first switches the
+    // reader's framing and the second stops the reader. AsyncLocal flows across await
     // resumptions on different threads, so a setupAction that re-enters
     // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
     // detected and surfaced as InvalidOperationException — instead of
-    // corrupting the consumer swap mid-flight. Plain
+    // reframing the reader underneath the outer exchange. Plain
     // Environment.CurrentManagedThreadId capture wouldn't work — the
     // value seen before await may not match the value seen after.
     //
-    // Distinct from OperationSerializer's ownership generation: this one says "a consumer swap
-    // is in progress on this flow" (nesting is a bug), that one says "this flow holds the lock"
-    // (nesting is fine).
+    // Distinct from OperationSerializer's ownership generation: this one says "a text exchange
+    // or raw capture is in progress on this flow" (nesting is a bug), that one says "this flow
+    // holds the lock" (nesting is fine).
     private readonly AsyncLocal<bool> _isInsideTextExchange = new();
 
     /// <summary>
@@ -1454,19 +1461,29 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
             if (_messageConsumer == null)
             {
-                _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
+                // One reader for everything the device sends: protobuf frames, and the reply
+                // lines of every text exchange, which switches this parser's framing rather than
+                // putting a second reader on the stream (issue #900).
+                _wireParser = new DeviceWireParser();
+                _messageConsumer = new StreamMessageConsumer<WireMessage>(
                     _transport.Stream,
-                    new ProtobufMessageParser(),
+                    _wireParser,
                     healthSink: healthSink);
             }
 
             // Read/parse/dispatch failures used to be raised into an event with no
-            // subscribers (issue #378). Subscribe here rather than alongside
-            // MessageReceived: that one is attached and detached around every consumer
-            // swap, and error visibility must not have holes in it. '-=' first keeps a
-            // reconnect on the same consumer instance from double-subscribing.
+            // subscribers (issue #378). '-=' first keeps a reconnect on the same consumer
+            // instance from double-subscribing.
             _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
             _messageConsumer.ErrorOccurred += OnConsumerErrorOccurred;
+
+            // Routed from the moment the reader starts, not from InitializeAsync: a text
+            // exchange's reply lines arrive through this same subscription, and an exchange
+            // can run on a device that was connected without being initialized. Frames that
+            // arrive before InitializeAsync creates the protocol handler are dropped by the
+            // handler's absence, exactly as they were when nothing was subscribed yet.
+            DetachInboundMessages(_messageConsumer);
+            AttachInboundMessages(_messageConsumer);
         }
 
         // Start message producer and consumer if available
@@ -1543,13 +1560,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Waits up to 10 seconds to acquire the device operation lock before
     /// tearing down the consumer / producer / transport. This prevents
     /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
-    /// is mid-swap (text consumer running on the stream, protobuf
-    /// consumer not yet restarted) and Disconnect rips the transport
-    /// out from under it. If the wait times out, Disconnect proceeds
-    /// anyway — a stuck text exchange must not block teardown forever.
-    /// The 10s budget covers the worst-case ExecuteTextCommandAsync
-    /// hold time with default timeouts (StopSafely up to 1s + maxWait
-    /// of responseTimeoutMs*5 = 5s by default + safety margin) and
+    /// is still collecting its reply (or a raw capture still holds the stream with the
+    /// reader stopped) and Disconnect rips the transport out from under it. If the wait
+    /// times out, Disconnect proceeds anyway — a stuck text exchange must not block
+    /// teardown forever. The 10s budget covers the worst-case ExecuteTextCommandAsync
+    /// hold time with default timeouts (maxWait of responseTimeoutMs*5 = 5s by default
+    /// + safety margin) and
     /// most custom-timeout callers; on timeout the in-flight exchange
     /// sees the teardown via the post-acquisition
     /// validation and bails out cleanly. Callers wanting a non-blocking
@@ -1784,6 +1800,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // path (MarkDisconnectedWithoutTeardown) never reaches here, so those
         // fields stay set for that dispose.
         DisposeMessagePump(ref _messageConsumer);
+        _wireParser = null;
         DisposeMessagePump(ref _messageProducer);
     }
 
@@ -2043,7 +2060,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     /// <summary>
     /// Takes exclusive use of the device and hands the transport stream to <paramref name="rawAction"/>
-    /// for raw byte access, with the protobuf consumer paused for the duration. Everything is
+    /// for raw byte access, with the device's reader stopped for the duration. Everything is
     /// restored when the action completes, however it completes.
     /// </summary>
     /// <remarks>
@@ -2056,7 +2073,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     /// <param name="rawAction">
     /// An async function that receives the transport stream and performs raw I/O.
-    /// The protobuf consumer will not read from the stream while this action is executing.
+    /// The device's reader will not read from the stream while this action is executing.
     /// </param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
@@ -2070,10 +2087,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Executes a text-based command by temporarily switching from the protobuf consumer to a
-    /// line-based text consumer, collecting text responses, then restoring the protobuf consumer.
+    /// Executes a text-based command by switching the device's reader from protobuf frames to
+    /// reply lines, collecting the lines the device sends, then switching it back.
     /// </summary>
-    /// <param name="setupAction">An action that sends SCPI commands to the device while the text consumer is active.</param>
+    /// <remarks>
+    /// The reader is not stopped: the one that has run since connect frames the reply as lines
+    /// for the duration and goes back to protobuf afterwards (issue #900). Protobuf frames that
+    /// arrive meanwhile are not decoded — a binary frame read as text is lost to the stream — so
+    /// an exchange during an active stream still costs that stream its frames for the exchange's
+    /// duration, and the stream frames can reach the reply as unreadable lines.
+    /// </remarks>
+    /// <param name="setupAction">An action that sends SCPI commands to the device while the reader frames text.</param>
     /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
     /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
@@ -2084,10 +2108,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <para>
     /// It runs inside the device-wide text-exchange lock, so no competing exchange can interleave
     /// between it and <paramref name="setupAction"/> and undo what it established. It also runs
-    /// before the consumer swap, and therefore before the stale-line boundary below: a settle
+    /// before the reader is switched to text, and therefore before the stale-line boundary below: a settle
     /// wait placed inside <paramref name="setupAction"/> would widen that boundary into a window
     /// where a late reply to an earlier command could be captured as part of this response
-    /// (#396). Anything the device emits in reply to it goes to the protobuf consumer, exactly as
+    /// (#396). Anything the device emits in reply to it is still framed as protobuf, exactly as
     /// it did before this exchange began.
     /// </para>
     /// </param>
@@ -2097,7 +2121,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <para>
     /// It is the mirror of the prepare phase and runs under the <b>same</b> lock acquisition, so
     /// nothing can interleave between this exchange's commands and the state it restores (#407).
-    /// It runs after the protobuf consumer has been restarted, mirroring the prepare phase
+    /// It runs after the reader has been switched back to protobuf, mirroring the prepare phase
     /// running before the consumer was swapped out.
     /// </para>
     /// <para>
@@ -2168,7 +2192,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
     /// blocking the thread-pool thread.
     /// </summary>
-    /// <param name="setupActionAsync">An async function that sends SCPI commands to the device while the text consumer is active. Receives the operation's cancellation token.</param>
+    /// <param name="setupActionAsync">An async function that sends SCPI commands to the device while the reader frames text. Receives the operation's cancellation token.</param>
     /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
     /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
@@ -2240,15 +2264,73 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     string? ISerialPortNamed.SerialPortName => (_transport as SerialStreamTransport)?.PortName;
 
     /// <inheritdoc />
-    IMessageConsumer<DaqifiOutMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
+    IMessageConsumer<WireMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
 
     /// <inheritdoc />
-    void ITextExchangeHost.AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
-        AttachInboundMessages(consumer);
+    /// <remarks>
+    /// The consumer and parser are snapshotted once: teardown nulls both fields, and the
+    /// exchange's lock does not exclude a teardown that has given up waiting for it.
+    /// </remarks>
+    IDisposable ITextExchangeHost.BeginTextCapture(Action<string> onLine)
+    {
+        var consumer = _messageConsumer as StreamMessageConsumer<WireMessage>;
+        var parser = _wireParser;
+        if (consumer == null || parser == null)
+        {
+            throw new InvalidOperationException(
+                "ExecuteTextCommandAsync requires the device's message reader, and this device has none.");
+        }
 
-    /// <inheritdoc />
-    void ITextExchangeHost.DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
-        DetachInboundMessages(consumer);
+        // A no-op on a running reader, which is every reader except one a raw capture could
+        // not restart because its stream was stuck. Asking here either revives that reader or
+        // throws ConsumerThreadNotExitedException, so an exchange on a stuck stream fails saying
+        // so instead of reporting silence.
+        consumer.Start();
+
+        var capture = new TextReplyCapture(onLine);
+        consumer.Reframe(() => parser.Capture = capture);
+        return new TextCaptureScope(consumer, parser, capture);
+    }
+
+    /// <summary>
+    /// Ends a <see cref="ITextExchangeHost.BeginTextCapture"/>: puts the reader back on protobuf
+    /// and stops delivering lines to the exchange.
+    /// </summary>
+    private sealed class TextCaptureScope : IDisposable
+    {
+        private readonly StreamMessageConsumer<WireMessage> _consumer;
+        private readonly DeviceWireParser _parser;
+        private readonly TextReplyCapture _capture;
+
+        internal TextCaptureScope(
+            StreamMessageConsumer<WireMessage> consumer,
+            DeviceWireParser parser,
+            TextReplyCapture capture)
+        {
+            _consumer = consumer;
+            _parser = parser;
+            _capture = capture;
+        }
+
+        /// <summary>
+        /// Idempotent and never throws: it runs from the exchange's <c>finally</c>.
+        /// </summary>
+        public void Dispose()
+        {
+            // Reframed first, so nothing more is framed as this exchange's text; then closed, so
+            // a line framed before the switch and not yet handed over is dropped — the exchange
+            // has finished listening. Only this capture is removed: if it is no longer the one
+            // installed, the reader is someone else's and is left alone.
+            _consumer.Reframe(() =>
+            {
+                if (ReferenceEquals(_parser.Capture, _capture))
+                {
+                    _parser.Capture = null;
+                }
+            });
+            _capture.Close();
+        }
+    }
 
     /// <inheritdoc />
     bool ITextExchangeHost.HoldsOperationLock => _operations.HoldsOperationLock;
@@ -2406,10 +2488,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <inheritdoc />
-    IDisposable ITextExchangeHost.SubscribeConsumerErrors(IMessageConsumer<string> consumer) =>
-        new ConsumerErrorSubscription(this, consumer);
-
-    /// <inheritdoc />
     ILogger ITextExchangeHost.Logger => _logger;
 
     /// <inheritdoc />
@@ -2494,7 +2572,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </para>
     /// <para>
     /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>, which
-    /// pauses the protobuf consumer for the duration of the text exchange.
+    /// stops decoding protobuf frames for the duration of the text exchange.
     /// Avoid calling this during active streaming or concurrently with
     /// other text commands.
     /// </para>
@@ -2644,7 +2722,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// soon as the enabled set changes.
     /// </para>
     /// <para>
-    /// This runs a text-mode exchange, which pauses the protobuf consumer for its duration.
+    /// This runs a text-mode exchange, which stops decoding protobuf frames for its duration.
     /// Do not call it while streaming.
     /// </para>
     /// </remarks>
@@ -2667,10 +2745,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
-        // Both queries go out in one text exchange. Swapping the protobuf consumer out and back
-        // costs far more than either reply does — the reader thread has to time out of its
-        // blocking read first — so a second exchange would roughly double what this adds to
-        // the connect sequence, to fetch a document that measures 8 KB in ~25 ms. The version
+        // Both queries go out in one text exchange. Each exchange costs far more than either
+        // reply does — its settle window and completion window alone are hundreds of
+        // milliseconds — so a second exchange would roughly double what this adds to the
+        // connect sequence, to fetch a document that measures 8 KB in ~25 ms. The version
         // is still checked before the document is *trusted*, which is what the gate is for;
         // asking for both up front only means a device on an unreadable schema transferred a
         // document that is then discarded.
@@ -3067,36 +3145,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Attaches a device's consumer-error forwarding to a short-lived
-    /// <see cref="IMessageConsumer{T}"/> for the duration of a scope, and detaches it again on
-    /// dispose.
-    /// </summary>
-    /// <remarks>
-    /// Exists so a temporary consumer can never end up permanently subscribed. Stopping and
-    /// disposing a consumer are both time-bounded and may return while its reader thread is
-    /// still alive; that thread roots the consumer, and a still-attached handler would root this
-    /// device through it. Detaching in a <c>finally</c> (which is what <c>using</c> compiles to)
-    /// makes the subscription's lifetime exactly the scope's, whatever way control leaves it.
-    /// </remarks>
-    private sealed class ConsumerErrorSubscription : IDisposable
-    {
-        private readonly DaqifiDevice _device;
-        private readonly IMessageConsumer<string> _consumer;
-
-        public ConsumerErrorSubscription(DaqifiDevice device, IMessageConsumer<string> consumer)
-        {
-            _device = device;
-            _consumer = consumer;
-            _consumer.ErrorOccurred += _device.OnConsumerErrorOccurred;
-        }
-
-        public void Dispose()
-        {
-            _consumer.ErrorOccurred -= _device.OnConsumerErrorOccurred;
-        }
-    }
-
-    /// <summary>
     /// Logs a background failure and raises <see cref="ErrorOccurred"/> for it, subject to the
     /// throttle policy documented on that event.
     /// </summary>
@@ -3364,15 +3412,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 streamMessageHandler: OnStreamMessageReceived
             );
 
-            // Wire up message consumer to route messages through protocol handler.
-            // Remove first so a retried initialization (e.g. after a prior timeout or
-            // cancellation that left the device connected) does not double-subscribe and
-            // process every inbound message twice; '-=' is a no-op when not subscribed.
-            if (_messageConsumer != null)
-            {
-                DetachInboundMessages(_messageConsumer);
-                AttachInboundMessages(_messageConsumer);
-            }
+            // The reader has routed inbound messages here since CompleteConnect, so creating
+            // the handler is all it takes for frames to reach it from this point on.
 
             // Snapshot into a local, once. The setup block and the derived-class hook further
             // down are then handed the same decision explicitly, so it cannot be
@@ -3400,9 +3441,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
             // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
             // any -200 execution error response is captured rather than silently discarded
-            // by the protobuf consumer.  The protobuf consumer is stopped for the duration
-            // of this call and restarted afterward, leaving the device in protobuf mode
-            // and ready to receive the SYSInfoPB? response.
+            // by the protobuf framing. The reader frames text for the duration of this call
+            // and protobuf again afterward, ready to receive the SYSInfoPB? response.
             IReadOnlyList<string> initLines;
 
             // The short circuit is scoped to this one exchange, not to InitializeAsync as a
@@ -3532,7 +3572,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // firmware version, so an earlier read would skip on every device. This is its own
             // SCPI round-trip rather than something folded into status processing: the
             // document does not ride along in the protobuf status message, and a text exchange
-            // pauses the protobuf consumer, which is only safe at a quiescent point like this
+            // stops decoding protobuf frames, which is only safe at a quiescent point like this
             // one. It runs before OnDeviceInitializingAsync so derived-class initialization
             // already sees the device's own capabilities.
             await TryReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
@@ -3621,7 +3661,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// for itself.
     /// </para>
     /// <para>
-    /// The exchange is already in text mode with the protobuf consumer paused, so an override
+    /// The exchange is already in text mode, with the reader framing reply lines, so an override
     /// may only <see cref="Send{T}"/>. It must not start another text exchange and must not
     /// block.
     /// </para>
@@ -3876,7 +3916,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             var startedAt = clock.GetTimestamp();
 
             // Query device info – expects a protobuf response, so use plain Send()
-            // now that the protobuf consumer is running again.
+            // now that the setup exchange has put the reader back on protobuf.
             Send(ScpiMessageProducer.GetDeviceInfo);
 
             // If the response arrived synchronously (e.g. the consumer thread fired the
@@ -4640,9 +4680,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// interface event, which behaves exactly as before.
     /// </remarks>
     /// <param name="consumer">The consumer to subscribe to.</param>
-    private void AttachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+    private void AttachInboundMessages(IMessageConsumer<WireMessage> consumer)
     {
-        if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+        if (consumer is StreamMessageConsumer<WireMessage> streamConsumer)
         {
             streamConsumer.MessageParsed += OnInboundMessageParsed;
             return;
@@ -4657,9 +4697,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// subscriptions cannot be left half-subscribed.
     /// </summary>
     /// <param name="consumer">The consumer to unsubscribe from.</param>
-    private void DetachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+    private void DetachInboundMessages(IMessageConsumer<WireMessage> consumer)
     {
-        if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+        if (consumer is StreamMessageConsumer<WireMessage> streamConsumer)
         {
             streamConsumer.MessageParsed -= OnInboundMessageParsed;
         }
@@ -4672,20 +4712,33 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     /// <param name="sender">The message consumer that raised the event.</param>
     /// <param name="e">The message received event arguments.</param>
-    private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<DaqifiOutMessage> e)
+    private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<WireMessage> e)
         => OnInboundMessageParsed(e.Message);
 
     /// <summary>
-    /// Routes a parsed inbound message through the protocol handler.
+    /// Routes a parsed inbound message: a protobuf frame to the protocol handler, a reply line to
+    /// the text exchange it was framed for.
     /// </summary>
     /// <remarks>
     /// Calls the typed <see cref="ProtobufProtocolHandler.Handle"/> entry point so streaming
     /// frames are not wrapped in a <c>GenericInboundMessage&lt;object&gt;</c> (issue #490).
+    /// A line goes to the capture it carries rather than to whichever exchange is current, so a
+    /// line framed for one exchange can never be counted as another's (issue #900).
     /// </remarks>
     /// <param name="message">The parsed message.</param>
-    private void OnInboundMessageParsed(IInboundMessage<DaqifiOutMessage> message)
+    private void OnInboundMessageParsed(IInboundMessage<WireMessage> message)
     {
-        _protocolHandler?.Handle(message.Data);
+        var wire = message.Data;
+        if (wire.Frame is { } frame)
+        {
+            _protocolHandler?.Handle(frame);
+            return;
+        }
+
+        if (wire.Line is { } line)
+        {
+            wire.Capture?.Deliver(line);
+        }
     }
 }
 

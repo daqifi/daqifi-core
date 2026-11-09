@@ -1130,11 +1130,11 @@ Notes:
 - The `StreamStats`/`MemoryDiagnostics` parsers are **forward-compatible**: the device emits a set of
   `Key=Value` lines whose membership grows between firmware versions, so every numeric pair is exposed
   through `Values` and the typed properties return `null` for fields the running firmware omits.
-- Each call runs as a text command (the protobuf consumer is paused for the exchange, like the SD and
-  LAN-chip queries). Avoid issuing them concurrently.
+- Each call runs as a text command (the device's reader frames reply lines instead of protobuf for the
+  exchange, like the SD and LAN-chip queries). Avoid issuing them concurrently.
 - **Query while the device is not streaming.** These calls do not stop an active capture, but the
-  firmware does not stop either: pausing Core's protobuf reader leaves the device emitting frames, and
-  whatever is in flight lands on the front of the reply and destroys its first line. A mid-capture call
+  firmware does not stop either: while Core's reader frames the reply as text, the device keeps
+  emitting stream frames, and they arrive in the reply as unreadable lines (and are lost to the stream). A mid-capture call
   is therefore opportunistic — it may fail, and stopping the stream is the only way to be sure of a
   clean read.
 - A `DeviceDiagnosticsException` (carrying `RawDeviceResponse`) is thrown when the device returns a

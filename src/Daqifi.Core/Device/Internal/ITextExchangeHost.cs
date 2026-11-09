@@ -11,8 +11,8 @@ namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
 /// The slice of <see cref="DaqifiDevice"/> that <see cref="TextExchangeEngine"/> drives: the
-/// state the exchange validates against, the consumer and transport bindings it swaps, and the
-/// device's operation-lock protocol it takes part in.
+/// state the exchange validates against, the reader and transport it uses, and the device's
+/// operation-lock protocol it takes part in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -50,26 +50,42 @@ internal interface ITextExchangeHost
     IStreamTransport? Transport { get; }
 
     /// <summary>
-    /// The protobuf consumer the exchange stops for the duration of the swap, or <c>null</c> on
-    /// a device that has none.
+    /// The device's one reader — the consumer that frames both its protobuf frames and, during a
+    /// text exchange, its reply lines — or <c>null</c> on a device that has none. A raw capture
+    /// stops it for the capture's duration and restarts it afterwards.
     /// </summary>
-    IMessageConsumer<DaqifiOutMessage>? MessageConsumer { get; }
+    IMessageConsumer<WireMessage>? MessageConsumer { get; }
 
     /// <summary>
-    /// Subscribes the device's inbound-message handler to <paramref name="consumer"/>.
+    /// Switches the device's reader to framing reply lines, delivering each one to
+    /// <paramref name="onLine"/>, until the returned scope is disposed — which switches it back to
+    /// protobuf (issue #900).
     /// </summary>
     /// <remarks>
-    /// Attach and detach are the device's own because the handler is private to it. Routing them
-    /// through here rather than exposing the delegate keeps the subscription symmetric — the
-    /// engine cannot accidentally remove a differently-constructed equal delegate, or leave one
-    /// attached twice.
+    /// <para>
+    /// Nothing is stopped or started on the stream: the reader that has run since connect keeps
+    /// running and keeps reporting its own read failures. The switch is made between two of its
+    /// parses (<see cref="StreamMessageConsumer{T}.Reframe"/>), and the bytes it had begun framing
+    /// the old way are discarded at that instant, in both directions.
+    /// </para>
+    /// <para>
+    /// A reader that a raw capture could not restart is asked to start again first. That either
+    /// recovers it — its stuck read has since returned — or throws
+    /// <see cref="ConsumerThreadNotExitedException"/>, so an exchange on a stuck stream fails saying
+    /// so rather than waiting out its timeout and reporting silence.
+    /// </para>
+    /// <para>
+    /// <paramref name="onLine"/> is called on the reader thread, outside its buffer lock, and only
+    /// for lines framed while this capture held the reader: a line framed for an earlier exchange
+    /// can never reach a later one. The returned scope's <see cref="IDisposable.Dispose"/> never
+    /// throws, so it is safe in a <c>finally</c>.
+    /// </para>
     /// </remarks>
-    void AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer);
-
-    /// <summary>
-    /// Unsubscribes the device's inbound-message handler from <paramref name="consumer"/>.
-    /// </summary>
-    void DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer);
+    /// <param name="onLine">Receives each line, trimmed, blank lines included.</param>
+    /// <returns>The scope that ends the capture.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the device has no reader to switch.</exception>
+    /// <exception cref="ConsumerThreadNotExitedException">Thrown when the reader is stopped and cannot be restarted because its stream is stuck.</exception>
+    IDisposable BeginTextCapture(Action<string> onLine);
 
     /// <summary>
     /// True when the current logical flow already holds the device's operation lock — in any
@@ -108,9 +124,9 @@ internal interface ITextExchangeHost
     void ExitOperationLockOwnership();
 
     /// <summary>
-    /// Whether the current logical flow is already inside a consumer swap — a text exchange or
-    /// a raw capture. Set by the engine around both, so a callback that re-enters either one is
-    /// caught rather than restarting the consumer underneath the swap that is still running.
+    /// Whether the current logical flow is already inside a text exchange or a raw capture. Set by
+    /// the engine around both, so a callback that re-enters either one is caught rather than
+    /// reframing or restarting the reader underneath the one that is still running.
     /// </summary>
     /// <remarks>
     /// <b>The setter must not be made async</b> — see the remarks on
@@ -131,8 +147,8 @@ internal interface ITextExchangeHost
     /// device's genuine reply on the wrong side of the exchange's stale-line boundary. The whole
     /// point of a sample is that it costs nothing and delays nothing.
     /// <para>
-    /// Called on the text consumer's reader thread as well as the exchange's own, so it must
-    /// stay cheap and must not take any lock the exchange holds.
+    /// Called on the device's reader thread as well as the exchange's own, so it must stay cheap
+    /// and must not take any lock the exchange holds.
     /// </para>
     /// <para>
     /// <c>null</c> on a device with no queued producer, and on one whose producer does not count
@@ -165,18 +181,6 @@ internal interface ITextExchangeHost
     /// </remarks>
     /// <param name="line">A line collected after this exchange's commands began going out.</param>
     bool IsExchangeTerminatorReply(string line);
-
-    /// <summary>
-    /// Forwards the temporary text consumer's failures to the device's
-    /// <see cref="DaqifiDevice.ErrorOccurred"/> surface for the lifetime of the returned scope.
-    /// </summary>
-    /// <remarks>
-    /// Scoped rather than a bare subscription because the text consumer can outlive the exchange:
-    /// its stop and dispose are both time-bounded and may return with the reader thread still
-    /// parked in an un-returning read. A live thread roots the consumer, which would root the
-    /// device through the handler.
-    /// </remarks>
-    IDisposable SubscribeConsumerErrors(IMessageConsumer<string> consumer);
 
     /// <summary>
     /// The device's logger. The engine wraps every call to it, so a throwing logger cannot take

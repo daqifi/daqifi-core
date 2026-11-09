@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using System.Reflection;
 using System.Text;
 
@@ -10,11 +11,9 @@ namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
 /// Documents and verifies the thread accounting from issue #491's triage: a connected, idle
-/// device holds exactly two dedicated background threads (the producer and the protobuf
-/// consumer), and a text exchange transiently spawns fresh threads for both the protobuf
-/// consumer restart and the temporary text consumer rather than reusing them. That per-exchange
-/// churn is deliberately left in place — see the remarks on <see cref="DaqifiDevice"/> — so this
-/// is a characterization test, not a target for these counts to shrink to.
+/// device holds exactly two dedicated background threads (the producer and the reader), and —
+/// since issue #900 — a text exchange adds none. It used to stop the reader, start a temporary
+/// text reader, and restart the first on a fresh thread; the reader now frames the reply itself.
 /// </summary>
 public class DaqifiDeviceThreadAccountingTests
 {
@@ -47,69 +46,52 @@ public class DaqifiDeviceThreadAccountingTests
     }
 
     [Fact]
-    public async Task ExecuteTextCommand_RestartsTheProtobufConsumerOnAFreshThread()
+    public async Task ExecuteTextCommand_KeepsTheReaderOnTheSameThread()
     {
-        // The triage finding this pins down: the exchange does not resume the protobuf consumer's
-        // existing reader, it stops it and starts a new one, so the exchange costs a second thread
-        // creation beyond the temporary text consumer's own. Compared by Thread instance rather
-        // than ManagedThreadId — the old thread has already exited by the time the new one is
-        // created, so the runtime is free to reuse its id, which would make an id comparison
-        // intermittently pass for the wrong reason.
+        // The finding #900 removes: the exchange used to stop the reader and start a new one,
+        // costing a thread creation (and the stop's join) every time. Compared by Thread
+        // instance rather than ManagedThreadId, so a reused id cannot make this pass for the
+        // wrong reason.
         using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
-        using var device = new ThreadAccountingTestableDevice("Churning Device", transport);
+        using var device = new ThreadAccountingTestableDevice("Steady Device", transport);
 
         device.Connect();
         var consumer = GetMessageConsumer(device);
         var beforeThread = GetConsumerThread(consumer!)!;
 
         await device.CallExecuteTextCommandAsync(() => { });
+        await device.CallExecuteTextCommandAsync(() => { });
 
-        // Same consumer instance, restarted — the exchange swaps the reader, not the object
-        // (issue #383's invariant), but the thread backing it is a new one.
         var afterConsumer = GetMessageConsumer(device);
         Assert.Same(consumer, afterConsumer);
         Assert.True(afterConsumer!.IsRunning);
-
-        var afterThread = GetConsumerThread(afterConsumer)!;
-        Assert.NotSame(beforeThread, afterThread);
-        Assert.True(
-            SpinWait.SpinUntil(() => !beforeThread.IsAlive, TimeSpan.FromSeconds(2)),
-            "The pre-exchange consumer thread never exited.");
+        Assert.Same(beforeThread, GetConsumerThread(afterConsumer));
+        Assert.True(beforeThread.IsAlive);
 
         device.Disconnect();
     }
 
     [Fact]
-    public async Task ExecuteTextCommand_LeavesTheDeviceBackAtTwoRunningThreadsAfterward()
+    public async Task ExecuteTextCommand_PutsNoSecondReaderOnTheStream()
     {
-        // The exchange's thread churn is transient: once it completes, the device is back to
-        // steady state — no leaked text-consumer thread left running behind it. Proven by
-        // tracking every thread that ever entered the transport's Read — the protobuf consumer's
-        // restarts plus the transient text consumer's, the producer never reads — and requiring
-        // that only the current consumer thread is still alive afterward.
+        // Every thread that ever entered the transport's Read is tracked; the producer never
+        // reads. Before #900 each exchange added two — a temporary text reader and the
+        // restarted protobuf one — and the restart was a step a stuck stream could refuse,
+        // leaving no reader at all (#383). Now there is exactly one, for the whole connection.
         using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
-        using var device = new ThreadAccountingTestableDevice("Settled Device", transport);
+        using var device = new ThreadAccountingTestableDevice("Single Reader Device", transport);
 
         device.Connect();
-        await device.CallExecuteTextCommandAsync(() => { });
+        var consumerThread = GetConsumerThread(GetMessageConsumer(device)!)!;
 
-        var producer = GetMessageProducer(device);
-        var consumer = GetMessageConsumer(device);
-        var producerThread = GetProducerThread(producer!)!;
-        var consumerThread = GetConsumerThread(consumer!)!;
+        for (var i = 0; i < 3; i++)
+        {
+            await device.CallExecuteTextCommandAsync(() => { });
+        }
 
-        Assert.True(producer!.IsRunning);
-        Assert.True(consumer!.IsRunning);
-        Assert.True(producerThread.IsAlive);
-        Assert.True(consumerThread.IsAlive);
-
-        // Every reader thread the exchange spun up — including the transient text consumer's —
-        // must have exited by now; only the steady-state producer and consumer stay alive.
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => transport.ObservedReaderThreads.All(t => t == consumerThread || !t.IsAlive),
-                TimeSpan.FromSeconds(2)),
-            "A reader thread from the exchange outlived it.");
+        Assert.True(GetMessageProducer(device)!.IsRunning);
+        Assert.True(GetMessageConsumer(device)!.IsRunning);
+        Assert.Equal(new[] { consumerThread }, transport.ObservedReaderThreads);
 
         device.Disconnect();
     }
@@ -121,9 +103,9 @@ public class DaqifiDeviceThreadAccountingTests
             .GetValue(device);
     }
 
-    private static IMessageConsumer<DaqifiOutMessage>? GetMessageConsumer(DaqifiDevice device)
+    private static IMessageConsumer<WireMessage>? GetMessageConsumer(DaqifiDevice device)
     {
-        return (IMessageConsumer<DaqifiOutMessage>?)typeof(DaqifiDevice)
+        return (IMessageConsumer<WireMessage>?)typeof(DaqifiDevice)
             .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(device);
     }

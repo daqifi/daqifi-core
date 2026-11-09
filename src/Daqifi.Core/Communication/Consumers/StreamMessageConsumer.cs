@@ -311,6 +311,46 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
+    /// Changes how the bytes that arrive from now on are framed, without stopping the reader.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="applyFraming"/> runs under the buffer lock the reader holds while it appends
+    /// and parses, so the change falls exactly between two batches and never inside one: every
+    /// complete message in what has been read so far was already parsed the old way, and
+    /// everything read afterwards is parsed the new way. The bytes still buffered at that instant
+    /// — a message the old framing had begun and not finished — are discarded with it, because the
+    /// new framing could only misread them.
+    /// </para>
+    /// <para>
+    /// This is what lets the device keep one reader for both its protobuf frames and its SCPI text
+    /// replies, instead of stopping one reader and starting another around every text exchange
+    /// (issue #900). It touches neither the stream nor the reader thread, so it is immediate
+    /// whether or not the consumer is running, and works on a disposed consumer too.
+    /// </para>
+    /// <para>
+    /// Messages parsed before the change but not yet dispatched are still dispatched, after it.
+    /// A caller that must tell them apart has to tag them while parsing, which is what the device's
+    /// parser does.
+    /// </para>
+    /// <para>
+    /// <paramref name="applyFraming"/> must be quick and must not call back into this consumer or
+    /// take any lock a message handler takes: it runs with the reader's buffer lock held.
+    /// </para>
+    /// </remarks>
+    /// <param name="applyFraming">Changes the parser's framing.</param>
+    internal void Reframe(Action applyFraming)
+    {
+        ArgumentNullException.ThrowIfNull(applyFraming);
+
+        lock (_bufferLock)
+        {
+            applyFraming();
+            _messageBuffer.Clear();
+        }
+    }
+
+    /// <summary>
     /// Resets the message buffer and drains any residual bytes from the stream. Must only run on
     /// the thread that currently owns the stream/buffer (the consumer thread while running, or the
     /// caller of <see cref="ClearBuffer"/> when it is not).
@@ -456,17 +496,8 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 // a stream that glitches and recovers is never mistaken for a disconnected device.
                 SafeReportIoSuccess();
 
-                // Add received data to message buffer (guarded: a caller may be reading
-                // QueuedMessageCount and ClearBuffer's drain runs on this same thread).
-                // Bulk-appended: the byte-at-a-time loop this replaced re-checked the list's
-                // capacity once per byte, on every read, for the life of the connection (#490).
-                lock (_bufferLock)
-                {
-                    _messageBuffer.AddRange(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
-                }
-
-                // Try to parse complete messages from buffer
-                ProcessMessageBuffer();
+                // Append what was read and parse complete messages out of the buffer.
+                ProcessMessageBuffer(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
             }
             catch (Exception ex)
             {
@@ -643,17 +674,27 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
-    /// Processes the message buffer and extracts complete messages.
+    /// Appends what a read returned to the message buffer and extracts complete messages from it.
     /// </summary>
-    private void ProcessMessageBuffer()
+    /// <param name="received">The bytes the read returned.</param>
+    private void ProcessMessageBuffer(ReadOnlySpan<byte> received)
     {
         byte[] bufferData;
         IEnumerable<IInboundMessage<T>> messages;
 
-        // Snapshot, parse, and drain the buffer under the lock; dispatch events outside it so a
-        // subscriber callback never runs while the lock is held.
+        // Append, snapshot, parse, and drain the buffer under the lock; dispatch events outside it
+        // so a subscriber callback never runs while the lock is held.
+        //
+        // The append shares the parse's lock section rather than taking one of its own, so there
+        // is no instant at which bytes have been buffered but not yet parsed. Reframe depends on
+        // that: a framing change can then only ever fall between two whole batches, and nothing
+        // a read returned before the change can be swept away unparsed by it (issue #900).
         lock (_bufferLock)
         {
+            // Bulk-appended: the byte-at-a-time loop this replaced re-checked the list's capacity
+            // once per byte, on every read, for the life of the connection (#490).
+            _messageBuffer.AddRange(received);
+
             // Parse from a view over the accumulation buffer rather than a copy of it. The copy
             // this replaced was the wire throughput duplicated as garbage on every single read
             // (issue #490); it existed only because the parser entry point demanded an array.
