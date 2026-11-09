@@ -292,8 +292,7 @@ internal sealed class WifiModuleUpdater
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.Complete, "WiFi module update completed.");
-            _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, _context.CurrentOperation, totalBytes, totalBytes);
+            _context.CompleteOperation(progress, "WiFi module update completed.", totalBytes, totalBytes);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -302,7 +301,10 @@ internal sealed class WifiModuleUpdater
             // caller's is already canceled by definition on this path.
             await TryLeaveLanUpdateModeAfterFailureAsync(device, lanUpdateProgress).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.Failed, "WiFi module update canceled.");
+            // A WiFi module update never writes the PIC32 application flash, so every failed end
+            // state here reports it as unchanged.
+            _context.TransitionToState(
+                FirmwareUpdateState.Failed, "WiFi module update canceled.", Pic32FlashCondition.NotChanged);
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, _context.CurrentOperation, 0, totalBytes);
             Logger.LogWarning("WiFi module update canceled.");
             throw;
@@ -316,11 +318,12 @@ internal sealed class WifiModuleUpdater
             // rather than the recovery attempt that follows it.
             await TryLeaveLanUpdateModeAfterFailureAsync(device, lanUpdateProgress).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation);
+            _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation, Pic32FlashCondition.NotChanged);
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, failedOperation, 0, totalBytes);
             Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState);
 
-            throw _context.CreateFirmwareUpdateException(failedState, failedOperation, ex);
+            throw _context.CreateFirmwareUpdateException(
+                failedState, failedOperation, ex, flashCondition: Pic32FlashCondition.NotChanged);
         }
     }
 
@@ -495,8 +498,7 @@ internal sealed class WifiModuleUpdater
             case WifiFirmwareStatusReason.UpToDate:
                 var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FwVersion}, latest: {status.LatestRelease!.TagName}).";
                 Logger.LogInformation(message);
-                _context.TransitionToState(FirmwareUpdateState.Complete, message);
-                _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, message, 100, 100);
+                _context.CompleteOperation(progress, message, 100, 100);
                 return true;
 
             default:
@@ -522,8 +524,7 @@ internal sealed class WifiModuleUpdater
                         + $"minimum: {status.MinimumSupportedVersion}); latest-release lookup was unavailable ({status.Reason}), "
                         + "so skipping the flash rather than reflashing a supported module.";
                     Logger.LogInformation(minimumMessage);
-                    _context.TransitionToState(FirmwareUpdateState.Complete, minimumMessage);
-                    _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, minimumMessage, 100, 100);
+                    _context.CompleteOperation(progress, minimumMessage, 100, 100);
                     return true;
                 }
 

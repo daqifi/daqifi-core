@@ -153,7 +153,16 @@ internal sealed class FirmwareUpdateContext
         });
     }
 
-    internal void TransitionToState(FirmwareUpdateState nextState, string operation)
+    /// <param name="nextState">The state to move to.</param>
+    /// <param name="operation">A short description of the operation the transition starts or ends.</param>
+    /// <param name="flashCondition">
+    /// The condition of the PIC32 application flash, supplied on the transitions that end an
+    /// operation that did not complete (Failed / Recovered) so observers can read it as a value.
+    /// </param>
+    internal void TransitionToState(
+        FirmwareUpdateState nextState,
+        string operation,
+        Pic32FlashCondition? flashCondition = null)
     {
         if (CurrentState == nextState)
         {
@@ -178,7 +187,51 @@ internal sealed class FirmwareUpdateContext
             nextState,
             operation);
 
-        StateChanged?.Invoke(_eventSender, new FirmwareUpdateStateChangedEventArgs(previousState, nextState, operation));
+        StateChanged?.Invoke(
+            _eventSender,
+            new FirmwareUpdateStateChangedEventArgs(previousState, nextState, operation)
+            {
+                FlashCondition = flashCondition
+            });
+    }
+
+    /// <summary>
+    /// Ends a successful operation: moves to <see cref="FirmwareUpdateState.Complete"/> and
+    /// reports 100% progress. A <see cref="StateChanged"/> subscriber or progress sink that throws
+    /// here is logged and swallowed — the work on the device already succeeded, and letting a
+    /// consumer callback escape would send the caller into the failure path, which reports a
+    /// failure that did not happen and then cannot even reach Failed (Complete → Failed is not a
+    /// legal transition). Same rule the Recovered transition follows.
+    /// </summary>
+    internal void CompleteOperation(
+        IProgress<FirmwareUpdateProgress>? progress,
+        string operation,
+        long bytesWritten,
+        long totalBytes)
+    {
+        try
+        {
+            TransitionToState(FirmwareUpdateState.Complete, operation);
+        }
+        catch (Exception ex) when (CurrentState == FirmwareUpdateState.Complete)
+        {
+            // The transition committed before the subscriber threw; an illegal transition
+            // leaves CurrentState untouched, fails this filter and still propagates.
+            Logger.LogWarning(
+                ex,
+                "A StateChanged subscriber threw after the Complete transition; the operation itself succeeded.");
+        }
+
+        try
+        {
+            ReportProgress(progress, FirmwareUpdateState.Complete, 100, operation, bytesWritten, totalBytes);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "A progress sink threw on the Complete report; the operation itself succeeded.");
+        }
     }
 
     internal void ResetIfTerminalState()
@@ -331,7 +384,8 @@ internal sealed class FirmwareUpdateContext
         string failedOperation,
         Exception exception,
         string? recoveryGuidance = null,
-        string failureSubject = "Firmware update")
+        string failureSubject = "Firmware update",
+        Pic32FlashCondition flashCondition = Pic32FlashCondition.NotChanged)
     {
         if (exception is FirmwareUpdateException firmwareUpdateException)
         {
@@ -350,7 +404,10 @@ internal sealed class FirmwareUpdateContext
             failedOperation,
             message,
             recoveryGuidance ?? BuildRecoveryGuidance(failedState),
-            exception);
+            exception)
+        {
+            FlashCondition = flashCondition
+        };
     }
 
     internal static string BuildRecoveryGuidance(FirmwareUpdateState failedState)

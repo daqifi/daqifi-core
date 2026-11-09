@@ -40,4 +40,12 @@ public class FirmwareUpdateException : Exception
     /// Gets optional guidance that can help recover from this failure.
     /// </summary>
     public string? RecoveryGuidance { get; }
+
+    /// <summary>
+    /// Gets the condition the failure left the PIC32 application flash in, so a caller can tell a
+    /// device that is safe to retry from one that may be half-flashed without comparing message
+    /// text. Set by <see cref="FirmwareUpdateService"/> on every exception it throws;
+    /// <see langword="null"/> on an exception constructed elsewhere without it.
+    /// </summary>
+    public Pic32FlashCondition? FlashCondition { get; init; }
 }
