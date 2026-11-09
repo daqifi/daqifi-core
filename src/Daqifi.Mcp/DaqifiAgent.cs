@@ -1793,11 +1793,13 @@ public sealed class DaqifiAgent
     /// Fails fast with MCP-actionable guidance when PWM is enabled on <paramref name="channel"/>,
     /// rather than letting the call reach Core and surface its SDK-oriented
     /// <see cref="InvalidOperationException"/> message (which points at <c>SetPwmEnabled</c>, a
-    /// method MCP callers have no tool for) — see #449.
+    /// method MCP callers have no tool for) — see #449. The check is the channel's
+    /// <see cref="IDigitalChannel.Mode"/>, the same one Core makes (#945); only the wording of
+    /// the refusal is this server's own.
     /// </summary>
     private static void RequirePwmDisabled(IChannel channel)
     {
-        if (channel is IDigitalChannel { IsPwmEnabled: true })
+        if (channel is IDigitalChannel { Mode: DigitalPinMode.Pwm })
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; the firmware ignores digital direction/state " +

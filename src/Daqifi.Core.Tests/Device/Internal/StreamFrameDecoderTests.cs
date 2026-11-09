@@ -1171,7 +1171,8 @@ public class StreamFrameDecoderTests
         public IChannel AddDigital(
             int number, bool enabled, ChannelDirection direction = ChannelDirection.Input)
         {
-            var channel = new DigitalChannel(number) { IsEnabled = enabled, Direction = direction };
+            var channel = new DigitalChannel(number) { IsEnabled = enabled };
+            channel.ApplyDirection(direction);
             Track(channel);
             return channel;
         }

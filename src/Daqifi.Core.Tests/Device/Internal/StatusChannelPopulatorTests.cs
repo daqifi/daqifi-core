@@ -73,7 +73,8 @@ public class StatusChannelPopulatorTests
     public void Populate_ReusesExistingChannelInstances_WhenIdentityIsUnchanged()
     {
         var existingAnalog = new AnalogChannel(0);
-        var existingDigital = new DigitalChannel(0, isPwmCapable: true) { Direction = ChannelDirection.Output };
+        var existingDigital = new DigitalChannel(0, isPwmCapable: true);
+        existingDigital.ApplyDirection(ChannelDirection.Output);
         var destination = new List<IChannel>();
 
         Create().Populate(
@@ -159,7 +160,8 @@ public class StatusChannelPopulatorTests
     {
         // The device's own view outranks Core's, the same way analog IsEnabled does (#409):
         // an output pin left driven by a previous session must not come back as an input.
-        var existing = new DigitalChannel(2, isPwmCapable: false) { Direction = ChannelDirection.Input };
+        var existing = new DigitalChannel(2, isPwmCapable: false);
+        existing.ApplyDirection(ChannelDirection.Input);
         var message = new DaqifiOutMessage { DigitalPortNum = 3 };
         message.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b1111_1011 });
         var destination = new List<IChannel>();
@@ -175,7 +177,8 @@ public class StatusChannelPopulatorTests
     {
         // Firmware that never populates the field, and the SD-card/replay paths that synthesize
         // status messages without one, must not stomp a locally-commanded direction.
-        var existing = new DigitalChannel(0, isPwmCapable: true) { Direction = ChannelDirection.Output };
+        var existing = new DigitalChannel(0, isPwmCapable: true);
+        existing.ApplyDirection(ChannelDirection.Output);
         var destination = new List<IChannel>();
 
         Create().Populate(
@@ -188,7 +191,8 @@ public class StatusChannelPopulatorTests
     public void Populate_DefaultsDigitalDirectionToInput_ForChannelsBeyondTheReportedMask()
     {
         // A one-byte mask describes channels 0-7 only; channel 8 is "not reported", not "output".
-        var existingBeyondMask = new DigitalChannel(8, isPwmCapable: false) { Direction = ChannelDirection.Output };
+        var existingBeyondMask = new DigitalChannel(8, isPwmCapable: false);
+        existingBeyondMask.ApplyDirection(ChannelDirection.Output);
         var message = new DaqifiOutMessage { DigitalPortNum = 9 };
         message.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b1111_1011 });
         var destination = new List<IChannel>();

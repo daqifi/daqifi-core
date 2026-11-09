@@ -423,6 +423,101 @@ public class ChannelControlOperationsTests
         Assert.Equal(new[] { "send:PWM:CHannel:ENable 1,0" }, host.Calls);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SetPwmEnabled_FailedSend_LeavesTheChannelAsItWas(bool enabled)
+    {
+        // The command never reached the device, so the pin is where it was. A channel left
+        // marked PWM here would make Core refuse every digital command for it (#945).
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        digital.ApplyDirection(ChannelDirection.Output);
+        digital.ApplyOutputValue(true);
+        if (!enabled)
+        {
+            digital.EnterPwm();
+        }
+
+        var modeBefore = digital.Mode;
+        var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Throws<IOException>(() => ops.SetPwmEnabled(digital, enabled));
+
+        Assert.Equal(modeBefore, digital.Mode);
+        Assert.Equal(!enabled, digital.IsPwmEnabled);
+        Assert.Equal(ChannelDirection.Output, digital.Direction);
+        Assert.True(digital.OutputValue);
+        Assert.Empty(host.Calls);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_FailedSend_DoesNotBlockTheNextDigitalCommand()
+    {
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
+        var ops = new ChannelControlOperations(host);
+        Assert.Throws<IOException>(() => ops.SetPwmEnabled(digital, true));
+
+        host.SendFailure = null;
+        ops.SetDioValue(digital, true);
+
+        Assert.Equal(new[] { "send:DIO:PORt:STATe 4,1" }, host.Calls);
+    }
+
+    [Fact]
+    public void SetDioValue_FailedSend_LeavesTheChannelAsItWas()
+    {
+        var digital = new DigitalChannel(channelNumber: 2);
+        digital.ApplyDirection(ChannelDirection.Output);
+        var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Throws<IOException>(() => ops.SetDioValue(digital, true));
+
+        Assert.False(digital.OutputValue);
+        Assert.Equal(DigitalPinMode.Output, digital.Mode);
+        Assert.Empty(host.Calls);
+    }
+
+    [Fact]
+    public void SetPwmDutyCycle_FailedSend_LeavesTheChannelAsItWas()
+    {
+        var digital = new DigitalChannel(channelNumber: 1, isPwmCapable: true) { PwmDutyCyclePercent = 30 };
+        var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Throws<IOException>(() => ops.SetPwmDutyCycle(digital, 75));
+
+        Assert.Equal(30, digital.PwmDutyCyclePercent);
+        Assert.Equal(DigitalPinMode.Input, digital.Mode);
+        Assert.Empty(host.Calls);
+    }
+
+    [Fact]
+    public void ResetPwmEnabled_TakesEveryChannelOutOfPwmModeAndKeepsItsDirection()
+    {
+        var pwmOverOutput = new DigitalChannel(channelNumber: 0, isPwmCapable: true);
+        pwmOverOutput.ApplyDirection(ChannelDirection.Output);
+        pwmOverOutput.EnterPwm();
+        var pwmOverInput = new DigitalChannel(channelNumber: 3, isPwmCapable: true);
+        pwmOverInput.EnterPwm();
+        var plainOutput = new DigitalChannel(channelNumber: 1);
+        plainOutput.ApplyDirection(ChannelDirection.Output);
+        plainOutput.ApplyOutputValue(true);
+        var host = new FakeHost(pwmOverOutput, pwmOverInput, plainOutput);
+        var ops = new ChannelControlOperations(host);
+
+        ops.ResetPwmEnabled();
+
+        Assert.Equal(DigitalPinMode.Output, pwmOverOutput.Mode);
+        Assert.Equal(DigitalPinMode.Input, pwmOverInput.Mode);
+        // A channel that was not in PWM mode is not touched.
+        Assert.Equal(DigitalPinMode.Output, plainOutput.Mode);
+        Assert.True(plainOutput.OutputValue);
+        Assert.Empty(host.Calls);
+    }
+
     [Fact]
     public void SetPwmEnabled_AnalogChannel_Throws()
     {

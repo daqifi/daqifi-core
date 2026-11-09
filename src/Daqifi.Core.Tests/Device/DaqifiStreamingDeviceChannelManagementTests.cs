@@ -697,6 +697,30 @@ public class DaqifiStreamingDeviceChannelManagementTests
     }
 
     [Fact]
+    public void Disconnect_RecordsPwmAsOff_SoAReconnectDoesNotRefuseDigitalCommands()
+    {
+        // The device may have restarted while the link was down, which stops PWM. Core cannot
+        // tell, so it drops the flag with the PWM frequency record; the caller enables PWM
+        // again after a reconnect (#945).
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        device.SetPwmEnabled(channel, true);
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+
+        device.Disconnect();
+
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+
+        device.Connect();
+        device.SentMessages.Clear();
+        device.SetDioValue(channel, true);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(4, 1).Data, sent.Data);
+    }
+
+    [Fact]
     public void PopulateChannelsFromStatus_PreservesPwmBookkeepingAcrossRefresh()
     {
         var device = CreateConnectedDevice(digitalChannels: 8);

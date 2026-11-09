@@ -34,7 +34,30 @@ public interface IDigitalChannel : IChannel
     /// mirroring the last commanded state; use <c>IStreamingDevice.SetPwmEnabled</c> to change
     /// the device.
     /// </summary>
-    bool IsPwmEnabled { get; set; }
+    bool IsPwmEnabled
+    {
+        get;
+
+        [Obsolete(
+            "Call IStreamingDevice.SetPwmEnabled to start or stop PWM, and read Mode or IsPwmEnabled to see it. "
+            + "Assigning here sends nothing to the device, and Core then refuses digital commands for a pin "
+            + "that is not in PWM mode. This setter will be removed in a future major version.")]
+        set;
+    }
+
+    /// <summary>
+    /// Gets the one mode the pin is in: input, output or PWM.
+    /// </summary>
+    /// <remarks>
+    /// Core records PWM as off when a connection ends, because it can no longer vouch for the
+    /// device; enable PWM again after a reconnect (#945). The default implementation derives the
+    /// mode from <see cref="IsPwmEnabled"/> and <see cref="IChannel.Direction"/>, so an existing
+    /// implementation of this interface keeps compiling.
+    /// </remarks>
+    DigitalPinMode Mode =>
+        IsPwmEnabled ? DigitalPinMode.Pwm
+        : Direction == ChannelDirection.Output ? DigitalPinMode.Output
+        : DigitalPinMode.Input;
 
     /// <summary>
     /// Gets or sets the last commanded PWM duty cycle for this channel, in whole percent.

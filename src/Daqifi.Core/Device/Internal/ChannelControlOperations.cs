@@ -61,6 +61,25 @@ internal sealed class ChannelControlOperations
     /// </summary>
     internal void ResetSentPwmFrequency() => _lastSentPwmFrequencyHz = null;
 
+    /// <summary>
+    /// Records PWM as off on every digital channel. Called on any transition away from
+    /// Connected, together with <see cref="ResetSentPwmFrequency"/>: a device that restarted
+    /// while the link was down has PWM off, and a channel still marked PWM would make Core
+    /// refuse digital commands for a pin that is not in PWM mode. A device that only lost the
+    /// link keeps PWM running, so the caller enables (or disables) PWM again after a reconnect.
+    /// See #945.
+    /// </summary>
+    internal void ResetPwmEnabled()
+    {
+        foreach (var channel in _host.SnapshotChannels())
+        {
+            if (channel is DigitalChannel { Mode: DigitalPinMode.Pwm } digitalChannel)
+            {
+                digitalChannel.ExitPwm();
+            }
+        }
+    }
+
     /// <inheritdoc cref="IStreamingDevice.EnableChannel" />
     internal void EnableChannel(IChannel channel)
     {
@@ -163,7 +182,17 @@ internal sealed class ChannelControlOperations
         // Under the channels lock, which is the lock the status-frame resync of this property
         // writes under — the discipline SetChannelsEnabled already follows for analog
         // IsEnabled (#409). Blocking I/O stays outside it, hence the send above.
-        _host.WithChannelsLock(() => channel.Direction = direction);
+        _host.WithChannelsLock(() =>
+        {
+            if (channel is DigitalChannel digitalChannel)
+            {
+                digitalChannel.ApplyDirection(direction);
+            }
+            else
+            {
+                channel.Direction = direction;
+            }
+        });
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetDioValue" />
@@ -184,16 +213,25 @@ internal sealed class ChannelControlOperations
         EnsureChannelBelongs(channel);
         EnsurePwmNotEnabled(channel);
 
-        if (channel is IDigitalChannel digitalChannel)
-        {
-            // OutputValue is obsolete, but it stays correct while it is still part of the
-            // public surface: a caller who reads it must not see a stale level (#901).
-#pragma warning disable CS0618
-            digitalChannel.OutputValue = value;
-#pragma warning restore CS0618
-        }
-
+        // Send first, then record — the rule SetDioDirection sets out above. A send that
+        // throws leaves Core's view of the channel as it was (#945).
         _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
+
+        // OutputValue is obsolete, but it stays correct while it is still part of the
+        // public surface: a caller who reads it must not see a stale level (#901).
+        _host.WithChannelsLock(() =>
+        {
+            if (channel is DigitalChannel digitalChannel)
+            {
+                digitalChannel.ApplyOutputValue(value);
+            }
+            else if (channel is IDigitalChannel foreignChannel)
+            {
+#pragma warning disable CS0618
+                foreignChannel.OutputValue = value;
+#pragma warning restore CS0618
+            }
+        });
     }
 
     /// <summary>
@@ -202,10 +240,12 @@ internal sealed class ChannelControlOperations
     /// still mirror the commanded level/direction into local state — telling every caller the
     /// pin is doing something it is not (#449). Symmetric with the capability guard in
     /// <see cref="SetPwmEnabled"/>; the only way past this is <c>SetPwmEnabled(channel, false)</c>.
+    /// The check is the channel's <see cref="IDigitalChannel.Mode"/>, the same one the MCP
+    /// server makes before it calls in (#945).
     /// </summary>
     private static void EnsurePwmNotEnabled(IChannel channel)
     {
-        if (channel is IDigitalChannel { IsPwmEnabled: true })
+        if (channel is IDigitalChannel { Mode: DigitalPinMode.Pwm })
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Disable PWM on this channel first (SetPwmEnabled(channel, false); the MCP server exposes this as the disable_pwm tool).");
@@ -237,23 +277,40 @@ internal sealed class ChannelControlOperations
 
         EnsureChannelBelongs(channel);
 
-        if (channel is IDigitalChannel digitalChannel)
+        // Send first, then record — the rule SetDioDirection sets out above. A send that
+        // throws must not leave the channel marked PWM when the pin never went there: Core
+        // would then refuse every digital command for it (#945).
+        _host.Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
+
+        // Disabling PWM leaves the pin high-impedance and the firmware zeroes its stored
+        // output value; ExitPwm mirrors that so local state doesn't claim a driven level.
+        // The stored direction is intentionally left as-is: the firmware keeps it and
+        // re-applies it (resuming driving) on the next state or direction write, or on the
+        // next streaming tick — verified on hardware.
+        _host.WithChannelsLock(() =>
         {
-            digitalChannel.IsPwmEnabled = enabled;
-            if (!enabled)
+            if (channel is DigitalChannel digitalChannel)
             {
-                // Disabling PWM leaves the pin high-impedance and the firmware zeroes its
-                // stored output value; mirror that so local state doesn't claim a driven level.
-                // Direction is intentionally left as-is: the firmware keeps the channel's
-                // stored direction and re-applies it (resuming driving) on the next state or
-                // direction write, or on the next streaming tick — verified on hardware.
-#pragma warning disable CS0618 // obsolete, but kept correct while it is still public (#901)
-                digitalChannel.OutputValue = false;
+                if (enabled)
+                {
+                    digitalChannel.EnterPwm();
+                }
+                else
+                {
+                    digitalChannel.ExitPwm();
+                }
+            }
+            else if (channel is IDigitalChannel foreignChannel)
+            {
+#pragma warning disable CS0618 // an implementation Core does not own has only the public setters
+                foreignChannel.IsPwmEnabled = enabled;
+                if (!enabled)
+                {
+                    foreignChannel.OutputValue = false;
+                }
 #pragma warning restore CS0618
             }
-        }
-
-        _host.Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
+        });
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetPwmDutyCycle" />
@@ -287,12 +344,13 @@ internal sealed class ChannelControlOperations
 
         EnsureChannelBelongs(channel);
 
+        // Send first, then record — the rule SetDioDirection sets out above (#945).
+        _host.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
+
         if (channel is IDigitalChannel digitalChannel)
         {
             digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
         }
-
-        _host.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetPwmFrequency" />

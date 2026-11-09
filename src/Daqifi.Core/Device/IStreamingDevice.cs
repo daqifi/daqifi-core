@@ -335,6 +335,11 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <see cref="Channel.IChannel.Direction"/>), and any subsequent <see cref="SetDioValue"/> or
     /// <see cref="SetDioDirection"/> write — or the per-tick refresh while streaming — re-applies it and
     /// resumes driving, so no explicit direction resend is required first.
+    /// <para>
+    /// Core records PWM as off on every channel when the connection ends (#945): the device stops
+    /// PWM if it restarts, and keeps it running if only the link was lost, and Core cannot tell
+    /// which happened. Call this again after a reconnect — <c>true</c> to carry on, <c>false</c> to stop.
+    /// </para>
     /// </remarks>
     void SetPwmEnabled(IChannel channel, bool enabled);
 
