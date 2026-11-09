@@ -177,7 +177,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.
     /// </summary>
-    public bool IsLoggingToSdCard => _sdCardOperations.IsLoggingToSdCard;
+    /// <remarks>
+    /// A logging session is also a stream, so <see cref="IsStreaming"/> is <c>true</c> whenever
+    /// this is. It goes false when the session ends, by <see cref="StopSdCardLoggingAsync"/>,
+    /// <see cref="StopStreaming"/>, or a stop command sent any other way, including the one
+    /// <see cref="DaqifiDevice.InitializeAsync"/> sends. A disconnect alone does not end it: nothing
+    /// has told the device to stop, so it stays true until one of those happens.
+    /// </remarks>
+    public bool IsLoggingToSdCard => _session.IsLoggingToSdCard;
 
     /// <summary>
     /// Gets a value indicating whether the device is connected over USB (serial transport).
@@ -306,6 +313,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>
     /// Stops streaming data from the device.
     /// </summary>
+    /// <remarks>
+    /// During an SD card logging session this ends the session completely, the same as
+    /// <see cref="StopSdCardLoggingAsync"/>: it sends the same commands in the same order, so the
+    /// card is free and the device is configured for live streaming again.
+    /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     public void StopStreaming() => _session.StopStreaming();
 
@@ -1459,6 +1471,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     bool ISdCardOperationHost.IsUsbConnection => IsUsbConnection;
 
+    bool ISdCardOperationHost.IsLoggingToSdCard => IsLoggingToSdCard;
+
+    void ISdCardOperationHost.BeginSdCardLogSession() => _session.BeginSdCardLogSession();
+
     TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 
     TimeSpan ISdCardOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
@@ -1505,6 +1521,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     // read it.
     void IStreamingSessionHost.BeginDecoderSession(int streamingFrequencyHz)
         => _frameDecoder.BeginSession(TimestampFrequency, streamingFrequencyHz);
+
+    void IStreamingSessionHost.EndSdCardLogSession() => _sdCardOperations.EndLoggingSession();
 
     void IStreamingSessionHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 

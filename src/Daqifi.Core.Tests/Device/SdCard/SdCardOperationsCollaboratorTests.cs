@@ -562,7 +562,7 @@ public class SdCardOperationsCollaboratorTests
         // what the method sent, so the proof is that it appended nothing at all.
         Assert.Equal(callsBeforeTheListing, host.Calls);
         Assert.Equal(0, host.ExchangeCount);
-        Assert.True(ops.IsLoggingToSdCard);
+        Assert.True(host.IsLoggingToSdCard);
     }
 
     [Fact]
@@ -892,16 +892,46 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task StopSdCardLoggingAsync_WhenTheStopFails_LeavesTheSessionRunning()
+    {
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        host.ThrowOnSend = (StopStreaming, new IOException("gone"));
+
+        await Assert.ThrowsAsync<IOException>(() => ops.StopSdCardLoggingAsync());
+
+        Assert.True(host.IsLoggingToSdCard);
+        Assert.True(host.IsStreaming);
+    }
+
+    [Fact]
+    public async Task StopSdCardLoggingAsync_WhenALaterCommandFails_TheSessionHasStillEnded()
+    {
+        // The stop went out, and the firmware closes the log on the stop itself. Calling
+        // StopSdCardLoggingAsync again still sends the whole sequence.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        host.ThrowOnSend = (DisableSd, new IOException("gone"));
+
+        await Assert.ThrowsAsync<IOException>(() => ops.StopSdCardLoggingAsync());
+
+        Assert.False(host.IsLoggingToSdCard);
+        Assert.False(host.IsStreaming);
+    }
+
+    [Fact]
     public async Task StopSdCardLoggingAsync_ClearsTheBusyState()
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
         await ops.StartSdCardLoggingSessionAsync("data.bin");
-        Assert.True(ops.IsLoggingToSdCard);
+        Assert.True(host.IsLoggingToSdCard);
 
         await ops.StopSdCardLoggingAsync();
 
-        Assert.False(ops.IsLoggingToSdCard);
+        Assert.False(host.IsLoggingToSdCard);
     }
 
     [Theory]
@@ -1689,8 +1719,28 @@ public class SdCardOperationsCollaboratorTests
 
         public bool IsConnected { get; set; } = true;
         public bool IsUsbConnection { get; set; } = true;
-        public bool IsStreaming { get; set; }
         public int StreamingFrequency { get; set; } = 100;
+
+        private bool _isStreaming;
+
+        /// <summary>Clearing it ends a logging session too, as the device's one session value does.</summary>
+        public bool IsStreaming
+        {
+            get => _isStreaming;
+            set
+            {
+                _isStreaming = value;
+                IsLoggingToSdCard = IsLoggingToSdCard && value;
+            }
+        }
+
+        public bool IsLoggingToSdCard { get; private set; }
+
+        public void BeginSdCardLogSession()
+        {
+            IsStreaming = true;
+            IsLoggingToSdCard = true;
+        }
 
         /// <summary>Number of times <see cref="StartStreaming"/> was called, for tests that only
         /// care that a restore happened without pinning the exact position in <see cref="Calls"/>.</summary>

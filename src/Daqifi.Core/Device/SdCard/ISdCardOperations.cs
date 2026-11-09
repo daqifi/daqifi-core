@@ -22,6 +22,12 @@ public interface ISdCardOperations
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.
     /// </summary>
+    /// <remarks>
+    /// It goes false when the session ends, by <see cref="StopSdCardLoggingAsync"/>,
+    /// <see cref="IStreamingDevice.StopStreaming"/>, or a stop command sent any other way,
+    /// including the one <see cref="DaqifiDevice.InitializeAsync"/> sends. A disconnect alone does
+    /// not end it: nothing has told the device to stop.
+    /// </remarks>
     bool IsLoggingToSdCard { get; }
 
     /// <summary>

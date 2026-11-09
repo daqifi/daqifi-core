@@ -73,6 +73,12 @@ internal interface IStreamingSessionHost
     /// </remarks>
     void BeginDecoderSession(int streamingFrequencyHz);
 
+    /// <summary>
+    /// Ends a running SD log the way <see cref="DaqifiStreamingDevice.StopSdCardLoggingAsync"/>
+    /// does, sending the same commands in the same order.
+    /// </summary>
+    void EndSdCardLogSession();
+
     /// <inheritdoc cref="IDeviceOperationHost.WithChannelsLock"/>
     void WithChannelsLock(Action action);
 
