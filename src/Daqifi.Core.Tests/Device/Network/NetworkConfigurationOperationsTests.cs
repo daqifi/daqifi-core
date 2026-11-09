@@ -463,6 +463,8 @@ public class NetworkConfigurationOperationsTests
 
         public bool IsConnected { get; set; } = true;
         public bool IsStreaming { get; set; }
+        public void EndStreamingSession() => IsStreaming = false;
+        public void MarkStreamingStartRefused() => IsStreaming = false;
 
         /// <summary>Runs after each call is recorded, so a test can trip cancellation at an exact point.</summary>
         public Action<string>? SendHook { get; set; }

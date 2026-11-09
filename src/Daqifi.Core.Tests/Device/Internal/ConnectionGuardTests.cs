@@ -118,7 +118,9 @@ public class ConnectionGuardTests
     {
         public bool IsConnected { get; set; }
 
-        public bool IsStreaming { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public bool IsStreaming => throw new NotSupportedException();
+        public void EndStreamingSession() => throw new NotSupportedException();
+        public void MarkStreamingStartRefused() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();

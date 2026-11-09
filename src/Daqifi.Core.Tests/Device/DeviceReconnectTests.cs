@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.SdCard;
 using Google.Protobuf;
 using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Time.Testing;
@@ -1471,6 +1472,135 @@ public class DeviceReconnectTests
         Assert.True(
             wallClock.Elapsed < TimeSpan.FromSeconds(15),
             $"the reconnect took {wallClock.Elapsed} of real time, so it was not on the stepped clock.");
+    }
+
+    #endregion
+
+    #region The stream session ends with the connection (issue #940)
+
+    [Fact]
+    public void Disconnect_EndsTheStreamSession()
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Disconnected Device", transport);
+
+        ConnectAndInitialize(device);
+        device.StartStreaming();
+        Assert.True(device.IsStreaming);
+
+        device.Disconnect();
+
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public void ALostLink_WithReconnectOff_EndsTheStreamSession()
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Dropped Device", transport);
+
+        ConnectAndInitialize(device);
+        device.StartStreaming();
+        Assert.True(device.IsStreaming);
+
+        // Raises Lost before it returns, and with reconnect off nothing follows it.
+        transport.SimulateDrop();
+
+        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WhenTheConnectionEnds_AnSdCardLogSessionEndsToo(bool lostLink)
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Logging Device", transport);
+
+        ConnectAndInitialize(device);
+        ((ISdCardOperationHost)device).BeginSdCardLogSession();
+        Assert.True(device.IsLoggingToSdCard);
+        Assert.True(device.IsStreaming);
+
+        if (lostLink)
+        {
+            transport.SimulateDrop();
+        }
+        else
+        {
+            device.Disconnect();
+        }
+
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public void AfterAReconnectThatSendsNoStop_StartStreamingSendsTheStartCommand()
+    {
+        using var transport = new ScriptedReconnectTransport();
+
+        // PreserveActiveStream is what makes initialization send no stop. The scripted
+        // initialization sends nothing at all, so nothing but the end of the connection can have
+        // ended the session recorded before the disconnect.
+        using var device = new ScriptedStreamingDevice("Observing Device", transport)
+        {
+            PreserveActiveStream = true
+        };
+
+        ConnectAndInitialize(device);
+        device.StreamingFrequency = 250;
+        device.StartStreaming();
+
+        device.Disconnect();
+        device.ClearSentCommands();
+
+        ConnectAndInitialize(device);
+        Assert.DoesNotContain(device.SentCommands, c => c.Contains("StopStreamData", StringComparison.Ordinal));
+        Assert.False(device.IsStreaming);
+
+        device.StartStreaming();
+
+        Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task AnAutomaticReconnect_StillResumesAStreamTheDropEnded()
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Snapshot Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+        device.EnableChannels(new[] { device.Channels.First(c => c.Type == ChannelType.Analog) });
+        device.StreamingFrequency = 250;
+        device.StartStreaming();
+
+        // What a consumer sees at Lost: the session has ended by then. The snapshot the reconnect
+        // restores from was taken before that, so it still records the stream.
+        bool? streamingAtLost = null;
+        device.StatusChanged += (_, e) =>
+        {
+            if (e.Status == ConnectionStatus.Lost)
+            {
+                streamingAtLost = device.IsStreaming;
+            }
+        };
+
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+
+        var result = await WaitWithTimeoutAsync(reconnected);
+
+        Assert.False(streamingAtLost);
+        Assert.True(result.StreamingResumed);
+        Assert.True(device.IsStreaming);
+        Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
     }
 
     #endregion

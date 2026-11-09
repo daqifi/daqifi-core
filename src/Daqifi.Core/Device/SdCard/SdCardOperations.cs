@@ -508,7 +508,7 @@ internal sealed class SdCardOperations
 
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
         _host.Send(ScpiMessageProducer.StopStreaming);
-        _host.IsStreaming = false;
+        _host.EndStreamingSession();
 
         return wasStreaming;
     }
@@ -558,7 +558,7 @@ internal sealed class SdCardOperations
             // device isn't" staleness #533 exists to fix — just relocated to this catch instead
             // of fixed by it. Correcting it here is safe: this catch is the only code that knows
             // the resume attempt failed.
-            _host.IsStreaming = false;
+            _host.MarkStreamingStartRefused();
         }
     }
 
@@ -970,7 +970,7 @@ internal sealed class SdCardOperations
     {
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
         _host.Send(ScpiMessageProducer.StopStreaming);
-        _host.IsStreaming = false;
+        _host.EndStreamingSession();
 
         // Put the stream encoding back to protobuf, the format the library runs live streaming in
         // (DaqifiDevice.InitializeAsync sets it at connect time, and the frame decoder reads

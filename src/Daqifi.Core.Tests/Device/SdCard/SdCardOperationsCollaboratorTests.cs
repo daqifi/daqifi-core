@@ -1736,6 +1736,10 @@ public class SdCardOperationsCollaboratorTests
 
         public bool IsLoggingToSdCard { get; private set; }
 
+        public void EndStreamingSession() => IsStreaming = false;
+
+        public void MarkStreamingStartRefused() => IsStreaming = false;
+
         public void BeginSdCardLogSession()
         {
             IsStreaming = true;

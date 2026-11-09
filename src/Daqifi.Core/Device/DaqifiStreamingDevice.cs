@@ -136,6 +136,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>
     /// Gets a value indicating whether the device is currently streaming data.
     /// </summary>
+    /// <remarks>
+    /// Goes false when the connection ends, by a disconnect or a lost link, as well as when the
+    /// stream is stopped.
+    /// </remarks>
     public bool IsStreaming => _session.IsStreaming;
 
     /// <summary>
@@ -181,8 +185,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// A logging session is also a stream, so <see cref="IsStreaming"/> is <c>true</c> whenever
     /// this is. It goes false when the session ends, by <see cref="StopSdCardLoggingAsync"/>,
     /// <see cref="StopStreaming"/>, or a stop command sent any other way, including the one
-    /// <see cref="DaqifiDevice.InitializeAsync"/> sends. A disconnect alone does not end it: nothing
-    /// has told the device to stop, so it stays true until one of those happens.
+    /// <see cref="DaqifiDevice.InitializeAsync"/> sends. It also goes false when the connection
+    /// ends, by a disconnect or a lost link: this object then knows nothing of what the device is
+    /// doing, although nothing has told the device to stop.
     /// </remarks>
     public bool IsLoggingToSdCard => _session.IsLoggingToSdCard;
 
@@ -267,6 +272,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             if (e.Status != ConnectionStatus.Connected)
             {
                 _channelControl.ResetSentPwmFrequency();
+            }
+        };
+
+        // The stream session ends with the connection too, for the same reason: nothing stopped
+        // it, and what the device does from here is unknown. A separate handler so it cannot be
+        // skipped by a failure in the one above. See #940.
+        StatusChanged += (_, e) =>
+        {
+            if (e.Status != ConnectionStatus.Connected)
+            {
+                _session.EndSessionOnConnectionEnd();
             }
         };
     }
@@ -516,7 +532,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // The device is not streaming, whatever the flag says, so put the session back before
         // the exception leaves: a device reported as streaming while it sits idle also makes
         // the next StartStreaming() a silent no-op.
-        _session.IsStreaming = false;
+        _session.MarkStartRefused();
 
         var command = ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim();
         throw ScpiResponseClassifier.TryParseSystemErrorReplyCode(refusal, out var code) && code != 0
@@ -1421,11 +1437,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     bool IDeviceOperationHost.IsConnected => IsConnected;
 
-    bool IDeviceOperationHost.IsStreaming
-    {
-        get => IsStreaming;
-        set => _session.IsStreaming = value;
-    }
+    bool IDeviceOperationHost.IsStreaming => IsStreaming;
+
+    void IDeviceOperationHost.EndStreamingSession() => _session.EndSession();
+
+    void IDeviceOperationHost.MarkStreamingStartRefused() => _session.MarkStartRefused();
 
     int IDeviceOperationHost.StreamingFrequency => StreamingFrequency;
 

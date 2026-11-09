@@ -511,7 +511,9 @@ public class LiveSampleStreamTests
         // Outside this block's remit — reaching for any of these is a regression, not a refinement.
         // In particular the live path must never send a command or take the channels lock: it is an
         // adapter over events the decoder already raises, and it runs on the decode thread.
-        public bool IsStreaming { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public bool IsStreaming => throw new NotSupportedException();
+        public void EndStreamingSession() => throw new NotSupportedException();
+        public void MarkStreamingStartRefused() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
