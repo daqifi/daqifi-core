@@ -185,6 +185,137 @@ public class Pic32FirmwareUpdaterTests
         Assert.False(harness.Transport.IsConnected);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Stopping in ErasingFlash before the erase command is written (#952)
+    //
+    // The state moves to ErasingFlash, and its observers run, before anything is written to the
+    // bootloader. A run that stops in that interval still has its old application in the flash,
+    // so the cleanup must leave it alone.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunUpdate_WhenAStateObserverThrowsOnErasingFlash_SendsNoEraseAndReportsFlashNotChanged()
+    {
+        var harness = new Harness();
+        harness.ScriptHappyPathReads();
+        var observerFailure = new InvalidOperationException("The caller's StateChanged handler threw.");
+        harness.Context.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.ErasingFlash)
+            {
+                throw observerFailure;
+            }
+        };
+
+        var error = await Assert.ThrowsAsync<FirmwareUpdateException>(() => harness.RunUpdateAsync());
+
+        harness.AssertStoppedWithTheOldApplicationIntact();
+        Assert.Same(observerFailure, error.InnerException);
+        Assert.Equal(FirmwareUpdateState.ErasingFlash, error.FailedState);
+        Assert.Equal(Pic32FlashCondition.NotChanged, error.FlashCondition);
+
+        // The advice has to match the device: nothing was erased, so nothing "failed to erase"
+        // and nothing is half-flashed.
+        Assert.Contains("was not changed", error.RecoveryGuidance, StringComparison.Ordinal);
+        Assert.DoesNotContain("half-flashed", error.RecoveryGuidance, StringComparison.Ordinal);
+        Assert.DoesNotContain("erase failed", error.RecoveryGuidance, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenTheProgressSinkThrowsOnErasingFlash_SendsNoEraseAndReportsFlashNotChanged()
+    {
+        var harness = new Harness();
+        harness.ScriptHappyPathReads();
+        var sinkFailure = new InvalidOperationException("The caller's progress sink threw.");
+        var progress = new CallbackProgress(report =>
+        {
+            if (report.State == FirmwareUpdateState.ErasingFlash)
+            {
+                throw sinkFailure;
+            }
+        });
+
+        var error = await Assert.ThrowsAsync<FirmwareUpdateException>(() => harness.RunUpdateAsync(progress));
+
+        harness.AssertStoppedWithTheOldApplicationIntact();
+        Assert.Same(sinkFailure, error.InnerException);
+        Assert.Equal(Pic32FlashCondition.NotChanged, error.FlashCondition);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenCanceledDuringTheErasingFlashNotification_SendsNoEraseAndStillThrowsCanceled()
+    {
+        // The cancel a user is most likely to make: the display has just changed to "Erasing" and
+        // they want to keep what they have. The token is seen before the first write.
+        var harness = new Harness();
+        harness.ScriptHappyPathReads();
+        using var cts = new CancellationTokenSource();
+        harness.Context.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.ErasingFlash)
+            {
+                cts.Cancel();
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.RunUpdateAsync(cancellationToken: cts.Token));
+
+        // A cancel throws no FirmwareUpdateException, so the terminal event is the only place the
+        // flash condition is reported (#944).
+        harness.AssertStoppedWithTheOldApplicationIntact();
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenTheEraseWriteItselfThrows_StillReErases()
+    {
+        // The other side of the line. Once the erase command has been handed to the transport, a
+        // write that threw can still have reached the bootloader, so this is a changed flash and
+        // the #208 cleanup has to run exactly as before.
+        var harness = new Harness();
+        harness.Transport.EnqueueRead(VersionOk);
+        harness.Transport.EnqueueRead(EraseAck); // the cleanup's re-erase
+        var eraseWriteFailures = harness.Options.FlashWriteRetryCount;
+        harness.Transport.WriteHook = (data, _) => data[0] == EraseRequest && eraseWriteFailures-- > 0
+            ? Task.FromException(new IOException("The erase write failed part-way."))
+            : Task.CompletedTask;
+
+        var error = await Assert.ThrowsAsync<FirmwareUpdateException>(() => harness.RunUpdateAsync());
+
+        Assert.Equal(FirmwareUpdateState.ErasingFlash, error.FailedState);
+        Assert.Equal(Pic32FlashCondition.CleanBootloader, error.FlashCondition);
+        Assert.Contains(FirmwareUpdateState.CleaningUp, harness.StateTransitions);
+        Assert.Equal(FirmwareUpdateState.Recovered, harness.Context.CurrentState);
+        Assert.Equal(1, harness.Transport.Writes.Count(w => w[0] == EraseRequest));
+    }
+
+    [Fact]
+    public async Task RunUpdate_AfterARunThatErased_StartsTheFlashRecordOver()
+    {
+        // The session outlives one update. A record left at EraseSent by the last run would make
+        // this run's early stop look like a changed flash, and the cleanup would erase again.
+        var harness = new Harness();
+        harness.ScriptHappyPathReads();
+        await harness.RunUpdateAsync();
+        Assert.Equal(Pic32FlashProgress.EraseSent, harness.Session.FlashProgress);
+
+        harness.Context.ResetIfTerminalState();
+        harness.Transport.Writes.Clear();
+        harness.StateTransitions.Clear();
+        harness.ScriptHappyPathReads();
+        harness.Context.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.ErasingFlash)
+            {
+                throw new InvalidOperationException("The caller's StateChanged handler threw.");
+            }
+        };
+
+        await Assert.ThrowsAsync<FirmwareUpdateException>(() => harness.RunUpdateAsync());
+
+        harness.AssertStoppedWithTheOldApplicationIntact();
+    }
+
     [Fact]
     public async Task RunUpdate_OnSuccess_ReleasesTheHidHandle()
     {
@@ -267,7 +398,11 @@ public class Pic32FirmwareUpdaterTests
             };
 
             Context = new FirmwareUpdateContext(eventSender: new object(), NullLogger.Instance, Options);
-            Context.StateChanged += (_, args) => StateTransitions.Add(args.CurrentState);
+            Context.StateChanged += (_, args) =>
+            {
+                StateTransitions.Add(args.CurrentState);
+                FlashConditions.Add(args.FlashCondition);
+            };
 
             Session = new Pic32BootloaderSession(
                 Context,
@@ -297,6 +432,25 @@ public class Pic32FirmwareUpdaterTests
 
         internal List<FirmwareUpdateState> StateTransitions { get; } = [];
 
+        /// <summary>The flash condition each state change carried, in order.</summary>
+        internal List<Pic32FlashCondition?> FlashConditions { get; } = [];
+
+        /// <summary>
+        /// The whole of what "the run stopped ahead of the erase" has to mean (#952): no erase
+        /// command reached the bootloader, no cleanup ran, and the run ended in
+        /// <see cref="FirmwareUpdateState.Failed"/> saying the flash was not changed.
+        /// </summary>
+        internal void AssertStoppedWithTheOldApplicationIntact()
+        {
+            Assert.DoesNotContain(Transport.Writes, w => w[0] == EraseRequest);
+            Assert.Equal(Pic32FlashProgress.NotChanged, Session.FlashProgress);
+            Assert.DoesNotContain(FirmwareUpdateState.CleaningUp, StateTransitions);
+            Assert.DoesNotContain(FirmwareUpdateState.Recovered, StateTransitions);
+            Assert.Equal(FirmwareUpdateState.Failed, Context.CurrentState);
+            Assert.Equal(FirmwareUpdateState.Failed, StateTransitions[^1]);
+            Assert.Equal(Pic32FlashCondition.NotChanged, FlashConditions[^1]);
+        }
+
         /// <summary>
         /// Queues the HID responses a clean run consumes: the connect health check, the erase
         /// acknowledgment, one acknowledgment per record, and — because this image has no CRC
@@ -314,7 +468,9 @@ public class Pic32FirmwareUpdaterTests
             Transport.EnqueueRead(VersionOk);
         }
 
-        internal Task RunUpdateAsync(IProgress<FirmwareUpdateProgress>? progress = null)
+        internal Task RunUpdateAsync(
+            IProgress<FirmwareUpdateProgress>? progress = null,
+            CancellationToken cancellationToken = default)
         {
             return Updater.RunUpdateAsync(
                 Device,
@@ -324,7 +480,17 @@ public class Pic32FirmwareUpdaterTests
                 progress,
                 targetDevicePath: null,
                 targetLocationKey: null,
-                CancellationToken.None);
+                cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// A progress sink that runs the callback on the reporting thread, as a caller's own
+    /// <see cref="IProgress{T}"/> implementation can. <see cref="Progress{T}"/> would post it.
+    /// </summary>
+    private sealed class CallbackProgress(Action<FirmwareUpdateProgress> onReport)
+        : IProgress<FirmwareUpdateProgress>
+    {
+        public void Report(FirmwareUpdateProgress value) => onReport(value);
     }
 }
