@@ -25,8 +25,9 @@ public interface ISdCardOperations
     /// <remarks>
     /// It goes false when the session ends, by <see cref="StopSdCardLoggingAsync"/>,
     /// <see cref="IStreamingDevice.StopStreaming"/>, or a stop command sent any other way,
-    /// including the one <see cref="DaqifiDevice.InitializeAsync"/> sends. A disconnect alone does
-    /// not end it: nothing has told the device to stop.
+    /// including the one <see cref="DaqifiDevice.InitializeAsync"/> sends. It also goes false when
+    /// the connection ends, by a disconnect or a lost link: this object then knows nothing of what
+    /// the device is doing, although nothing has told the device to stop.
     /// </remarks>
     bool IsLoggingToSdCard { get; }
 

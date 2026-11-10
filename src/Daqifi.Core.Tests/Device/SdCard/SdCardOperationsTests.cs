@@ -624,15 +624,16 @@ public class SdCardOperationsTests
     [Fact]
     public async Task InitializeAsync_AfterAnSdLogAndAReconnect_ClearsTheSessionAndTheCardIsUsable()
     {
-        // The session was never stopped, only walked away from: the state goes when the connect
-        // sends the device StopStreamData, because that is what really ends the log.
+        // The session was never stopped, only walked away from. What this object records about
+        // it goes with the connection (issue #940); the connect then sends the device
+        // StopStreamData, because that is what really ends the log.
         var device = new InitializingSdCardDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
 
         device.Disconnect();
+        Assert.False(device.IsLoggingToSdCard);
         device.Connect();
-        Assert.True(device.IsLoggingToSdCard); // Nothing has told the device to stop yet.
 
         await device.InitializeAsync(TimeSpan.FromSeconds(10));
 
@@ -646,9 +647,11 @@ public class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WithPreserveActiveStream_LeavesAnSdLogRunning()
+    public async Task InitializeAsync_WithPreserveActiveStream_SendsNoStopAndRecordsNoSdLog()
     {
-        // An observing session sends no stop, so the log is still running and the card still busy.
+        // An observing session sends no stop, so whatever the device is doing goes on. This object
+        // records none of it: its session ended with the connection, and it is in the state a new
+        // device object would be in (issue #940).
         var device = new InitializingSdCardDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
@@ -660,13 +663,12 @@ public class SdCardOperationsTests
         await device.InitializeAsync(TimeSpan.FromSeconds(10));
 
         Assert.DoesNotContain(StopStreamCommand, Sent(device));
-        Assert.True(device.IsLoggingToSdCard);
-        Assert.True(device.IsStreaming);
-        await Assert.ThrowsAsync<SdCardBusyException>(() => device.GetSdCardFilesAsync());
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
     }
 
     [Fact]
-    public async Task InitializeAsync_WithPreserveActiveStream_LeavesALiveStreamRunning()
+    public async Task InitializeAsync_WithPreserveActiveStream_SendsNoStopAndRecordsNoLiveStream()
     {
         var device = new InitializingSdCardDevice("TestDevice");
         device.Connect();
@@ -679,8 +681,12 @@ public class SdCardOperationsTests
         await device.InitializeAsync(TimeSpan.FromSeconds(10));
 
         Assert.DoesNotContain(StopStreamCommand, Sent(device));
-        Assert.True(device.IsStreaming);
+        Assert.False(device.IsStreaming);
         Assert.False(device.IsLoggingToSdCard);
+
+        // ...so a start is sent, not swallowed as "already streaming".
+        device.StartStreaming();
+        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -730,7 +736,7 @@ public class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task AutomaticReconnect_WithPreserveActiveStream_LeavesAnSdLogRunning()
+    public async Task AutomaticReconnect_WithPreserveActiveStream_DoesNotRestoreTheLog()
     {
         var device = new InitializingSdCardDevice("TestDevice");
         device.Connect();
@@ -741,10 +747,39 @@ public class SdCardOperationsTests
         device.Connect();
         device.PreserveActiveStream = true;
         await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        device.SentMessages.Clear();
 
-        await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
 
-        Assert.True(device.IsLoggingToSdCard);
+        // Initialization sent no stop, so the device may still be writing the log. A start must
+        // not be sent to it, and nothing is reported as resumed. The session stays ended, as on a
+        // new device object (issue #940).
+        Assert.False(resumed);
+        Assert.DoesNotContain(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task AutomaticReconnect_WithPreserveActiveStream_DuringALiveStream_ResumesTheStream()
+    {
+        // Only an SD log is left alone. A live stream is started again, as it always was.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+
+        device.CaptureSessionAtTheDrop();
+        device.Disconnect();
+        device.Connect();
+        device.PreserveActiveStream = true;
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        device.SentMessages.Clear();
+
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+
+        Assert.True(resumed);
+        Assert.True(device.IsStreaming);
+        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
 
     [Fact]

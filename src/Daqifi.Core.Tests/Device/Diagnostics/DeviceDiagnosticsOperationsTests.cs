@@ -460,6 +460,8 @@ public class DeviceDiagnosticsOperationsTests
 
         public bool IsConnected { get; set; } = true;
         public bool IsStreaming { get; set; }
+        public void EndStreamingSession() => IsStreaming = false;
+        public void MarkStreamingStartRefused() => IsStreaming = false;
         public int StreamingFrequency { get; set; } = 100;
         public long ChannelStateVersion { get; set; }
 

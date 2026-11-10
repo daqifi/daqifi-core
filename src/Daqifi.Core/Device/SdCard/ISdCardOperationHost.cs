@@ -39,8 +39,8 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
     /// <remarks>
     /// Read from the device's one session value, so it cannot disagree with
-    /// <see cref="IDeviceOperationHost.IsStreaming"/>. Setting that to <c>false</c> is what ends
-    /// the session (issue #932).
+    /// <see cref="IDeviceOperationHost.IsStreaming"/>.
+    /// <see cref="IDeviceOperationHost.EndStreamingSession"/> is what ends the session (issue #932).
     /// </remarks>
     bool IsLoggingToSdCard { get; }
 
