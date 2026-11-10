@@ -33,6 +33,9 @@ public sealed class AmbiguousBootloaderTargetException : FirmwareUpdateException
             "or disconnect the other bootloader devices and retry.")
     {
         CandidateDevicePaths = candidateDevicePaths;
+
+        // The refusal happens while searching for the bootloader, before any erase.
+        FlashCondition = Pic32FlashCondition.NotChanged;
     }
 
     /// <summary>

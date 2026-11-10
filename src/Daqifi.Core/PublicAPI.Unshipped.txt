@@ -48,8 +48,12 @@ Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseProgress.TruncatedFinalRow.get -> bool
 Daqifi.Core.Device.SdCard.SdCardParseProgress.TruncatedFinalRow.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateCheckResult.Status.get -> Daqifi.Core.Firmware.FirmwareUpdateStatus
+Daqifi.Core.Firmware.FirmwareUpdateException.FlashCondition.get -> Daqifi.Core.Firmware.Pic32FlashCondition?
+Daqifi.Core.Firmware.FirmwareUpdateException.FlashCondition.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.set -> void
+Daqifi.Core.Firmware.FirmwareUpdateStateChangedEventArgs.FlashCondition.get -> Daqifi.Core.Firmware.Pic32FlashCondition?
+Daqifi.Core.Firmware.FirmwareUpdateStateChangedEventArgs.FlashCondition.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareUpdateStatus.DeviceNewerThanLatest = 4 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareUpdateStatus.DeviceVersionUnknown = 0 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
@@ -58,6 +62,11 @@ Daqifi.Core.Firmware.FirmwareUpdateStatus.UpToDate = 2 -> Daqifi.Core.Firmware.F
 Daqifi.Core.Firmware.FirmwareUpdateStatus.UpdateAvailable = 3 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareVersion.Revision.get -> int
 Daqifi.Core.Firmware.FirmwareVersion.Revision.init -> void
+Daqifi.Core.Firmware.Pic32FlashCondition
+Daqifi.Core.Firmware.Pic32FlashCondition.CleanBootloader = 1 -> Daqifi.Core.Firmware.Pic32FlashCondition
+Daqifi.Core.Firmware.Pic32FlashCondition.NotChanged = 0 -> Daqifi.Core.Firmware.Pic32FlashCondition
+Daqifi.Core.Firmware.Pic32FlashCondition.PossiblyHalfFlashed = 2 -> Daqifi.Core.Firmware.Pic32FlashCondition
+Daqifi.Core.Firmware.Pic32FlashCondition.ProgrammedNotConfirmed = 3 -> Daqifi.Core.Firmware.Pic32FlashCondition
 Daqifi.Core.Logging.Export.ISampleSource.ValueUnit.get -> string?
 Daqifi.Core.Logging.Export.LiveSampleSource.ValueUnit.get -> string?
 Daqifi.Core.Logging.Export.SampleValueUnits

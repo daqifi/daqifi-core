@@ -41,4 +41,14 @@ public sealed class FirmwareUpdateStateChangedEventArgs : EventArgs
     /// Gets the UTC timestamp when this transition was recorded.
     /// </summary>
     public DateTimeOffset ChangedAtUtc { get; }
+
+    /// <summary>
+    /// Gets the condition of the PIC32 application flash when this transition ends an operation
+    /// that did not complete — that is, when <see cref="CurrentState"/> is
+    /// <see cref="FirmwareUpdateState.Failed"/> or <see cref="FirmwareUpdateState.Recovered"/>.
+    /// <see langword="null"/> on every other transition. A canceled update throws
+    /// <see cref="OperationCanceledException"/> rather than <see cref="FirmwareUpdateException"/>,
+    /// so this is where its flash condition is reported.
+    /// </summary>
+    public Pic32FlashCondition? FlashCondition { get; init; }
 }

@@ -56,10 +56,12 @@ public class FirmwareUpdateExceptionFactoryTests
         var cause = new IOException("HID write failed.");
 
         var ex = context.CreateFirmwareUpdateException(
-            FirmwareUpdateState.Programming, "program flash block 7", cause);
+            FirmwareUpdateState.Programming, "program flash block 7", cause, Pic32FlashCondition.PossiblyHalfFlashed);
 
         Assert.Equal(FirmwareUpdateState.Programming, ex.FailedState);
         Assert.Equal("program flash block 7", ex.Operation);
+        // #944: the caller states the flash condition and the factory carries it unchanged.
+        Assert.Equal(Pic32FlashCondition.PossiblyHalfFlashed, ex.FlashCondition);
         // The cause must survive by reference: a consumer catching this is expected to
         // unwrap it to decide whether the failure was transport noise or a bad image.
         Assert.Same(cause, ex.InnerException);
@@ -86,6 +88,7 @@ public class FirmwareUpdateExceptionFactoryTests
             FirmwareUpdateState.CleaningUp,
             "re-erase flash after failure",
             original,
+            Pic32FlashCondition.PossiblyHalfFlashed,
             recoveryGuidance: "Ignored guidance.",
             failureSubject: "Ignored subject");
 
@@ -108,9 +111,9 @@ public class FirmwareUpdateExceptionFactoryTests
         var cause = new TimeoutException("No response.");
 
         var defaulted = context.CreateFirmwareUpdateException(
-            FirmwareUpdateState.Connecting, "connect HID transport", cause);
+            FirmwareUpdateState.Connecting, "connect HID transport", cause, Pic32FlashCondition.NotChanged);
         var subjected = context.CreateFirmwareUpdateException(
-            FirmwareUpdateState.Connecting, "connect HID transport", cause,
+            FirmwareUpdateState.Connecting, "connect HID transport", cause, Pic32FlashCondition.NotChanged,
             failureSubject: "Bootloader health check");
 
         Assert.StartsWith("Firmware update failed in state", defaulted.Message, StringComparison.Ordinal);
@@ -132,10 +135,10 @@ public class FirmwareUpdateExceptionFactoryTests
         var cause = new IOException("Erase rejected.");
 
         var stateDefault = context.CreateFirmwareUpdateException(
-            FirmwareUpdateState.ErasingFlash, "erase flash", cause).RecoveryGuidance;
+            FirmwareUpdateState.ErasingFlash, "erase flash", cause, Pic32FlashCondition.CleanBootloader).RecoveryGuidance;
 
         var overridden = context.CreateFirmwareUpdateException(
-            FirmwareUpdateState.ErasingFlash, "erase flash", cause,
+            FirmwareUpdateState.ErasingFlash, "erase flash", cause, Pic32FlashCondition.CleanBootloader,
             recoveryGuidance: "Flash was fully re-erased; the device is safe to retry.");
 
         Assert.Equal(
@@ -150,7 +153,7 @@ public class FirmwareUpdateExceptionFactoryTests
         var context = CreateContext();
 
         string GuidanceFor(FirmwareUpdateState state) =>
-            context.CreateFirmwareUpdateException(state, "some operation", new IOException("boom"))
+            context.CreateFirmwareUpdateException(state, "some operation", new IOException("boom"), Pic32FlashCondition.NotChanged)
                 .RecoveryGuidance!;
 
         // Every outcome state shares the catch-all arm, so it is the baseline a dropped
@@ -187,11 +190,13 @@ public class FirmwareUpdateExceptionFactoryTests
         var first = context.CreateFirmwareUpdateException(
             FirmwareUpdateState.WaitingForBootloader,
             "wait for HID bootloader enumeration",
-            new TimeoutException("Timed out."));
+            new TimeoutException("Timed out."),
+            Pic32FlashCondition.NotChanged);
         var second = context.CreateFirmwareUpdateException(
             FirmwareUpdateState.WaitingForBootloader,
             "poll for the bootloader a second time",
-            new UnauthorizedAccessException("Access denied."));
+            new UnauthorizedAccessException("Access denied."),
+            Pic32FlashCondition.NotChanged);
 
         Assert.Equal(first.RecoveryGuidance, second.RecoveryGuidance);
         // ...while the message still distinguishes them.

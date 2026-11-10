@@ -159,8 +159,7 @@ internal sealed class Pic32FirmwareUpdater
                 ct => JumpToApplicationAndReconnectAsync(device, ct),
                 cancellationToken).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.Complete, "PIC32 firmware update completed.");
-            _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, _context.CurrentOperation, totalBytes, totalBytes);
+            _context.CompleteOperation(progress, "PIC32 firmware update completed.", totalBytes, totalBytes);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -188,8 +187,13 @@ internal sealed class Pic32FirmwareUpdater
             var cleanupOutcome = await CleanUpAfterFailureAsync(
                 failedState, progress, totalBytes).ConfigureAwait(false);
 
+            var flashCondition = GetFlashCondition(failedState, cleanupOutcome);
             throw _context.CreateFirmwareUpdateException(
-                failedState, failedOperation, ex, BuildRecoveryGuidance(failedState, cleanupOutcome));
+                failedState,
+                failedOperation,
+                ex,
+                flashCondition,
+                BuildRecoveryGuidance(failedState, flashCondition));
         }
         finally
         {
@@ -312,8 +316,13 @@ internal sealed class Pic32FirmwareUpdater
         }
         catch (Exception ex)
         {
+            // A diagnostic touches no flash, whichever phase it broke in.
             throw _context.CreateFirmwareUpdateException(
-                phase.State, phase.Operation, ex, failureSubject: failureSubject);
+                phase.State,
+                phase.Operation,
+                ex,
+                Pic32FlashCondition.NotChanged,
+                failureSubject: failureSubject);
         }
     }
 
@@ -322,7 +331,7 @@ internal sealed class Pic32FirmwareUpdater
     /// optional re-erase cleanup pass, used to tailor the recovery guidance and
     /// reflected by the service's terminal state.
     /// </summary>
-    private enum Pic32CleanupOutcome
+    internal enum Pic32CleanupOutcome
     {
         /// <summary>
         /// Cleanup did not apply: the failure occurred before flash was written
@@ -370,7 +379,8 @@ internal sealed class Pic32FirmwareUpdater
             // cannot re-erase (CleanupFailed — warn that it may be half-flashed).
             // Both terminate in Failed. On the cancel path the rethrown
             // OperationCanceledException carries no recovery guidance, so this
-            // terminal event text is the only channel observers get.
+            // terminal event (its flash condition and text) is the only channel
+            // observers get.
             var outcome = eligible ? Pic32CleanupOutcome.CleanupFailed : Pic32CleanupOutcome.NotEligible;
 
             string failedOperation;
@@ -390,7 +400,8 @@ internal sealed class Pic32FirmwareUpdater
                 failedOperation = canceled ? "PIC32 firmware update canceled." : _context.CurrentOperation;
             }
 
-            _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation);
+            _context.TransitionToState(
+                FirmwareUpdateState.Failed, failedOperation, GetFlashCondition(failedState, outcome));
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, failedOperation, 0, totalBytes);
             return outcome;
         }
@@ -421,7 +432,10 @@ internal sealed class Pic32FirmwareUpdater
             var recoveredOperation = canceled
                 ? "Update canceled; flash re-erased — device is in a clean bootloader state and can be re-flashed."
                 : "Flash re-erased; device is in a clean bootloader state and can be re-flashed.";
-            _context.TransitionToState(FirmwareUpdateState.Recovered, recoveredOperation);
+            _context.TransitionToState(
+                FirmwareUpdateState.Recovered,
+                recoveredOperation,
+                GetFlashCondition(failedState, Pic32CleanupOutcome.Recovered));
             _context.ReportProgress(progress, FirmwareUpdateState.Recovered, frozenPercent, recoveredOperation, 0, totalBytes);
             Logger.LogInformation(
                 "Firmware re-erase cleanup succeeded; device is in a clean bootloader state.");
@@ -444,7 +458,10 @@ internal sealed class Pic32FirmwareUpdater
 
             const string cleanupFailedOperation =
                 "Cleanup re-erase failed; device may be in a half-flashed state.";
-            _context.TransitionToState(FirmwareUpdateState.Failed, cleanupFailedOperation);
+            _context.TransitionToState(
+                FirmwareUpdateState.Failed,
+                cleanupFailedOperation,
+                GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed));
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, cleanupFailedOperation, 0, totalBytes);
             Logger.LogError(
                 cleanupEx,
@@ -454,24 +471,68 @@ internal sealed class Pic32FirmwareUpdater
         }
     }
 
-    private static string BuildRecoveryGuidance(
+    /// <summary>
+    /// The one place that decides what a failed update left in the PIC32 application flash, from
+    /// the state the failure occurred in and how the cleanup pass ended. The terminal
+    /// <c>StateChanged</c> event, the thrown <see cref="FirmwareUpdateException"/> and the recovery
+    /// guidance all read this, so they cannot disagree.
+    /// </summary>
+    /// <remarks>
+    /// Fails toward the worse answer. <see cref="Pic32FlashCondition.NotChanged"/> is an
+    /// allow-list of the states that provably come before the erase; a state nobody classified —
+    /// including one added to <see cref="FirmwareUpdateState"/> later — reports
+    /// <see cref="Pic32FlashCondition.PossiblyHalfFlashed"/> rather than telling the user a
+    /// device is safe when it may not be.
+    /// </remarks>
+    internal static Pic32FlashCondition GetFlashCondition(
         FirmwareUpdateState failedState,
         Pic32CleanupOutcome cleanupOutcome)
+    {
+        switch (cleanupOutcome)
+        {
+            case Pic32CleanupOutcome.Recovered:
+                return Pic32FlashCondition.CleanBootloader;
+            case Pic32CleanupOutcome.CleanupFailed:
+                return Pic32FlashCondition.PossiblyHalfFlashed;
+        }
+
+        // No cleanup ran, so the state the failure occurred in is all there is to go on.
+        switch (failedState)
+        {
+            // Before the erase command is ever sent: nothing has been written.
+            case FirmwareUpdateState.Idle:
+            case FirmwareUpdateState.PreparingDevice:
+            case FirmwareUpdateState.WaitingForBootloader:
+            case FirmwareUpdateState.Connecting:
+                return Pic32FlashCondition.NotChanged;
+
+            // The image is fully programmed and CRC-verified; only the return to the
+            // application is unconfirmed.
+            case FirmwareUpdateState.JumpingToApp:
+                return Pic32FlashCondition.ProgrammedNotConfirmed;
+
+            default:
+                return Pic32FlashCondition.PossiblyHalfFlashed;
+        }
+    }
+
+    private static string BuildRecoveryGuidance(
+        FirmwareUpdateState failedState,
+        Pic32FlashCondition flashCondition)
     {
         // When a re-erase cleanup ran, its outcome — not the original failure
         // state — drives the guidance: the operator needs to know whether the
         // device is safe to simply re-flash or may be half-flashed.
-        switch (cleanupOutcome)
+        switch (flashCondition)
         {
-            case Pic32CleanupOutcome.Recovered:
+            case Pic32FlashCondition.CleanBootloader:
                 return "The update did not complete, but the device's application flash was automatically " +
                        "re-erased and it is now in a clean bootloader state — safe to re-flash. " +
                        "Simply re-run the firmware update.";
-            case Pic32CleanupOutcome.CleanupFailed:
+            case Pic32FlashCondition.PossiblyHalfFlashed:
                 return "The update failed and the automatic re-erase cleanup could not complete, so the device " +
                        "may be in a half-flashed state. Power-cycle the device into bootloader mode and re-run " +
                        "the firmware update; the next erase will restore a clean state.";
-            case Pic32CleanupOutcome.NotEligible:
             default:
                 return FirmwareUpdateContext.BuildRecoveryGuidance(failedState);
         }
