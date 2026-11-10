@@ -32,6 +32,9 @@ internal interface IStreamingSessionHost
     /// <inheritdoc cref="DaqifiDevice.EnsureConnected()"/>
     void EnsureConnected();
 
+    /// <inheritdoc cref="DaqifiDevice.PreserveActiveStream"/>
+    bool PreserveActiveStream { get; }
+
     /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
     void Send<T>(IOutboundMessage<T> message);
 

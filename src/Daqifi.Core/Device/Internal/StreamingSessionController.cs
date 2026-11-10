@@ -402,7 +402,7 @@ internal sealed class StreamingSessionController
 
     /// <inheritdoc cref="DaqifiStreamingDevice.CaptureSessionSnapshot"/>
     internal void CaptureSessionSnapshot() =>
-        _sessionSnapshot = StreamingSessionSnapshot.Capture(_host.SnapshotChannels(), IsStreaming);
+        _sessionSnapshot = StreamingSessionSnapshot.Capture(_host.SnapshotChannels(), IsStreaming, IsLoggingToSdCard);
 
     /// <summary>
     /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -454,12 +454,19 @@ internal sealed class StreamingSessionController
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (plan.ResumeStreaming)
+        // An SD log that initialization did not stop (PreserveActiveStream) may still be running
+        // on the device. A start sent now would go to a device that is writing to the card, and
+        // would record a live stream that delivers nothing. So nothing is sent and nothing is
+        // reported as resumed. The session stays ended, as on a new device object (issue #940).
+        var resumeStreaming =
+            plan.ResumeStreaming && !(snapshot.WasLoggingToSdCard && _host.PreserveActiveStream);
+
+        if (resumeStreaming)
         {
             StartStreaming();
         }
 
-        return Task.FromResult(plan.ResumeStreaming);
+        return Task.FromResult(resumeStreaming);
     }
 
     #endregion

@@ -276,8 +276,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         };
 
         // The stream session ends with the connection too, for the same reason: nothing stopped
-        // it, and what the device does from here is unknown. A separate handler so it cannot be
-        // skipped by a failure in the one above. See #940.
+        // it, and what the device does from here is unknown. See #940.
         StatusChanged += (_, e) =>
         {
             if (e.Status != ConnectionStatus.Connected)
@@ -1533,6 +1532,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     // a subclass override of Send{T} still intercepts every command the session issues.
 
     void IStreamingSessionHost.EnsureConnected() => EnsureConnected();
+
+    bool IStreamingSessionHost.PreserveActiveStream => PreserveActiveStream;
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 

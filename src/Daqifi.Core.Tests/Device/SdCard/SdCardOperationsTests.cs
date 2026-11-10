@@ -747,13 +747,39 @@ public class SdCardOperationsTests
         device.Connect();
         device.PreserveActiveStream = true;
         await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        device.SentMessages.Clear();
 
-        await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
 
-        // The same as without PreserveActiveStream: the session ended with the connection, and the
-        // snapshot resumes an interrupted log as a live stream (issue #940).
+        // Initialization sent no stop, so the device may still be writing the log. A start must
+        // not be sent to it, and nothing is reported as resumed. The session stays ended, as on a
+        // new device object (issue #940).
+        Assert.False(resumed);
+        Assert.DoesNotContain(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
         Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task AutomaticReconnect_WithPreserveActiveStream_DuringALiveStream_ResumesTheStream()
+    {
+        // Only an SD log is left alone. A live stream is started again, as it always was.
+        var device = new InitializingSdCardDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+
+        device.CaptureSessionAtTheDrop();
+        device.Disconnect();
+        device.Connect();
+        device.PreserveActiveStream = true;
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+        device.SentMessages.Clear();
+
+        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
+
+        Assert.True(resumed);
         Assert.True(device.IsStreaming);
+        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
 
     [Fact]

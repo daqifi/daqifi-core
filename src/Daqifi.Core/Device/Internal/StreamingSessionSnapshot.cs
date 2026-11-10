@@ -56,14 +56,25 @@ internal sealed class StreamingSessionSnapshot
 {
     private readonly HashSet<(ChannelType Type, int Number)> _enabledChannels;
 
-    private StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
+    private StreamingSessionSnapshot(
+        HashSet<(ChannelType Type, int Number)> enabledChannels,
+        bool wasStreaming,
+        bool wasLoggingToSdCard)
     {
         _enabledChannels = enabledChannels;
         WasStreaming = wasStreaming;
+        WasLoggingToSdCard = wasLoggingToSdCard;
     }
 
     /// <summary>Gets a value indicating whether data was flowing when the connection dropped.</summary>
     public bool WasStreaming { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether that data was going to the SD card and not to this
+    /// machine. The log itself is never restored; this only lets the restore tell a log the
+    /// device may still be writing from a live stream it can start again (issue #940).
+    /// </summary>
+    public bool WasLoggingToSdCard { get; }
 
     /// <summary>Gets how many channels were enabled at the drop.</summary>
     public int EnabledChannelCount => _enabledChannels.Count;
@@ -79,7 +90,11 @@ internal sealed class StreamingSessionSnapshot
     /// </remarks>
     /// <param name="channels">The device's channels at the moment of the drop.</param>
     /// <param name="isStreaming">Whether the device was streaming at the moment of the drop.</param>
-    public static StreamingSessionSnapshot Capture(IEnumerable<IChannel> channels, bool isStreaming)
+    /// <param name="isLoggingToSdCard">Whether that stream was an SD card log.</param>
+    public static StreamingSessionSnapshot Capture(
+        IEnumerable<IChannel> channels,
+        bool isStreaming,
+        bool isLoggingToSdCard = false)
     {
         ArgumentNullException.ThrowIfNull(channels);
 
@@ -92,7 +107,7 @@ internal sealed class StreamingSessionSnapshot
             }
         }
 
-        return new StreamingSessionSnapshot(enabled, isStreaming);
+        return new StreamingSessionSnapshot(enabled, isStreaming, isLoggingToSdCard);
     }
 
     /// <summary>
