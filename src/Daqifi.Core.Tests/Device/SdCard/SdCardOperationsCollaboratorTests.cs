@@ -1008,6 +1008,10 @@ public class SdCardOperationsCollaboratorTests
                 "send:" + DisableSd,
                 "send:" + EnableLan,
                 "exchange:end",
+                // Outside the exchange, and read-only, exactly as on the read path: the
+                // relist is judged by the same verdict, so it asks the same question
+                // about the end-of-listing marker (#942).
+                "supports:" + DeviceFeature.SdListingEndMarker,
             },
             host.Calls);
         Assert.Equal("keep.bin", Assert.Single(ops.SdCardFiles).FileName);
@@ -1020,17 +1024,21 @@ public class SdCardOperationsCollaboratorTests
         // just an unterminated listing. The relist-only retry then hits a
         // transient bus error of its own. That error belongs to a LIST that
         // never carried a DELETE, so it must not be reported as "the delete
-        // operation failed"; the honest answer is that the listing could not
-        // be confirmed.
+        // operation failed"; the honest answer is that the listing failed,
+        // in the words the read path uses for the same reply (#942: one
+        // verdict for both paths, so this is no longer reported as an
+        // incomplete listing while the read path called it a list error).
         var host = new FakeHost();
         host.EnqueueResponse("Daqifi/keep.bin 10");                         // no terminator
         host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
         var ops = new SdCardOperations(host);
 
-        var ex = await Assert.ThrowsAsync<SdCardListIncompleteException>(
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
             () => ops.DeleteSdCardFileAsync("gone.bin"));
 
         Assert.DoesNotContain("delete operation failed", ex.Message);
+        Assert.Contains("list operation failed", ex.Message);
+        Assert.Empty(ops.SdCardFiles);
     }
 
     [Fact]
