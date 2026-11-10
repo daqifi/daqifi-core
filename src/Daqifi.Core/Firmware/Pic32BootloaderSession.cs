@@ -40,6 +40,18 @@ internal sealed class Pic32BootloaderSession
 
     internal bool IsConnected => _hidTransport.IsConnected;
 
+    /// <summary>
+    /// What this update has done to the application flash so far. The failure cleanup reads this,
+    /// not the update state, to decide whether there is anything to re-erase (issue #952).
+    /// </summary>
+    internal Pic32FlashProgress FlashProgress { get; private set; }
+
+    /// <summary>
+    /// Starts the flash record over for a new update, so one run's erase is never read as the
+    /// next run's.
+    /// </summary>
+    internal void ResetFlashProgress() => FlashProgress = Pic32FlashProgress.NotChanged;
+
     private ILogger Logger => _context.Logger;
 
     private FirmwareUpdateServiceOptions Options => _context.Options;
@@ -318,6 +330,11 @@ internal sealed class Pic32BootloaderSession
             Options.FlashWriteRetryDelay,
             async ct =>
             {
+                // Recorded before the write, not after it: a write that fails can still have
+                // reached the bootloader. Recorded here and not before the retry loop, because
+                // the loop checks the caller's token first and a cancel there writes nothing.
+                FlashProgress = Pic32FlashProgress.EraseSent;
+
                 await _hidTransport
                     .WriteAsync(_bootloaderProtocol.CreateEraseFlashMessage(), ct)
                     .ConfigureAwait(false);

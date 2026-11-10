@@ -1820,8 +1820,9 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public void GetFlashCondition_ClassifiesEveryStateDeliberately()
     {
-        // What a failure in each state means for the flash when NO cleanup erase ran. Only the
-        // states that provably precede the erase may say NotChanged; everything unclassified
+        // What a failure in each state means for the flash when NO cleanup erase ran and the
+        // erase command had been written. Only the states that provably precede the erase may
+        // say NotChanged; everything unclassified
         // must fail toward PossiblyHalfFlashed. A new FirmwareUpdateState member fails this test
         // until someone adds it here on purpose.
         var expected = new Dictionary<FirmwareUpdateState, Pic32FlashCondition>
@@ -1848,15 +1849,30 @@ public class FirmwareUpdateServiceTests
         {
             Assert.Equal(
                 expected[state],
-                Pic32FirmwareUpdater.GetFlashCondition(state, Pic32FirmwareUpdater.Pic32CleanupOutcome.NotEligible));
+                Pic32FirmwareUpdater.GetFlashCondition(
+                    state, Pic32FirmwareUpdater.Pic32CleanupOutcome.NotEligible, Pic32FlashProgress.EraseSent));
 
-            // Once a cleanup erase ran, its result decides, whatever state the failure was in.
+            // #952: with the erase command never written, the update changed nothing, whatever
+            // state it had reached. ErasingFlash is the state this matters for, because it is
+            // entered ahead of the write.
             Assert.Equal(
-                Pic32FlashCondition.CleanBootloader,
-                Pic32FirmwareUpdater.GetFlashCondition(state, Pic32FirmwareUpdater.Pic32CleanupOutcome.Recovered));
-            Assert.Equal(
-                Pic32FlashCondition.PossiblyHalfFlashed,
-                Pic32FirmwareUpdater.GetFlashCondition(state, Pic32FirmwareUpdater.Pic32CleanupOutcome.CleanupFailed));
+                Pic32FlashCondition.NotChanged,
+                Pic32FirmwareUpdater.GetFlashCondition(
+                    state, Pic32FirmwareUpdater.Pic32CleanupOutcome.NotEligible, Pic32FlashProgress.NotChanged));
+
+            // Once a cleanup erase ran, its result decides, whatever state the failure was in
+            // and whatever the flash record said before it.
+            foreach (var flashProgress in Enum.GetValues<Pic32FlashProgress>())
+            {
+                Assert.Equal(
+                    Pic32FlashCondition.CleanBootloader,
+                    Pic32FirmwareUpdater.GetFlashCondition(
+                        state, Pic32FirmwareUpdater.Pic32CleanupOutcome.Recovered, flashProgress));
+                Assert.Equal(
+                    Pic32FlashCondition.PossiblyHalfFlashed,
+                    Pic32FirmwareUpdater.GetFlashCondition(
+                        state, Pic32FirmwareUpdater.Pic32CleanupOutcome.CleanupFailed, flashProgress));
+            }
         }
     }
 
