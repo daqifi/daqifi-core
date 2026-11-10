@@ -8,15 +8,18 @@ namespace Daqifi.Core.Firmware;
 /// <see cref="FirmwareUpdateState.Failed"/> / <see cref="FirmwareUpdateState.Recovered"/> transition.
 /// </summary>
 /// <remarks>
-/// This describes the PIC32 application flash only. A failed WiFi module update reports
-/// <see cref="NotChanged"/>: it never writes the PIC32 flash, whatever state it left the WiFi
-/// module's own firmware in.
+/// This describes what the failed operation did to the PIC32 application flash, and nothing
+/// else. A failed WiFi module update reports <see cref="NotChanged"/>: it never writes the PIC32
+/// flash, whatever state it left the WiFi module's own firmware in.
 /// </remarks>
 public enum Pic32FlashCondition
 {
     /// <summary>
-    /// The operation stopped before the flash was erased or written. The firmware that was on the
-    /// device is still there; the operation can simply be retried.
+    /// This operation did not alter the PIC32 application flash: it stopped before any erase or
+    /// write, so the flash holds whatever it held before and the operation can be retried. That
+    /// is not a statement that the flash holds a working application — an earlier failed update
+    /// may already have left it erased or half-flashed — and it says nothing about the WiFi
+    /// module's own firmware.
     /// </summary>
     NotChanged,
 

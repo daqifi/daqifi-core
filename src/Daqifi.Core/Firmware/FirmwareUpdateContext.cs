@@ -383,9 +383,9 @@ internal sealed class FirmwareUpdateContext
         FirmwareUpdateState failedState,
         string failedOperation,
         Exception exception,
+        Pic32FlashCondition flashCondition,
         string? recoveryGuidance = null,
-        string failureSubject = "Firmware update",
-        Pic32FlashCondition flashCondition = Pic32FlashCondition.NotChanged)
+        string failureSubject = "Firmware update")
     {
         if (exception is FirmwareUpdateException firmwareUpdateException)
         {

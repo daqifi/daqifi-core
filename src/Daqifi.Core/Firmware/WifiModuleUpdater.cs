@@ -323,7 +323,7 @@ internal sealed class WifiModuleUpdater
             Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState);
 
             throw _context.CreateFirmwareUpdateException(
-                failedState, failedOperation, ex, flashCondition: Pic32FlashCondition.NotChanged);
+                failedState, failedOperation, ex, Pic32FlashCondition.NotChanged);
         }
     }
 
