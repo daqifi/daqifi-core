@@ -1402,15 +1402,14 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WhenTwoInitializationsOverlapOnOneDevice_EachKeepsItsOwnDecision()
+    public async Task InitializeAsync_WhenASecondCallOverlapsTheFirst_TheFirstCallsDecisionStands()
     {
-        // Arrange — the race reported against the first cut of this change: the observing
-        // decision was held in an instance field, so a second InitializeAsync starting while
-        // the first was still in flight overwrote it, and the first initialization's USB
-        // routing step then acted on the second one's decision. Reproduced by holding an
-        // observing initialization inside its first SCPI exchange — past the point the
-        // decision is made, before the routing step — while a take-control initialization
-        // starts on the same instance.
+        // Arrange — the race reported against the first cut of #385: the observing decision
+        // was held in an instance field, so a second InitializeAsync starting while the first
+        // was still in flight overwrote it, and the first initialization's USB routing step
+        // then acted on the second one's decision. Reproduced by holding an observing
+        // initialization inside its first SCPI exchange — past the point the decision is made,
+        // before the routing step — while a take-control call starts on the same instance.
         var device = new OverlappingInitDevice("TestDevice");
         device.Connect();
 
@@ -1421,18 +1420,19 @@ public class DaqifiDeviceInitializeTests
         await device.FirstExchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         device.PreserveActiveStream = false;
-        var takingControl = device.InitializeAsync();
-        await takingControl.WaitAsync(TimeSpan.FromSeconds(5));
+        var overlapping = device.InitializeAsync();
 
         // Act — let the observing initialization finish, now that the flag has moved under it.
         device.ReleaseFirstExchange();
         await observing.WaitAsync(TimeSpan.FromSeconds(5));
+        await overlapping.WaitAsync(TimeSpan.FromSeconds(5));
 
-        // Assert — one initialization decided to observe and one to take control, and each
-        // reached its own hook with its own decision. A shared field yields {false, false}.
-        Assert.Equal(
-            new[] { false, true },
-            device.HookDecisions.OrderBy(flag => flag).ToArray());
+        // Assert — the one initialization that ran reached its hook with the decision it
+        // started with. The overlapping call waited for it rather than running a second
+        // sequence over the top of it (issue #943), so there is no second decision at all.
+        // A shared field yields {false}.
+        Assert.Equal(new[] { true }, device.HookDecisions.ToArray());
+        Assert.Equal(DeviceState.Ready, device.State);
     }
 
     /// <summary>
