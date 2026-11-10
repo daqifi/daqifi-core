@@ -119,6 +119,55 @@ public class DaqifiDeviceConcurrentInitializeTests
         Assert.Equal(1, device.SetupBlockCount);
     }
 
+    [Fact]
+    public async Task InitializeAsync_WhenTheConnectionIsLostUnderAWaitingCall_ItIsNotToldTheDeviceIsShuttingDown()
+    {
+        // Arrange — one call initializing, a second waiting on it.
+        using var device = new GatedInitDevice();
+        var gate = device.GateSetupBlock(1);
+        device.Connect();
+
+        using var cts = new CancellationTokenSource();
+        var first = device.InitializeAsync(cancellationToken: cts.Token);
+        await gate.Entered.Task.WaitAsync(Hang);
+        var second = device.InitializeAsync();
+
+        // Act — the link drops, and the first call unwinds with a cancellation that is not the
+        // waiting call's own. Nobody asked for a disconnect.
+        Assert.True(device.TryTransition(DeviceLifecycle.Lost));
+        cts.Cancel();
+
+        // Assert — the waiting call finds no connection to initialize, which is all it says.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Hang));
+        var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second.WaitAsync(Hang));
+        Assert.False(thrown.IsShuttingDown);
+        Assert.Equal(DeviceLifecycle.Lost, device.Lifecycle);
+        Assert.Equal(1, device.SetupBlockCount);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheConnectionIsBeingTornDownUnderAWaitingCall_ItIsToldSo()
+    {
+        // Arrange
+        using var device = new GatedInitDevice();
+        var gate = device.GateSetupBlock(1);
+        device.Connect();
+
+        using var cts = new CancellationTokenSource();
+        var first = device.InitializeAsync(cancellationToken: cts.Token);
+        await gate.Entered.Task.WaitAsync(Hang);
+        var second = device.InitializeAsync();
+
+        // Act — a teardown somebody asked for, caught part-way.
+        Assert.True(device.TryTransition(DeviceLifecycle.Disconnecting));
+        cts.Cancel();
+
+        // Assert
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Hang));
+        var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second.WaitAsync(Hang));
+        Assert.True(thrown.IsShuttingDown);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

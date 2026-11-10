@@ -769,11 +769,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// When this returns <c>false</c> because another call is already initializing this
     /// connection, that call's result. <c>null</c> when the table refused the change.
     /// </param>
+    /// <param name="observed">
+    /// The value the device was on when this looked, read under the lock. A caller that was
+    /// refused decides what to say from this and not from a second read, which a drop or a
+    /// disconnect could have moved in between.
+    /// </param>
     /// <returns><c>true</c> if the caller now owns the initialization of this connection.</returns>
     private bool TryBeginInitialization(
         out long ticket,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TaskCompletionSource? completion,
-        out Task? inFlight)
+        out Task? inFlight,
+        out DeviceLifecycle observed)
     {
         ticket = 0;
         completion = null;
@@ -781,6 +787,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         lock (_lifecycleTransitionLock)
         {
+            observed = _lifecycle;
             if (_lifecycle == DeviceLifecycle.Initializing)
             {
                 if (_initializationCompletion is { } running && _initializationTicket == _lifecycleVersion)
@@ -3587,18 +3594,25 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // answer about the device, so this call takes its own turn.
         long ticket;
         TaskCompletionSource? completion;
-        while (!TryBeginInitialization(out ticket, out completion, out var inFlight))
+        while (!TryBeginInitialization(out ticket, out completion, out var inFlight, out var observed))
         {
             if (inFlight == null)
             {
-                if (_lifecycle == DeviceLifecycle.Ready)
+                // Decided on what the refusal saw, under its lock. Only a teardown somebody
+                // asked for may say so: a call that waited on another and then found the link
+                // dropped has lost its connection, and telling it the device is shutting down
+                // would have its caller suppress the retry it should offer.
+                switch (observed)
                 {
-                    return;
+                    case DeviceLifecycle.Ready:
+                        return;
+                    case DeviceLifecycle.Disconnecting:
+                        throw new DeviceNotConnectedException(
+                            "The device cannot be initialized while its connection is being torn down.",
+                            isShuttingDown: true);
+                    default:
+                        throw new DeviceNotConnectedException("Device must be connected before initialization.");
                 }
-
-                throw new DeviceNotConnectedException(
-                    "The device cannot be initialized while its connection is being torn down.",
-                    isShuttingDown: true);
             }
 
             try
