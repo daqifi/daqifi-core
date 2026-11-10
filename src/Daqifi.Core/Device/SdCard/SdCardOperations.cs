@@ -102,6 +102,111 @@ internal sealed class SdCardOperations
     /// </remarks>
     private readonly SemaphoreSlim _sdDownloadGate = new(1, 1);
 
+    /// <summary>
+    /// Who has the SPI bus that the LAN module and the SD card share, as far as the commands
+    /// this class has sent can tell (issue #941).
+    /// </summary>
+    private enum SdBusMode
+    {
+        /// <summary>The default: LAN on, SD storage off, stream routed to USB.</summary>
+        LanActive,
+
+        /// <summary>A file operation (list, delete, download, format, space query) has the card.</summary>
+        SdBorrowed,
+
+        /// <summary>The start sequence of an SD log is going out; the device is part-way onto the card.</summary>
+        LogStarting,
+
+        /// <summary>An SD log is recording.</summary>
+        Logging,
+
+        /// <summary>The stop sequence of an SD log is going out.</summary>
+        LogEnding,
+    }
+
+    /// <summary>
+    /// The one record of the bus mode, a <see cref="SdBusMode"/> held as an <see cref="int"/>
+    /// so it can be swapped atomically. Before this the mode existed only as the order of the
+    /// <c>Send</c> calls, so a start sequence that was part-way through, or had stopped
+    /// part-way, looked exactly like an idle device (issue #941).
+    /// </summary>
+    /// <remarks>
+    /// Written only by the transition methods: <see cref="PrepareSdInterface"/>,
+    /// <see cref="PrepareLanInterface"/>, <see cref="ClaimBusForLogStart"/>,
+    /// <see cref="StartSdCardLoggingSessionAsync"/>, <see cref="EndLoggingSession"/>,
+    /// <see cref="FormatSdCardAsync"/> and <see cref="IsBusHeldByLog"/>.
+    /// <para>
+    /// Remaining limit: the file operations check this at their guard and only record
+    /// <see cref="SdBusMode.SdBorrowed"/> when their bus switch goes out, so a log start that
+    /// arrives between the two is still admitted. And <see cref="SdBusMode.SdBorrowed"/> is
+    /// not something a start can be refused on: a borrow is not always handed back (a device
+    /// that drops mid-operation, an abandoned download, a caller's own
+    /// <see cref="PrepareSdInterface"/>, a format), so refusing on it could refuse logging for
+    /// the rest of the connection.
+    /// </para>
+    /// </remarks>
+    private int _busMode = (int)SdBusMode.LanActive;
+
+    private SdBusMode BusMode => (SdBusMode)Volatile.Read(ref _busMode);
+
+    private void EnterBusMode(SdBusMode mode) => Volatile.Write(ref _busMode, (int)mode);
+
+    /// <summary>
+    /// Moves the bus mode to <paramref name="to"/> only if it is <paramref name="from"/>, so a
+    /// borrow or a restore never overwrites the record of a log that owns the bus.
+    /// </summary>
+    private bool MoveBusMode(SdBusMode from, SdBusMode to) =>
+        Interlocked.CompareExchange(ref _busMode, (int)to, (int)from) == (int)from;
+
+    /// <summary>
+    /// Takes the bus for a log start, or refuses when a log already has it. The start goes
+    /// through the same gate it puts in front of every other SD operation: without this a
+    /// second start was admitted during the first, and if it was then cancelled or failed, its
+    /// cleanup sent the stop sequence and ended the first caller's recording (issue #941).
+    /// </summary>
+    /// <exception cref="SdCardBusyException">A log is starting, recording or stopping.</exception>
+    private void ClaimBusForLogStart()
+    {
+        while (true)
+        {
+            if (IsBusHeldByLog())
+            {
+                throw new SdCardBusyException(Array.Empty<string>());
+            }
+
+            // Compare-exchange from the mode just read, so two starts racing here cannot both
+            // win: the loser re-reads, finds LogStarting and is refused.
+            var current = BusMode;
+            if (current is SdBusMode.LanActive or SdBusMode.SdBorrowed
+                && MoveBusMode(current, SdBusMode.LogStarting))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// True while an SD log owns the bus: starting, recording or stopping. Every other SD
+    /// operation refuses in that case, because each of them ends by switching SD storage off
+    /// and the LAN back on — which during the start sequence left a "successful" log with
+    /// nowhere to write (issue #941), and during a recording ended it (issue #851).
+    /// </summary>
+    /// <remarks>
+    /// A recording can end without this class: the device's own stop on re-initialization, a
+    /// raw <c>StopStreamData</c>, a disconnect. Those end the stream session, so a
+    /// <see cref="SdBusMode.Logging"/> record with no session behind it is released here
+    /// rather than left to refuse SD operations forever.
+    /// </remarks>
+    private bool IsBusHeldByLog()
+    {
+        if (!_host.IsLoggingToSdCard)
+        {
+            MoveBusMode(SdBusMode.Logging, SdBusMode.LanActive);
+        }
+
+        return BusMode is SdBusMode.LogStarting or SdBusMode.Logging or SdBusMode.LogEnding;
+    }
+
     internal SdCardOperations(ISdCardOperationHost host)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -151,6 +256,8 @@ internal sealed class SdCardOperations
         }
 
         _host.Send(ScpiMessageProducer.EnableStorageSd);
+
+        MoveBusMode(SdBusMode.LanActive, SdBusMode.SdBorrowed);
     }
 
     /// <summary>
@@ -170,6 +277,8 @@ internal sealed class SdCardOperations
         {
             _host.Send(ScpiMessageProducer.EnableNetworkLan);
         }
+
+        MoveBusMode(SdBusMode.SdBorrowed, SdBusMode.LanActive);
     }
 
     /// <summary>
@@ -283,7 +392,7 @@ internal sealed class SdCardOperations
         // mode to NONE, which tears down a write session, and SD:LIST? is answered with -200
         // while the manager is busy. So there is no command order that lists during a session
         // without ending it.
-        if (_host.IsLoggingToSdCard)
+        if (IsBusHeldByLog())
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -697,7 +806,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_host.IsLoggingToSdCard)
+        if (IsBusHeldByLog())
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -867,6 +976,7 @@ internal sealed class SdCardOperations
     /// file name (supplied or auto-generated) and the logging format.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="SdCardBusyException">Thrown when an SD log is already starting, recording or stopping.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     internal async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
     {
@@ -905,33 +1015,71 @@ internal sealed class SdCardOperations
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
 
-        // SD card and LAN share the SPI bus on the hardware, so LAN must be
-        // disabled before the SD card can be used.
-        _host.Send(ScpiMessageProducer.DisableNetworkLan);
-        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+        // Read before the claim: a start that is cancelled or fails runs the stop sequence,
+        // which stops a live stream that was running before it and has nothing to do with it.
+        var wasLiveStreaming = _host.IsStreaming && !_host.IsLoggingToSdCard;
 
-        _host.Send(ScpiMessageProducer.EnableStorageSd);
-        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+        // Recorded before the first command, so the other SD operations — and a second start —
+        // refuse from here on rather than only once the last command has gone (issue #941).
+        ClaimBusForLogStart();
 
-        // Route the data stream to the SD card interface.
-        _host.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
-        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
-
-        _host.Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
-
-        _host.Send(formatCommand);
-        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
-
-        if (!string.IsNullOrWhiteSpace(channelMask))
+        try
         {
-            _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
+            // SD card and LAN share the SPI bus on the hardware, so LAN must be
+            // disabled before the SD card can be used.
+            _host.Send(ScpiMessageProducer.DisableNetworkLan);
             await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+
+            _host.Send(ScpiMessageProducer.EnableStorageSd);
+            await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+
+            // Route the data stream to the SD card interface.
+            _host.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
+            await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+
+            _host.Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
+            await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+
+            _host.Send(formatCommand);
+            await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(channelMask))
+            {
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
+                await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
+            }
+
+            _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
+
+            _host.BeginSdCardLogSession();
+
+            EnterBusMode(SdBusMode.Logging);
         }
+        catch
+        {
+            // A cancellation or a failed send part-way through leaves the device wherever the
+            // commands already sent put it: LAN off, SD storage on, and possibly the stream
+            // routed to the card in a text format — with nothing recording, and nothing in
+            // Core saying so. The stop sequence sets each of those back to its default, so it
+            // is the right cleanup after any step (issue #941). Best-effort: if the link is
+            // what failed, the stop cannot go out either, and the exception that reaches the
+            // caller must be the start's own.
+            try
+            {
+                EndLoggingSession();
+            }
+            catch
+            {
+                // The start's exception is the one to report.
+            }
 
-        _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
+            // The cleanup's StopStreamData also silenced a live stream that was running before
+            // this start. Its consumer would otherwise go quiet with no error, the failure #533
+            // fixed for the other SD operations, so it is resumed the same way.
+            RestoreStreamingIfNeeded(wasLiveStreaming);
 
-        _host.BeginSdCardLogSession();
+            throw;
+        }
 
         return new SdCardLoggingSession(logFileName, format);
     }
@@ -967,6 +1115,21 @@ internal sealed class SdCardOperations
     /// format and the routing. A stop that fails leaves the session as it was.
     /// </remarks>
     internal void EndLoggingSession()
+    {
+        EnterBusMode(SdBusMode.LogEnding);
+
+        try
+        {
+            SendLogStopSequence();
+        }
+        finally
+        {
+            // A stop that could not be sent leaves the session, and so the bus, with the log.
+            EnterBusMode(_host.IsLoggingToSdCard ? SdBusMode.Logging : SdBusMode.LanActive);
+        }
+    }
+
+    private void SendLogStopSequence()
     {
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
         _host.Send(ScpiMessageProducer.StopStreaming);
@@ -1025,7 +1188,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_host.IsLoggingToSdCard)
+        if (IsBusHeldByLog())
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -1265,7 +1428,7 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
-        if (_host.IsLoggingToSdCard)
+        if (IsBusHeldByLog())
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
@@ -1277,7 +1440,20 @@ internal sealed class SdCardOperations
         try
         {
             _host.Send(ScpiMessageProducer.EnableStorageSd);
+
+            // SD storage is on from here and nothing below switches it off, so say so. Not a
+            // record anything refuses on; the next list, delete or log stop puts it back.
+            MoveBusMode(SdBusMode.LanActive, SdBusMode.SdBorrowed);
+
             _host.Send(ScpiMessageProducer.FormatSdCard);
+
+            // Nothing is sent after the format, and SD storage is left ON (issue #941, still
+            // open for format). The firmware arms the format and returns at once, and it
+            // answers SD:ENAble 0 with -200 for as long as the format runs, so a restore sent
+            // here is refused every time: the card stays on anyway and each format leaves an
+            // entry in the SCPI error queue. Handing the bus back needs a wait on
+            // SYSTem:STORage:SD:FORmat? first, which would make this call block for the whole
+            // format; that is left to a follow-up.
         }
         finally
         {
@@ -1391,7 +1567,7 @@ internal sealed class SdCardOperations
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_host.IsLoggingToSdCard)
+        if (IsBusHeldByLog())
         {
             throw new SdCardBusyException(Array.Empty<string>());
         }
