@@ -1644,15 +1644,88 @@ public class SdCardOperationsTests
         var device = MarkerCapableDevice();
         device.ResponseSequence.Enqueue(new List<string>
         {
+            "Daqifi/a.bin 100",
+            "Daqifi/b.bin 200",
+            "__END_OF_LIST__ OK",
+        });
+        device.ResponseSequence.Enqueue(new List<string>
+        {
             "[Error:4]Failed to open directory [DAQiFi]",
             "__END_OF_LIST__ FAILED",
         });
         device.Connect();
+        await device.GetSdCardFilesAsync();
 
         await Assert.ThrowsAsync<SdCardDirectoryNotFoundException>(
             () => device.DeleteSdCardFileAsync("a.bin"));
 
-        Assert.Empty(device.SdCardFiles);
+        Assert.Equal(new[] { "a.bin", "b.bin" }, device.SdCardFiles.Select(f => f.FileName));
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_MarkerCapableFirmwareRelistHasAnErrorAndNoMarker_ThrowsAndKeepsTheCache()
+    {
+        // The delete's own exchange reports no error but stops short of the marker, so the
+        // list is read again -- and the relist comes back with a SCPI error, one entry and
+        // still no __END_OF_LIST__. The read path accepts that shape (the error line counts
+        // as the reason the marker is missing, #887); after a delete it is a walk that may
+        // have stopped early, and it must not replace the cache.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "Daqifi/a.bin 100",
+            "Daqifi/b.bin 200",
+            "Daqifi/c.bin 300",
+            "__END_OF_LIST__ OK",
+        });
+        device.ResponseSequence.Enqueue(new List<string> { "Daqifi/b.bin 200" });
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "**ERROR: -200,\"Execution error\"",
+            "Daqifi/b.bin 200",
+        });
+        device.Connect();
+        await device.GetSdCardFilesAsync();
+
+        await Assert.ThrowsAsync<SdCardListIncompleteException>(
+            () => device.DeleteSdCardFileAsync("a.bin"));
+
+        Assert.Equal(
+            new[] { "a.bin", "b.bin", "c.bin" },
+            device.SdCardFiles.Select(f => f.FileName));
+        Assert.Equal(1, CountDeletesSent(device));
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_LastFileOnTheCardWithAnErrorInTheExchange_IsNotBlamedOnTheDelete()
+    {
+        // The only file on the card. Attempt 1 removes it but its LIST answers -200, so the
+        // delete and the list are both sent again: the second DELETE fails because the file
+        // is already gone, and the listing is empty and finished. A finished walk without the
+        // file means the delete happened, so the error must not be reported as "the delete
+        // operation failed". What is left is a listing that is nothing but an error line,
+        // and that is reported in the read path's words.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "Daqifi/only.bin 100",
+            "__END_OF_LIST__ OK",
+        });
+        device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200,\"Execution error\"" });
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "**ERROR: -200,\"Execution error\"",
+            "__END_OF_LIST__ OK",
+        });
+        device.Connect();
+        await device.GetSdCardFilesAsync();
+
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+            () => device.DeleteSdCardFileAsync("only.bin"));
+
+        Assert.DoesNotContain("delete operation failed", ex.Message);
+        Assert.Contains("list operation failed", ex.Message);
+        Assert.Equal("only.bin", Assert.Single(device.SdCardFiles).FileName);
     }
 
     #endregion

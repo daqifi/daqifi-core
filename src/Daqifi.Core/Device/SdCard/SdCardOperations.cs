@@ -684,7 +684,7 @@ internal sealed class SdCardOperations
         internal IReadOnlyList<string> Listing { get; }
 
         /// <summary>Whether the listing holds a SCPI error line, with or without entries.</summary>
-        private bool HasScpiError { get; }
+        internal bool HasScpiError { get; }
 
         /// <summary>
         /// The exception that reports this verdict; null only when <see cref="IsUsable"/>.
@@ -1294,16 +1294,22 @@ internal sealed class SdCardOperations
                 // beats attributing the error, which the wire format does not
                 // let us do.
                 // Absence only proves anything if the listing is WHOLE. A
-                // usable verdict on firmware that sends no marker says the
-                // exchange finished, not that the device's walk reached the
-                // end of the tree, and a listing can be missing the target
-                // because it stopped early -- reading that as "deleted" is the
-                // same wrong answer pointed the other way. Only the device's
-                // own Complete marker rules it out, so against firmware that
-                // sends no marker the error stands, exactly as it did before
-                // this check existed.
+                // terminated reply says the exchange finished, not that the
+                // device's walk reached the end of the tree, and a listing
+                // can be missing the target because it stopped early --
+                // reading that as "deleted" is the same wrong answer pointed
+                // the other way. Only the device's own Complete marker rules
+                // it out, so against firmware that sends no marker the error
+                // stands, exactly as it did before this check existed.
+                //
+                // Asked of the terminator and the marker, not of the verdict:
+                // the last file on the card leaves a listing that is nothing
+                // but the error line and "__END_OF_LIST__ OK", which the
+                // verdict calls a DeviceError. The walk still finished and
+                // the file is still absent, so the delete is not to blame --
+                // the listing's own error is what is reported, below.
                 var target = System.IO.Path.GetFileName(fileName);
-                var goneFromCard = verdict.IsUsable
+                var goneFromCard = verdict.Kind != SdListVerdictKind.NoTerminator
                     && SdCardFileListParser.GetListingStatus(verdict.Listing)
                         == SdCardListingStatus.Complete
                     && !SdCardFileListParser.ParseFileList(verdict.Listing).Any(
@@ -1330,6 +1336,22 @@ internal sealed class SdCardOperations
             if (!verdict.IsUsable)
             {
                 throw verdict.Error!;
+            }
+
+            // One rule this path keeps tighter than the read path. On firmware
+            // that sends the end marker, a listing with entries, a SCPI error
+            // line and no marker is usable to the verdict: the error line
+            // counts as the explanation for the missing marker (#887, read
+            // path). Here the same reply is a walk that may have stopped
+            // early, about to replace the cache a caller reads next to learn
+            // what the delete left behind, so it is refused and the cache is
+            // kept.
+            if (verdict.HasScpiError
+                && SdCardFileListParser.GetListingStatus(verdict.Listing)
+                    == SdCardListingStatus.Unterminated
+                && _host.Supports(DeviceFeature.SdListingEndMarker))
+            {
+                throw new SdCardListIncompleteException(lines);
             }
 
             _sdCardFiles = SdCardFileListParser.ParseFileList(verdict.Listing);
