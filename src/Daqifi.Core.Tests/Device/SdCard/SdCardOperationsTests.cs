@@ -2017,18 +2017,10 @@ public class SdCardOperationsTests
 
         // Assert — defensive stop is always sent first (issue #118)
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        // then the same bus borrow and restore the list and delete operations make (issue #941).
-        Assert.Equal(
-            new[]
-            {
-                "SYSTem:StopStreamData",
-                "SYSTem:COMMunicate:LAN:ENAbled 0",
-                "SYSTem:STORage:SD:ENAble 1",
-                "SYSTem:STORage:SD:FORmat",
-                "SYSTem:STORage:SD:ENAble 0",
-                "SYSTem:COMMunicate:LAN:ENAbled 1",
-            },
-            sentCommands);
+        Assert.Equal(3, sentCommands.Count);
+        Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+        Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+        Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[2]);
     }
 
     [Fact]
