@@ -272,6 +272,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             if (e.Status != ConnectionStatus.Connected)
             {
                 _channelControl.ResetSentPwmFrequency();
+
+                // The same goes for which channels are in PWM mode (#945).
+                _channelControl.ResetPwmEnabled();
             }
         };
 

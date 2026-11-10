@@ -308,6 +308,11 @@ device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
 device.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
 ```
 
+`IDigitalChannel.Mode` gives the pin's one mode — `Input`, `Output` or `Pwm` — and changes only
+once the command has been sent. Core records PWM as off when a connection ends, because the device
+stops PWM if it restarts and Core cannot tell; a device that only lost the link keeps its PWM
+running. After a reconnect, call `SetPwmEnabled` again (`true` to carry on, `false` to stop).
+
 ### Network configuration
 
 `DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.

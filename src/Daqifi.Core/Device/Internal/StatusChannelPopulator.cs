@@ -238,10 +238,10 @@ internal sealed class StatusChannelPopulator
 
             if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
             {
-                existingDigital.IsPwmCapable = isPwmCapable;
+                existingDigital.ApplyPwmCapability(isPwmCapable);
                 if (reportedDirection.HasValue)
                 {
-                    existingDigital.Direction = reportedDirection.Value;
+                    existingDigital.ApplyDirection(reportedDirection.Value);
                 }
                 destination.Add(existingDigital);
                 continue;
@@ -250,9 +250,9 @@ internal sealed class StatusChannelPopulator
             var channel = new DigitalChannel(i, isPwmCapable)
             {
                 Name = $"DIO{i}",
-                Direction = reportedDirection ?? ChannelDirection.Input,
                 IsEnabled = false
             };
+            channel.ApplyDirection(reportedDirection ?? ChannelDirection.Input);
 
             destination.Add(channel);
         }

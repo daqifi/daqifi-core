@@ -183,4 +183,153 @@ public class DigitalChannelTests
         // Assert
         Assert.Equal("Test Digital Channel", result);
     }
+
+    [Fact]
+    public void Mode_FollowsTheTransitionsOfThePin()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+
+        channel.ApplyDirection(ChannelDirection.Output);
+        Assert.Equal(DigitalPinMode.Output, channel.Mode);
+
+        channel.EnterPwm();
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+        Assert.True(channel.IsPwmEnabled);
+
+        channel.ExitPwm();
+        Assert.Equal(DigitalPinMode.Output, channel.Mode);
+        Assert.False(channel.IsPwmEnabled);
+
+        channel.ApplyDirection(ChannelDirection.Input);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void EnterPwm_FromInput_ReadsAsOutputAndReturnsToInput()
+    {
+        // The PWM timer drives the pin, so the channel never shows PWM enabled with direction
+        // Input; the stored direction comes back when PWM stops, as it does on the device.
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+
+        channel.EnterPwm();
+        Assert.Equal(ChannelDirection.Output, channel.Direction);
+
+        // A status message that reports the stored direction does not change that.
+        channel.ApplyDirection(ChannelDirection.Input);
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+        Assert.Equal(ChannelDirection.Output, channel.Direction);
+
+        channel.ExitPwm();
+        Assert.Equal(ChannelDirection.Input, channel.Direction);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void EnterPwm_OnAChannelThatCannotDoPwm_Throws()
+    {
+        var channel = new DigitalChannel(2, isPwmCapable: false);
+
+        Assert.Throws<InvalidOperationException>(() => channel.EnterPwm());
+
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void IsPwmEnabledSetter_OnAChannelThatCannotDoPwm_IsIgnored()
+    {
+        // The obsolete public setter must not produce the combination the transitions rule out.
+        var channel = new DigitalChannel(2, isPwmCapable: false);
+
+        channel.IsPwmEnabled = true;
+
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void IsPwmEnabledSetter_OnAPwmCapableChannel_StillWorks()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+
+        channel.IsPwmEnabled = true;
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+
+        channel.IsPwmEnabled = false;
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void ApplyPwmCapability_False_LeavesPwmMode()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+        channel.EnterPwm();
+
+        channel.ApplyPwmCapability(false);
+
+        Assert.False(channel.IsPwmCapable);
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void ExitPwm_ClearsTheRecordedOutputLevel()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+        channel.ApplyDirection(ChannelDirection.Output);
+        channel.ApplyOutputValue(true);
+        channel.EnterPwm();
+
+        channel.ExitPwm();
+
+        Assert.False(channel.OutputValue);
+    }
+
+    [Theory]
+    [InlineData(nameof(DigitalChannel.Direction), typeof(DigitalChannel))]
+    [InlineData(nameof(DigitalChannel.IsPwmEnabled), typeof(DigitalChannel))]
+    [InlineData(nameof(IDigitalChannel.IsPwmEnabled), typeof(IDigitalChannel))]
+    public void PublicModeSetters_AreObsoleteAndNameTheReplacement(string property, Type type)
+    {
+        var setter = type.GetProperty(property)!.SetMethod!;
+
+        var obsolete = Assert.Single(setter.GetCustomAttributes(typeof(ObsoleteAttribute), inherit: false));
+        Assert.Contains("IStreamingDevice.Set", ((ObsoleteAttribute)obsolete).Message);
+    }
+
+    [Fact]
+    public void Mode_DefaultInterfaceImplementation_DerivesFromThePublicState()
+    {
+        IDigitalChannel channel = new ForeignDigitalChannel { Direction = ChannelDirection.Output };
+        Assert.Equal(DigitalPinMode.Output, channel.Mode);
+
+        channel.IsPwmEnabled = true;
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+    }
+
+    /// <summary>
+    /// An implementation written before <see cref="IDigitalChannel.Mode"/> existed: it does not
+    /// declare the property and must still compile and report a mode.
+    /// </summary>
+    private sealed class ForeignDigitalChannel : IDigitalChannel
+    {
+        public int ChannelNumber => 0;
+        public string Name { get; set; } = "foreign";
+        public bool IsEnabled { get; set; }
+        public ChannelType Type => ChannelType.Digital;
+        public ChannelDirection Direction { get; set; }
+        public IDataSample? ActiveSample => null;
+        public bool OutputValue { get; set; }
+        public bool IsHigh => false;
+        public bool IsPwmCapable => true;
+        public bool IsPwmEnabled { get; set; }
+        public int PwmDutyCyclePercent { get; set; }
+
+        public event EventHandler<SampleReceivedEventArgs>? SampleReceived { add { } remove { } }
+
+        public void SetActiveSample(double value, DateTime timestamp) { }
+
+        public void SetActiveSample(IDataSample sample) { }
+    }
 }

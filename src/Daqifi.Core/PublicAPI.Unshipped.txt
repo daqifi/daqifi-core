@@ -84,3 +84,9 @@ virtual Daqifi.Core.Device.DaqifiDevice.OnSendingInitializationCommands() -> voi
 virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnDeviceUpdated(Daqifi.Core.Device.Discovery.IDeviceInfo! previousDeviceInfo, Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string
+Daqifi.Core.Channel.DigitalChannel.Mode.get -> Daqifi.Core.Channel.DigitalPinMode
+Daqifi.Core.Channel.DigitalPinMode
+Daqifi.Core.Channel.DigitalPinMode.Input = 0 -> Daqifi.Core.Channel.DigitalPinMode
+Daqifi.Core.Channel.DigitalPinMode.Output = 1 -> Daqifi.Core.Channel.DigitalPinMode
+Daqifi.Core.Channel.DigitalPinMode.Pwm = 2 -> Daqifi.Core.Channel.DigitalPinMode
+Daqifi.Core.Channel.IDigitalChannel.Mode.get -> Daqifi.Core.Channel.DigitalPinMode
