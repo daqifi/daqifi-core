@@ -69,15 +69,25 @@ internal sealed class ChannelControlOperations
     /// link keeps PWM running, so the caller enables (or disables) PWM again after a reconnect.
     /// See #945.
     /// </summary>
+    /// <remarks>
+    /// Runs under the channels lock, the lock <see cref="SetPwmEnabled"/> records under, so a
+    /// reset and a record cannot interleave: an enable whose send returned just as the link
+    /// dropped either records before this reset, which then clears it, or after it, where it
+    /// sees the device is no longer connected and records nothing. Nothing here waits on the
+    /// connection or raises an event, so the order stays channels lock, then a channel's own.
+    /// </remarks>
     internal void ResetPwmEnabled()
     {
-        foreach (var channel in _host.SnapshotChannels())
+        _host.WithChannelsLock(() =>
         {
-            if (channel is DigitalChannel { Mode: DigitalPinMode.Pwm } digitalChannel)
+            foreach (var channel in _host.SnapshotChannels())
             {
-                digitalChannel.ExitPwm();
+                if (channel is DigitalChannel { Mode: DigitalPinMode.Pwm } digitalChannel)
+                {
+                    digitalChannel.ExitPwm();
+                }
             }
-        }
+        });
     }
 
     /// <inheritdoc cref="IStreamingDevice.EnableChannel" />
@@ -293,7 +303,14 @@ internal sealed class ChannelControlOperations
             {
                 if (enabled)
                 {
-                    digitalChannel.EnterPwm();
+                    // The link can drop between the send above and this record. The status
+                    // handler has then already reset PWM (ResetPwmEnabled, under this same
+                    // lock); entering PWM now would mark a disconnected device's pin as PWM
+                    // and keep it so across the reconnect.
+                    if (_host.IsConnected)
+                    {
+                        digitalChannel.EnterPwm();
+                    }
                 }
                 else
                 {

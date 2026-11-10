@@ -2,6 +2,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -718,6 +719,28 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetDioPortState(4, 1).Data, sent.Data);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALostLink_RecordsPwmAsOff(bool thenRetrying)
+    {
+        // The reset hangs off the status change, not off Disconnect(): a dropped link and a
+        // reconnect attempt must clear the flag just the same (#945).
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        device.SetPwmEnabled(channel, true);
+
+        Assert.True(device.TryTransition(DeviceLifecycle.Lost));
+        if (thenRetrying)
+        {
+            Assert.True(device.TryTransition(DeviceLifecycle.Retrying));
+        }
+
+        Assert.NotEqual(ConnectionStatus.Connected, device.Status);
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
     }
 
     [Fact]

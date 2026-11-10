@@ -237,6 +237,30 @@ public class DigitalChannelTests
     }
 
     [Fact]
+    public void IsPwmEnabledSetter_OnAChannelThatCannotDoPwm_IsIgnored()
+    {
+        // The obsolete public setter must not produce the combination the transitions rule out.
+        var channel = new DigitalChannel(2, isPwmCapable: false);
+
+        channel.IsPwmEnabled = true;
+
+        Assert.False(channel.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
+    public void IsPwmEnabledSetter_OnAPwmCapableChannel_StillWorks()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+
+        channel.IsPwmEnabled = true;
+        Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
+
+        channel.IsPwmEnabled = false;
+        Assert.Equal(DigitalPinMode.Input, channel.Mode);
+    }
+
+    [Fact]
     public void ApplyPwmCapability_False_LeavesPwmMode()
     {
         var channel = new DigitalChannel(0, isPwmCapable: true);

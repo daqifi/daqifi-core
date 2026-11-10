@@ -495,6 +495,27 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
+    public void SetPwmEnabled_LinkDropsWhileTheEnableIsInFlight_DoesNotUndoTheReset()
+    {
+        // The send returns, the link drops and the status handler resets PWM, and only then
+        // does the enable reach its record step. Recording it would leave the channel in PWM
+        // mode on a disconnected device, and across the reconnect (#945).
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+        host.OnSend = () =>
+        {
+            host.IsConnected = false;
+            ops.ResetPwmEnabled();
+        };
+
+        ops.SetPwmEnabled(digital, true);
+
+        Assert.False(digital.IsPwmEnabled);
+        Assert.Equal(DigitalPinMode.Input, digital.Mode);
+    }
+
+    [Fact]
     public void ResetPwmEnabled_TakesEveryChannelOutOfPwmModeAndKeepsItsDirection()
     {
         var pwmOverOutput = new DigitalChannel(channelNumber: 0, isPwmCapable: true);

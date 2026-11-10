@@ -170,7 +170,8 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     /// <summary>
     /// Gets or sets whether PWM output is enabled on this channel (local bookkeeping mirroring
     /// the last commanded state). The same fact as <see cref="Mode"/> being
-    /// <see cref="DigitalPinMode.Pwm"/>.
+    /// <see cref="DigitalPinMode.Pwm"/>. Assigning <see langword="true"/> on a channel that is
+    /// not <see cref="IsPwmCapable"/> is ignored: such a pin cannot be in PWM mode.
     /// </summary>
     public bool IsPwmEnabled
     {
@@ -180,7 +181,7 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
             "Call IStreamingDevice.SetPwmEnabled to start or stop PWM, and read Mode or IsPwmEnabled to see it. "
             + "Assigning here sends nothing to the device, and Core then refuses digital commands for a pin "
             + "that is not in PWM mode. This setter will be removed in a future major version.")]
-        set { lock (_lock) { _isPwmEnabled = value; } }
+        set { lock (_lock) { _isPwmEnabled = value && _isPwmCapable; } }
     }
 
     /// <summary>
