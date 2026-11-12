@@ -1120,6 +1120,9 @@ int queuedErrors = await device.GetSystemErrorCountAsync();
 // firmware doesn't emit them); the full set is available via Values.
 StreamStats stream = await device.GetStreamStatsAsync();
 Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
+// Unrounded loss. The firmware's own SampleLossPercent (in Values) is a whole
+// number, so any loss under 1% reads 0 there.
+Console.WriteLine($"Loss: {stream.PreciseSampleLossPercent:0.###}%");
 
 MemoryDiagnostics mem = await device.GetMemoryDiagnosticsAsync();
 Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
