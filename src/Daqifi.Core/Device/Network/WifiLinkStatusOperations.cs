@@ -48,6 +48,13 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
             // state the caller asked about, not a failed query, so it comes back as a value.
             if (ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var code) && code == ScpiErrorExecution)
             {
+                // The device also queued that -200. Since Core reports it as an answer rather
+                // than a failure, pop one entry so the query leaves the error queue as deep as it
+                // found it. Otherwise every poll of a device in standby adds a stale -200 (seen on
+                // the bench: three polls, three entries), and a later reader of the queue that
+                // does not drain first — the stream-start confirmation — would take one of them
+                // for its own command's refusal.
+                await _host.DrainErrorQueueAsync(maxIterations: 1, cancellationToken).ConfigureAwait(false);
                 return WifiLinkState.Unavailable;
             }
 

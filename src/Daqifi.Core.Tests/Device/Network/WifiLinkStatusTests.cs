@@ -27,8 +27,13 @@ public class WifiLinkStatusTests
     private static readonly string ConnectedQuery = ScpiMessageProducer.GetLanConnected.Data;
     private static readonly string ActiveModeQuery = ScpiMessageProducer.GetLanActiveWifiMode.Data;
 
-    /// <summary>The firmware's exact refusal for a disabled or powered-down radio.</summary>
-    private const string WifiNotReady = "**ERROR: -200, \"SYST:COMM:LAN: WiFi not ready (device powered up?)\"";
+    private static readonly string ErrorQueueQuery = ScpiMessageProducer.GetSystemError.Data;
+
+    /// <summary>
+    /// What the bench Nq1 on firmware 3.9.0 volunteered for <c>CONnected?</c> in standby: the
+    /// generic -200 text, not the custom message <c>SCPI_LANConnectedGet</c> passes.
+    /// </summary>
+    private const string WifiNotReadyOnTheWire = "**ERROR: -200, \"Execution error\"";
 
     #region Wire format
 
@@ -99,13 +104,44 @@ public class WifiLinkStatusTests
 
     #region GetWifiLinkStateAsync — errors
 
-    [Fact]
-    public async Task GetWifiLinkStateAsync_WifiNotReadyMinus200_ReturnsUnavailableRatherThanThrowing()
+    [Theory]
+    [InlineData(WifiNotReadyOnTheWire)]
+    [InlineData("**ERROR: -200, \"SYST:COMM:LAN: WiFi not ready (device powered up?)\"")]
+    public async Task GetWifiLinkStateAsync_WifiNotReadyMinus200_ReturnsUnavailableRatherThanThrowing(string refusal)
     {
-        // WiFi disabled or the device in standby: an expected answer, reported as a value.
-        var device = ConnectedDevice(WifiNotReady);
+        // WiFi disabled or the device in standby: an expected answer, reported as a value. Keyed
+        // on the code alone, so the text the firmware happens to print does not matter.
+        var device = ConnectedDevice(refusal);
 
         Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
+    }
+
+    [Fact]
+    public async Task GetWifiLinkStateAsync_WifiNotReady_PopsExactlyOneErrorQueueEntry()
+    {
+        // The device queues the -200 it volunteers. Reported as a value, it must not be left
+        // behind: on the bench, three standby polls left three -200s for the next reader of the
+        // queue (stream-start confirmation) to mistake for its own refusal. Exactly one entry is
+        // popped, so an older, unrelated entry stays for whoever owns it.
+        var device = ConnectedDevice();
+        device.ScriptedResponses.Enqueue(new[] { WifiNotReadyOnTheWire });
+        device.ScriptedResponses.Enqueue(new[] { "-200,\"Execution error\"" });
+        device.ScriptedResponses.Enqueue(new[] { "-113,\"Undefined header\"" });
+
+        Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
+
+        Assert.Equal(new[] { ConnectedQuery, ErrorQueueQuery }, device.SentCommands);
+        Assert.Single(device.ScriptedResponses);
+    }
+
+    [Fact]
+    public async Task GetActiveWifiModeAsync_InStandby_ReadsNullWithoutTouchingTheErrorQueue()
+    {
+        // Bench, firmware 3.9.0, SYSTem:POWer:STATe 0: NETType? 1 answers 0 with no error.
+        var device = ConnectedDevice("0");
+
+        Assert.Null(await device.GetActiveWifiModeAsync());
+        Assert.Equal(new[] { ActiveModeQuery }, device.SentCommands);
     }
 
     [Fact]
@@ -307,6 +343,12 @@ public class WifiLinkStatusTests
         public List<string> SentCommands { get; } = new();
         public List<string> CannedTextResponse { get; } = new();
 
+        /// <summary>Per-exchange replies, used in order before falling back to <see cref="CannedTextResponse"/>.</summary>
+        public Queue<string[]> ScriptedResponses { get; } = new();
+
+        private List<string> NextResponse()
+            => ScriptedResponses.Count > 0 ? ScriptedResponses.Dequeue().ToList() : CannedTextResponse.ToList();
+
         /// <summary>Firmware version to report without connecting, for the disconnected case.</summary>
         public string FirmwareVersionOnConnect
         {
@@ -344,7 +386,7 @@ public class WifiLinkStatusTests
 
                 cancellationToken.ThrowIfCancellationRequested();
                 setupAction();
-                return CannedTextResponse.ToList();
+                return NextResponse();
             }
             finally
             {
@@ -362,7 +404,7 @@ public class WifiLinkStatusTests
             CancellationToken cancellationToken = default)
         {
             await setupActionAsync(cancellationToken).ConfigureAwait(false);
-            return CannedTextResponse.ToList();
+            return NextResponse();
         }
     }
 }

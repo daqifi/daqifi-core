@@ -15,9 +15,9 @@ public enum WifiLinkState
 {
     /// <summary>
     /// The WiFi link cannot be reported because WiFi is disabled or the device is in standby. The
-    /// device answers SCPI error <c>-200</c> ("WiFi not ready (device powered up?)") rather than a
-    /// state. Power the device up (<c>SYSTem:POWer:STATe 1</c>) and enable the LAN interface
-    /// before polling again; this is not a fault.
+    /// device answers SCPI error <c>-200</c> rather than a state. Power the device up
+    /// (<c>SYSTem:POWer:STATe 1</c>) and enable the LAN interface before polling again; this is
+    /// not a fault.
     /// </summary>
     Unavailable = 0,
 

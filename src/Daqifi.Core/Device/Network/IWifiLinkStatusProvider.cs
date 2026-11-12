@@ -42,7 +42,9 @@ public interface IWifiLinkStatusProvider
     /// With WiFi disabled, or the device in standby, the firmware answers SCPI error <c>-200</c>
     /// instead of a state. That is reported as <see cref="WifiLinkState.Unavailable"/> — a value,
     /// not an exception — because it is an expected answer while a device is powered down or its
-    /// LAN interface is off, not a failure of the query.
+    /// LAN interface is off, not a failure of the query. The device also queues that <c>-200</c>;
+    /// Core pops one entry from the device's error queue on this path, so polling a device in
+    /// standby does not leave a stale error behind per poll. That pop costs one more text exchange.
     /// </remarks>
     /// <param name="cancellationToken">A cancellation token to observe while the exchange runs.</param>
     /// <returns>The link state the device reported.</returns>
