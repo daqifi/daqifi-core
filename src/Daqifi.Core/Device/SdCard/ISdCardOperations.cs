@@ -154,6 +154,12 @@ public interface ISdCardOperations
     /// paused for the command and resumed afterwards, as the other SD operations do.
     /// </para>
     /// <para>
+    /// A change takes a second or two. The device applies it by re-initializing the card, which
+    /// cannot be mounted until the device picks it up again at its next card check. This call
+    /// waits for that, so an SD log or file operation started right after it finds the card.
+    /// Setting the value the device already holds returns straight away.
+    /// </para>
+    /// <para>
     /// <b>The device forgets the setting every time it boots</b>, and Core does not re-apply it.
     /// Set it again after each connect, and after a reboot. Read it back with
     /// <see cref="GetSdCardCrcProtectionAsync"/> before a capture whose integrity matters.
@@ -167,10 +173,10 @@ public interface ISdCardOperations
     /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// <see cref="SdCardCrcProtectionResult.Applied"/> when the device applied the change, or
-    /// <see cref="SdCardCrcProtectionResult.Pending"/> when it stored the change but cannot apply
-    /// it until its SD task runs again (the device is in standby, or WiFi streaming has the SPI
-    /// bus). <see cref="SdCardCrcProtectionResult.Pending"/> explains what that blocks.
+    /// <see cref="SdCardCrcProtectionResult.Applied"/> once the card is running in the new mode,
+    /// or <see cref="SdCardCrcProtectionResult.Pending"/> when the device stored the change but no
+    /// card is running with it yet. <see cref="SdCardCrcProtectionResult.Pending"/> lists the
+    /// causes and what each blocks.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">

@@ -3,6 +3,7 @@ using Daqifi.Core.Device.SdCard;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;
@@ -21,6 +22,10 @@ public partial class SdCardOperationsCollaboratorTests
     private const string ProtectOn = "SYSTem:STORage:SD:PROTect 1";
     private const string ProtectOff = "SYSTem:STORage:SD:PROTect 0";
     private const string ProtectQuery = "SYSTem:STORage:SD:PROTect?";
+    private const string CardInfoQuery = "SYSTem:STORage:SD:INFO?";
+
+    /// <summary>The bench card's <c>SD:INFO?</c> reply at firmware v3.9.0, CRC field set as given.</summary>
+    private static string CardInfo(bool crcOn) => $"254,\"4V\",\"ASTC\",1.2,45,2025-05,{(crcOn ? 1 : 0)},0";
 
     #region SetSdCardCrcProtectionAsync
 
@@ -29,6 +34,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
         var ops = new SdCardOperations(host);
 
         var result = await ops.SetSdCardCrcProtectionAsync(true);
@@ -46,6 +52,9 @@ public partial class SdCardOperationsCollaboratorTests
                 "send:" + ProtectOn,
                 "send:" + SystemError,
                 "exchange:end",
+                "exchange:begin",
+                "send:" + CardInfoQuery,
+                "exchange:end",
             },
             host.Calls);
     }
@@ -55,6 +64,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(false));
         var ops = new SdCardOperations(host);
 
         var result = await ops.SetSdCardCrcProtectionAsync(false);
@@ -72,11 +82,12 @@ public partial class SdCardOperationsCollaboratorTests
         // that as no answer at all.
         var host = new FakeHost();
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
         var ops = new SdCardOperations(host);
 
         await ops.SetSdCardCrcProtectionAsync(true);
 
-        Assert.True(Assert.Single(host.ResponseTimeouts) > 2000);
+        Assert.True(host.ResponseTimeouts[0] > 2000);
     }
 
     [Fact]
@@ -133,6 +144,7 @@ public partial class SdCardOperationsCollaboratorTests
         await ops.StartSdCardLoggingSessionAsync("session.bin");
         await ops.StopSdCardLoggingAsync();
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
 
         var result = await ops.SetSdCardCrcProtectionAsync(true);
 
@@ -153,6 +165,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         Assert.Equal("**ERROR: -221, \"Settings conflict\"", ex.LastScpiError);
         Assert.Contains("-221,\"Settings conflict\"", ex.RawDeviceResponse);
+        Assert.Equal(1, host.ExchangeCount);
     }
 
     [Fact]
@@ -167,6 +180,9 @@ public partial class SdCardOperationsCollaboratorTests
         var result = await ops.SetSdCardCrcProtectionAsync(true);
 
         Assert.Equal(SdCardCrcProtectionResult.Pending, result);
+
+        // The SD task is not running, so there is no card to wait for.
+        Assert.Equal(1, host.ExchangeCount);
     }
 
     [Fact]
@@ -177,6 +193,7 @@ public partial class SdCardOperationsCollaboratorTests
         // terminator's reply must not turn an applied change into a pending one.
         var host = new FakeHost();
         host.EnqueueResponse("-200,\"Execution error\"");
+        host.EnqueueResponse(CardInfo(true));
         var ops = new SdCardOperations(host);
 
         var result = await ops.SetSdCardCrcProtectionAsync(true);
@@ -233,6 +250,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost { IsStreaming = true };
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
         var ops = new SdCardOperations(host);
 
         await ops.SetSdCardCrcProtectionAsync(true);
@@ -261,12 +279,96 @@ public partial class SdCardOperationsCollaboratorTests
         // admitted and runs its full sequence.
         var host = new FakeHost();
         host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
         var ops = new SdCardOperations(host);
 
         await ops.SetSdCardCrcProtectionAsync(true);
         await ops.StartSdCardLoggingSessionAsync("after.bin");
 
         Assert.True(host.IsLoggingToSdCard);
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_AChange_WaitsForTheCardToComeBackInTheNewModeAndSettle()
+    {
+        // Bench, firmware v3.9.0: the device answers the set once it has dropped the card, and
+        // the card cannot be mounted for up to a second after that. An SD log started in that
+        // window found no card and wrote no file, silently. So Applied waits until SD:INFO?
+        // reports the card back in the new mode, then lets its initialization finish.
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { TimeProvider = clock };
+        host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(false));
+        host.EnqueueResponse(CardInfo(false));
+        host.EnqueueResponse(CardInfo(true));
+        var ops = new SdCardOperations(host);
+
+        var set = ops.SetSdCardCrcProtectionAsync(true);
+
+        Assert.Equal(4, host.ExchangeCount);
+        Assert.False(set.IsCompleted);
+
+        clock.Advance(TimeSpan.FromMilliseconds(499));
+        Assert.False(set.IsCompleted);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(SdCardCrcProtectionResult.Applied, await set);
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_TheValueTheCardAlreadyRuns_ReturnsWithoutWaiting()
+    {
+        // No change means no re-initialization: the first SD:INFO? already agrees and there is
+        // no settle to sit through.
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { TimeProvider = clock };
+        host.EnqueueResponse(NoErrorTerminator);
+        host.EnqueueResponse(CardInfo(true));
+        var ops = new SdCardOperations(host);
+
+        var set = ops.SetSdCardCrcProtectionAsync(true);
+
+        Assert.True(set.IsCompleted);
+        Assert.Equal(SdCardCrcProtectionResult.Applied, await set);
+        Assert.Equal(2, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_CardNeverComesBackInTheNewMode_ReturnsPending()
+    {
+        // A card that refuses CRC checking is never mounted while protection is on, and keeps
+        // reporting the old mode; with no card in the slot it is the same. The setting is stored
+        // but no card runs with it, which is what Pending means.
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { TimeProvider = clock };
+        host.AfterExchangeSetup = _ => clock.Advance(TimeSpan.FromSeconds(1));
+        host.EnqueueResponse(NoErrorTerminator);
+        for (var i = 0; i < 10; i++)
+        {
+            host.EnqueueResponse(CardInfo(false));
+        }
+
+        var ops = new SdCardOperations(host);
+
+        var result = await ops.SetSdCardCrcProtectionAsync(true);
+
+        Assert.Equal(SdCardCrcProtectionResult.Pending, result);
+
+        // Bounded by the four-second budget on the stepped clock: the set, then four reads.
+        Assert.Equal(5, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_CardInfoUnreadable_ReturnsPendingAtTheBudget()
+    {
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { TimeProvider = clock };
+        host.AfterExchangeSetup = _ => clock.Advance(TimeSpan.FromSeconds(1));
+        host.EnqueueResponse(NoErrorTerminator);
+
+        var ops = new SdCardOperations(host);
+
+        Assert.Equal(SdCardCrcProtectionResult.Pending, await ops.SetSdCardCrcProtectionAsync(true));
     }
 
     #endregion

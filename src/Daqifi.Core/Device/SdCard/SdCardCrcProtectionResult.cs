@@ -7,22 +7,40 @@ namespace Daqifi.Core.Device.SdCard;
 public enum SdCardCrcProtectionResult
 {
     /// <summary>
-    /// The device has applied the setting: every write the card takes from now on uses it.
+    /// The card is running in the requested mode, and is ready for the next SD operation: every
+    /// write it takes from now on uses that mode.
     /// </summary>
     Applied = 0,
 
     /// <summary>
-    /// The device stored the setting but has not applied it yet, because its SD task is not
-    /// running: the device is in standby, or the shared SPI bus is handed to WiFi streaming. It
-    /// takes effect the next time the SD task runs.
+    /// The device stored the setting, but no card is running with it yet.
     /// </summary>
     /// <remarks>
-    /// Until then the device will not mount the card. Starting an SD log, or any SD file
-    /// operation, waits up to two seconds for the change to apply and then fails with SCPI
-    /// <c>-200</c>, and the storage-space query is refused the same way. Power the device up or
-    /// stop the WiFi stream, then call
-    /// <see cref="ISdCardOperations.SetSdCardCrcProtectionAsync"/> again with the same value: it
-    /// returns <see cref="Applied"/> once the change has landed.
+    /// <para>
+    /// Three causes, all of which leave the setting in place to apply later:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// The device's SD task is not running: it is in standby, or WiFi streaming has the shared
+    /// SPI bus. The change lands when the SD task next runs. Until then, starting an SD log or
+    /// any SD file operation can wait up to two seconds and fail with SCPI <c>-200</c>, and the
+    /// storage-space query can be refused the same way. Power the device up or stop the WiFi
+    /// stream.
+    /// </description></item>
+    /// <item><description>
+    /// There is no card in the slot. The next card inserted is initialized in the new mode.
+    /// </description></item>
+    /// <item><description>
+    /// The card refuses CRC checking. With protection on, the device never mounts such a card
+    /// rather than run it unprotected, so it cannot be logged to until protection is turned off
+    /// again.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// Once the cause is dealt with, call <see cref="ISdCardOperations.SetSdCardCrcProtectionAsync"/>
+    /// again with the same value: it returns <see cref="Applied"/> when the card is running in
+    /// the new mode.
+    /// </para>
     /// </remarks>
     Pending = 1
 }

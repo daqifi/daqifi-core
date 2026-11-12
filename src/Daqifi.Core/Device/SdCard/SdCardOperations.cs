@@ -95,6 +95,30 @@ internal sealed class SdCardOperations
     /// </summary>
     private const int SD_PROTECT_RESPONSE_TIMEOUT_MS = 5000;
 
+    /// <summary>
+    /// How long <see cref="SetSdCardCrcProtectionAsync"/> waits, after the device has applied a
+    /// change, for the card to come back initialized in the new mode.
+    /// </summary>
+    /// <remarks>
+    /// The device applies a change by dropping the card, and picks it up again at its next
+    /// card-detect poll, about a second later (measured on firmware v3.9.0: unmountable for
+    /// 0.5–1.0 s). Several polls' worth, so one slow init does not read as a card that never
+    /// came back.
+    /// </remarks>
+    private static readonly TimeSpan SdProtectCardReturnTimeout = TimeSpan.FromSeconds(4);
+
+    /// <summary>
+    /// Settle period after the card first reports the new mode, before an SD operation can rely on
+    /// mounting it.
+    /// </summary>
+    /// <remarks>
+    /// The driver records the mode part-way through initializing the card, not at the end:
+    /// turning protection on is recorded just before the last few init commands, and turning it
+    /// off is recorded as init begins, ahead of the card's own power-up loop. A mount sent in that
+    /// gap still finds no card.
+    /// </remarks>
+    private static readonly TimeSpan SdProtectCardSettle = TimeSpan.FromMilliseconds(500);
+
     private readonly ISdCardOperationHost _host;
 
     private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -1107,12 +1131,111 @@ internal sealed class SdCardOperations
                 responseTimeoutMs: SD_PROTECT_RESPONSE_TIMEOUT_MS,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            return ClassifySdCrcProtectionReply(lines);
+            var result = ClassifySdCrcProtectionReply(lines);
+
+            return result == SdCardCrcProtectionResult.Applied
+                ? await WaitForCardInCrcModeAsync(enabled, cancellationToken).ConfigureAwait(false)
+                : result;
         }
         finally
         {
             RestoreStreamingIfNeeded(wasStreaming);
         }
+    }
+
+    /// <summary>
+    /// Waits for the card to come back initialized in the mode just applied, so that an SD
+    /// operation started straight after <see cref="SetSdCardCrcProtectionAsync"/> finds it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The device answers the set as soon as its driver has dropped the card for
+    /// re-initialization, and picks the card up again only at its next detect poll. Until then
+    /// the card cannot be mounted, and the device does not wait for it: on the bench (firmware
+    /// v3.9.0) an SD log started straight after a change found "No SD card detected", fell back
+    /// to streaming over USB, and wrote no file, with nothing reported to Core. Measured
+    /// unmountable for 0.5–1.0 s after the set returned.
+    /// </para>
+    /// <para>
+    /// <c>SYSTem:STORage:SD:INFO?</c> reports the mode the card was last initialized in, from
+    /// cached state: no mount, no SD storage needed, and nothing pushed to the error queue while
+    /// the card is away. When the value did not change there was no re-initialization and the
+    /// first answer already agrees.
+    /// </para>
+    /// <para>
+    /// A card that never reports the new mode within <see cref="SdProtectCardReturnTimeout"/>
+    /// makes this <see cref="SdCardCrcProtectionResult.Pending"/>: the device holds the setting
+    /// but no card is running with it. That covers no card in the slot, and a card that refuses
+    /// CRC checking, which the firmware then never mounts while protection is on.
+    /// </para>
+    /// </remarks>
+    private async Task<SdCardCrcProtectionResult> WaitForCardInCrcModeAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        var start = Clock.GetTimestamp();
+        var sawOtherMode = false;
+
+        while (true)
+        {
+            var lines = await _host.ExecuteTextCommandAsync(
+                () => _host.Send(ScpiMessageProducer.GetSdCardInfo),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (TryReadCardCrcMode(lines, out var cardMode))
+            {
+                if (cardMode == enabled)
+                {
+                    if (sawOtherMode)
+                    {
+                        await Task.Delay(SdProtectCardSettle, Clock, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return SdCardCrcProtectionResult.Applied;
+                }
+
+                sawOtherMode = true;
+            }
+
+            // No delay between reads: each text exchange already waits out its own completion
+            // window, which paces this at a few reads a second.
+            if (Clock.GetElapsedTime(start) >= SdProtectCardReturnTimeout)
+            {
+                return SdCardCrcProtectionResult.Pending;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the card's CRC mode from a <c>SYSTem:STORage:SD:INFO?</c> reply
+    /// (<c>mid,"oid","pnm",major.minor,serial,yyyy-mm,crc,resyncs</c>).
+    /// </summary>
+    /// <remarks>
+    /// Read from the end: the two fields firmware v3.9.0 appended are last, and the quoted name
+    /// fields before them are the card's own text.
+    /// </remarks>
+    private static bool TryReadCardCrcMode(IReadOnlyList<string> lines, out bool crcOn)
+    {
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            var fields = lines[i].Trim().Split(',');
+            if (fields.Length < 8
+                || !ulong.TryParse(fields[^1].Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+            {
+                continue;
+            }
+
+            switch (fields[^2].Trim())
+            {
+                case "1":
+                    crcOn = true;
+                    return true;
+                case "0":
+                    crcOn = false;
+                    return true;
+            }
+        }
+
+        crcOn = false;
+        return false;
     }
 
     /// <summary>
