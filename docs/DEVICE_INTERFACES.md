@@ -470,8 +470,9 @@ log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming(
 rate keeps it there.
 
 Until something starts a stream after power-up, the device stores a 1 Hz placeholder. Core does not
-adopt that: a freshly powered device reads 100 Hz, as it always has. The one thing this costs is a
-device somebody deliberately left at exactly 1 Hz, which also reads 100 Hz.
+adopt that: a freshly powered device reads 100 Hz, as it always has. A 1 Hz that somebody did start
+at is adopted — the capability document read in the same exchange says whether any rate has been
+configured since power-up (`streaming.timing.actual_rate_millihz` is 0 until one has).
 
 This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
 through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect

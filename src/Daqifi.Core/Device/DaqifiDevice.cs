@@ -2967,12 +2967,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         var document = TryApplyCapabilityDocument(lines);
 
         // After the document, so the rate is checked against the sampling ceiling the document
-        // may just have set.
+        // may just have set. Whether a rate has been configured at all is only taken from a
+        // document that was trusted; an untrusted one leaves it unknown.
         if (readStoredStreamingRate)
         {
             if (StoredStreamingRateReply.TryParse(lines, out var storedRateHz))
             {
-                OnStoredStreamingRateRead(storedRateHz);
+                var rateConfigured = document != null ? StoredStreamingRateReply.ReadRateConfigured(lines) : null;
+                OnStoredStreamingRateRead(storedRateHz, rateConfigured);
             }
             else
             {
@@ -2989,7 +2991,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// (<c>SYSTem:STReam:START?</c>). The base device keeps no streaming rate, so it ignores it.
     /// </summary>
     /// <param name="rateHz">The reported rate, in Hz; not yet range-checked.</param>
-    internal virtual void OnStoredStreamingRateRead(int rateHz)
+    /// <param name="rateConfigured">
+    /// Whether the trusted capability document says a rate has been configured since power-up
+    /// (<c>streaming.timing.actual_rate_millihz</c> non-zero), or <c>null</c> when that is unknown.
+    /// </param>
+    internal virtual void OnStoredStreamingRateRead(int rateHz, bool? rateConfigured)
     {
     }
 
@@ -3001,7 +3007,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <returns>The applied document, or <c>null</c> when nothing was applied.</returns>
     private CapabilityDocument? TryApplyCapabilityDocument(IReadOnlyList<string> lines)
     {
-        if (!CapabilityDocumentParser.TryParseApiVersion(lines, out var apiVersion))
+        // The version is only looked for before the document, which is where its query puts it.
+        // On firmware 3.9.0+ the stored-rate reply follows the document and is a bare integer
+        // too, so a version reply that never arrived would otherwise be stood in for by the rate
+        // — and a device storing 2 Hz would vouch for a schema-2 document nothing checked.
+        var documentIndex = StoredStreamingRateReply.IndexOfDocumentLine(lines);
+        var versionLines = documentIndex >= 0 ? lines.Take(documentIndex) : lines;
+
+        if (!CapabilityDocumentParser.TryParseApiVersion(versionLines, out var apiVersion))
         {
             SafeLog(() => _logger.LogDebug(
                 "[ReadCapabilityDocumentAsync] The device did not report a capability schema version; keeping board-derived capabilities."));

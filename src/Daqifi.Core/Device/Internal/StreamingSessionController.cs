@@ -164,7 +164,7 @@ internal sealed class StreamingSessionController
     /// <summary>
     /// Takes the streaming rate the device reports it has stored (<c>SYSTem:STReam:START?</c>,
     /// firmware v3.9.0) as this device's rate, unless a rate has already been chosen here or the
-    /// device is still on its boot placeholder.
+    /// device has never had one configured.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -172,11 +172,13 @@ internal sealed class StreamingSessionController
     /// reported at Core's 100 Hz default, and the next start silently changed its rate (#960).
     /// </para>
     /// <para>
-    /// A reported <see cref="FirmwareBootDefaultStoredRateHz"/> is treated as nothing stored, and
-    /// the current rate stands. Every device reports it after power-up, so adopting it would make
-    /// a freshly powered device stream at 1 Hz where Core has always started at 100 Hz. The cost
-    /// is that a device somebody deliberately left at 1 Hz is reported at Core's rate, which is
-    /// what every connect reported before the device could be asked at all.
+    /// A device nothing has started since power-up stores the
+    /// <see cref="FirmwareBootDefaultStoredRateHz"/> placeholder, which is not adopted: doing so
+    /// would make every freshly powered device stream at 1 Hz where Core has always started at
+    /// 100 Hz. <paramref name="rateConfigured"/> is what tells it apart from a 1 Hz somebody did
+    /// start at. When it is unknown — no trusted capability document, or one without the
+    /// timing block — a reported 1 Hz is taken to be the placeholder, which reports a deliberate
+    /// 1 Hz at Core's rate: what every connect reported before the device could be asked.
     /// </para>
     /// <para>
     /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
@@ -187,19 +189,25 @@ internal sealed class StreamingSessionController
     /// </para>
     /// </remarks>
     /// <param name="frequencyHz">The rate the device reported, in Hz.</param>
+    /// <param name="rateConfigured">
+    /// Whether the device has had a rate configured since power-up, as its capability document
+    /// states it; <c>null</c> when that is unknown.
+    /// </param>
     /// <returns><c>true</c> when the rate was adopted.</returns>
-    internal bool TryAdoptStoredFrequency(int frequencyHz)
+    internal bool TryAdoptStoredFrequency(int frequencyHz, bool? rateConfigured)
     {
         if (_frequencyChosen)
         {
             return false;
         }
 
-        if (frequencyHz == FirmwareBootDefaultStoredRateHz)
+        var isPlaceholder = rateConfigured == false
+                            || (rateConfigured == null && frequencyHz == FirmwareBootDefaultStoredRateHz);
+        if (isPlaceholder)
         {
             SafeTrace(
-                $"[{nameof(TryAdoptStoredFrequency)}] The device reports its {FirmwareBootDefaultStoredRateHz} Hz boot "
-                + $"placeholder, so no rate has been stored; keeping {_streamingFrequency} Hz.");
+                $"[{nameof(TryAdoptStoredFrequency)}] The device reports {frequencyHz} Hz but has had no rate "
+                + $"configured since power-up; keeping {_streamingFrequency} Hz.");
             return false;
         }
 

@@ -264,8 +264,8 @@ public class DeviceReconnectTests
     [Fact]
     public async Task AStreamResumesAtItsOwnRate_WhenAPowerCycledDeviceComesBackOnItsBootPlaceholder()
     {
-        // A device power-cycled while away stores its 1 Hz placeholder. Resuming at that would
-        // turn a 250 Hz session into a 1 Hz one.
+        // A device power-cycled while away stores its 1 Hz placeholder, and its document says no
+        // rate has been configured. Resuming at that would turn a 250 Hz session into a 1 Hz one.
         using var transport = new ScriptedReconnectTransport();
         using var device = new ScriptedStreamingDevice("Power-cycled Device", transport);
         device.ReconnectOptions = FastPolicy();
@@ -278,6 +278,7 @@ public class DeviceReconnectTests
         device.StartStreaming();
 
         device.StoredRateReportedOnInitialize = 1;
+        device.StoredRateConfiguredOnInitialize = false;
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
         device.ClearSentCommands();
 
@@ -1817,6 +1818,12 @@ public class DeviceReconnectTests
         /// </summary>
         public int? StoredRateReportedOnInitialize { get; set; }
 
+        /// <summary>
+        /// What the capability document says alongside <see cref="StoredRateReportedOnInitialize"/>
+        /// about whether a rate has been configured since power-up; <c>null</c> when it says nothing.
+        /// </summary>
+        public bool? StoredRateConfiguredOnInitialize { get; set; }
+
         public IReadOnlyList<string> SentCommands
         {
             get
@@ -1882,7 +1889,7 @@ public class DeviceReconnectTests
             // restored.
             if (StoredRateReportedOnInitialize is { } storedRateHz)
             {
-                OnStoredStreamingRateRead(storedRateHz);
+                OnStoredStreamingRateRead(storedRateHz, StoredRateConfiguredOnInitialize);
             }
 
             return Task.CompletedTask;

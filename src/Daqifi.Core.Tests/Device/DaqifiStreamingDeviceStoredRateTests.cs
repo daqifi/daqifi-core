@@ -23,6 +23,18 @@ public class DaqifiStreamingDeviceStoredRateTests
     private const string StoredRateCommand = "SYSTem:STReam:START?";
     private const int CoreDefaultHz = 100;
 
+    /// <summary>
+    /// The 3.7.2 capture with the <c>streaming.timing.actual_rate_millihz</c> figure firmware
+    /// 3.9.0 reports: <c>0</c> until a start configures a rate, the applied rate afterwards.
+    /// </summary>
+    private static string DocumentWithActualRate(int millihertz)
+    {
+        const string StreamingBlock = "\"streaming\":{";
+        var sample = CapabilityDocumentSamples.Nyquist1Firmware372;
+        Assert.Contains(StreamingBlock, sample);
+        return sample.Replace(StreamingBlock, StreamingBlock + $"\"timing\":{{\"actual_rate_millihz\":{millihertz}}},");
+    }
+
     private static StoredRateDevice CreateDevice(string firmwareVersion = "3.9.0", string? storedRateReply = "1000")
     {
         var device = new StoredRateDevice();
@@ -76,16 +88,103 @@ public class DaqifiStreamingDeviceStoredRateTests
     [Fact]
     public async Task OnFirmware390_TheBootPlaceholderIsNotAStoredRate_SoCoresDefaultStands()
     {
-        // A device that has not been started since power-up reports 1 Hz: the firmware's
-        // placeholder, not a rate anybody asked for. Adopting it would make every freshly powered
-        // device stream at 1 Hz where Core has always started at 100 Hz. Measured on the bench Nq1
-        // on firmware 3.9.0: a raw START? straight after flashing answered 1.
+        // A device nothing has started since power-up reports 1 Hz and, in its document, an actual
+        // rate of 0: the firmware's placeholder, not a rate anybody asked for. Adopting it would
+        // make every freshly powered device stream at 1 Hz where Core has always started at
+        // 100 Hz. Measured on the bench Nq1 on firmware 3.9.0: START? answered 1 straight after
+        // flashing, and the document's actual_rate_millihz was 0 on a device nothing had started.
         var device = CreateDevice(storedRateReply: "1");
+        device.Responses[DocumentCommand] = [DocumentWithActualRate(0)];
 
         var document = await device.ReadCapabilityDocumentAsync();
 
         Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
         Assert.NotNull(document);
+    }
+
+    [Fact]
+    public async Task OnFirmware390_ADeliberatelyConfigured1Hz_IsAdopted()
+    {
+        // START? answers 1 for the placeholder and for a 1 Hz somebody started at; the document's
+        // actual rate is what tells them apart.
+        var device = CreateDevice(storedRateReply: "1");
+        device.Responses[DocumentCommand] = [DocumentWithActualRate(1000)];
+
+        await device.ReadCapabilityDocumentAsync();
+
+        Assert.Equal(1, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task WhenTheDocumentSaysNoRateWasEverConfigured_NothingIsAdopted()
+    {
+        // The document is the device's own word that nothing has been started; a START? value
+        // next to it is not a rate anybody chose either.
+        var device = CreateDevice(storedRateReply: "250");
+        device.Responses[DocumentCommand] = [DocumentWithActualRate(0)];
+
+        await device.ReadCapabilityDocumentAsync();
+
+        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task AConfiguredRateWithTheTimingBlock_IsAdopted()
+    {
+        var device = CreateDevice(storedRateReply: "250");
+        device.Responses[DocumentCommand] = [DocumentWithActualRate(250_000)];
+
+        await device.ReadCapabilityDocumentAsync();
+
+        Assert.Equal(250, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task WithNoTimingBlock_1HzIsTakenToBeThePlaceholder()
+    {
+        // Nothing says whether a rate was configured, so 1 Hz falls back to the reading that
+        // keeps a freshly powered device at Core's 100 Hz.
+        var device = CreateDevice(storedRateReply: "1");
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.NotNull(document);
+        Assert.DoesNotContain("\"timing\"", CapabilityDocumentSamples.Nyquist1Firmware372);
+        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task AnUntrustedDocumentsTimingBlock_IsNotBelieved()
+    {
+        // The configured flag comes from the document, so it is only taken from one that passed
+        // the schema check. An untrusted one leaves it unknown, and 1 Hz is the placeholder.
+        var device = CreateDevice(storedRateReply: "1");
+        device.Responses[ApiVersionCommand] = ["**ERROR: -113, \"Undefined header\""];
+        device.Responses[DocumentCommand] = [DocumentWithActualRate(1000)];
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.Null(document);
+        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task AMissingVersionReply_IsNotStoodInForByTheStoredRate()
+    {
+        // The stored-rate reply is a bare integer after the document. If the version query goes
+        // unanswered, a device storing 2 Hz must not vouch for a schema-2 document: the version
+        // is only looked for before the document.
+        var device = CreateDevice(storedRateReply: "2");
+        device.Responses.Remove(ApiVersionCommand);
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.Null(document);
+        Assert.Null(device.Metadata.CapabilityDocument);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+
+        // The rate itself is still read: its position after the document identifies it.
+        Assert.Equal(2, device.StreamingFrequency);
     }
 
     [Fact]
@@ -215,6 +314,24 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.StartStreaming();
 
         Assert.Equal(ScpiMessageProducer.StartStreaming(1000).Data, device.SentCommands.Last());
+    }
+
+    [Fact]
+    public async Task OnThePlainDevice_AMissingVersionReplyIsNotStoodInForByTheStoredRate()
+    {
+        // The version check lives in the base capability read, so the base device is held to it
+        // too.
+        var device = new PlainDevice();
+        device.Metadata.FirmwareVersion = "3.9.0";
+        device.Metadata.PartNumber = "Nq1";
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
+        device.Responses[StoredRateCommand] = ["2"];
+        device.Connect();
+
+        Assert.Null(await device.ReadCapabilityDocumentAsync());
+        Assert.Null(device.Metadata.CapabilityDocument);
     }
 
     [Fact]

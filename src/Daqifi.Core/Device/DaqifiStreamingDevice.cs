@@ -156,9 +156,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// last started it at — so this reports the device's rate rather than Core's guess (#960).
     /// That happens only while no rate has been chosen on this object: once it is set here or a
     /// stream is started, the chosen rate stands, and an automatic reconnect resumes at it whatever
-    /// the device reports. A device that has not been started since power-up reports its 1 Hz boot
+    /// the device reports. A device that has not been started since power-up reports a 1 Hz
     /// placeholder, which is not adopted: the 100 Hz default stands for it, as it does below
-    /// v3.9.0, where the device cannot be asked.
+    /// v3.9.0, where the device cannot be asked. A 1 Hz that somebody did start at is adopted; the
+    /// capability document tells the two apart.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
@@ -193,8 +194,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Adopts the rate the device reported it has stored, unless a rate has been chosen on this
     /// device; see <see cref="StreamingFrequency"/>.
     /// </summary>
-    internal override void OnStoredStreamingRateRead(int rateHz) =>
-        _session.TryAdoptStoredFrequency(rateHz);
+    internal override void OnStoredStreamingRateRead(int rateHz, bool? rateConfigured) =>
+        _session.TryAdoptStoredFrequency(rateHz, rateConfigured);
 
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.
