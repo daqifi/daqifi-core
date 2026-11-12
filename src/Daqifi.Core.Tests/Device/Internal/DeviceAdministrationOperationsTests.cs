@@ -185,6 +185,156 @@ public class DeviceAdministrationOperationsTests
 
     #endregion
 
+    #region Identify
+
+    [Theory]
+    [InlineData(true, "send:SYSTem:IDENtify 1")]
+    [InlineData(false, "send:SYSTem:IDENtify 0")]
+    public async Task SetIdentifyAsync_ChecksTheGateThenSendsOneCommand(bool enabled, string expectedSend)
+    {
+        var host = new FakeHost { IsConnected = true, SupportedFeatures = { DeviceFeature.Identify } };
+
+        await new DeviceAdministrationOperations(host).SetIdentifyAsync(enabled);
+
+        // A single write and nothing else: no text exchange, so it stays usable mid-stream.
+        Assert.Equal(new[] { "ensure:Identify", expectedSend }, host.Calls);
+    }
+
+    [Fact]
+    public async Task SetIdentifyAsync_OnFirmwareWithoutIdentify_ThrowsAndSendsNothing()
+    {
+        var host = new FakeHost { IsConnected = true };
+
+        await Assert.ThrowsAsync<FeatureNotSupportedException>(
+            () => new DeviceAdministrationOperations(host).SetIdentifyAsync(true));
+
+        Assert.Equal(new[] { "ensure:Identify" }, host.Calls);
+    }
+
+    [Fact]
+    public async Task SetIdentifyAsync_WhenNotConnected_ThrowsAndTouchesNothing()
+    {
+        var host = new FakeHost { IsConnected = false, SupportedFeatures = { DeviceFeature.Identify } };
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => new DeviceAdministrationOperations(host).SetIdentifyAsync(true));
+
+        Assert.Empty(host.Calls);
+    }
+
+    [Fact]
+    public async Task SetIdentifyAsync_AlreadyCancelled_ThrowsAndTouchesNothing()
+    {
+        var host = new FakeHost { IsConnected = true, SupportedFeatures = { DeviceFeature.Identify } };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => new DeviceAdministrationOperations(host).SetIdentifyAsync(true, cts.Token));
+
+        Assert.Empty(host.Calls);
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("0", false)]
+    [InlineData(" 1\r", true)]
+    public async Task GetIdentifyAsync_ReadsTheDevicesAnswer(string reply, bool expected)
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            SupportedFeatures = { DeviceFeature.Identify },
+            ExchangeResponse = new[] { reply },
+        };
+
+        var identifying = await new DeviceAdministrationOperations(host).GetIdentifyAsync();
+
+        Assert.Equal(expected, identifying);
+        Assert.Equal(new[] { "ensure:Identify", "exchange", "send:SYSTem:IDENtify?" }, host.Calls);
+    }
+
+    [Fact]
+    public async Task GetIdentifyAsync_SkipsAnEchoOfTheQuery()
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            SupportedFeatures = { DeviceFeature.Identify },
+            ExchangeResponse = new[] { "SYSTem:IDENtify?", "1" },
+        };
+
+        Assert.True(await new DeviceAdministrationOperations(host).GetIdentifyAsync());
+    }
+
+    public static IEnumerable<object[]> UnreadableIdentifyAnswers()
+    {
+        // Nothing came back.
+        yield return [Array.Empty<string>()];
+        // A number, but not one the firmware's 0/1 flag can produce.
+        yield return [new[] { "2" }];
+        // Only the echo of the query.
+        yield return [new[] { "SYSTem:IDENtify?" }];
+    }
+
+    [Theory]
+    [MemberData(nameof(UnreadableIdentifyAnswers))]
+    public async Task GetIdentifyAsync_WhenTheAnswerIsNotOneOrZero_ThrowsRatherThanGuessing(string[] response)
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            SupportedFeatures = { DeviceFeature.Identify },
+            ExchangeResponse = response,
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
+
+        Assert.Contains("not 1 or 0", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetIdentifyAsync_WhenTheDeviceReportsAnError_Throws()
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            SupportedFeatures = { DeviceFeature.Identify },
+            ExchangeResponse = new[] { "**ERROR: -113, \"Undefined header\"" },
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
+
+        Assert.Contains("rejected", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("-113", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetIdentifyAsync_OnFirmwareWithoutIdentify_ThrowsWithoutAnExchange()
+    {
+        var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { "1" } };
+
+        await Assert.ThrowsAsync<FeatureNotSupportedException>(
+            () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
+
+        Assert.Equal(new[] { "ensure:Identify" }, host.Calls);
+    }
+
+    [Fact]
+    public async Task GetIdentifyAsync_WhenNotConnected_ThrowsAndTouchesNothing()
+    {
+        var host = new FakeHost { IsConnected = false, SupportedFeatures = { DeviceFeature.Identify } };
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
+
+        Assert.Empty(host.Calls);
+    }
+
+    #endregion
+
     #region Confirming variants
 
     /// <summary>The reply a device gives to <c>SYSTem:ERRor?</c> when the queue is clean.</summary>
@@ -625,7 +775,19 @@ public class DeviceAdministrationOperationsTests
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public bool Supports(DeviceFeature feature) => throw new NotSupportedException();
-        public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
+
+        /// <summary>The features this fake device has; <see cref="EnsureSupported"/> refuses the rest.</summary>
+        public HashSet<DeviceFeature> SupportedFeatures { get; init; } = new();
+
+        public void EnsureSupported(DeviceFeature feature)
+        {
+            Calls.Add("ensure:" + feature);
+            if (!SupportedFeatures.Contains(feature))
+            {
+                throw new FeatureNotSupportedException(feature, null, null, null);
+            }
+        }
+
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
             => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();

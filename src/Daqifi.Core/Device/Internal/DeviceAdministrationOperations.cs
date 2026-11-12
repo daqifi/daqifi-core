@@ -10,8 +10,9 @@ namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
 /// The device-administration half of <see cref="IStreamingDevice"/> — reboot, the ADC
-/// calibration banks, voltage-precision persistence, and the friendly-name write — extracted
-/// from <see cref="DaqifiStreamingDevice"/> (#344) so the device delegates rather than hosts it.
+/// calibration banks, voltage-precision persistence, the friendly-name write, and the identify
+/// LED flash — extracted from <see cref="DaqifiStreamingDevice"/> (#344) so the device delegates
+/// rather than hosts it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,7 +21,8 @@ namespace Daqifi.Core.Device.Internal;
 /// because none of them touches the channel collection, the streaming session, or any device
 /// state — the two exceptions being <see cref="Reboot"/>'s local teardown and
 /// <see cref="SetFriendlyNameAsync"/>'s optimistic metadata write, both of which go back through
-/// the host rather than being done here.
+/// the host rather than being done here. <see cref="GetIdentifyAsync"/> is the one query: it reads
+/// a single <c>1</c>/<c>0</c> back in a text exchange.
 /// </para>
 /// <para>
 /// Each of those commands also has a confirming <c>...Async</c> twin here, which sends the same
@@ -66,6 +68,69 @@ internal sealed class DeviceAdministrationOperations
 
         return Task.CompletedTask;
     }
+
+    /// <inheritdoc cref="DaqifiStreamingDevice.SetIdentifyAsync(bool, CancellationToken)" />
+    internal Task SetIdentifyAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected(cancellationToken);
+        _host.EnsureSupported(DeviceFeature.Identify);
+
+        _host.Send(ScpiMessageProducer.SetIdentify(enabled));
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc cref="DaqifiStreamingDevice.GetIdentifyAsync(CancellationToken)" />
+    internal async Task<bool> GetIdentifyAsync(CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected(cancellationToken);
+        _host.EnsureSupported(DeviceFeature.Identify);
+
+        var lines = await _host.ExecuteTextCommandAsync(
+            () => _host.Send(ScpiMessageProducer.GetIdentify),
+            responseTimeoutMs: IdentifyQueryResponseTimeoutMs,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (ScpiResponseClassifier.ContainsScpiError(lines))
+        {
+            throw new InvalidOperationException(
+                $"The device rejected the identify query. It answered: {DescribeLines(lines)}");
+        }
+
+        // The firmware answers exactly 1 or 0 (SCPI_GetIdentify). Anything else — a number out of
+        // that range included — is not an answer to this query, so it is not read as one.
+        if (LineParsing.TryParseFirst<bool>(lines, static (string? line, out bool identifying) =>
+            {
+                switch (line?.Trim())
+                {
+                    case "1":
+                        identifying = true;
+                        return true;
+                    case "0":
+                        identifying = false;
+                        return true;
+                    default:
+                        identifying = false;
+                        return false;
+                }
+            },
+            out var isIdentifying))
+        {
+            return isIdentifying;
+        }
+
+        throw new InvalidOperationException(
+            $"The device's answer to the identify query was not 1 or 0. It answered: {DescribeLines(lines)}");
+    }
+
+    /// <summary>
+    /// How long to wait for the answer to <c>SYSTem:IDENtify?</c>. The firmware reads a flag held
+    /// in RAM, so this only needs to cover the round trip.
+    /// </summary>
+    private const int IdentifyQueryResponseTimeoutMs = 2000;
+
+    private static string DescribeLines(IReadOnlyList<string> lines)
+        => lines.Count == 0 ? "(nothing)" : string.Join(" | ", lines);
 
     /// <inheritdoc cref="IStreamingDevice.Reboot" />
     internal void Reboot()

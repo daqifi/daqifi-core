@@ -77,6 +77,13 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware for <c>SYSTem:IDENtify</c> / <c>SYSTem:IDENtify?</c> (firmware
+    /// <c>#1220</c>), first released in <b>v3.9.0</b>. Older firmware answers either with
+    /// <c>-113</c> "Undefined header".
+    /// </summary>
+    internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -117,7 +124,12 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.SdListingEndMarker] = new(
                 MinVersion: SdListingEndMarkerMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.SdCard)
+                Hardware: HardwareRequirement.SdCard),
+
+            [DeviceFeature.Identify] = new(
+                MinVersion: IdentifyMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.None)
         };
 
     /// <summary>

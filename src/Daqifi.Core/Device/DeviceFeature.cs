@@ -57,5 +57,12 @@ public enum DeviceFeature
     /// did get as the whole card (closes #887). On older firmware a missing marker is simply
     /// the norm and carries no such information.
     /// </remarks>
-    SdListingEndMarker
+    SdListingEndMarker,
+
+    /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify
 }
