@@ -48,13 +48,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
             // state the caller asked about, not a failed query, so it comes back as a value.
             if (ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var code) && code == ScpiErrorExecution)
             {
-                // The device also queued that -200. Since Core reports it as an answer rather
-                // than a failure, pop one entry so the query leaves the error queue as deep as it
-                // found it. Otherwise every poll of a device in standby adds a stale -200 (seen on
-                // the bench: three polls, three entries), and a later reader of the queue that
-                // does not drain first — the stream-start confirmation — would take one of them
-                // for its own command's refusal.
-                await _host.DrainErrorQueueAsync(maxIterations: 1, cancellationToken).ConfigureAwait(false);
+                await RemoveOwnQueuedRefusalAsync(cancellationToken).ConfigureAwait(false);
                 return WifiLinkState.Unavailable;
             }
 
@@ -127,6 +121,44 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
         return await _host.ExecuteTextCommandAsync(
             () => _host.Send(message),
             cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Removes the <c>-200</c> that <c>LAN:CONnected?</c> just queued, but only when it is provably
+    /// the only entry in the device's error queue.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Core reports that <c>-200</c> as an answer, not a failure, so leaving it queued would let
+    /// every poll of a device in standby add a stale entry (seen on the bench: three polls, three
+    /// entries). A later reader that does not drain first — the stream-start confirmation — would
+    /// take one of them for its own command's refusal.
+    /// </para>
+    /// <para>
+    /// <c>SYSTem:ERRor?</c> pops the <em>oldest</em> entry, though, so popping blindly would
+    /// consume an earlier, unrelated error and leave this one behind. The non-destructive count
+    /// settles ownership: a queue of exactly one entry, read right after the device volunteered
+    /// this query's <c>-200</c>, holds only that <c>-200</c>. With anything older ahead of it, the
+    /// queue is left untouched — the older entries belong to whoever caused them.
+    /// </para>
+    /// </remarks>
+    private async Task RemoveOwnQueuedRefusalAsync(CancellationToken cancellationToken)
+    {
+        var lines = await _host.ExecuteTextCommandAsync(
+            () => _host.Send(ScpiMessageProducer.GetSystemErrorCount),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (LineParsing.TryParseFirst<int>(lines, TryParseCount, out var count) && count == 1)
+        {
+            await _host.DrainErrorQueueAsync(maxIterations: 1, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static bool TryParseCount(string? line, out int count)
+    {
+        count = 0;
+        return !string.IsNullOrWhiteSpace(line)
+               && int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out count);
     }
 
     /// <summary>

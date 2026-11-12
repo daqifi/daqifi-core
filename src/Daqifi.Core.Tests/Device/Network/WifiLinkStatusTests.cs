@@ -28,6 +28,10 @@ public class WifiLinkStatusTests
     private static readonly string ActiveModeQuery = ScpiMessageProducer.GetLanActiveWifiMode.Data;
 
     private static readonly string ErrorQueueQuery = ScpiMessageProducer.GetSystemError.Data;
+    private static readonly string ErrorCountQuery = ScpiMessageProducer.GetSystemErrorCount.Data;
+
+    /// <summary>What <c>SYSTem:ERRor?</c> returned for the standby -200 on the bench.</summary>
+    private const string StandbyQueueEntry = "-200,\"Execution error\"";
 
     /// <summary>
     /// What the bench Nq1 on firmware 3.9.0 volunteered for <c>CONnected?</c> in standby: the
@@ -117,21 +121,60 @@ public class WifiLinkStatusTests
     }
 
     [Fact]
-    public async Task GetWifiLinkStateAsync_WifiNotReady_PopsExactlyOneErrorQueueEntry()
+    public async Task GetWifiLinkStateAsync_WifiNotReadyWithAnEmptyQueue_RemovesItsOwnMinus200()
     {
         // The device queues the -200 it volunteers. Reported as a value, it must not be left
         // behind: on the bench, three standby polls left three -200s for the next reader of the
-        // queue (stream-start confirmation) to mistake for its own refusal. Exactly one entry is
-        // popped, so an older, unrelated entry stays for whoever owns it.
-        var device = ConnectedDevice();
-        device.ScriptedResponses.Enqueue(new[] { WifiNotReadyOnTheWire });
-        device.ScriptedResponses.Enqueue(new[] { "-200,\"Execution error\"" });
-        device.ScriptedResponses.Enqueue(new[] { "-113,\"Undefined header\"" });
+        // queue (stream-start confirmation) to mistake for its own refusal. The count proves the
+        // queue holds only this query's entry, so popping it is safe.
+        var errorQueue = new Queue<string>();
+        var device = StandbyDevice(errorQueue);
 
         Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
 
-        Assert.Equal(new[] { ConnectedQuery, ErrorQueueQuery }, device.SentCommands);
-        Assert.Single(device.ScriptedResponses);
+        Assert.Empty(errorQueue);
+        Assert.Equal(new[] { ConnectedQuery, ErrorCountQuery, ErrorQueueQuery }, device.SentCommands);
+    }
+
+    [Fact]
+    public async Task GetWifiLinkStateAsync_WifiNotReadyBehindAnOlderError_LeavesTheQueueUntouched()
+    {
+        // SYSTem:ERRor? pops the OLDEST entry. With an earlier -113 queued, a blind pop would
+        // consume that -113 and leave this query's -200 behind. The query cannot reach its own
+        // entry without destroying someone else's, so it leaves both, in order.
+        var errorQueue = new Queue<string>(new[] { "-113,\"Undefined header\"" });
+        var device = StandbyDevice(errorQueue);
+
+        Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
+
+        Assert.Equal(new[] { "-113,\"Undefined header\"", StandbyQueueEntry }, errorQueue);
+        Assert.Equal(new[] { ConnectedQuery, ErrorCountQuery }, device.SentCommands);
+    }
+
+    [Fact]
+    public async Task GetWifiLinkStateAsync_RepeatedStandbyPolls_DoNotGrowTheQueue()
+    {
+        var errorQueue = new Queue<string>();
+        var device = StandbyDevice(errorQueue);
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
+        }
+
+        Assert.Empty(errorQueue);
+    }
+
+    [Fact]
+    public async Task GetWifiLinkStateAsync_WifiNotReadyWithAnUnreadableCount_LeavesTheQueueUntouched()
+    {
+        // No count, no proof of ownership: nothing is popped.
+        var device = ConnectedDevice();
+        device.Responder = command => command == ConnectedQuery ? new[] { WifiNotReadyOnTheWire } : Array.Empty<string>();
+
+        Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
+
+        Assert.Equal(new[] { ConnectedQuery, ErrorCountQuery }, device.SentCommands);
     }
 
     [Fact]
@@ -318,6 +361,38 @@ public class WifiLinkStatusTests
 
     private static TestableWifiDevice ConnectedDevice(params string[] reply) => ConnectedOn("3.9.0", reply);
 
+    /// <summary>
+    /// A 3.9.0 device in standby with a FIFO SCPI error queue, answering the three commands the
+    /// link-state query can send the way the bench Nq1 did: <c>CONnected?</c> queues a -200 and
+    /// volunteers it inline, <c>SYSTem:ERRor:COUNt?</c> reports the depth without popping, and
+    /// <c>SYSTem:ERRor?</c> pops the oldest entry.
+    /// </summary>
+    private static TestableWifiDevice StandbyDevice(Queue<string> errorQueue)
+    {
+        var device = ConnectedDevice();
+        device.Responder = command =>
+        {
+            if (command == ConnectedQuery)
+            {
+                errorQueue.Enqueue(StandbyQueueEntry);
+                return new[] { WifiNotReadyOnTheWire };
+            }
+
+            if (command == ErrorCountQuery)
+            {
+                return new[] { errorQueue.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            }
+
+            if (command == ErrorQueueQuery)
+            {
+                return new[] { errorQueue.Count > 0 ? errorQueue.Dequeue() : "0,\"No error\"" };
+            }
+
+            throw new InvalidOperationException($"Unexpected command '{command}'.");
+        };
+        return device;
+    }
+
     private static TestableWifiDevice ConnectedOn(string firmware, params string[] reply)
     {
         var device = new TestableWifiDevice();
@@ -343,11 +418,14 @@ public class WifiLinkStatusTests
         public List<string> SentCommands { get; } = new();
         public List<string> CannedTextResponse { get; } = new();
 
-        /// <summary>Per-exchange replies, used in order before falling back to <see cref="CannedTextResponse"/>.</summary>
-        public Queue<string[]> ScriptedResponses { get; } = new();
+        /// <summary>
+        /// Computes the reply from the command the exchange sent; when unset, every exchange gets
+        /// <see cref="CannedTextResponse"/>.
+        /// </summary>
+        public Func<string, string[]>? Responder { get; set; }
 
         private List<string> NextResponse()
-            => ScriptedResponses.Count > 0 ? ScriptedResponses.Dequeue().ToList() : CannedTextResponse.ToList();
+            => Responder != null ? Responder(SentCommands[^1]).ToList() : CannedTextResponse.ToList();
 
         /// <summary>Firmware version to report without connecting, for the disconnected case.</summary>
         public string FirmwareVersionOnConnect
