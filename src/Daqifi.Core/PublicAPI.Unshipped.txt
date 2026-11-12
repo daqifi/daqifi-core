@@ -11,6 +11,9 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> Sy
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.SdCardCrcProtection = 5 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DaqifiStreamingDevice.GetSdCardCrcProtectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardCrcProtectionAsync(bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult>!
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DeviceUpdated -> System.EventHandler<Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs!>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
@@ -47,6 +50,11 @@ Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseProgress.TruncatedFinalRow.get -> bool
 Daqifi.Core.Device.SdCard.SdCardParseProgress.TruncatedFinalRow.init -> void
+Daqifi.Core.Device.SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Daqifi.Core.Device.SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync(bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult>!
+Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Applied = 0 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Pending = 1 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
 Daqifi.Core.Firmware.FirmwareUpdateCheckResult.Status.get -> Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareUpdateException.FlashCondition.get -> Daqifi.Core.Firmware.Pic32FlashCondition?
 Daqifi.Core.Firmware.FirmwareUpdateException.FlashCondition.init -> void
@@ -77,6 +85,8 @@ const Daqifi.Core.Logging.Export.SampleValueUnits.Volts = "V" -> string!
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommands() -> void
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetDeviceIdentity.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetSdCrcProtection.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetSdCrcProtection(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.SdCard.SdCardParseOptions.ForDevice(Daqifi.Core.Device.DaqifiDevice! device) -> Daqifi.Core.Device.SdCard.SdCardParseOptions!

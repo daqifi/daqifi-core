@@ -46,7 +46,7 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// drain fails loudly instead of passing quietly.
 /// </para>
 /// </remarks>
-public class SdCardOperationsCollaboratorTests
+public partial class SdCardOperationsCollaboratorTests
 {
     private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 

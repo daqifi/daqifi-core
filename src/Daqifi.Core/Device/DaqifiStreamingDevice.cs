@@ -1307,6 +1307,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void SetSdCardMinimumFreeSpace(long bytes) => _sdCardOperations.SetSdCardMinimumFreeSpace(bytes);
 
     /// <inheritdoc />
+    public Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
+        => _sdCardOperations.SetSdCardCrcProtectionAsync(enabled, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
+        => _sdCardOperations.GetSdCardCrcProtectionAsync(cancellationToken);
+
+    /// <inheritdoc />
     public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         => _sdCardOperations.StartSdCardLoggingAsync(fileName, channelMask, format, cancellationToken);
 

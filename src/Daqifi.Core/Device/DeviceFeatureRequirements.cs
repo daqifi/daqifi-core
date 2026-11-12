@@ -77,6 +77,13 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware for CRC-protected SD writes (<c>SYSTem:STORage:SD:PROTect</c>, firmware
+    /// <c>#1217</c>/<c>#1228</c>), first released in <b>v3.9.0</b>. Older firmware answers the
+    /// command with <c>-113</c> (undefined header).
+    /// </summary>
+    internal static readonly FirmwareVersion SdCardCrcProtectionMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -116,6 +123,11 @@ internal static class DeviceFeatureRequirements
             // reading, where a missing marker is the norm and is not treated as a short walk.
             [DeviceFeature.SdListingEndMarker] = new(
                 MinVersion: SdListingEndMarkerMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.SdCard),
+
+            [DeviceFeature.SdCardCrcProtection] = new(
+                MinVersion: SdCardCrcProtectionMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.SdCard)
         };

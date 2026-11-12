@@ -17,7 +17,7 @@ using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;
 
-public class SdCardOperationsTests
+public partial class SdCardOperationsTests
 {
     [Fact]
     public async Task GetSdCardFilesAsync_WhenDisconnected_Throws()

@@ -81,6 +81,20 @@ internal sealed class SdCardOperations
     /// </summary>
     private const int ScpiErrorCodeUndefinedHeader = -113;
 
+    /// <summary>libscpi's <c>SCPI_ERROR_EXECUTION_ERROR</c>.</summary>
+    private const int ScpiErrorCodeExecutionError = -200;
+
+    /// <summary>libscpi's <c>SCPI_ERROR_SETTINGS_CONFLICT</c>.</summary>
+    private const int ScpiErrorCodeSettingsConflict = -221;
+
+    /// <summary>
+    /// How long <c>SYSTem:STORage:SD:PROTect</c> may take to answer, in milliseconds. The
+    /// firmware holds its reply for up to two seconds (<c>SCPI_SD_PROTECT_APPLY_MS</c>) while it
+    /// waits for the SD driver to drop the card for re-initialization, and only then reports a
+    /// change it could not apply; the rest is margin for a WiFi link.
+    /// </summary>
+    private const int SD_PROTECT_RESPONSE_TIMEOUT_MS = 5000;
+
     private readonly ISdCardOperationHost _host;
 
     private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -1044,6 +1058,152 @@ internal sealed class SdCardOperations
         _host.EnsureConnected();
 
         _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
+    }
+
+    /// <inheritdoc cref="ISdCardOperations.SetSdCardCrcProtectionAsync" />
+    /// <remarks>
+    /// <para>
+    /// No bus switch: unlike the file operations this neither mounts the card nor turns SD storage
+    /// on, so it leaves the bus record (issue #941) as it found it. The firmware is what decides
+    /// whether SD storage is off and idle, and says so with <c>-221</c>. Refusing locally on
+    /// <see cref="SdBusMode.SdBorrowed"/> would not be safe, for the reason that record's remarks
+    /// give: a borrow is not always handed back.
+    /// </para>
+    /// <para>
+    /// The device's answer is read from the reply itself. Both transports write a refusal straight
+    /// to the wire as <c>**ERROR: &lt;code&gt;, ...</c> when the command pushes it, so the error
+    /// line in this exchange belongs to this command. The <c>SYSTem:ERRor?</c> sent after it is a
+    /// terminator, as in <see cref="GetSdCardFilesAsync"/>: its reply proves the device got past
+    /// the set (which can hold its reply for two seconds), and when nothing older is queued it
+    /// takes this command's refusal back off the error queue rather than leave it there. Its code
+    /// is not used to classify anything, because the queue can hold older entries.
+    /// </para>
+    /// </remarks>
+    internal async Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected();
+        _host.EnsureSupported(DeviceFeature.SdCardCrcProtection);
+
+        // The device takes this only with SD storage off and idle. A log this object is running
+        // has SD storage on, and turning it off to make room would end the recording, so refuse
+        // without sending anything — the answer every other SD operation gives during a log.
+        if (IsBusHeldByLog())
+        {
+            throw new SdCardBusyException(Array.Empty<string>());
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var wasStreaming = PauseStreamingForSdOperation();
+
+        try
+        {
+            var lines = await _host.ExecuteTextCommandAsync(
+                () =>
+                {
+                    _host.Send(ScpiMessageProducer.SetSdCrcProtection(enabled));
+                    _host.Send(ScpiMessageProducer.GetSystemError);
+                },
+                responseTimeoutMs: SD_PROTECT_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            return ClassifySdCrcProtectionReply(lines);
+        }
+        finally
+        {
+            RestoreStreamingIfNeeded(wasStreaming);
+        }
+    }
+
+    /// <summary>
+    /// Turns the reply to <c>SYSTem:STORage:SD:PROTect n</c> + <c>SYSTem:ERRor?</c> into the
+    /// documented outcome of <see cref="SetSdCardCrcProtectionAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The codes are the ones <c>SCPI_StorageSDProtectSet</c> pushes at firmware v3.9.0:
+    /// <c>-221</c> when SD storage is on or busy (the value is not stored), and <c>-200</c> when
+    /// the value is stored but the driver has not applied it within the firmware's two-second
+    /// wait, because the SD task is not running. <c>-113</c> is firmware that does not know the
+    /// command at all, which the version gate should already have kept from being sent.
+    /// </remarks>
+    private SdCardCrcProtectionResult ClassifySdCrcProtectionReply(IReadOnlyList<string> lines)
+    {
+        var refusal = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+
+        if (refusal == null)
+        {
+            if (lines.Any(ScpiResponseClassifier.IsSystemErrorReplyLine))
+            {
+                return SdCardCrcProtectionResult.Applied;
+            }
+
+            throw new SdCardOperationException(
+                "The device did not answer the SD CRC protection command, so whether the setting changed is unknown.",
+                lines);
+        }
+
+        if (ScpiResponseClassifier.TryExtractErrorCode(refusal, out var code))
+        {
+            switch (code)
+            {
+                case ScpiErrorCodeExecutionError:
+                    return SdCardCrcProtectionResult.Pending;
+                case ScpiErrorCodeSettingsConflict:
+                    throw new SdCardBusyException(lines, refusal);
+                case ScpiErrorCodeUndefinedHeader:
+                    throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+            }
+        }
+
+        throw new SdCardOperationException(
+            "The device refused the SD CRC protection command: " + refusal,
+            lines,
+            refusal);
+    }
+
+    /// <inheritdoc cref="ISdCardOperations.GetSdCardCrcProtectionAsync" />
+    /// <remarks>
+    /// A plain query: no bus switch and no stream pause, so it is safe during an SD log, where a
+    /// pause would end the recording.
+    /// </remarks>
+    internal async Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected();
+        _host.EnsureSupported(DeviceFeature.SdCardCrcProtection);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var lines = await _host.ExecuteTextCommandAsync(
+            () => _host.Send(ScpiMessageProducer.GetSdCrcProtection),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // The last readable answer, the line closest to the query.
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            switch (lines[i].Trim())
+            {
+                case "1":
+                    return true;
+                case "0":
+                    return false;
+            }
+        }
+
+        var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+
+        if (lastScpiError != null
+            && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var code)
+            && code == ScpiErrorCodeUndefinedHeader)
+        {
+            throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+        }
+
+        throw new SdCardOperationException(
+            lastScpiError != null
+                ? "The SD CRC protection query failed: " + lastScpiError
+                : "The SD CRC protection query returned no readable answer.",
+            lines,
+            lastScpiError);
     }
 
     /// <summary>

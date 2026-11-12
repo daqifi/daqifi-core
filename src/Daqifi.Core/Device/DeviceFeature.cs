@@ -57,5 +57,14 @@ public enum DeviceFeature
     /// did get as the whole card (closes #887). On older firmware a missing marker is simply
     /// the norm and carries no such information.
     /// </remarks>
-    SdListingEndMarker
+    SdListingEndMarker,
+
+    /// <summary>
+    /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
+    /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
+    /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:
+    /// introduced by firmware <c>#1217</c>/<c>#1228</c> and first released in <b>v3.9.0</b>;
+    /// requires SD hardware.
+    /// </summary>
+    SdCardCrcProtection
 }

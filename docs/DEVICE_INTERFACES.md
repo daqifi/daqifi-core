@@ -93,7 +93,7 @@ directly (no cast required). It implements:
   (see [Channel Management](#channel-management) below)
 - `INetworkConfigurable` — WiFi/LAN configuration (see the
   [Network configuration](../README.md#network-configuration) recipe in the root README)
-- `ISdCardOperations` — list/download/delete/format SD card contents and start/stop on-device logging
+- `ISdCardOperations` — list/download/delete/format SD card contents, start/stop on-device logging, and opt in to CRC-protected SD writes
 - `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)
@@ -1012,6 +1012,12 @@ link it is on, and not every gated call enforces its own gate:
   WiFi/TCP link: there they throw `FeatureNotSupportedException` (feature, required version,
   reported version, board) unless the device supports `SdFileTransferOverWifi`. Over USB
   that gate does not apply — the SD card is reachable on any supported firmware.
+- **CRC-protected SD writes** (`SetSdCardCrcProtectionAsync` / `GetSdCardCrcProtectionAsync`)
+  enforce theirs on every link: below firmware v3.9.0, or on a board with no SD slot, they throw
+  `FeatureNotSupportedException` for `SdCardCrcProtection` before sending anything. Protection
+  costs about two thirds of the SD write speed, makes WiFi commands stall during an SD log, and
+  is forgotten every time the device boots: Core does not re-apply it, so set it after each
+  connect.
 - **`SetAnalogOutput`** does not: it sends the command whatever the board, and a board other
   than Nyquist 3 rejects it on the device without an exception reaching you. The check is
   yours to make.

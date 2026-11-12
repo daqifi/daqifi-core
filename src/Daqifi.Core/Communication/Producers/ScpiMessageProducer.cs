@@ -323,6 +323,30 @@ public class ScpiMessageProducer
     }
 
     /// <summary>
+    /// Creates a command message to turn CRC-protected SD card writes on or off.
+    /// </summary>
+    /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>
+    /// <remarks>
+    /// Firmware v3.9.0 and later (firmware #1217). The device accepts it only while SD storage is
+    /// disabled and idle, and forgets it on every boot. Prefer
+    /// <see cref="Device.SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/>, which gates the
+    /// firmware version and reads the device's answer.
+    /// Command: SYSTem:STORage:SD:PROTect 0|1
+    /// </remarks>
+    public static IOutboundMessage<string> SetSdCrcProtection(bool enabled)
+        => new ScpiMessage(enabled ? "SYSTem:STORage:SD:PROTect 1" : "SYSTem:STORage:SD:PROTect 0");
+
+    /// <summary>
+    /// Creates a query message for whether CRC-protected SD card writes are on.
+    /// </summary>
+    /// <remarks>
+    /// Firmware v3.9.0 and later (firmware #1217). Answers <c>1</c> or <c>0</c>: the value the
+    /// device holds, which may not have been applied to the card yet.
+    /// Command: SYSTem:STORage:SD:PROTect?
+    /// </remarks>
+    public static IOutboundMessage<string> GetSdCrcProtection => new ScpiMessage("SYSTem:STORage:SD:PROTect?");
+
+    /// <summary>
     /// Creates a command message to run an SD card write speed benchmark.
     /// </summary>
     /// <param name="size">The size in bytes to benchmark.</param>
