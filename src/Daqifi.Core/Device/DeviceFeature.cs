@@ -68,8 +68,9 @@ public enum DeviceFeature
     /// <remarks>
     /// Core asks it during the capability read so that
     /// <see cref="DaqifiStreamingDevice.StreamingFrequency"/> reports the device's rate rather
-    /// than Core's own default, for as long as no rate has been chosen on this device object.
-    /// Below v3.9.0 the query is not sent and the default stands.
+    /// than Core's own default, for as long as no rate has been chosen on this device object. The
+    /// 1 Hz boot placeholder is not adopted. Below v3.9.0 the query is not sent and the default
+    /// stands.
     /// </remarks>
     StoredStreamingRateQuery
 }

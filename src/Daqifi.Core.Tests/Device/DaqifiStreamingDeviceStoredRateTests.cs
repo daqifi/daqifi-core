@@ -74,14 +74,32 @@ public class DaqifiStreamingDeviceStoredRateTests
     }
 
     [Fact]
-    public async Task OnFirmware390_TheBootDefaultIsAdoptedToo()
+    public async Task OnFirmware390_TheBootPlaceholderIsNotAStoredRate_SoCoresDefaultStands()
     {
-        // A device that has never been started reports 1 Hz. That is its real rate.
+        // A device that has not been started since power-up reports 1 Hz: the firmware's
+        // placeholder, not a rate anybody asked for. Adopting it would make every freshly powered
+        // device stream at 1 Hz where Core has always started at 100 Hz. Measured on the bench Nq1
+        // on firmware 3.9.0: a raw START? straight after flashing answered 1.
         var device = CreateDevice(storedRateReply: "1");
 
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.NotNull(document);
+    }
+
+    [Fact]
+    public async Task TheBootPlaceholderDoesNotUndoARateAdoptedEarlier()
+    {
+        // A device power-cycled between two reads comes back on its placeholder. That says nothing
+        // was stored since, not that the rate is now 1 Hz.
+        var device = CreateDevice(storedRateReply: "500");
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(1, device.StreamingFrequency);
+        device.Responses[StoredRateCommand] = ["1"];
+        await device.ReadCapabilityDocumentAsync();
+
+        Assert.Equal(500, device.StreamingFrequency);
     }
 
     [Theory]
@@ -163,8 +181,8 @@ public class DaqifiStreamingDeviceStoredRateTests
     public async Task OnceAStreamHasRunAtTheDefault_ALaterReadDoesNotReplaceIt()
     {
         // Starting a stream commits to its rate: it is what a reconnect resumes at. The device
-        // here reports 1 Hz, as one that was power-cycled meanwhile would.
-        var device = CreateDevice(storedRateReply: "1");
+        // here reports 500 Hz, as one another client restarted meanwhile would.
+        var device = CreateDevice(storedRateReply: "500");
         device.StartStreaming();
         device.StopStreaming();
 

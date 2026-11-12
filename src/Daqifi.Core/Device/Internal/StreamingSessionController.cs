@@ -151,13 +151,32 @@ internal sealed class StreamingSessionController
     }
 
     /// <summary>
+    /// The rate the firmware stores from power-up until something starts a stream: 1 Hz
+    /// (<c>COMMON_STREAMING_RUNTIME_DEFAULTS</c>, <c>CommonRuntimeDefaults.h</c> at v3.9.0).
+    /// </summary>
+    /// <remarks>
+    /// The firmware itself calls it a placeholder that describes no real rate
+    /// (<c>streaming.h</c>, <c>Streaming_NoteRateConfigured</c>): it is the one rate legal in every
+    /// configuration, not one anybody asked for.
+    /// </remarks>
+    internal const int FirmwareBootDefaultStoredRateHz = 1;
+
+    /// <summary>
     /// Takes the streaming rate the device reports it has stored (<c>SYSTem:STReam:START?</c>,
-    /// firmware v3.9.0) as this device's rate, unless a rate has already been chosen here.
+    /// firmware v3.9.0) as this device's rate, unless a rate has already been chosen here or the
+    /// device is still on its boot placeholder.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Without this, a device that another client — or an SD log — had set to 1000 Hz was
     /// reported at Core's 100 Hz default, and the next start silently changed its rate (#960).
+    /// </para>
+    /// <para>
+    /// A reported <see cref="FirmwareBootDefaultStoredRateHz"/> is treated as nothing stored, and
+    /// the current rate stands. Every device reports it after power-up, so adopting it would make
+    /// a freshly powered device stream at 1 Hz where Core has always started at 100 Hz. The cost
+    /// is that a device somebody deliberately left at 1 Hz is reported at Core's rate, which is
+    /// what every connect reported before the device could be asked at all.
     /// </para>
     /// <para>
     /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
@@ -173,6 +192,14 @@ internal sealed class StreamingSessionController
     {
         if (_frequencyChosen)
         {
+            return false;
+        }
+
+        if (frequencyHz == FirmwareBootDefaultStoredRateHz)
+        {
+            SafeTrace(
+                $"[{nameof(TryAdoptStoredFrequency)}] The device reports its {FirmwareBootDefaultStoredRateHz} Hz boot "
+                + $"placeholder, so no rate has been stored; keeping {_streamingFrequency} Hz.");
             return false;
         }
 

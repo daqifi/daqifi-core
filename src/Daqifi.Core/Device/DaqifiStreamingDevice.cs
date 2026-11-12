@@ -155,9 +155,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// the rate the device has stored — the one another client, an SD log, or an earlier session
     /// last started it at — so this reports the device's rate rather than Core's guess (#960).
     /// That happens only while no rate has been chosen on this object: once it is set here or a
-    /// stream is started, the chosen rate stands, and an automatic reconnect resumes at it even if
-    /// the device came back with its 1 Hz boot default. Below v3.9.0 the device cannot be asked,
-    /// and the 100 Hz default stands until it is set.
+    /// stream is started, the chosen rate stands, and an automatic reconnect resumes at it whatever
+    /// the device reports. A device that has not been started since power-up reports its 1 Hz boot
+    /// placeholder, which is not adopted: the 100 Hz default stands for it, as it does below
+    /// v3.9.0, where the device cannot be asked.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.

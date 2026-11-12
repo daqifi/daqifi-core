@@ -467,13 +467,16 @@ The stopped stream keeps its rate: the device stores the last rate it was starte
 does not revert it. On firmware **3.9.0 and newer**, initialization reads that stored rate
 (`SYSTem:STReam:START?`) and `StreamingFrequency` reports it — so a device another client, an SD
 log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming()` without setting a
-rate keeps it there. Before any start since power-up the device stores 1 Hz, and that is what you
-see.
+rate keeps it there.
+
+Until something starts a stream after power-up, the device stores a 1 Hz placeholder. Core does not
+adopt that: a freshly powered device reads 100 Hz, as it always has. The one thing this costs is a
+device somebody deliberately left at exactly 1 Hz, which also reads 100 Hz.
 
 This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
 through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect
-resumes at it even if the device came back from a power cycle at 1 Hz. On firmware below 3.9.0 the
-device cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
+resumes at it whatever the device reports when it comes back. On firmware below 3.9.0 the device
+cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
 
 ### Manual Device Connection (Advanced)
 

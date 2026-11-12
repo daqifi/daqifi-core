@@ -20,9 +20,10 @@ public class StoredStreamingRateReplyTests
     }
 
     [Fact]
-    public void TryParse_TheBootDefault_IsRead()
+    public void TryParse_TheBootPlaceholder_IsRead()
     {
-        // A device that has never been started reports 1 Hz, which is a real answer.
+        // The parser reads 1 Hz like any other value; whether to adopt it is decided where the
+        // rate is kept (it is not: StreamingSessionController.FirmwareBootDefaultStoredRateHz).
         Assert.True(StoredStreamingRateReply.TryParse(new[] { "2", Document, "1" }, out var rateHz));
         Assert.Equal(1, rateHz);
     }

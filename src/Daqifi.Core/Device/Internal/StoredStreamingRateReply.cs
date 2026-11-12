@@ -31,7 +31,8 @@ internal static class StoredStreamingRateReply
     /// <param name="lines">Every line the exchange returned, in order.</param>
     /// <param name="rateHz">
     /// The reported rate, in Hz, when this returns <c>true</c>. Not range-checked against the
-    /// device: that is the caller's job, since the ceiling is the device's.
+    /// device, and the 1 Hz boot placeholder is returned like any other value: what to adopt is the
+    /// caller's decision, since the ceiling is the device's.
     /// </param>
     /// <returns><c>true</c> when the line after the document is a plain unsigned integer that fits in an <see cref="int"/>.</returns>
     internal static bool TryParse(IReadOnlyList<string> lines, out int rateHz)

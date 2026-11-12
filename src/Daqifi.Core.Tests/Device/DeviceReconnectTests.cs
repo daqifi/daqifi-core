@@ -205,12 +205,12 @@ public class DeviceReconnectTests
     }
 
     [Fact]
-    public async Task AStreamResumesAtItsOwnRate_WhenTheDeviceComesBackWithItsBootDefault()
+    public async Task AStreamResumesAtItsOwnRate_WhenTheDeviceComesBackStoringAnotherOne()
     {
         // #960: on firmware 3.9.0+ initialization adopts the rate the device has stored. A device
-        // that was power-cycled while it was away comes back storing its 1 Hz boot default, and
-        // adopting that on the reconnect would resume a 250 Hz session at 1 Hz. A rate somebody
-        // chose stands.
+        // that another client restarted at 1000 Hz while this session was away comes back storing
+        // that, and adopting it on the reconnect would resume a 250 Hz session at 1000 Hz. A rate
+        // somebody chose here stands.
         using var transport = new ScriptedReconnectTransport();
         using var device = new ScriptedStreamingDevice("Power-cycled Device", transport);
         device.ReconnectOptions = FastPolicy();
@@ -222,7 +222,7 @@ public class DeviceReconnectTests
         device.StreamingFrequency = 250;
         device.StartStreaming();
 
-        device.StoredRateReportedOnInitialize = 1;
+        device.StoredRateReportedOnInitialize = 1000;
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
         device.ClearSentCommands();
 
@@ -232,11 +232,11 @@ public class DeviceReconnectTests
         Assert.True(result.StreamingResumed);
         Assert.Equal(250, device.StreamingFrequency);
         Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
-        Assert.DoesNotContain("SYSTem:StartStreamData 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:StartStreamData 1000", device.SentCommands);
     }
 
     [Fact]
-    public async Task ARawStartedStreamResumesAtItsOwnRate_WhenTheDeviceComesBackWithItsBootDefault()
+    public async Task ARawStartedStreamResumesAtItsOwnRate_WhenTheDeviceComesBackStoringAnotherOne()
     {
         // The same, for a session the caller drove with raw commands (#379): the rate it started
         // at is just as much a choice as one set through the property.
@@ -248,6 +248,34 @@ public class DeviceReconnectTests
 
         device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
         device.Send(ScpiMessageProducer.StartStreaming(250));
+
+        device.StoredRateReportedOnInitialize = 1000;
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+        var result = await reconnected;
+
+        Assert.True(result.StreamingResumed);
+        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task AStreamResumesAtItsOwnRate_WhenAPowerCycledDeviceComesBackOnItsBootPlaceholder()
+    {
+        // A device power-cycled while away stores its 1 Hz placeholder. Resuming at that would
+        // turn a 250 Hz session into a 1 Hz one.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Power-cycled Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var analog0 = device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        device.EnableChannels(new[] { analog0 });
+        device.StreamingFrequency = 250;
+        device.StartStreaming();
 
         device.StoredRateReportedOnInitialize = 1;
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
