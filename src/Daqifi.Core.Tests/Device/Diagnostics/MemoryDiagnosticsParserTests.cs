@@ -112,6 +112,54 @@ public class MemoryDiagnosticsParserTests
         Assert.Equal(32UL, mem.SampleElementBytes);
     }
 
+    // Firmware 3.9.0's SYSTem:MEMory:FREE? answer, every key in SCPI_GetMemFree's emit order at
+    // tag v3.9.0. StreamingPoolTotal is the build's STATIC_POOL_SIZE (193024 B); the rest are
+    // representative values.
+    private static readonly string[] V390Response =
+    {
+        "HeapTotal=75000",
+        "HeapFree=9216",
+        "HeapUsed=65784",
+        "HeapMinEverFree=8840",
+        "LargestFreeBlock=8192",
+        "SmallestFreeBlock=16",
+        "HeapFreeBlocks=4",
+        "CoherentPoolTotal=32768",
+        "CoherentPoolFree=16384",
+        "SdCircularSize=512",
+        "SamplePoolCount=1100",
+        "SamplePoolPartitioned=1100",
+        "SamplePoolClampedSlots=0",
+        "SampleElementBytes=20",
+        "SamplePoolBytes=22000",
+        "SampleNextFreeBytes=2200",
+        "SampleQueueBytes=4480",
+        "SamplePoolInUse=0",
+        "SamplePoolMaxUsed=1100",
+        "StreamingPoolTotal=193024",
+    };
+
+    [Fact]
+    public void TryParse_V390Response_ExposesStreamingPoolTotal()
+    {
+        var ok = MemoryDiagnosticsParser.TryParse(V390Response, out var mem);
+
+        Assert.True(ok);
+        Assert.NotNull(mem);
+        Assert.Equal(193024UL, mem!.StreamingPoolTotal);
+        Assert.Equal(20, mem.Values.Count);
+    }
+
+    [Fact]
+    public void TryParse_WhenFirmwareOmitsStreamingPoolTotal_ItReadsNull()
+    {
+        // Firmware before 3.9.0 (the 3.7.2 bench answer) does not send it.
+        var ok = MemoryDiagnosticsParser.TryParse(BenchResponse, out var mem);
+
+        Assert.True(ok);
+        Assert.Null(mem!.StreamingPoolTotal);
+    }
+
     [Fact]
     public void TryParse_MissingFieldsReturnNull()
     {
