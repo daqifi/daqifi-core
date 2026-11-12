@@ -32,7 +32,7 @@ public sealed class CapabilityIdentity
 
     /// <summary>
     /// Gets the CRC32 of the flashed firmware image as eight hexadecimal digits, e.g.
-    /// <c>"3F0A6B1D"</c>, or <c>null</c> when not stated (firmware before v3.8.0).
+    /// <c>"0E9DEE9C"</c>, or <c>null</c> when not stated (firmware before v3.8.0).
     /// </summary>
     /// <remarks>
     /// <see cref="FirmwareRevision"/> names a release, so every build between two releases reports

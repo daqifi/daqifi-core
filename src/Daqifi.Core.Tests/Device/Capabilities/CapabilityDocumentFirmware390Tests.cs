@@ -26,14 +26,35 @@ public class CapabilityDocumentFirmware390Tests
 
         var terms = streaming.CapTerms;
         Assert.NotNull(terms);
-        Assert.Equal(15714, terms!.AdcAdditiveHz);
-        Assert.Equal(12000, terms.TransportHz);
-        Assert.Equal(31446, terms.ScanBoundHz);
+        Assert.Equal(7319, terms!.AdcAdditiveHz);
+        Assert.Equal(30000, terms.TransportHz);
+        Assert.Equal(6924, terms.ScanBoundHz);
         // 0 is "not applicable" (the stream is not going to SD), kept as 0 rather than null.
         Assert.Equal(0, terms.SdAdditiveHz);
 
-        Assert.Equal(CapabilityRateCapTerm.Transport, terms.BindingTerm);
-        Assert.Equal(12000, streaming.CurrentMaximumRateHz);
+        Assert.Equal(CapabilityRateCapTerm.ScanBound, terms.BindingTerm);
+        Assert.Equal(6924, streaming.CurrentMaximumRateHz);
+    }
+
+    [Fact]
+    public void TryParse_Firmware390DocumentWithNothingEnabled_ReadsZerosAsZeros()
+    {
+        var document = Parse(CapabilityDocumentSamples.Nyquist1Firmware390NoChannels);
+        var streaming = document.Streaming!;
+
+        // With no input enabled every term is 0 ("not applicable"): stated, so not null, and
+        // nothing binds.
+        var terms = streaming.CapTerms!;
+        Assert.Equal(0, terms.AdcAdditiveHz);
+        Assert.Equal(0, terms.TransportHz);
+        Assert.Equal(0, terms.ScanBoundHz);
+        Assert.Equal(0, terms.SdAdditiveHz);
+        Assert.Null(terms.BindingTerm);
+        Assert.Equal(0, streaming.CurrentMaximumRateHz);
+
+        Assert.All(
+            document.Channels.Where(c => c.Kind == CapabilityChannelKind.AnalogInput),
+            c => Assert.Equal(0, c.ScanOffsetTicks));
     }
 
     [Fact]
@@ -44,8 +65,9 @@ public class CapabilityDocumentFirmware390Tests
         Assert.NotNull(timing);
         Assert.Equal(42_000_000, timing!.TimestampHz);
         Assert.Equal(10_500_000, timing.StreamTimerHz);
-        Assert.Equal(42_000, timing.TimestampTicksPerSample);
-        Assert.Equal(1_000_000, timing.ActualRateMillihertz);
+        // Captured with a 10 Hz rate configured.
+        Assert.Equal(4_200_000, timing.TimestampTicksPerSample);
+        Assert.Equal(10_000, timing.ActualRateMillihertz);
         Assert.Equal(84_000_000, timing.PeripheralClockHz);
         Assert.Equal(84_000_000, timing.PeripheralClockBuiltHz);
         Assert.True(timing.ClockMatchesBuild);
@@ -56,9 +78,9 @@ public class CapabilityDocumentFirmware390Tests
     {
         var document = Parse(CapabilityDocumentSamples.Nyquist1Firmware390);
 
-        // Scan positions 0 and 1 of the enabled multiplexed inputs.
+        // Scan positions 0 and 2: an internal input is scanned between the two enabled ones.
         Assert.Equal(510, AnalogInput(document, 0).ScanOffsetTicks);
-        Assert.Equal(1090, AnalogInput(document, 1).ScanOffsetTicks);
+        Assert.Equal(1670, AnalogInput(document, 1).ScanOffsetTicks);
 
         // Enabled but dedicated: converts with the stamp, so no offset.
         var dedicated = AnalogInput(document, 4);
@@ -86,7 +108,7 @@ public class CapabilityDocumentFirmware390Tests
 
         var identity = document.Identity!;
         Assert.Equal("3.9.0", identity.FirmwareRevision);
-        Assert.Equal("3F0A6B1D", identity.FirmwareCrc32);
+        Assert.Equal("0E9DEE9C", identity.FirmwareCrc32);
 
         // A board that was never calibrated, which firmware before 3.9.0 could not report.
         Assert.NotNull(identity.Calibration);
@@ -205,9 +227,9 @@ public class CapabilityDocumentFirmware390Tests
         // it wrote "inf", which made the whole document unparseable). One channel's null must not
         // take the document, or the neighbouring channels, down with it.
         var json = CapabilityDocumentSamples.Nyquist1Firmware390.Replace(
-            "\"scan_offset_ticks\":1090,\"ranges\":[{\"min\":0.000,\"max\":5.000}],"
+            "\"scan_offset_ticks\":1670,\"ranges\":[{\"min\":0.000,\"max\":5.000}],"
             + "\"calibration\":{\"model\":\"linear\",\"user_override_supported\":true,\"slope\":1,\"intercept\":0}",
-            "\"scan_offset_ticks\":1090,\"ranges\":[{\"min\":null,\"max\":null}],"
+            "\"scan_offset_ticks\":1670,\"ranges\":[{\"min\":null,\"max\":null}],"
             + "\"calibration\":{\"model\":\"linear\",\"user_override_supported\":true,\"slope\":null,\"intercept\":null}",
             System.StringComparison.Ordinal);
         Assert.NotEqual(CapabilityDocumentSamples.Nyquist1Firmware390, json);
@@ -219,7 +241,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.Null(affected.CalibrationIntercept);
         Assert.Null(affected.RangeMinimum);
         Assert.Null(affected.RangeMaximum);
-        Assert.Equal(1090, affected.ScanOffsetTicks);
+        Assert.Equal(1670, affected.ScanOffsetTicks);
 
         var neighbour = AnalogInput(document, 0);
         Assert.Equal(1.0, neighbour.CalibrationSlope);
