@@ -120,6 +120,13 @@ public sealed record MemoryDiagnostics
     /// </summary>
     public ulong? SampleElementBytes => GetValue("SampleElementBytes");
 
+    /// <summary>
+    /// Gets the total size in bytes of the streaming buffer pool that the USB, WiFi, encoder, SD
+    /// and sample buffers are carved from, or <see langword="null"/> if absent (firmware before
+    /// 3.9.0).
+    /// </summary>
+    public ulong? StreamingPoolTotal => GetValue("StreamingPoolTotal");
+
     private ulong? GetValue(string key) =>
         Values.TryGetValue(key, out var value) ? value : null;
 }
