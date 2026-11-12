@@ -57,5 +57,14 @@ public enum DeviceFeature
     /// did get as the whole card (closes #887). On older firmware a missing marker is simply
     /// the norm and carries no such information.
     /// </remarks>
-    SdListingEndMarker
+    SdListingEndMarker,
+
+    /// <summary>
+    /// The live WiFi status queries behind <see cref="Network.IWifiLinkStatusProvider"/>: the link
+    /// state (<c>SYSTem:COMMunicate:LAN:CONnected?</c>, firmware <c>#951</c>/<c>#1044</c>) and the
+    /// active — rather than staged — WiFi mode (<c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware
+    /// <c>#1186</c>/<c>#1193</c>). Firmware-gated: first released in <b>v3.9.0</b>; requires WiFi
+    /// hardware.
+    /// </summary>
+    WifiLinkStatus
 }

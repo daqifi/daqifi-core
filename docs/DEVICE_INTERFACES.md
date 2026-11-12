@@ -93,6 +93,8 @@ directly (no cast required). It implements:
   (see [Channel Management](#channel-management) below)
 - `INetworkConfigurable` — WiFi/LAN configuration (see the
   [Network configuration](../README.md#network-configuration) recipe in the root README)
+- `IWifiLinkStatusProvider` — live WiFi link state and the mode the radio is actually running
+  (firmware v3.9.0+, gated by `DeviceFeature.WifiLinkStatus`)
 - `ISdCardOperations` — list/download/delete/format SD card contents and start/stop on-device logging
 - `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
