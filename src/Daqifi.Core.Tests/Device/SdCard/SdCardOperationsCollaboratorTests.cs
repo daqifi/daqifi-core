@@ -42,8 +42,9 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// </para>
 /// <para>
 /// The fake host below throws <see cref="NotSupportedException"/> for every member outside this
-/// block's remit, so a change that reaches for the channels lock, the metadata, or the error-queue
-/// drain fails loudly instead of passing quietly.
+/// block's remit, so a change that reaches for the channels lock or the metadata fails loudly
+/// instead of passing quietly. The error-queue drain is in its remit since #959: a download that
+/// comes back empty on firmware v3.9.0+ reads the device's queued reason through it.
 /// </para>
 /// </remarks>
 public class SdCardOperationsCollaboratorTests
@@ -1722,6 +1723,218 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"data.bin\""));
     }
 
+    // ---- #959: an empty SD:GET on firmware v3.9.0+ reads the reason off the error queue ----
+
+    /// <summary>
+    /// A host on firmware v3.9.0+, whose download of a missing file comes back as one bare EOF
+    /// marker per GET attempt, with <paramref name="queuedErrors"/> waiting on the error queue.
+    /// </summary>
+    private static FakeHost HostWithEmptyGetOnV390(params string[] queuedErrors)
+    {
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker, EofMarker),
+        };
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.QueuedErrors.AddRange(queuedErrors);
+        return host;
+    }
+
+    [Theory]
+    [InlineData(-256, "-256,\"File name not found\"")]
+    [InlineData(-257, "-257,\"File name error\"")]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_DeviceReportsABadName_ThrowsSdCardFileNotFoundException(
+        int code, string queuedError)
+    {
+        // The bug: a file that is not on the card came back as SdCardEmptyTransferException,
+        // telling the user to retry or power-cycle. Firmware v3.9.0 queues why the open failed.
+        var host = HostWithEmptyGetOnV390(queuedError);
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
+            () => ops.DownloadSdCardFileAsync("missing.bin", destination));
+
+        Assert.Equal("missing.bin", ex.FileName);
+        Assert.Equal(code, ex.ScpiErrorCode);
+        Assert.Equal(queuedError, ex.LastScpiError);
+        Assert.Contains("missing.bin", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(destination.ToArray());
+
+        // Read once, after the last GET, while the download still owns the device.
+        var calls = host.Calls.ToList();
+        Assert.Equal(1, calls.Count(c => c == "drain"));
+        Assert.True(
+            calls.IndexOf("drain") > calls.LastIndexOf("send:SYSTem:STORage:SD:GET \"missing.bin\""),
+            string.Join(" | ", calls));
+
+        // Drained to empty, not read once: a full firmware queue holds 17 entries, and two left
+        // over make the next connect fail (#898).
+        Assert.True(host.DrainCaps.Single() >= 18, $"drain cap {host.DrainCaps.Single()}");
+        Assert.Empty(host.QueuedErrors);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_DeviceReportsMassStorage_ThrowsSdCardFilesystemException()
+    {
+        // -250 means the storage, not the name, is the problem (unmounted, denied, no handles).
+        var host = HostWithEmptyGetOnV390("-250,\"Mass storage error\"");
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        // ThrowsAsync matches the exact type, so this also proves it is not reported as a
+        // missing file.
+        var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
+            () => ops.DownloadSdCardFileAsync("data.bin", destination));
+
+        Assert.Equal("-250,\"Mass storage error\"", ex.LastScpiError);
+        Assert.Equal("-250,\"Mass storage error\"", ex.DeviceMessage);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_DeviceReportsNothing_KeepsSdCardEmptyTransferException()
+    {
+        // No queued reason means the file opened and the SD subsystem sent nothing: the #264
+        // condition the empty-transfer exception has always described.
+        var host = HostWithEmptyGetOnV390();
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => ops.DownloadSdCardFileAsync("data.bin", destination));
+
+        Assert.Equal("data.bin", ex.FileName);
+        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
+        Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"data.bin\""));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_DoesNotReadTheErrorQueue()
+    {
+        // Older firmware queues nothing for an open failure, so the queue cannot answer and the
+        // download behaves exactly as before. The queued entry proves it was never consulted.
+        var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
+        host.SupportedFeatures.Clear();
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => ops.DownloadSdCardFileAsync("missing.bin", destination));
+
+        Assert.DoesNotContain("drain", host.Calls);
+        Assert.Single(host.QueuedErrors);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_StaleEntriesAhead_TheNewestOpenFailureWins()
+    {
+        // Entries left by earlier commands come out first. The device queues its open failure at
+        // the latest command boundary, so the newest matching entry is the one about this GET.
+        var host = HostWithEmptyGetOnV390(
+            "-200,\"Execution error\"",
+            "-250,\"Mass storage error\"",
+            "-256,\"File name not found\"");
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
+            () => ops.DownloadSdCardFileAsync("missing.bin", destination));
+
+        Assert.Equal(-256, ex.ScpiErrorCode);
+        Assert.Equal(
+            new[] { "-200,\"Execution error\"", "-250,\"Mass storage error\"", "-256,\"File name not found\"" },
+            ex.RawDeviceResponse);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_OnlyUnrelatedEntriesQueued_KeepsSdCardEmptyTransferException()
+    {
+        // A stale -200 says nothing about this file. It is drained (so it cannot trip the next
+        // connect, #898) but does not change the answer.
+        var host = HostWithEmptyGetOnV390("-200,\"Execution error\"");
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => ops.DownloadSdCardFileAsync("data.bin", destination));
+
+        Assert.Empty(host.QueuedErrors);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_ErrorQueueReadFails_KeepsSdCardEmptyTransferException()
+    {
+        // The read is best effort: if it fails, the download's own answer still stands, rather
+        // than a failure from a query the caller never asked for.
+        var host = HostWithEmptyGetOnV390();
+        host.ThrowOnDrain = new TimeoutException("no reply");
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => ops.DownloadSdCardFileAsync("data.bin", destination));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_DeviceReportsFileNotFound_ThrowsSdCardFileNotFoundException()
+    {
+        // A file listed at 0 bytes and deleted since gives the same bare EOF marker as the empty
+        // file the listing promised. On v3.9.0 the queue tells them apart.
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
+        host.QueuedErrors.Add("-256,\"File name not found\"");
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
+            () => ops.DownloadSdCardFileAsync("empty.bin", destination));
+
+        Assert.Equal("empty.bin", ex.FileName);
+        Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_NothingQueued_ReportsAnEmptyDownload()
+    {
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
+
+        Assert.Equal(0, result.FileSize);
+        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_FileWithContentOnV390_DoesNotReadTheErrorQueue()
+    {
+        // Only an empty reply can hide an open failure; a download that delivered content pays
+        // no extra exchange.
+        var payload = new byte[] { 1, 2, 3 };
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)),
+        };
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("data.bin", destination);
+
+        Assert.Equal(payload.Length, result.FileSize);
+        Assert.DoesNotContain("drain", host.Calls);
+    }
+
     [Fact]
     public async Task DownloadSdCardFileAsync_WhileAnotherIsParkedOnTheTransport_RefusesInsteadOfSharingIt()
     {
@@ -2331,9 +2544,35 @@ public class SdCardOperationsCollaboratorTests
         public void Disconnect() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
+
+        /// <summary>
+        /// What the device's SCPI error queue holds, oldest first. <see cref="DrainErrorQueueAsync"/>
+        /// hands it all back and empties it, as the real drain does when it reads to "No error".
+        /// </summary>
+        public List<string> QueuedErrors { get; } = new();
+
+        /// <summary>When set, <see cref="DrainErrorQueueAsync"/> fails with it instead of reading.</summary>
+        public Exception? ThrowOnDrain { get; set; }
+
+        /// <summary>The read cap each drain asked for, in order.</summary>
+        public List<int> DrainCaps { get; } = new();
+
         public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            Record("drain");
+            DrainCaps.Add(maxIterations);
+
+            if (ThrowOnDrain != null)
+            {
+                return Task.FromException<IReadOnlyList<string>>(ThrowOnDrain);
+            }
+
+            var drained = QueuedErrors.ToArray();
+            QueuedErrors.Clear();
+            return Task.FromResult<IReadOnlyList<string>>(drained);
+        }
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();
         public void RaiseRawStreamFrame(DaqifiOutMessage message) => throw new NotSupportedException();

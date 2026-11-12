@@ -96,6 +96,22 @@ public class DeviceFeatureSupportTests
         Assert.True(device.Supports(DeviceFeature.SdListingEndMarker));
     }
 
+    [Theory]
+    [InlineData("3.8.0", false)]
+    [InlineData("3.9.0", true)]
+    public void Supports_SdGetOpenFailureError_FromV3_9_0(string firmwareVersion, bool expected)
+    {
+        // Firmware #914 (PR #1106) first shipped in v3.9.0. Below it an open failure queues
+        // nothing, so reading the error queue after an empty SD:GET would only cost an exchange.
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdGetOpenFailureError);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
+
+        Assert.Equal(
+            expected,
+            DeviceOn(DeviceType.Nyquist1, firmwareVersion).Supports(DeviceFeature.SdGetOpenFailureError));
+    }
+
     [Fact]
     public void RequirementTable_SdStorageQuery_ReportsTheSupportedFloorNotTheIntroducingVersion()
     {

@@ -3171,6 +3171,49 @@ public class SdCardOperationsTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_MissingFileOnV390_ReadsTheErrorQueueAndThrowsSdCardFileNotFoundException()
+    {
+        // End to end through the device's real error-queue drain (#959): the open failure the
+        // firmware queued is read with SYSTem:ERRor?, and the queue is read until it is empty.
+        var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.FirmwareVersion = "3.9.0";
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.QueuedErrors.Enqueue("-256,\"File name not found\"");
+        device.Connect();
+        using var destinationStream = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
+            () => device.DownloadSdCardFileAsync("missing.bin", destinationStream));
+
+        Assert.Equal("missing.bin", ex.FileName);
+        Assert.Equal(-256, ex.ScpiErrorCode);
+        Assert.Empty(device.QueuedErrors);
+
+        // One read for the queued entry, one that answered "No error".
+        var errorQueries = device.SentMessages.Count(m => m.Data == ScpiMessageProducer.GetSystemError.Data);
+        Assert.Equal(2, errorQueries);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_MissingFileOnV380_StillThrowsSdCardEmptyTransferException()
+    {
+        // Firmware before v3.9.0 queues nothing for an open failure, so the download behaves as
+        // it always has and spends no exchange on the error queue.
+        var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.FirmwareVersion = "3.8.0";
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.Connect();
+        using var destinationStream = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => device.DownloadSdCardFileAsync("missing.bin", destinationStream));
+
+        Assert.DoesNotContain(device.SentMessages, m => m.Data == ScpiMessageProducer.GetSystemError.Data);
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_ListedNonEmptyFile_RetriesThenReportsListedSize()
     {
         // Arrange — the listing says 4096 bytes, so a marker-only transfer really is a wedged
@@ -4247,6 +4290,13 @@ public class SdCardOperationsTests
         /// </summary>
         public int UnterminatedAttempts { get; set; }
 
+        /// <summary>
+        /// What the device's SCPI error queue holds, oldest first. An exchange that sends nothing
+        /// but <c>SYSTem:ERRor?</c> pops the next entry, and an empty queue answers "No error",
+        /// which is how the real device answers the drain that follows an empty SD:GET (#959).
+        /// </summary>
+        public Queue<string> QueuedErrors { get; } = new();
+
         public TestableRetryDownloadDevice(params byte[][] fileDataPerAttempt)
             : base("TestDevice")
         {
@@ -4299,6 +4349,15 @@ public class SdCardOperationsTests
 
                 setupAction();
                 _executeTextCommandCallCount++;
+
+                if (SentMessages.Count == sentBefore + 1
+                    && SentMessages[sentBefore].Data == ScpiMessageProducer.GetSystemError.Data)
+                {
+                    return new[]
+                    {
+                        QueuedErrors.Count > 0 ? QueuedErrors.Dequeue() : SdCardTestResponses.NoErrorReply,
+                    };
+                }
 
                 // GetSdCardFilesAsync drives the listing through THIS overload (the SPI switch is
                 // the exchange's prepareAsync phase, #406), and terminates it with SYSTem:ERRor?
