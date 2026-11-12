@@ -2862,8 +2862,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public const int MaximumCapabilityDocumentApiVersion = 2;
 
     /// <summary>
-    /// Gap between the two capability queries sent in one exchange, so the firmware's SCPI
-    /// parser sees two commands rather than one write it has to split.
+    /// Gap between the queries sent in one capability exchange, so the firmware's SCPI parser
+    /// sees separate commands rather than one write it has to split.
     /// </summary>
     private const int CapabilityQuerySpacingMs = 50;
 
@@ -2905,6 +2905,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// soon as the enabled set changes.
     /// </para>
     /// <para>
+    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.StoredStreamingRateQuery"/>) the
+    /// same exchange also asks <c>SYSTem:STReam:START?</c>, the rate the device has stored, so
+    /// that a <see cref="DaqifiStreamingDevice"/> reports the device's rate rather than its own
+    /// default until a rate is chosen (#960). It rides here because a separate exchange would
+    /// cost the connect sequence hundreds of milliseconds for one integer. Its outcome never
+    /// affects the document's: a missing or unusable answer leaves the rate as it was.
+    /// </para>
+    /// <para>
     /// This runs a text-mode exchange, which stops decoding protobuf frames for its duration.
     /// Do not call it while streaming.
     /// </para>
@@ -2928,24 +2936,71 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
+        var readStoredStreamingRate = Supports(DeviceFeature.StoredStreamingRateQuery);
+
         // Both queries go out in one text exchange. Each exchange costs far more than either
         // reply does — its settle window and completion window alone are hundreds of
         // milliseconds — so a second exchange would roughly double what this adds to the
         // connect sequence, to fetch a document that measures 8 KB in ~25 ms. The version
         // is still checked before the document is *trusted*, which is what the gate is for;
         // asking for both up front only means a device on an unreadable schema transferred a
-        // document that is then discarded.
+        // document that is then discarded. The stored-rate query joins them for the same
+        // reason, and goes last: StoredStreamingRateReply finds its answer by its position
+        // after the document.
         var lines = await ExecuteTextCommandAsync(
             async token =>
             {
                 Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
                 await Task.Delay(TimeSpan.FromMilliseconds(CapabilityQuerySpacingMs), _timeProvider, token).ConfigureAwait(false);
                 Send(ScpiMessageProducer.GetCapabilitiesJson);
+
+                if (readStoredStreamingRate)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(CapabilityQuerySpacingMs), _timeProvider, token).ConfigureAwait(false);
+                    Send(ScpiMessageProducer.GetStoredStreamingRate);
+                }
             },
             responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
             completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
+        var document = TryApplyCapabilityDocument(lines);
+
+        // After the document, so the rate is checked against the sampling ceiling the document
+        // may just have set.
+        if (readStoredStreamingRate)
+        {
+            if (StoredStreamingRateReply.TryParse(lines, out var storedRateHz))
+            {
+                OnStoredStreamingRateRead(storedRateHz);
+            }
+            else
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The device did not report a usable stored streaming rate; keeping the current rate."));
+            }
+        }
+
+        return document;
+    }
+
+    /// <summary>
+    /// Receives the streaming rate the device reported it has stored
+    /// (<c>SYSTem:STReam:START?</c>). The base device keeps no streaming rate, so it ignores it.
+    /// </summary>
+    /// <param name="rateHz">The reported rate, in Hz; not yet range-checked.</param>
+    internal virtual void OnStoredStreamingRateRead(int rateHz)
+    {
+    }
+
+    /// <summary>
+    /// Vets the capability exchange's lines and, when they hold a document this parser can
+    /// trust, applies it.
+    /// </summary>
+    /// <param name="lines">The lines of the capability exchange.</param>
+    /// <returns>The applied document, or <c>null</c> when nothing was applied.</returns>
+    private CapabilityDocument? TryApplyCapabilityDocument(IReadOnlyList<string> lines)
+    {
         if (!CapabilityDocumentParser.TryParseApiVersion(lines, out var apiVersion))
         {
             SafeLog(() => _logger.LogDebug(

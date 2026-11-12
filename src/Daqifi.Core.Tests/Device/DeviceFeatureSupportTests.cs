@@ -97,6 +97,18 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_StoredStreamingRateQuery_RequiresV3_9_0_OnEveryBoard()
+    {
+        // SYSTem:STReam:START? (firmware #1007/#1014) first shipped in v3.9.0. Below it the query
+        // is an undefined header, so asking it would leave an error in the device's queue.
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.StoredStreamingRateQuery);
+
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Null(requirement.Boards);
+        Assert.Equal(HardwareRequirement.None, requirement.Hardware);
+    }
+
+    [Fact]
     public void RequirementTable_SdStorageQuery_ReportsTheSupportedFloorNotTheIntroducingVersion()
     {
         // SYSTem:STORage:SD:SPACe? shipped in v3.4.6b1, but the floor is what daqifi-core
@@ -120,7 +132,8 @@ public class DeviceFeatureSupportTests
             //                feature                                below,    at min,   above
             new object[] { DeviceFeature.SdFileTransferOverWifi, "3.6.3", "3.7.0", "3.7.2" },
             new object[] { DeviceFeature.CapabilityDocument,     "3.4.4", "3.5.0", "3.6.0" },
-            new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" }
+            new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
+            new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" }
         };
 
     [Theory]

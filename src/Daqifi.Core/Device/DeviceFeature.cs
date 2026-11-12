@@ -57,5 +57,19 @@ public enum DeviceFeature
     /// did get as the whole card (closes #887). On older firmware a missing marker is simply
     /// the norm and carries no such information.
     /// </remarks>
-    SdListingEndMarker
+    SdListingEndMarker,
+
+    /// <summary>
+    /// The stored streaming rate readback (<c>SYSTem:STReam:START?</c>), which answers the rate
+    /// the device will stream at — the last one a start set, which a stop deliberately does not
+    /// revert, or the 1 Hz boot default before any start. Firmware-gated: introduced by firmware
+    /// <c>#1007</c>/<c>#1014</c> and first released in <b>v3.9.0</b>.
+    /// </summary>
+    /// <remarks>
+    /// Core asks it during the capability read so that
+    /// <see cref="DaqifiStreamingDevice.StreamingFrequency"/> reports the device's rate rather
+    /// than Core's own default, for as long as no rate has been chosen on this device object.
+    /// Below v3.9.0 the query is not sent and the default stands.
+    /// </remarks>
+    StoredStreamingRateQuery
 }

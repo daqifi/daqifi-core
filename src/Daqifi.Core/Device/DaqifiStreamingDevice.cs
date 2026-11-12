@@ -149,6 +149,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// reaches the hardware — consistent with the client-side guards Core already applies
     /// to PWM (#306) and channel bounds (#300).
     /// </summary>
+    /// <remarks>
+    /// A new device object starts at 100 Hz. On firmware v3.9.0 and newer
+    /// (<see cref="DeviceFeature.StoredStreamingRateQuery"/>), initialization replaces that with
+    /// the rate the device has stored — the one another client, an SD log, or an earlier session
+    /// last started it at — so this reports the device's rate rather than Core's guess (#960).
+    /// That happens only while no rate has been chosen on this object: once it is set here or a
+    /// stream is started, the chosen rate stands, and an automatic reconnect resumes at it even if
+    /// the device came back with its 1 Hz boot default. Below v3.9.0 the device cannot be asked,
+    /// and the 100 Hz default stands until it is set.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
     /// </exception>
@@ -177,6 +187,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
               + "Read MaximumStreamingFrequencyHz to see the limit. This member will be removed "
               + "in a future major version.")]
     public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
+
+    /// <summary>
+    /// Adopts the rate the device reported it has stored, unless a rate has been chosen on this
+    /// device; see <see cref="StreamingFrequency"/>.
+    /// </summary>
+    internal override void OnStoredStreamingRateRead(int rateHz) =>
+        _session.TryAdoptStoredFrequency(rateHz);
 
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.
@@ -246,7 +263,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // method, so they are always in place before the device is handed to a caller.
         //
         // The session controller is built first because IsStreaming and StreamingFrequency now
-        // read through it, and both the StreamingFrequency assignment at the bottom of this
+        // read through it, and both the default-rate assignment at the bottom of this
         // method and anything a collaborator's constructor might read would otherwise find it
         // null.
         _session = new StreamingSessionController(this);
@@ -260,7 +277,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         _lanChipInfoOperations = new LanChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
 
-        StreamingFrequency = 100;
+        _session.SetDefaultFrequency(100);
 
         // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
         // an intentional Disconnected as well as an unexpected drop (which sets Lost, not

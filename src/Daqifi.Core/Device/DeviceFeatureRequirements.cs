@@ -77,6 +77,13 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware that answers <c>SYSTem:STReam:START?</c> with the stored streaming rate
+    /// (firmware <c>#1007</c>/<c>#1014</c>), first released in <b>v3.9.0</b>. Below this version
+    /// the query is an undefined header.
+    /// </summary>
+    internal static readonly FirmwareVersion StoredStreamingRateQueryMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -117,7 +124,12 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.SdListingEndMarker] = new(
                 MinVersion: SdListingEndMarkerMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.SdCard)
+                Hardware: HardwareRequirement.SdCard),
+
+            [DeviceFeature.StoredStreamingRateQuery] = new(
+                MinVersion: StoredStreamingRateQueryMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.None)
         };
 
     /// <summary>

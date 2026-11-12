@@ -205,6 +205,78 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public async Task AStreamResumesAtItsOwnRate_WhenTheDeviceComesBackWithItsBootDefault()
+    {
+        // #960: on firmware 3.9.0+ initialization adopts the rate the device has stored. A device
+        // that was power-cycled while it was away comes back storing its 1 Hz boot default, and
+        // adopting that on the reconnect would resume a 250 Hz session at 1 Hz. A rate somebody
+        // chose stands.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Power-cycled Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var analog0 = device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        device.EnableChannels(new[] { analog0 });
+        device.StreamingFrequency = 250;
+        device.StartStreaming();
+
+        device.StoredRateReportedOnInitialize = 1;
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+        var result = await reconnected;
+
+        Assert.True(result.StreamingResumed);
+        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:StartStreamData 1", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task ARawStartedStreamResumesAtItsOwnRate_WhenTheDeviceComesBackWithItsBootDefault()
+    {
+        // The same, for a session the caller drove with raw commands (#379): the rate it started
+        // at is just as much a choice as one set through the property.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Raw Power-cycled Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
+        device.Send(ScpiMessageProducer.StartStreaming(250));
+
+        device.StoredRateReportedOnInitialize = 1;
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+        var result = await reconnected;
+
+        Assert.True(result.StreamingResumed);
+        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
+    }
+
+    [Fact]
+    public void BeforeAnyRateIsChosen_InitializationAdoptsTheDevicesStoredRate()
+    {
+        // The other half of the rule: with nothing chosen, the device's rate is the truth.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Pre-configured Device", transport)
+        {
+            StoredRateReportedOnInitialize = 500
+        };
+
+        ConnectAndInitialize(device);
+
+        Assert.Equal(500, device.StreamingFrequency);
+    }
+
+    [Fact]
     public void ARawStartedStream_ReAnchorsTimestampsInsteadOfContinuingTheLastSession()
     {
         // The silent-wrong-data one. Timestamp reconstruction advances a per-session anchor by the
@@ -1710,6 +1782,13 @@ public class DeviceReconnectTests
 
         public int InitializeCount => Volatile.Read(ref _initializeCount);
 
+        /// <summary>
+        /// When set, each initialization reports this as the device's stored streaming rate, the
+        /// way the capability read does on firmware 3.9.0+ (#960). Read at initialization time, so
+        /// a test can change it between the first connect and a reconnect.
+        /// </summary>
+        public int? StoredRateReportedOnInitialize { get; set; }
+
         public IReadOnlyList<string> SentCommands
         {
             get
@@ -1770,6 +1849,14 @@ public class DeviceReconnectTests
             }
 
             PopulateChannelsFromStatus(BuildStatusMessage());
+
+            // Where the real initialization reads it: after the channels, before the session is
+            // restored.
+            if (StoredRateReportedOnInitialize is { } storedRateHz)
+            {
+                OnStoredStreamingRateRead(storedRateHz);
+            }
+
             return Task.CompletedTask;
         }
 

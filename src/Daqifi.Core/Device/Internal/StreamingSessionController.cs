@@ -104,6 +104,18 @@ internal sealed class StreamingSessionController
 
     private int _streamingFrequency;
 
+    /// <summary>
+    /// Whether <see cref="_streamingFrequency"/> is a rate somebody chose — a caller set it, or a
+    /// stream was started at it — rather than the default this device object was built with.
+    /// </summary>
+    /// <remarks>
+    /// Only an unchosen rate gives way to the one the device reports it has stored
+    /// (<see cref="TryAdoptStoredFrequency"/>). A chosen one is the caller's intent, and a
+    /// reconnect has to restore it: a device that was power-cycled while it was away reports its
+    /// 1 Hz boot default, and adopting that would resume the stream at 1 Hz.
+    /// </remarks>
+    private bool _frequencyChosen;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
     internal int StreamingFrequency
     {
@@ -123,7 +135,58 @@ internal sealed class StreamingSessionController
             }
 
             _streamingFrequency = value;
+            _frequencyChosen = true;
         }
+    }
+
+    /// <summary>
+    /// Sets the rate a new device object starts with. It is Core's assumption, not anyone's
+    /// choice, so the device's own stored rate replaces it once that is read.
+    /// </summary>
+    /// <param name="frequencyHz">The default rate, validated as the setter validates it.</param>
+    internal void SetDefaultFrequency(int frequencyHz)
+    {
+        StreamingFrequency = frequencyHz;
+        _frequencyChosen = false;
+    }
+
+    /// <summary>
+    /// Takes the streaming rate the device reports it has stored (<c>SYSTem:STReam:START?</c>,
+    /// firmware v3.9.0) as this device's rate, unless a rate has already been chosen here.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this, a device that another client — or an SD log — had set to 1000 Hz was
+    /// reported at Core's 100 Hz default, and the next start silently changed its rate (#960).
+    /// </para>
+    /// <para>
+    /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
+    /// fail a connect that is otherwise fine. A rate outside <c>1..MaxSamplingRate</c> is left
+    /// alone, and the ceiling is read once and the backing field assigned directly, for the same
+    /// reason <see cref="TrackSessionCommand"/> gives. Adopting it does not count as choosing it,
+    /// so a later read can still bring the rate up to date.
+    /// </para>
+    /// </remarks>
+    /// <param name="frequencyHz">The rate the device reported, in Hz.</param>
+    /// <returns><c>true</c> when the rate was adopted.</returns>
+    internal bool TryAdoptStoredFrequency(int frequencyHz)
+    {
+        if (_frequencyChosen)
+        {
+            return false;
+        }
+
+        var maxSamplingRate = Math.Max(1, _host.MaxSamplingRate);
+        if (frequencyHz < 1 || frequencyHz > maxSamplingRate)
+        {
+            SafeTrace(
+                $"[{nameof(TryAdoptStoredFrequency)}] Ignoring the device's stored streaming rate of {frequencyHz} Hz, "
+                + $"which is outside 1..{maxSamplingRate} Hz; keeping {_streamingFrequency} Hz.");
+            return false;
+        }
+
+        _streamingFrequency = frequencyHz;
+        return true;
     }
 
     /// <summary>
@@ -167,6 +230,10 @@ internal sealed class StreamingSessionController
         if (IsStreaming) return;
 
         ApplyRateCap();
+
+        // The rate a stream ran at is the one a reconnect resumes it at, whatever the device
+        // reports afterwards.
+        _frequencyChosen = true;
 
         BeginStreamingSession();
 
@@ -336,6 +403,7 @@ internal sealed class StreamingSessionController
                 // Frequency first: anything observing IsStreaming must never catch it true next
                 // to a rate belonging to a previous session.
                 _streamingFrequency = effect.StreamingFrequency;
+                _frequencyChosen = true;
 
                 // A restart while already streaming is not a session boundary — the typed API
                 // cannot even express it (StartStreaming returns early) — so there is nothing to
