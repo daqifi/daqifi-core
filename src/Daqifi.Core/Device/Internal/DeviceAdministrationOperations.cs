@@ -93,6 +93,18 @@ internal sealed class DeviceAdministrationOperations
 
         if (ScpiResponseClassifier.ContainsScpiError(lines))
         {
+            // -113 "Undefined header" means the firmware does not know the command at all, whatever
+            // version it reported. The device's answer is authoritative (ADR 0001), so this is the
+            // typed feature-gating exception rather than a generic rejection — the same backstop
+            // SdCardOperations applies to the storage query.
+            var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+            if (lastScpiError != null
+                && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var scpiErrorCode)
+                && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
+            {
+                throw _host.CreateFeatureNotSupportedException(DeviceFeature.Identify);
+            }
+
             throw new InvalidOperationException(
                 $"The device rejected the identify query. It answered: {DescribeLines(lines)}");
         }
@@ -128,6 +140,13 @@ internal sealed class DeviceAdministrationOperations
     /// in RAM, so this only needs to cover the round trip.
     /// </summary>
     private const int IdentifyQueryResponseTimeoutMs = 2000;
+
+    /// <summary>
+    /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c>: the firmware's reply to a command it does not
+    /// recognize, the wire-level signal behind the <see cref="FeatureNotSupportedException"/>
+    /// backstop (ADR 0001).
+    /// </summary>
+    private const int ScpiErrorCodeUndefinedHeader = -113;
 
     private static string DescribeLines(IReadOnlyList<string> lines)
         => lines.Count == 0 ? "(nothing)" : string.Join(" | ", lines);

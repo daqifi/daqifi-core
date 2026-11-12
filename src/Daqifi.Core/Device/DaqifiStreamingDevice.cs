@@ -1104,10 +1104,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <returns><c>true</c> while the device is identifying; otherwise <c>false</c>.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">
-    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown.
+    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown — or when
+    /// the device itself answers the query with SCPI <c>-113</c> "Undefined header", whatever
+    /// version it reported.
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when the device rejected the query or answered with something other than <c>1</c> or <c>0</c>.
+    /// Thrown when the device rejected the query with any other error, or answered with something
+    /// other than <c>1</c> or <c>0</c>.
     /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public Task<bool> GetIdentifyAsync(CancellationToken cancellationToken = default)

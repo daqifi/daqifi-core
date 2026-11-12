@@ -295,8 +295,10 @@ public class DeviceAdministrationOperationsTests
     }
 
     [Fact]
-    public async Task GetIdentifyAsync_WhenTheDeviceReportsAnError_Throws()
+    public async Task GetIdentifyAsync_WhenTheDeviceDoesNotKnowTheCommand_ThrowsFeatureNotSupported()
     {
+        // Past the version gate, but the firmware answers -113 "Undefined header": the device's
+        // answer is authoritative (ADR 0001), so it is the typed feature-gating exception.
         var host = new FakeHost
         {
             IsConnected = true,
@@ -304,11 +306,30 @@ public class DeviceAdministrationOperationsTests
             ExchangeResponse = new[] { "**ERROR: -113, \"Undefined header\"" },
         };
 
+        var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+            () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
+
+        Assert.Equal(DeviceFeature.Identify, ex.Feature);
+        Assert.Equal(
+            new[] { "ensure:Identify", "exchange", "send:SYSTem:IDENtify?", "create-unsupported:Identify" },
+            host.Calls);
+    }
+
+    [Fact]
+    public async Task GetIdentifyAsync_WhenTheDeviceReportsAnotherError_ThrowsRejected()
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            SupportedFeatures = { DeviceFeature.Identify },
+            ExchangeResponse = new[] { "**ERROR: -200, \"Execution error\"" },
+        };
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => new DeviceAdministrationOperations(host).GetIdentifyAsync());
 
         Assert.Contains("rejected", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("-113", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("-200", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -789,7 +810,10 @@ public class DeviceAdministrationOperationsTests
         }
 
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
-            => throw new NotSupportedException();
+        {
+            Calls.Add("create-unsupported:" + feature);
+            return new FeatureNotSupportedException(feature, null, null, null);
+        }
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();
         public void RaiseRawStreamFrame(DaqifiOutMessage message) => throw new NotSupportedException();

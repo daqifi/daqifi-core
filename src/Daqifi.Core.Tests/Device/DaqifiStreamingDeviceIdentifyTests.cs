@@ -73,6 +73,19 @@ public class DaqifiStreamingDeviceIdentifyTests
     }
 
     [Fact]
+    public async Task GetIdentifyAsync_OnV3_9_0_AnsweredWithUndefinedHeader_ReportsV3_9_0AsTheRequiredVersion()
+    {
+        // The device claims 3.9.0 but does not know the command: its answer wins (ADR 0001).
+        var device = ConnectedDeviceOn("3.9.0");
+        device.CannedTextResponse.Add("**ERROR: -113, \"Undefined header\"");
+
+        var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetIdentifyAsync());
+
+        Assert.Equal(DeviceFeature.Identify, ex.Feature);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+    }
+
+    [Fact]
     public async Task SetIdentifyAsync_WhenNotConnected_Throws()
     {
         var device = new CapturingIdentifyDevice();
