@@ -10,6 +10,8 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.IsDeviceResponding.get -> b
 Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
+Daqifi.Core.Device.DaqifiStreamingDevice.PwmFrequencyFloorHz.get -> int
+Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor = 5 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DeviceUpdated -> System.EventHandler<Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs!>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
