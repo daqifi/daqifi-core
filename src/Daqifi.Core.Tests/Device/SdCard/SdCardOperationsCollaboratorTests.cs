@@ -1726,18 +1726,30 @@ public class SdCardOperationsCollaboratorTests
     // ---- #959: an empty SD:GET on firmware v3.9.0+ reads the reason off the error queue ----
 
     /// <summary>
-    /// A host on firmware v3.9.0+, whose download of a missing file comes back as one bare EOF
-    /// marker per GET attempt, with <paramref name="queuedErrors"/> waiting on the error queue.
+    /// A host on firmware v3.9.0+ whose download comes back as one bare EOF marker per GET
+    /// attempt. Each GET leaves <paramref name="errorQueuedByGet"/> on the error queue (null:
+    /// nothing), and <paramref name="staleErrors"/> are already queued before the download.
     /// </summary>
-    private static FakeHost HostWithEmptyGetOnV390(params string[] queuedErrors)
+    private static FakeHost HostWithEmptyGetOnV390(string? errorQueuedByGet, params string[] staleErrors)
     {
         var host = new FakeHost
         {
             RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker, EofMarker),
         };
         host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
-        host.QueuedErrors.AddRange(queuedErrors);
+        host.ErrorQueuedByGet.Add(errorQueuedByGet);
+        host.QueuedErrors.AddRange(staleErrors);
         return host;
+    }
+
+    /// <summary>Asserts every GET went out immediately behind a <c>*CLS</c>.</summary>
+    private static void AssertEveryGetFollowsAClear(FakeHost host, string fileName)
+    {
+        var calls = host.Calls.ToList();
+        var get = $"send:SYSTem:STORage:SD:GET \"{fileName}\"";
+        var getIndexes = Enumerable.Range(0, calls.Count).Where(i => calls[i] == get).ToList();
+        Assert.NotEmpty(getIndexes);
+        Assert.All(getIndexes, i => Assert.Equal("send:*CLS", calls[i - 1]));
     }
 
     [Theory]
@@ -1760,6 +1772,10 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(queuedError, ex.LastScpiError);
         Assert.Contains("missing.bin", ex.Message, StringComparison.Ordinal);
         Assert.Empty(destination.ToArray());
+
+        // Only the final attempt's entry: the *CLS ahead of the retry cleared the first one.
+        Assert.Equal(new[] { queuedError }, ex.RawDeviceResponse);
+        AssertEveryGetFollowsAClear(host, "missing.bin");
 
         // Read once, after the last GET, while the download still owns the device.
         var calls = host.Calls.ToList();
@@ -1796,7 +1812,7 @@ public class SdCardOperationsCollaboratorTests
     {
         // No queued reason means the file opened and the SD subsystem sent nothing: the #264
         // condition the empty-transfer exception has always described.
-        var host = HostWithEmptyGetOnV390();
+        var host = HostWithEmptyGetOnV390(null);
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
 
@@ -1809,10 +1825,10 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_DoesNotReadTheErrorQueue()
+    public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_NeitherClearsNorReadsTheErrorQueue()
     {
         // Older firmware queues nothing for an open failure, so the queue cannot answer and the
-        // download behaves exactly as before. The queued entry proves it was never consulted.
+        // download puts exactly the same commands on the wire as before.
         var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
         host.SupportedFeatures.Clear();
         var ops = new SdCardOperations(host);
@@ -1822,18 +1838,40 @@ public class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("missing.bin", destination));
 
         Assert.DoesNotContain("drain", host.Calls);
-        Assert.Single(host.QueuedErrors);
+        Assert.DoesNotContain("send:*CLS", host.Calls);
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_StaleEntriesAhead_TheNewestOpenFailureWins()
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_StaleFileErrorQueued_ReportsAnEmptyDownload()
     {
-        // Entries left by earlier commands come out first. The device queues its open failure at
-        // the latest command boundary, so the newest matching entry is the one about this GET.
+        // Review on #967: a legitimately empty file queues nothing, so a -256 an earlier command
+        // left behind must not be blamed on it. The *CLS ahead of the GET discards it.
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
+        host.QueuedErrors.Add("-256,\"File name not found\"");
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
+
+        Assert.Equal(0, result.FileSize);
+        AssertEveryGetFollowsAClear(host, "empty.bin");
+        Assert.Empty(host.QueuedErrors);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_StaleEntriesQueued_OnlyThisGetsErrorCounts()
+    {
+        // Stale entries, including an open failure from some earlier command, are cleared
+        // before the GET, so the exception carries only what this GET left behind.
         var host = HostWithEmptyGetOnV390(
+            "-256,\"File name not found\"",
             "-200,\"Execution error\"",
-            "-250,\"Mass storage error\"",
-            "-256,\"File name not found\"");
+            "-250,\"Mass storage error\"");
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
 
@@ -1841,23 +1879,23 @@ public class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("missing.bin", destination));
 
         Assert.Equal(-256, ex.ScpiErrorCode);
-        Assert.Equal(
-            new[] { "-200,\"Execution error\"", "-250,\"Mass storage error\"", "-256,\"File name not found\"" },
-            ex.RawDeviceResponse);
+        Assert.Equal(new[] { "-256,\"File name not found\"" }, ex.RawDeviceResponse);
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_OnlyUnrelatedEntriesQueued_KeepsSdCardEmptyTransferException()
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_FirstAttemptsErrorIsNotBlamedOnTheRetry()
     {
-        // A stale -200 says nothing about this file. It is drained (so it cannot trip the next
-        // connect, #898) but does not change the answer.
-        var host = HostWithEmptyGetOnV390("-200,\"Execution error\"");
+        // The first GET hit a transient -250; the retry opened the file and still sent nothing.
+        // The answer is about the retry, so the first attempt's error must not decide it.
+        var host = HostWithEmptyGetOnV390("-250,\"Mass storage error\"");
+        host.ErrorQueuedByGet.Add(null);
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
 
         await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => ops.DownloadSdCardFileAsync("data.bin", destination));
 
+        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
         Assert.Empty(host.QueuedErrors);
     }
 
@@ -1866,7 +1904,7 @@ public class SdCardOperationsCollaboratorTests
     {
         // The read is best effort: if it fails, the download's own answer still stands, rather
         // than a failure from a query the caller never asked for.
-        var host = HostWithEmptyGetOnV390();
+        var host = HostWithEmptyGetOnV390(null);
         host.ThrowOnDrain = new TimeoutException("no reply");
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
@@ -1887,7 +1925,7 @@ public class SdCardOperationsCollaboratorTests
         await ops.GetSdCardFilesAsync();
 
         host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
-        host.QueuedErrors.Add("-256,\"File name not found\"");
+        host.ErrorQueuedByGet.Add("-256,\"File name not found\"");
         using var destination = new MemoryStream();
 
         var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
@@ -2441,7 +2479,35 @@ public class SdCardOperationsCollaboratorTests
             }
 
             Record("send:" + message.Data);
+            ModelErrorQueue(message.Data?.ToString() ?? string.Empty);
             AfterSend?.Invoke(message.Data?.ToString() ?? string.Empty);
+        }
+
+        /// <summary>
+        /// The error each <c>SD:GET</c> leaves queued, by attempt (the last entry repeats); null
+        /// means that attempt queued nothing. The real device queues it at the next command it
+        /// receives, which here is always a <c>*CLS</c> or the drain, so adding it at the GET is
+        /// the same thing.
+        /// </summary>
+        public List<string?> ErrorQueuedByGet { get; } = new();
+
+        private int _getsSent;
+
+        private void ModelErrorQueue(string command)
+        {
+            if (command == "*CLS")
+            {
+                QueuedErrors.Clear();
+            }
+            else if (command.StartsWith("SYSTem:STORage:SD:GET ", StringComparison.Ordinal) && ErrorQueuedByGet.Count > 0)
+            {
+                var queued = ErrorQueuedByGet[Math.Min(_getsSent, ErrorQueuedByGet.Count - 1)];
+                _getsSent++;
+                if (queued != null)
+                {
+                    QueuedErrors.Add(queued);
+                }
+            }
         }
 
         public bool Supports(DeviceFeature feature)

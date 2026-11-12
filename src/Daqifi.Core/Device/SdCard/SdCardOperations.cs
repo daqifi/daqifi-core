@@ -1734,6 +1734,11 @@ internal sealed class SdCardOperations
         // restore below, on this same async flow.
         var workerAbandoned = false;
 
+        // From firmware v3.9.0 an empty reply is not the whole answer: a file the device could
+        // not open also ends with a bare EOF marker, and the device queues the reason on this
+        // transport (#959). Below it the queue never says why, so it is neither cleared nor read.
+        var readsOpenFailure = _host.Supports(DeviceFeature.SdGetOpenFailureError);
+
         try
         {
             await RunWithHardDeadlineAsync(async token =>
@@ -1742,10 +1747,8 @@ internal sealed class SdCardOperations
                 {
                     await ReceiveSdFileAsync(token).ConfigureAwait(false);
                 }
-                // From firmware v3.9.0 an empty reply is not the whole answer: a file the device
-                // could not open also ends with a bare EOF marker, and the device queues the
-                // reason on this transport (#959). Read it before blaming the SD subsystem.
-                catch (SdCardEmptyTransferException) when (_host.Supports(DeviceFeature.SdGetOpenFailureError))
+                // Read the device's reason for an empty reply before blaming the SD subsystem.
+                catch (SdCardEmptyTransferException) when (readsOpenFailure)
                 {
                     await ThrowIfSdGetOpenFailedAsync(fileName, token).ConfigureAwait(false);
                     throw;
@@ -1756,7 +1759,7 @@ internal sealed class SdCardOperations
                 // same empty reply. Read the queue here too: it tells the two apart, and it is the
                 // only read that takes the device's queued error off the queue, where it would
                 // otherwise be left for the next exchange to trip over (#898).
-                if (fileSize == 0 && _host.Supports(DeviceFeature.SdGetOpenFailureError))
+                if (fileSize == 0 && readsOpenFailure)
                 {
                     await ThrowIfSdGetOpenFailedAsync(fileName, token).ConfigureAwait(false);
                 }
@@ -1780,7 +1783,7 @@ internal sealed class SdCardOperations
                     await Task.Delay(SdInterfaceSettleDelay, Clock, ct).ConfigureAwait(false);
 
                     // Send the SCPI command to request the file
-                    _host.Send(ScpiMessageProducer.GetSdFile(fileName));
+                    SendSdGet();
 
                     // Receive the file data. A marker-only (0-byte) transfer for a file the
                     // listing reports as non-empty means the device's SD subsystem wasn't ready
@@ -1833,12 +1836,27 @@ internal sealed class SdCardOperations
                         {
                             attempt++;
                             await Task.Delay(SdInterfaceSettleDelay, Clock, ct).ConfigureAwait(false);
-                            _host.Send(ScpiMessageProducer.GetSdFile(fileName));
+                            SendSdGet();
                         }
                     }
 
                     fileSize = bytesReceived;
                 }, token).ConfigureAwait(false);
+            }
+
+            // On v3.9.0+ every GET goes out right behind *CLS. The queue is then empty when the
+            // GET is processed, so whatever it holds when it is read afterwards came from that
+            // GET: not from an earlier command (a stale -256 would otherwise turn a legitimately
+            // empty file into "not found"), and not from a first attempt the retry replaced.
+            // *CLS sends no reply, so it puts nothing ahead of the file in the stream.
+            void SendSdGet()
+            {
+                if (readsOpenFailure)
+                {
+                    _host.Send(ScpiMessageProducer.ClearStatus);
+                }
+
+                _host.Send(ScpiMessageProducer.GetSdFile(fileName));
             }
         }
         finally
@@ -1919,9 +1937,9 @@ internal sealed class SdCardOperations
     /// The device cannot push the error while it streams the reply, so it records it and queues
     /// it at the next command it receives on the same transport, before running that command.
     /// It records it before it sends the EOF marker, so once Core has seen the marker, the first
-    /// <c>SYSTem:ERRor?</c> is enough to queue it and read it back. The queue is drained to
-    /// empty rather than read once: entries left by earlier commands are first in line, and two
-    /// left behind would make the next connect fail (#898).
+    /// <c>SYSTem:ERRor?</c> is enough to queue it and read it back. Each GET went out right
+    /// behind <c>*CLS</c>, so nothing older is on the queue. It is still drained to empty
+    /// rather than read once, so nothing is left behind to make the next connect fail (#898).
     /// </para>
     /// <para>
     /// Best effort. If the read itself fails (the link dropped, the device stopped answering) the
@@ -1956,11 +1974,11 @@ internal sealed class SdCardOperations
     /// or returns <c>null</c> when none of them is one.
     /// </summary>
     /// <remarks>
-    /// The newest matching entry wins. The device queues its open failure at the latest command
-    /// boundary, so anything older is left over from before, including the first attempt's
-    /// failure when the download re-sent the <c>SD:GET</c>. Entries with other codes (a stale
-    /// <c>-200</c>, say) are not about this file and do not change the answer. They are still
-    /// carried in the exception's <see cref="SdCardOperationException.RawDeviceResponse"/>.
+    /// The <c>*CLS</c> sent ahead of each GET normally leaves at most one entry here. If more
+    /// than one arrives anyway, the newest matching entry wins, because the device queues its
+    /// open failure at the latest command boundary. Entries with other codes are not about this
+    /// file and do not change the answer. They are still carried in the exception's
+    /// <see cref="SdCardOperationException.RawDeviceResponse"/>.
     /// </remarks>
     internal static SdCardFilesystemException? ClassifySdGetOpenFailure(
         string fileName, IReadOnlyList<string> queuedErrors)

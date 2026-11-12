@@ -3179,7 +3179,7 @@ public class SdCardOperationsTests
         device.Metadata.DeviceType = DeviceType.Nyquist1;
         device.Metadata.FirmwareVersion = "3.9.0";
         device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        device.QueuedErrors.Enqueue("-256,\"File name not found\"");
+        device.ErrorQueuedByGet = "-256,\"File name not found\"";
         device.Connect();
         using var destinationStream = new MemoryStream();
 
@@ -3199,7 +3199,7 @@ public class SdCardOperationsTests
     public async Task DownloadSdCardFileAsync_MissingFileOnV380_StillThrowsSdCardEmptyTransferException()
     {
         // Firmware before v3.9.0 queues nothing for an open failure, so the download behaves as
-        // it always has and spends no exchange on the error queue.
+        // it always has: no *CLS ahead of the GET and no exchange spent on the error queue.
         var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
         device.Metadata.DeviceType = DeviceType.Nyquist1;
         device.Metadata.FirmwareVersion = "3.8.0";
@@ -3211,6 +3211,7 @@ public class SdCardOperationsTests
             () => device.DownloadSdCardFileAsync("missing.bin", destinationStream));
 
         Assert.DoesNotContain(device.SentMessages, m => m.Data == ScpiMessageProducer.GetSystemError.Data);
+        Assert.DoesNotContain(device.SentMessages, m => m.Data == "*CLS");
     }
 
     [Fact]
@@ -4297,6 +4298,12 @@ public class SdCardOperationsTests
         /// </summary>
         public Queue<string> QueuedErrors { get; } = new();
 
+        /// <summary>
+        /// The error each SD:GET leaves on <see cref="QueuedErrors"/>, or null for none. The real
+        /// device queues it at the next command it receives; <c>*CLS</c> empties the queue.
+        /// </summary>
+        public string? ErrorQueuedByGet { get; set; }
+
         public TestableRetryDownloadDevice(params byte[][] fileDataPerAttempt)
             : base("TestDevice")
         {
@@ -4319,10 +4326,19 @@ public class SdCardOperationsTests
             if (message is IOutboundMessage<string> stringMessage)
             {
                 SentMessages.Add(stringMessage);
+                if (stringMessage.Data == "*CLS")
+                {
+                    QueuedErrors.Clear();
+                }
+
                 if (stringMessage.Data.Contains("SD:GET"))
                 {
                     _stream.AttemptIndex = _getCommandCount;
                     _getCommandCount++;
+                    if (ErrorQueuedByGet != null)
+                    {
+                        QueuedErrors.Enqueue(ErrorQueuedByGet);
+                    }
                 }
             }
         }
