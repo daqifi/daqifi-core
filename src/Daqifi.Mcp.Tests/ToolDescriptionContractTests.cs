@@ -41,6 +41,20 @@ public class ToolDescriptionContractTests
         Assert.Contains("Unless the device reports firmware 3.7.3 or later", description);
     }
 
+    [Fact]
+    public void SetPwmOutputFrequency_DescribesADeviceDependentMinimumNotAFixedRange()
+    {
+        // From firmware 3.9.0 the floor is the unit's own, computed from its clock (core#958), so
+        // a fixed "6-50000" would steer an agent away from valid frequencies on some units and
+        // into rejected ones on others.
+        var description = ParameterDescription(nameof(DaqifiTools.SetPwmOutput), "frequencyHz");
+
+        Assert.DoesNotContain("6-50000", description);
+        Assert.Contains("3.9.0", description);
+        Assert.Contains("6 Hz", description);
+        Assert.Contains("50000", description);
+    }
+
     [Theory]
     [InlineData(nameof(DaqifiTools.DiscoverDevices), "timeoutMs")]
     [InlineData(nameof(DaqifiTools.ReadChannelValues), "timeoutMs")]
