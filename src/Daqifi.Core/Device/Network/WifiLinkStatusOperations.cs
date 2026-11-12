@@ -141,6 +141,11 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
     /// this query's <c>-200</c>, holds only that <c>-200</c>. With anything older ahead of it, the
     /// queue is left untouched — the older entries belong to whoever caused them.
     /// </para>
+    /// <para>
+    /// The count only proves ownership if nothing else touches the queue between the query, the
+    /// count and the pop, which are separate exchanges. <see cref="DaqifiStreamingDevice"/> runs
+    /// the whole link-state read under its exclusive operation lock for that reason.
+    /// </para>
     /// </remarks>
     private async Task RemoveOwnQueuedRefusalAsync(CancellationToken cancellationToken)
     {

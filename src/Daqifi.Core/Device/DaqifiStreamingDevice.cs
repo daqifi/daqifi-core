@@ -1293,8 +1293,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     #region IWifiLinkStatusProvider
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync{TResult}(Func{CancellationToken, Task{TResult}}, CancellationToken)"/>:
+    /// on the standby path the query, the error-count read and the conditional pop of its own
+    /// <c>-200</c> are three exchanges, and the pop is only safe if no other caller can drain the
+    /// queue or add to it in between.
+    /// </remarks>
     public Task<WifiLinkState> GetWifiLinkStateAsync(CancellationToken cancellationToken = default)
-        => _wifiLinkStatusOperations.GetWifiLinkStateAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _wifiLinkStatusOperations.GetWifiLinkStateAsync(ct), cancellationToken);
 
     /// <inheritdoc />
     public Task<WifiMode?> GetActiveWifiModeAsync(CancellationToken cancellationToken = default)

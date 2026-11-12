@@ -30,6 +30,10 @@ public class WifiLinkStatusTests
     private static readonly string ErrorQueueQuery = ScpiMessageProducer.GetSystemError.Data;
     private static readonly string ErrorCountQuery = ScpiMessageProducer.GetSystemErrorCount.Data;
 
+    /// <summary>A command another caller sends that the device rejects, queuing <see cref="CompetingCallersError"/>.</summary>
+    private const string CompetingBadCommand = "SYSTem:BOGUSquery?";
+    private const string CompetingCallersError = "-113,\"Undefined header\"";
+
     /// <summary>What <c>SYSTem:ERRor?</c> returned for the standby -200 on the bench.</summary>
     private const string StandbyQueueEntry = "-200,\"Execution error\"";
 
@@ -175,6 +179,46 @@ public class WifiLinkStatusTests
         Assert.Equal(WifiLinkState.Unavailable, await device.GetWifiLinkStateAsync());
 
         Assert.Equal(new[] { ConnectedQuery, ErrorCountQuery }, device.SentCommands);
+    }
+
+    [Fact]
+    public async Task GetWifiLinkStateAsync_CompetingQueueReaderBetweenCountAndPop_CannotGetIn()
+    {
+        // The query, the count and the pop are three exchanges. Held only per exchange, the lock
+        // would let another caller drain this poll's -200 and queue its own error after the count
+        // read 1 — and the pop would then discard that caller's error. The link-state read holds
+        // the operation lock across all three, so the competitor runs only after the pop.
+        var errorQueue = new Queue<string>();
+        var device = StandbyDevice(errorQueue);
+        var popReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        device.BeforeExchange = async index =>
+        {
+            if (index == 3) // CONnected?, ERRor:COUNt?, then the pop
+            {
+                popReached.SetResult();
+                await releasePop.Task.ConfigureAwait(false);
+            }
+        };
+
+        var link = Task.Run(() => device.GetWifiLinkStateAsync());
+        await popReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var competitor = Task.Run(async () =>
+        {
+            var drained = await device.DrainErrorQueueAsync();
+            await device.QueryAsync(CompetingBadCommand);
+            return drained;
+        });
+        await Task.Delay(100);
+        Assert.False(competitor.IsCompleted, "The competing reader ran inside the link-state read.");
+
+        releasePop.SetResult();
+        await Task.WhenAll(link, competitor).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(WifiLinkState.Unavailable, await link);
+        Assert.Empty(await competitor);                           // the poll's -200 was already gone
+        Assert.Equal(new[] { CompetingCallersError }, errorQueue); // and the competitor's error survives
     }
 
     [Fact]
@@ -388,6 +432,12 @@ public class WifiLinkStatusTests
                 return new[] { errorQueue.Count > 0 ? errorQueue.Dequeue() : "0,\"No error\"" };
             }
 
+            if (command == CompetingBadCommand)
+            {
+                errorQueue.Enqueue(CompetingCallersError);
+                return new[] { "**ERROR: -113, \"Undefined header\"" };
+            }
+
             throw new InvalidOperationException($"Unexpected command '{command}'.");
         };
         return device;
@@ -446,6 +496,18 @@ public class WifiLinkStatusTests
             }
         }
 
+        /// <summary>
+        /// Runs before each exchange asks for the operation lock, with the exchange's 1-based
+        /// index — the gap between two exchanges a competing caller would have to use.
+        /// </summary>
+        public Func<int, Task>? BeforeExchange { get; set; }
+
+        private int _exchangeCount;
+
+        /// <summary>A raw query through the same exchange, standing in for another caller's command.</summary>
+        public Task<IReadOnlyList<string>> QueryAsync(string scpi)
+            => ExecuteTextCommandAsync(() => Send(new ScpiMessage(scpi)));
+
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
@@ -455,24 +517,34 @@ public class WifiLinkStatusTests
             Func<Task>? finalizeAsync = null,
             bool keepBlankLines = false)
         {
-            try
+            if (BeforeExchange != null)
             {
-                if (prepareAsync != null)
-                {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
+                await BeforeExchange(Interlocked.Increment(ref _exchangeCount)).ConfigureAwait(false);
+            }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                setupAction();
-                return NextResponse();
-            }
-            finally
+            // Each exchange takes the device's operation lock, as the real text exchange does, and
+            // like it runs nested when this flow already holds the lock (RunExclusiveAsync).
+            return await RunExclusiveAsync(async ct =>
             {
-                if (finalizeAsync != null)
+                try
                 {
-                    await finalizeAsync().ConfigureAwait(false);
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(ct).ConfigureAwait(false);
+                    }
+
+                    ct.ThrowIfCancellationRequested();
+                    setupAction();
+                    return (IReadOnlyList<string>)NextResponse();
                 }
-            }
+                finally
+                {
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
