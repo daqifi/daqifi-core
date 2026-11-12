@@ -12,6 +12,15 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdGetOpenFailureError = 5 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.Diagnostics.MemoryDiagnostics.StreamingPoolTotal.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.PoolExhaustedSamples.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.PreciseSampleLossPercent.get -> double?
+Daqifi.Core.Device.Diagnostics.StreamStats.QueueOverflowSamples.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.ReadLoopMaxNs.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.ReadLoopMeanNs.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.ScanStaleDroppedSteady.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.WifiTcpInflightOverflow.get -> ulong?
+Daqifi.Core.Device.Diagnostics.StreamStats.WifiTcpOverBytesExtra.get -> ulong?
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DeviceUpdated -> System.EventHandler<Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs!>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
