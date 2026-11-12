@@ -446,7 +446,7 @@ await device.InitializeAsync();
 | `SYSTem:STReam:FORmat 0` | sent | **skipped** |
 | `SYSTem:ERRor?` | sent | **skipped** — would pop the other session's error |
 | `SYSTem:STReam:INTerface` (USB routing) | sent | **skipped** — would steal the stream |
-| `SYSTem:SYSInfoPB?` + capability query | sent | sent — read-only |
+| `SYSTem:SYSInfoPB?` + capability query (+ `SYSTem:STReam:START?` on firmware 3.9.0+) | sent | sent — read-only |
 
 The observing session is fully usable for status, metadata, and channel inspection, and reaches
 `DeviceState.Ready` exactly as a normal connection does. What it is **not** is configured to stream:
@@ -460,6 +460,20 @@ a second controlling session. Within one process, prefer
 [`DaqifiDeviceRegistry`](#managing-multiple-devices-daqifideviceregistry) — it refuses to open the
 same physical unit twice at all, so the conflict never arises. Across processes there is no
 protection beyond both sides opting in to `PreserveActiveStream`.
+
+### The streaming rate a new connection reports
+
+The stopped stream keeps its rate: the device stores the last rate it was started at, and a stop
+does not revert it. On firmware **3.9.0 and newer**, initialization reads that stored rate
+(`SYSTem:STReam:START?`) and `StreamingFrequency` reports it — so a device another client, an SD
+log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming()` without setting a
+rate keeps it there. Before any start since power-up the device stores 1 Hz, and that is what you
+see.
+
+This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
+through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect
+resumes at it even if the device came back from a power cycle at 1 Hz. On firmware below 3.9.0 the
+device cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
 
 ### Manual Device Connection (Advanced)
 
