@@ -56,14 +56,14 @@ public partial class SdCardOperationsTests
     public async Task SetSdCardCrcProtectionAsync_OnV3_9_0_SendsTheCommandAndReportsItApplied()
     {
         var device = NyquistOn("3.9.0");
-        device.CannedTextResponse = new() { "254,\"4V\",\"ASTC\",1.2,45,2025-05,1,0" };
+        device.CannedTextResponse = new() { "7797608448,7798738944" };
         device.Connect();
 
         var result = await device.SetSdCardCrcProtectionAsync(true);
 
         Assert.Equal(SdCardCrcProtectionResult.Applied, result);
         Assert.Contains(device.SentMessages, m => m.Data == "SYSTem:STORage:SD:PROTect 1");
-        Assert.Equal("SYSTem:STORage:SD:INFO?", device.SentMessages.Last().Data);
+        Assert.Contains(device.SentMessages, m => m.Data == "SYSTem:STORage:SD:SPACe?");
     }
 
     [Fact]

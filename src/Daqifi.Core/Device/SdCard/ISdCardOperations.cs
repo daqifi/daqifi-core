@@ -156,8 +156,10 @@ public interface ISdCardOperations
     /// <para>
     /// A change takes a second or two. The device applies it by re-initializing the card, which
     /// cannot be mounted until the device picks it up again at its next card check. This call
-    /// waits for that, so an SD log or file operation started right after it finds the card.
-    /// Setting the value the device already holds returns straight away.
+    /// confirms a card is ready by mounting it (the storage-space query), so an SD log or file
+    /// operation started right after it finds the card. That check runs even when the value did
+    /// not change, so an empty slot reports <see cref="SdCardCrcProtectionResult.Pending"/>
+    /// rather than <see cref="SdCardCrcProtectionResult.Applied"/>.
     /// </para>
     /// <para>
     /// <b>The device forgets the setting every time it boots</b>, and Core does not re-apply it.
@@ -173,9 +175,9 @@ public interface ISdCardOperations
     /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// <see cref="SdCardCrcProtectionResult.Applied"/> once the card is running in the new mode,
+    /// <see cref="SdCardCrcProtectionResult.Applied"/> once a card is mounted in the new mode,
     /// or <see cref="SdCardCrcProtectionResult.Pending"/> when the device stored the change but no
-    /// card is running with it yet. <see cref="SdCardCrcProtectionResult.Pending"/> lists the
+    /// card is ready with it yet. <see cref="SdCardCrcProtectionResult.Pending"/> lists the
     /// causes and what each blocks.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>

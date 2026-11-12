@@ -7,17 +7,18 @@ namespace Daqifi.Core.Device.SdCard;
 public enum SdCardCrcProtectionResult
 {
     /// <summary>
-    /// The card is running in the requested mode, and is ready for the next SD operation: every
-    /// write it takes from now on uses that mode.
+    /// A card is in the slot, initialized in the requested mode, and mountable: Core mounted it
+    /// to check. Every write it takes from now on uses that mode, and the next SD operation finds
+    /// it ready.
     /// </summary>
     Applied = 0,
 
     /// <summary>
-    /// The device stored the setting, but no card is running with it yet.
+    /// The device stored the setting, but no card is ready with it yet.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Three causes, all of which leave the setting in place to apply later:
+    /// The causes, all of which leave the setting in place to apply later:
     /// </para>
     /// <list type="bullet">
     /// <item><description>
@@ -35,11 +36,14 @@ public enum SdCardCrcProtectionResult
     /// rather than run it unprotected, so it cannot be logged to until protection is turned off
     /// again.
     /// </description></item>
+    /// <item><description>
+    /// The device cannot mount the card at all, for example an unformatted or damaged card.
+    /// </description></item>
     /// </list>
     /// <para>
     /// Once the cause is dealt with, call <see cref="ISdCardOperations.SetSdCardCrcProtectionAsync"/>
-    /// again with the same value: it returns <see cref="Applied"/> when the card is running in
-    /// the new mode.
+    /// again with the same value: it returns <see cref="Applied"/> when a card is ready in the
+    /// new mode.
     /// </para>
     /// </remarks>
     Pending = 1
