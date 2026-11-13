@@ -93,6 +93,14 @@ internal static class DeviceFeatureRequirements
     internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
 
     /// <summary>
+    /// Minimum firmware for the live WiFi status queries (<c>SYSTem:COMMunicate:LAN:CONnected?</c>
+    /// and <c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware <c>#951</c>/<c>#1186</c>), first
+    /// released in <b>v3.9.0</b>. Below it <c>CONnected?</c> is an undefined header, and
+    /// <c>NETType? 1</c> answers the <em>staged</em> mode before rejecting the argument.
+    /// </summary>
+    internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, null, 0);
+
+    /// <summary>
     /// Minimum firmware that answers <c>SYSTem:STReam:START?</c> with the stored streaming rate
     /// (firmware <c>#1007</c>/<c>#1014</c>), first released in <b>v3.9.0</b>. Below this version
     /// the query is an undefined header.
@@ -153,6 +161,11 @@ internal static class DeviceFeatureRequirements
                 MinVersion: IdentifyMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.WifiLinkStatus] = new(
+                MinVersion: WifiLinkStatusMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.WiFi),
 
             [DeviceFeature.StoredStreamingRateQuery] = new(
                 MinVersion: StoredStreamingRateQueryMinFirmware,

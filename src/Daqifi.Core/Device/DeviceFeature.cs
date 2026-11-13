@@ -82,6 +82,15 @@ public enum DeviceFeature
     Identify,
 
     /// <summary>
+    /// The live WiFi status queries behind <see cref="Network.IWifiLinkStatusProvider"/>: the link
+    /// state (<c>SYSTem:COMMunicate:LAN:CONnected?</c>, firmware <c>#951</c>/<c>#1044</c>) and the
+    /// active — rather than staged — WiFi mode (<c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware
+    /// <c>#1186</c>/<c>#1193</c>). Firmware-gated: first released in <b>v3.9.0</b>; requires WiFi
+    /// hardware.
+    /// </summary>
+    WifiLinkStatus,
+
+    /// <summary>
     /// The stored streaming rate readback (<c>SYSTem:STReam:START?</c>), which answers the rate
     /// the device will stream at — the last one a start set, which a stop deliberately does not
     /// revert, or the 1 Hz boot default before any start. Firmware-gated: introduced by firmware
