@@ -75,6 +75,13 @@ public enum DeviceFeature
     PwmFrequencyFloor,
 
     /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify,
+
+    /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
     /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
     /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:

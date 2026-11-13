@@ -91,6 +91,13 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion SdCardCrcProtectionMinFirmware = new(3, 9, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware for <c>SYSTem:IDENtify</c> / <c>SYSTem:IDENtify?</c> (firmware
+    /// <c>#1220</c>), first released in <b>v3.9.0</b>. Older firmware answers either with
+    /// <c>-113</c> "Undefined header".
+    /// </summary>
+    internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -138,6 +145,11 @@ internal static class DeviceFeatureRequirements
             // is correct for every firmware before v3.9.0.
             [DeviceFeature.PwmFrequencyFloor] = new(
                 MinVersion: PwmFrequencyFloorMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.Identify] = new(
+                MinVersion: IdentifyMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),
 
