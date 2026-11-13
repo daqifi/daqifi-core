@@ -18,6 +18,14 @@ namespace Daqifi.Core.Device.SdCard;
 /// non-empty and returns a legitimate 0-byte download otherwise. When it is unknown
 /// (<see cref="ListedSizeInBytes"/> is <c>null</c>), the receiver keeps the conservative
 /// behavior and throws, so a wedged subsystem is still caught and retried.
+/// <para>
+/// A file the device could not open ends with the same marker-only reply. From firmware v3.9.0
+/// (<see cref="DeviceFeature.SdGetOpenFailureError"/>) the device also queues the reason as a
+/// SCPI error, and Core reads it before throwing this: a missing or rejected name raises
+/// <see cref="SdCardFileNotFoundException"/> and unusable storage raises
+/// <see cref="SdCardFilesystemException"/>. On that firmware this exception means the device
+/// reported no reason at all. On older firmware it can still mean either.
+/// </para>
 /// </remarks>
 public class SdCardEmptyTransferException : SdCardOperationException
 {

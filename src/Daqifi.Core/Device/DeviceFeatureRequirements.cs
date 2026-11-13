@@ -100,6 +100,14 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware that queues a SCPI error when <c>SYSTem:STORage:SD:GET</c> cannot open
+    /// its file (<c>-256</c>, <c>-257</c> or <c>-250</c>; firmware <c>#914</c>, PR <c>#1106</c>),
+    /// first released in <b>v3.9.0</b>. Below it an open failure leaves the error queue reading
+    /// "No error", exactly as a genuinely empty file does.
+    /// </summary>
+    internal static readonly FirmwareVersion SdGetOpenFailureErrorMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -158,7 +166,15 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.WifiLinkStatus] = new(
                 MinVersion: WifiLinkStatusMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.WiFi)
+                Hardware: HardwareRequirement.WiFi),
+
+            // Another reply-reading gate. Below it the error queue never says why an SD:GET came
+            // back empty, so reading it would cost an exchange and tell Core nothing; an
+            // unparseable version takes that same pre-#914 reading.
+            [DeviceFeature.SdGetOpenFailureError] = new(
+                MinVersion: SdGetOpenFailureErrorMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.SdCard)
         };
 
     /// <summary>
