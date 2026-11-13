@@ -170,7 +170,31 @@ public static class CapabilityDocumentParser
             Variant = ReadString(identity, "variant"),
             Serial = ReadString(identity, "serial"),
             FirmwareRevision = ReadString(identity, "firmware_rev"),
-            HardwareRevision = ReadString(identity, "hardware_rev")
+            HardwareRevision = ReadString(identity, "hardware_rev"),
+            FirmwareCrc32 = ReadString(identity, "firmware_crc32"),
+            Calibration = ReadCalibrationStatus(identity)
+        };
+    }
+
+    private static CapabilityCalibrationStatus? ReadCalibrationStatus(JsonElement identity)
+    {
+        if (!identity.TryGetProperty("cal", out var cal) || cal.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new CapabilityCalibrationStatus
+        {
+            FactoryPresent = ReadBool(cal, "factory_present"),
+            Source = ReadString(cal, "source") switch
+            {
+                null => null,
+                "none" => CapabilityCalibrationSource.None,
+                "factory" => CapabilityCalibrationSource.Factory,
+                "user" => CapabilityCalibrationSource.User,
+                // "unknown", and any value added after this version: neither establishes anything.
+                _ => CapabilityCalibrationSource.Unknown
+            }
         };
     }
 
@@ -211,6 +235,7 @@ public static class CapabilityDocumentParser
                 Unit = ReadString(element, "unit"),
                 ResolutionBits = ReadInt(element, "resolution_bits"),
                 IsSimultaneous = ReadBool(element, "simultaneous") ?? false,
+                ScanOffsetTicks = ReadInt(element, "scan_offset_ticks"),
                 IsDifferential = ReadBool(element, "differential") ?? false,
                 RangeMinimum = range.Minimum,
                 RangeMaximum = range.Maximum,
@@ -300,9 +325,46 @@ public static class CapabilityDocumentParser
             ConservativeEnvelopeHz = ReadInt(streaming, "conservative_envelope_hz"),
             CurrentMaximumRateHz = ReadInt(streaming, "current_max_rate_hz"),
             RateValidation = ReadString(streaming, "rate_validation"),
+            CapTerms = ReadCapTerms(streaming),
+            Timing = ReadTiming(streaming),
             RateModel = ReadRateModel(streaming),
             Encodings = ReadStringArray(streaming, "encodings"),
             Transports = ReadStringArray(streaming, "transports")
+        };
+    }
+
+    private static CapabilityRateCapTerms? ReadCapTerms(JsonElement streaming)
+    {
+        if (!streaming.TryGetProperty("cap_terms", out var terms) || terms.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new CapabilityRateCapTerms
+        {
+            AdcAdditiveHz = ReadInt(terms, "adc_additive_hz"),
+            TransportHz = ReadInt(terms, "transport_hz"),
+            ScanBoundHz = ReadInt(terms, "scan_bound_hz"),
+            SdAdditiveHz = ReadInt(terms, "sd_additive_hz")
+        };
+    }
+
+    private static CapabilityTiming? ReadTiming(JsonElement streaming)
+    {
+        if (!streaming.TryGetProperty("timing", out var timing) || timing.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new CapabilityTiming
+        {
+            TimestampHz = ReadInt(timing, "timestamp_hz"),
+            StreamTimerHz = ReadInt(timing, "stream_timer_hz"),
+            TimestampTicksPerSample = ReadInt(timing, "timestamp_ticks_per_sample"),
+            ActualRateMillihertz = ReadInt(timing, "actual_rate_millihz"),
+            PeripheralClockHz = ReadInt(timing, "pbclk_hz"),
+            PeripheralClockBuiltHz = ReadInt(timing, "pbclk_built_hz"),
+            ClockMatchesBuild = ReadBool(timing, "clock_ok")
         };
     }
 
@@ -348,6 +410,8 @@ public static class CapabilityDocumentParser
             ? parsedValue
             : null;
 
+    // A JSON null reads as "not stated" like any other non-number. Firmware v3.9.0 writes a
+    // non-finite calibration coefficient (one a client set to infinity) as null.
     private static double? ReadDouble(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value)
         && value.ValueKind == JsonValueKind.Number
