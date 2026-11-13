@@ -111,4 +111,23 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// a silent, compile-clean behavior change.
     /// </remarks>
     void RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e);
+
+    /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>
+    /// <remarks>
+    /// The SD download needs it on firmware v3.9.0+ (#959). There, the device's SCPI error queue
+    /// is read before an <c>SD:GET</c> to empty it, and again after an empty reply to find out
+    /// why. A raw capture and each error-queue read take the device lock separately, so without
+    /// one block around all three, another caller's command could run between them. A query
+    /// could pop the GET's error first, and a failing command could queue one that would then be
+    /// blamed on the GET.
+    /// </remarks>
+    Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default);
+
+    /// <inheritdoc cref="DaqifiDevice.DrainErrorQueueUntilEmptyAsync"/>
+    /// <remarks>
+    /// The SD download drains the queue before each v3.9.0+ <c>SD:GET</c> as a boundary (#959).
+    /// It may blame what it reads afterwards on the GET only when that drain reached
+    /// "No error". A drain that stopped early may have left an older <c>-256</c> behind.
+    /// </remarks>
+    Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(int maxIterations, CancellationToken cancellationToken = default);
 }

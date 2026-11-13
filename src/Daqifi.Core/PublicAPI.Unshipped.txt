@@ -71,7 +71,8 @@ Daqifi.Core.Device.DaqifiStreamingDevice.SetIdentifyAsync(bool enabled, System.T
 Daqifi.Core.Device.DeviceFeature.Identify = 6 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor = 5 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
-Daqifi.Core.Device.DeviceFeature.StoredStreamingRateQuery = 8 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.SdGetOpenFailureError = 8 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.StoredStreamingRateQuery = 9 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.WifiLinkStatus = 7 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Diagnostics.MemoryDiagnostics.StreamingPoolTotal.get -> ulong?
 Daqifi.Core.Device.Diagnostics.StreamStats.PoolExhaustedSamples.get -> ulong?
@@ -112,6 +113,10 @@ Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.get -> System.Tim
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.init -> void
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.get -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.init -> void
+Daqifi.Core.Device.SdCard.SdCardFileNotFoundException
+Daqifi.Core.Device.SdCard.SdCardFileNotFoundException.FileName.get -> string!
+Daqifi.Core.Device.SdCard.SdCardFileNotFoundException.ScpiErrorCode.get -> int
+Daqifi.Core.Device.SdCard.SdCardFileNotFoundException.SdCardFileNotFoundException(string! fileName, int scpiErrorCode, System.Collections.Generic.IReadOnlyList<string!>! rawDeviceResponse, string? lastScpiError) -> void
 Daqifi.Core.Device.Network.IWifiLinkStatusProvider
 Daqifi.Core.Device.Network.IWifiLinkStatusProvider.GetActiveWifiModeAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.Network.WifiMode?>!
 Daqifi.Core.Device.Network.IWifiLinkStatusProvider.GetWifiLinkStateAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.Network.WifiLinkState>!
@@ -157,6 +162,7 @@ const Daqifi.Core.Logging.Export.SampleValueUnits.Unscaled = "unscaled" -> strin
 const Daqifi.Core.Logging.Export.SampleValueUnits.Volts = "V" -> string!
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommands() -> void
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
+override Daqifi.Core.Device.SdCard.SdCardFileNotFoundException.Message.get -> string!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetDeviceIdentity.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetIdentify.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetLanActiveWifiMode.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!

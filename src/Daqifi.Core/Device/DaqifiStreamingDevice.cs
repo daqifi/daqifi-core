@@ -1653,6 +1653,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void ISdCardOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
+    Task<ErrorQueueDrainResult> ISdCardOperationHost.DrainErrorQueueUntilEmptyAsync(
+        int maxIterations,
+        CancellationToken cancellationToken)
+        => DrainErrorQueueUntilEmptyAsync(maxIterations, cancellationToken);
+
     void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
         => RaiseStreamFrameDiscarded(e);
 

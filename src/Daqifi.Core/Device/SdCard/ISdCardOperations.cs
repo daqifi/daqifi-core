@@ -234,6 +234,19 @@ public interface ISdCardOperations
     /// Thrown when the device serves a marker-only (0-byte) transfer for a file the last
     /// listing reported as non-empty (or whose listed size is unknown). A file the listing
     /// reports as 0 bytes downloads successfully as a legitimate empty file.
+    /// On firmware v3.9.0+ the device's error queue is read first, and a reason found there
+    /// raises <see cref="SdCardFileNotFoundException"/> or <see cref="SdCardFilesystemException"/>
+    /// instead; the same read applies to a listed 0-byte file.
+    /// </exception>
+    /// <exception cref="SdCardFileNotFoundException">
+    /// Thrown on firmware v3.9.0+ when the device could not open the file because the name does
+    /// not lead to one: it is not on the card (<c>-256</c>) or the device rejected the name
+    /// (<c>-257</c>). On older firmware the same request raises
+    /// <see cref="SdCardEmptyTransferException"/>, because the device reports nothing more.
+    /// </exception>
+    /// <exception cref="SdCardFilesystemException">
+    /// Thrown on firmware v3.9.0+ when the device could not open the file because its storage is
+    /// unusable (<c>-250</c>): no card mounted, access denied, or out of file handles.
     /// </exception>
     /// <exception cref="SdCardTransferErrorException">
     /// Thrown when the device ends the transfer with the transfer-error marker it gained in

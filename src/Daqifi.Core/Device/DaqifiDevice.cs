@@ -2778,6 +2778,23 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         int maxIterations = 256,
         CancellationToken cancellationToken = default)
     {
+        var drain = await DrainErrorQueueUntilEmptyAsync(maxIterations, cancellationToken).ConfigureAwait(false);
+        return drain.Entries;
+    }
+
+    /// <summary>
+    /// <see cref="DrainErrorQueueAsync"/>, also reporting whether the drain read the queue down to
+    /// <c>0,"No error"</c> or stopped early.
+    /// </summary>
+    /// <remarks>
+    /// A caller that uses the drain as a boundary needs the difference: when the drain stops on a
+    /// missing or unreadable reply, or at its cap, older entries may still be queued, and an entry
+    /// read later cannot be pinned on the command sent in between (the SD download, #959).
+    /// </remarks>
+    internal async Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(
+        int maxIterations,
+        CancellationToken cancellationToken)
+    {
         if (maxIterations <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxIterations), maxIterations, "Must be positive.");
 
@@ -2803,7 +2820,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 // No reply of that shape at all means a timeout, an unresponsive device, or
                 // noise — not a queued error. Terminate rather than spin to maxIterations.
                 SafeLog(() => _logger.LogDebug("[DrainErrorQueueAsync] No error-queue reply on iteration {Iteration}; terminating after {PoppedCount} popped entries.", i, popped.Count));
-                return popped;
+                return new ErrorQueueDrainResult(popped, ReachedEmpty: false);
             }
 
             // Code 0 (or +0) indicates an empty queue; anything else is a real error to
@@ -2812,14 +2829,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // terminator.
             if (ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code) && code == 0)
             {
-                return popped;
+                return new ErrorQueueDrainResult(popped, ReachedEmpty: true);
             }
 
             popped.Add(reply);
         }
 
         SafeLog(() => _logger.LogWarning("[DrainErrorQueueAsync] Did not converge after {MaxIterations} iterations; queue may still contain entries.", maxIterations));
-        return popped;
+        return new ErrorQueueDrainResult(popped, ReachedEmpty: false);
     }
 
     /// <summary>
