@@ -75,6 +75,13 @@ public enum DeviceFeature
     PwmFrequencyFloor,
 
     /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify,
+
+    /// <summary>
     /// The SCPI error an <c>SYSTem:STORage:SD:GET</c> leaves behind when the device cannot open
     /// the file: <c>-256</c> "File name not found", <c>-257</c> "File name error" or <c>-250</c>
     /// "Mass storage error", queued on the transport that asked and readable with

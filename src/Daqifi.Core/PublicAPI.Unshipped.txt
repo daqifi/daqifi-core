@@ -63,10 +63,13 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.IsDeviceResponding.get -> b
 Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
+Daqifi.Core.Device.DaqifiStreamingDevice.GetIdentifyAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Daqifi.Core.Device.DaqifiStreamingDevice.PwmFrequencyFloorHz.get -> int
+Daqifi.Core.Device.DaqifiStreamingDevice.SetIdentifyAsync(bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.DeviceFeature.Identify = 6 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor = 5 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
-Daqifi.Core.Device.DeviceFeature.SdGetOpenFailureError = 6 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.SdGetOpenFailureError = 7 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Diagnostics.MemoryDiagnostics.StreamingPoolTotal.get -> ulong?
 Daqifi.Core.Device.Diagnostics.StreamStats.PoolExhaustedSamples.get -> ulong?
 Daqifi.Core.Device.Diagnostics.StreamStats.PreciseSampleLossPercent.get -> double?
@@ -147,6 +150,8 @@ override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommand
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 override Daqifi.Core.Device.SdCard.SdCardFileNotFoundException.Message.get -> string!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetDeviceIdentity.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetIdentify.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetIdentify(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.SdCard.SdCardParseOptions.ForDevice(Daqifi.Core.Device.DaqifiDevice! device) -> Daqifi.Core.Device.SdCard.SdCardParseOptions!
