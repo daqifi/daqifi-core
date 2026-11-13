@@ -78,33 +78,6 @@ public class StoredStreamingRateReplyTests
         Assert.Equal(0, rateHz);
     }
 
-    [Theory]
-    [InlineData("{\"streaming\":{\"timing\":{\"actual_rate_millihz\":0}}}", false)]
-    [InlineData("{\"streaming\":{\"timing\":{\"actual_rate_millihz\":1000}}}", true)]
-    [InlineData("{\"streaming\":{\"timing\":{\"actual_rate_millihz\":10000,\"clock_ok\":true}}}", true)]
-    public void ReadRateConfigured_ReadsTheDocumentsActualRate(string document, bool expected)
-    {
-        Assert.Equal(expected, StoredStreamingRateReply.ReadRateConfigured(new[] { "2", document, "1" }));
-    }
-
-    [Theory]
-    [InlineData("{\"streaming\":{}}")]                                           // no timing block (before 3.8.0)
-    [InlineData("{\"streaming\":{\"timing\":{}}}")]                              // no actual rate
-    [InlineData("{\"streaming\":{\"timing\":{\"actual_rate_millihz\":\"x\"}}}")]   // not a number
-    [InlineData("{\"streaming\":{\"timing\":{\"actual_rate_millihz\":1.5}}}")]   // not an integer
-    [InlineData("{\"streaming\":{\"timing\":[]}}")]
-    [InlineData("{\"streaming\":")]                                              // not valid JSON
-    public void ReadRateConfigured_WhenTheDocumentDoesNotSay_IsUnknown(string document)
-    {
-        Assert.Null(StoredStreamingRateReply.ReadRateConfigured(new[] { "2", document, "1" }));
-    }
-
-    [Fact]
-    public void ReadRateConfigured_WithNoDocument_IsUnknown()
-    {
-        Assert.Null(StoredStreamingRateReply.ReadRateConfigured(new[] { "2", "1" }));
-    }
-
     [Fact]
     public void IndexOfDocumentLine_IsTheFirstLineThatOpensAnObject()
     {

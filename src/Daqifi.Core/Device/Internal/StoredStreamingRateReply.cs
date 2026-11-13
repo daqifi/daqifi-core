@@ -1,12 +1,10 @@
 using System.Collections.Generic;
 using System.Globalization;
-using System.Text.Json;
 
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
-/// Reads the answer to <c>SYSTem:STReam:START?</c> out of the capability exchange it rides in,
-/// and what the capability document says about whether that answer is a real rate.
+/// Reads the answer to <c>SYSTem:STReam:START?</c> out of the capability exchange it rides in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -81,49 +79,5 @@ internal static class StoredStreamingRateReply
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Reads whether the device has had a streaming rate configured since power-up, from the
-    /// document's <c>streaming.timing.actual_rate_millihz</c>.
-    /// </summary>
-    /// <remarks>
-    /// The firmware reports that figure as <c>0</c> until a start configures a rate, and as the
-    /// rate it applied afterwards (<c>Streaming_IsRateConfigured</c>, v3.9.0). That is what tells
-    /// the 1 Hz boot placeholder apart from a 1 Hz somebody started at: <c>START?</c> answers
-    /// <c>1</c> for both. Measured on the bench Nq1 on firmware 3.9.0: <c>0</c> on a device nothing
-    /// had started, <c>10000</c> after a 10 Hz start and stop.
-    /// </remarks>
-    /// <param name="lines">Every line the exchange returned, in order.</param>
-    /// <returns>
-    /// <c>true</c> or <c>false</c> when the document states it; <c>null</c> when there is no
-    /// document, it is not valid JSON, or it carries no such field.
-    /// </returns>
-    internal static bool? ReadRateConfigured(IReadOnlyList<string> lines)
-    {
-        var documentIndex = IndexOfDocumentLine(lines);
-        if (documentIndex < 0)
-        {
-            return null;
-        }
-
-        try
-        {
-            using var json = JsonDocument.Parse(lines[documentIndex]);
-            return json.RootElement.ValueKind == JsonValueKind.Object
-                   && json.RootElement.TryGetProperty("streaming", out var streaming)
-                   && streaming.ValueKind == JsonValueKind.Object
-                   && streaming.TryGetProperty("timing", out var timing)
-                   && timing.ValueKind == JsonValueKind.Object
-                   && timing.TryGetProperty("actual_rate_millihz", out var actualRate)
-                   && actualRate.ValueKind == JsonValueKind.Number
-                   && actualRate.TryGetInt64(out var millihertz)
-                ? millihertz != 0
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 }

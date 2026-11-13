@@ -2968,12 +2968,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         // After the document, so the rate is checked against the sampling ceiling the document
         // may just have set. Whether a rate has been configured at all is only taken from a
-        // document that was trusted; an untrusted one leaves it unknown.
+        // document that was trusted; an untrusted one leaves it unknown. The firmware reports
+        // actual_rate_millihz as 0 until a start configures a rate (Streaming_IsRateConfigured,
+        // v3.9.0), which is what tells the 1 Hz boot placeholder apart from a 1 Hz somebody
+        // started at: START? answers 1 for both.
         if (readStoredStreamingRate)
         {
             if (StoredStreamingRateReply.TryParse(lines, out var storedRateHz))
             {
-                var rateConfigured = document != null ? StoredStreamingRateReply.ReadRateConfigured(lines) : null;
+                var rateConfigured = document?.Streaming?.Timing?.ActualRateMillihertz is { } actualRateMillihertz
+                    ? actualRateMillihertz != 0
+                    : (bool?)null;
                 OnStoredStreamingRateRead(storedRateHz, rateConfigured);
             }
             else
