@@ -82,6 +82,15 @@ public enum DeviceFeature
     Identify,
 
     /// <summary>
+    /// The live WiFi status queries behind <see cref="Network.IWifiLinkStatusProvider"/>: the link
+    /// state (<c>SYSTem:COMMunicate:LAN:CONnected?</c>, firmware <c>#951</c>/<c>#1044</c>) and the
+    /// active — rather than staged — WiFi mode (<c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware
+    /// <c>#1186</c>/<c>#1193</c>). Firmware-gated: first released in <b>v3.9.0</b>; requires WiFi
+    /// hardware.
+    /// </summary>
+    WifiLinkStatus,
+
+    /// <summary>
     /// The SCPI error an <c>SYSTem:STORage:SD:GET</c> leaves behind when the device cannot open
     /// the file: <c>-256</c> "File name not found", <c>-257</c> "File name error" or <c>-250</c>
     /// "Mass storage error", queued on the transport that asked and readable with

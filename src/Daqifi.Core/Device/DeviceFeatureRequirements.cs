@@ -93,6 +93,14 @@ internal static class DeviceFeatureRequirements
     internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
 
     /// <summary>
+    /// Minimum firmware for the live WiFi status queries (<c>SYSTem:COMMunicate:LAN:CONnected?</c>
+    /// and <c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware <c>#951</c>/<c>#1186</c>), first
+    /// released in <b>v3.9.0</b>. Below it <c>CONnected?</c> is an undefined header, and
+    /// <c>NETType? 1</c> answers the <em>staged</em> mode before rejecting the argument.
+    /// </summary>
+    internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, null, 0);
+
+    /// <summary>
     /// Minimum firmware that queues a SCPI error when <c>SYSTem:STORage:SD:GET</c> cannot open
     /// its file (<c>-256</c>, <c>-257</c> or <c>-250</c>; firmware <c>#914</c>, PR <c>#1106</c>),
     /// first released in <b>v3.9.0</b>. Below it an open failure leaves the error queue reading
@@ -154,6 +162,11 @@ internal static class DeviceFeatureRequirements
                 MinVersion: IdentifyMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.WifiLinkStatus] = new(
+                MinVersion: WifiLinkStatusMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.WiFi),
 
             // Another reply-reading gate. Below it the error queue never says why an SD:GET came
             // back empty, so reading it would cost an exchange and tell Core nothing; an
