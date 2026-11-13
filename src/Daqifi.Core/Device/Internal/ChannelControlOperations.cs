@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -370,14 +371,51 @@ internal sealed class ChannelControlOperations
         }
     }
 
+    /// <inheritdoc cref="DaqifiStreamingDevice.PwmFrequencyFloorHz" />
+    internal int PwmFrequencyFloorHz
+    {
+        get
+        {
+            // Below v3.9.0 the document's floor is a fixed 1 Hz the hardware cannot produce, so
+            // only a device that passes this gate has one worth reading (#958).
+            if (!_host.Supports(DeviceFeature.PwmFrequencyFloor))
+            {
+                return DaqifiStreamingDevice.MinPwmFrequencyHz;
+            }
+
+            var document = _host.Metadata.CapabilityDocument;
+            if (document is null)
+            {
+                return DaqifiStreamingDevice.MinPwmFrequencyHz;
+            }
+
+            // One timer drives every PWM pin, so the firmware states the same floor on each of
+            // them. Taking the highest is the safe reading should two ever differ: it is the only
+            // value every pin accepts. A value outside the range Core can command at all is not a
+            // floor Core can use, so it is skipped rather than trusted.
+            int? floor = null;
+            foreach (var channel in document.Channels)
+            {
+                if (channel is { Kind: CapabilityChannelKind.DigitalIo, SupportsPwm: true, PwmMinimumFrequencyHz: { } advertised }
+                    && advertised is >= 1 and <= DaqifiStreamingDevice.MaxPwmFrequencyHz)
+                {
+                    floor = Math.Max(floor ?? advertised, advertised);
+                }
+            }
+
+            return floor ?? DaqifiStreamingDevice.MinPwmFrequencyHz;
+        }
+    }
+
     /// <inheritdoc cref="IStreamingDevice.SetPwmFrequency" />
     internal void SetPwmFrequency(int frequencyHz)
     {
-        if (frequencyHz is < DaqifiStreamingDevice.MinPwmFrequencyHz or > DaqifiStreamingDevice.MaxPwmFrequencyHz)
+        var floorHz = PwmFrequencyFloorHz;
+        if (frequencyHz < floorHz || frequencyHz > DaqifiStreamingDevice.MaxPwmFrequencyHz)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(frequencyHz), frequencyHz,
-                $"PWM frequency must be {DaqifiStreamingDevice.MinPwmFrequencyHz}-{DaqifiStreamingDevice.MaxPwmFrequencyHz} Hz.");
+                $"PWM frequency must be {floorHz}-{DaqifiStreamingDevice.MaxPwmFrequencyHz} Hz.");
         }
 
         _host.EnsureConnected();

@@ -23,10 +23,11 @@ namespace Daqifi.Core.Device.Capabilities;
 /// </para>
 /// <para>
 /// The document is the device's own account of itself, and it is accurate everywhere Core has
-/// checked it against hardware — with one exception. <see cref="CapabilityChannel.PwmMinimumFrequencyHz"/>
-/// advertises 1 Hz on every supported firmware, a frequency the hardware cannot actually produce;
-/// use <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the PWM floor instead. See that
-/// property's remarks for the detail.
+/// checked it against hardware — with one exception before firmware v3.9.0.
+/// <see cref="CapabilityChannel.PwmMinimumFrequencyHz"/> there advertises a fixed 1 Hz, a frequency
+/// the hardware cannot actually produce. From v3.9.0 the firmware computes it from its real clock
+/// and enforces it. <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/> resolves the floor
+/// that applies; see that property's remarks for the detail.
 /// </para>
 /// </remarks>
 public sealed class CapabilityDocument
