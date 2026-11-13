@@ -75,6 +75,13 @@ public enum DeviceFeature
     PwmFrequencyFloor,
 
     /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify,
+
+    /// <summary>
     /// The live WiFi status queries behind <see cref="Network.IWifiLinkStatusProvider"/>: the link
     /// state (<c>SYSTem:COMMunicate:LAN:CONnected?</c>, firmware <c>#951</c>/<c>#1044</c>) and the
     /// active — rather than staged — WiFi mode (<c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware

@@ -1077,6 +1077,67 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
         => _administration.SetFriendlyNameAsync(name, cancellationToken);
 
+    /// <summary>
+    /// Starts or stops flashing both of the device's LEDs, so the user can tell which physical
+    /// board this connection is talking to (<c>SYSTem:IDENtify 1</c> / <c>0</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// While on, the LEDs repeat a pattern of about one second of fast flashing followed by about
+    /// one second off, and that pattern replaces every other LED indication (power, charging,
+    /// streaming, errors) until it is turned off. The firmware puts <b>no time limit</b> on it:
+    /// it flashes until <c>SetIdentifyAsync(false)</c> or a reboot, so a caller that starts it
+    /// owns turning it off. Disconnecting does not stop it.
+    /// </para>
+    /// <para>
+    /// A single write with no reply, like <see cref="SetFriendlyNameAsync"/>: the task completes
+    /// once the command is sent, and it is safe to call while streaming. Use
+    /// <see cref="GetIdentifyAsync"/> to read the state back.
+    /// </para>
+    /// <para>Requires firmware v3.9.0 or newer (<see cref="DeviceFeature.Identify"/>).</para>
+    /// </remarks>
+    /// <param name="enabled"><c>true</c> to start flashing, <c>false</c> to stop.</param>
+    /// <param name="cancellationToken">A cancellation token observed before the command is sent.</param>
+    /// <returns>A task that completes once the command has been sent.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">
+    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    public Task SetIdentifyAsync(bool enabled, CancellationToken cancellationToken = default)
+        => _administration.SetIdentifyAsync(enabled, cancellationToken);
+
+    /// <summary>
+    /// Asks the device whether it is currently flashing its LEDs to identify itself
+    /// (<c>SYSTem:IDENtify?</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reads the device's own flag, so it also reports an identify started by another
+    /// connection or an earlier session.
+    /// </para>
+    /// <para>
+    /// This runs a text-mode exchange, which stops decoding protobuf frames for its duration.
+    /// Do not call it while streaming.
+    /// </para>
+    /// <para>Requires firmware v3.9.0 or newer (<see cref="DeviceFeature.Identify"/>).</para>
+    /// </remarks>
+    /// <param name="cancellationToken">Cancels the exchange.</param>
+    /// <returns><c>true</c> while the device is identifying; otherwise <c>false</c>.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">
+    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown — or when
+    /// the device itself answers the query with SCPI <c>-113</c> "Undefined header", whatever
+    /// version it reported.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the device rejected the query with any other error, or answered with something
+    /// other than <c>1</c> or <c>0</c>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    public Task<bool> GetIdentifyAsync(CancellationToken cancellationToken = default)
+        => _administration.GetIdentifyAsync(cancellationToken);
+
     /// <inheritdoc />
     public void SetAnalogOutput(int channelNumber, double voltage)
         => _channelControl.SetAnalogOutput(channelNumber, voltage);

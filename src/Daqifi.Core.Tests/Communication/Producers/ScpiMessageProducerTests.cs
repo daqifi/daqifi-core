@@ -1140,6 +1140,26 @@ public class ScpiMessageProducerTests
     }
 
     [Theory]
+    [InlineData(true, "SYSTem:IDENtify 1")]
+    [InlineData(false, "SYSTem:IDENtify 0")]
+    public void SetIdentify_ReturnsCorrectCommand(bool enabled, string expected)
+    {
+        // Firmware v3.9.0 SCPI_SetIdentify accepts only the integers 0 and 1 (anything else is
+        // -224), so the bool must map to exactly those, not ON/OFF or True/False.
+        var message = ScpiMessageProducer.SetIdentify(enabled);
+        Assert.Equal(expected, message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetIdentify_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetIdentify;
+        Assert.Equal("SYSTem:IDENtify?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("has a \"quote")]
