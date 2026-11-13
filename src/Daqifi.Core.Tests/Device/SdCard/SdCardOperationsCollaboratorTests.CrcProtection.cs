@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 using System;
@@ -470,6 +471,46 @@ public partial class SdCardOperationsCollaboratorTests
 
         var calls = host.Calls.ToList();
         Assert.True(calls.IndexOf("send:" + InfoQuery) < calls.IndexOf("send:" + ProtectOff));
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_QueuedWhileALogStarts_RefusesWithoutStoppingTheLog()
+    {
+        // The second call passes its log check while the first is still mounting, then waits. A
+        // log start that arrived in between claims the bus once the first is confirmed. Without a
+        // second check after the wait, the second call's defensive stream stop would end that log.
+        var host = new FakeHost();
+        using var firstIsMounting = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        host.AfterExchangeSetup = index =>
+        {
+            if (index == 2)
+            {
+                firstIsMounting.Set();
+                releaseFirst.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        EnqueueAppliedChange(host, crcOn: true);
+        var ops = new SdCardOperations(host);
+
+        var first = Task.Run(() => ops.SetSdCardCrcProtectionAsync(true));
+        Assert.True(firstIsMounting.Wait(TimeSpan.FromSeconds(10)));
+        var log = ops.StartSdCardLoggingSessionAsync("queued.bin");
+        var second = ops.SetSdCardCrcProtectionAsync(false);
+        Assert.False(log.IsCompleted, "The log start claimed the bus during the first change.");
+        Assert.False(second.IsCompleted);
+
+        releaseFirst.Set();
+        Assert.Equal(SdCardCrcProtectionResult.Applied, await first);
+        await Assert.ThrowsAsync<SdCardBusyException>(() => second);
+        await log;
+
+        var calls = host.Calls.ToList();
+        var firstConfirmed = calls.IndexOf("send:" + InfoQuery);
+        Assert.True(firstConfirmed < calls.IndexOf("send:" + ScpiMessageProducer.DisableNetworkLan.Data));
+        Assert.DoesNotContain("send:" + StopStreaming, calls.Skip(firstConfirmed));
+        Assert.DoesNotContain("send:" + ProtectOff, calls);
+        Assert.True(host.IsLoggingToSdCard);
     }
 
     [Fact]

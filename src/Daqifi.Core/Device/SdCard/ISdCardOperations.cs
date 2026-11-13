@@ -161,7 +161,7 @@ public interface ISdCardOperations
     /// card in that mode. That check runs even when the value did not change, so an empty slot
     /// reports <see cref="SdCardCrcProtectionResult.Pending"/> rather than
     /// <see cref="SdCardCrcProtectionResult.Applied"/>. Calls on one device run one at a time,
-    /// each through to its confirmation.
+    /// each through to its confirmation, and an SD log started during a change waits for it.
     /// </para>
     /// <para>
     /// <b>The device forgets the setting every time it boots</b>, and Core does not re-apply it.

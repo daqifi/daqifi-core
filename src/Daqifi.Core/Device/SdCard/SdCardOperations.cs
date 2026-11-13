@@ -135,7 +135,12 @@ internal sealed class SdCardOperations
     /// one waited for the card would leave the card in the other mode, and this call's mount
     /// would look like its own change arriving.
     /// </summary>
-    /// <remarks>Not disposed, for the reason <see cref="_sdDownloadGate"/> is not.</remarks>
+    /// <remarks>
+    /// An SD log start takes it too, around its claim on the bus, so a start can never land
+    /// between a change's log check and its defensive stream stop, which would end the new log.
+    /// A start that arrives during a change waits for the change to be confirmed.
+    /// Not disposed, for the reason <see cref="_sdDownloadGate"/> is not.
+    /// </remarks>
     private readonly SemaphoreSlim _sdProtectGate = new(1, 1);
 
     /// <summary>
@@ -1100,7 +1105,10 @@ internal sealed class SdCardOperations
     /// anything off it. See <see cref="ClearOwnRefusalAsync"/> for what happens to a refusal.
     /// </para>
     /// <para>
-    /// Calls run one at a time (<see cref="_sdProtectGate"/>), set and confirmation together.
+    /// Calls run one at a time (<see cref="_sdProtectGate"/>), set and confirmation together, and
+    /// a log start waits for the gate to make its claim. The log check is made again once the
+    /// gate is held, because a log can start while this call waits behind another; from then to
+    /// the end of the call no log start can claim the bus.
     /// </para>
     /// </remarks>
     internal async Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
@@ -1120,6 +1128,14 @@ internal sealed class SdCardOperations
 
         try
         {
+            // Again, now the gate is held: a log may have started while this call waited behind
+            // another, and the defensive stop below would end it. Log starts claim the bus only
+            // while holding this gate, so the answer holds until the gate is released.
+            if (IsBusHeldByLog())
+            {
+                throw new SdCardBusyException(Array.Empty<string>());
+            }
+
             var wasStreaming = PauseStreamingForSdOperation();
 
             try
@@ -1246,6 +1262,12 @@ internal sealed class SdCardOperations
     /// this exchange's own <c>**ERROR</c> line in the reply, can only be that refusal. With older
     /// entries everything is left in place, in order, for whoever reads the queue; the connect
     /// handshake drains it.
+    /// <para>
+    /// The count proves ownership only if nothing else reads or adds to the queue between the
+    /// exchange that read it and the pop, which are separate exchanges. <see cref="DaqifiStreamingDevice"/>
+    /// runs the whole of <see cref="SetSdCardCrcProtectionAsync"/> under its exclusive operation
+    /// lock for that reason, as it does the WiFi link-state read.
+    /// </para>
     /// </remarks>
     private async Task ClearOwnRefusalAsync(IReadOnlyList<string> lines, CancellationToken cancellationToken)
     {
@@ -1479,13 +1501,25 @@ internal sealed class SdCardOperations
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
 
-        // Read before the claim: a start that is cancelled or fails runs the stop sequence,
-        // which stops a live stream that was running before it and has nothing to do with it.
-        var wasLiveStreaming = _host.IsStreaming && !_host.IsLoggingToSdCard;
+        // Under the CRC protection gate: a change that is running has already checked for a log
+        // and is about to send, or has sent, its defensive stream stop, which would end this one.
+        // Waiting here lets it finish and confirm the card first.
+        await _sdProtectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool wasLiveStreaming;
+        try
+        {
+            // Read before the claim: a start that is cancelled or fails runs the stop sequence,
+            // which stops a live stream that was running before it and has nothing to do with it.
+            wasLiveStreaming = _host.IsStreaming && !_host.IsLoggingToSdCard;
 
-        // Recorded before the first command, so the other SD operations — and a second start —
-        // refuse from here on rather than only once the last command has gone (issue #941).
-        ClaimBusForLogStart();
+            // Recorded before the first command, so the other SD operations — and a second start —
+            // refuse from here on rather than only once the last command has gone (issue #941).
+            ClaimBusForLogStart();
+        }
+        finally
+        {
+            _sdProtectGate.Release();
+        }
 
         try
         {

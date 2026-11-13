@@ -1411,8 +1411,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void SetSdCardMinimumFreeSpace(long bytes) => _sdCardOperations.SetSdCardMinimumFreeSpace(bytes);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync{TResult}(Func{CancellationToken, Task{TResult}}, CancellationToken)"/>:
+    /// the set and each mount attempt read the error count in one exchange and may pop their own
+    /// refusal in the next, and that pop is only safe if no other caller can drain the queue or
+    /// add to it in between. Other callers' text queries wait for the change, a second or two.
+    /// </remarks>
     public Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
-        => _sdCardOperations.SetSdCardCrcProtectionAsync(enabled, cancellationToken);
+        => RunExclusiveAsync(ct => _sdCardOperations.SetSdCardCrcProtectionAsync(enabled, ct), cancellationToken);
 
     /// <inheritdoc />
     public Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
