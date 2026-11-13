@@ -98,6 +98,30 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> RebootDevice => new ScpiMessage("SYSTem:REboot");
 
     /// <summary>
+    /// Creates a command message to start or stop flashing both of the device's LEDs, so the
+    /// physical board can be picked out on a bench or a shelf.
+    /// </summary>
+    /// <param name="enabled"><c>true</c> to start flashing, <c>false</c> to stop.</param>
+    /// <remarks>
+    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.Identify"/>). The
+    /// firmware accepts only <c>0</c> and <c>1</c>, which is all a <see cref="bool"/> can produce.
+    /// Command: SYSTem:IDENtify 1 | SYSTem:IDENtify 0
+    /// </remarks>
+    public static IOutboundMessage<string> SetIdentify(bool enabled)
+        => new ScpiMessage($"SYSTem:IDENtify {(enabled ? 1 : 0)}");
+
+    /// <summary>
+    /// Creates a query message asking whether the device is currently flashing its LEDs to
+    /// identify itself.
+    /// </summary>
+    /// <remarks>
+    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.Identify"/>). The device
+    /// answers <c>1</c> while identifying and <c>0</c> otherwise.
+    /// Command: SYSTem:IDENtify?
+    /// </remarks>
+    public static IOutboundMessage<string> GetIdentify => new ScpiMessage("SYSTem:IDENtify?");
+
+    /// <summary>
     /// Creates a query message to request system information in protocol buffer format.
     /// </summary>
     /// <remarks>

@@ -110,6 +110,18 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_Identify_RequiresV3_9_0OnEveryBoard()
+    {
+        // SYSTem:IDENtify (firmware #1220) first shipped in v3.9.0. Every board has the two LEDs,
+        // so there is no board or hardware axis — only the version gate.
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.Identify);
+
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Null(requirement.Boards);
+        Assert.Equal(HardwareRequirement.None, requirement.Hardware);
+    }
+
+    [Fact]
     public void RequirementTable_StoredStreamingRateQuery_RequiresV3_9_0_OnEveryBoard()
     {
         // SYSTem:STReam:START? (firmware #1007/#1014) first shipped in v3.9.0. Below it the query
@@ -119,6 +131,20 @@ public class DeviceFeatureSupportTests
         Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.None, requirement.Hardware);
+    }
+
+    [Fact]
+    public void EnsureSupported_Identify_OnV3_8_0_ReportsV3_9_0AsTheRequiredVersion()
+    {
+        // The bench Nq1 runs 3.8.0: the refusal must name the upgrade that fixes it.
+        var device = DeviceOn(DeviceType.Nyquist1, "3.8.0");
+
+        var ex = Assert.Throws<FeatureNotSupportedException>(
+            () => device.EnsureSupported(DeviceFeature.Identify));
+
+        Assert.Equal(DeviceFeature.Identify, ex.Feature);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal("3.8.0", ex.ActualVersion);
     }
 
     [Fact]
@@ -147,6 +173,7 @@ public class DeviceFeatureSupportTests
             new object[] { DeviceFeature.CapabilityDocument,     "3.4.4", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.PwmFrequencyFloor,      "3.8.0", "3.9.0", "3.9.1" },
+            new object[] { DeviceFeature.Identify,               "3.8.0", "3.9.0", "3.10.0" },
             new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" }
         };
 
@@ -177,6 +204,7 @@ public class DeviceFeatureSupportTests
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));
         Assert.False(device.Supports(DeviceFeature.CapabilityDocument));
         Assert.False(device.Supports(DeviceFeature.SdStorageQuery));
+        Assert.False(device.Supports(DeviceFeature.Identify));
     }
 
     [Fact]

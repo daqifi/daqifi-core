@@ -86,6 +86,13 @@ internal static class DeviceFeatureRequirements
     internal static readonly FirmwareVersion PwmFrequencyFloorMinFirmware = new(3, 9, 0, null, 0);
 
     /// <summary>
+    /// Minimum firmware for <c>SYSTem:IDENtify</c> / <c>SYSTem:IDENtify?</c> (firmware
+    /// <c>#1220</c>), first released in <b>v3.9.0</b>. Older firmware answers either with
+    /// <c>-113</c> "Undefined header".
+    /// </summary>
+    internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
+
+    /// <summary>
     /// Minimum firmware that answers <c>SYSTem:STReam:START?</c> with the stored streaming rate
     /// (firmware <c>#1007</c>/<c>#1014</c>), first released in <b>v3.9.0</b>. Below this version
     /// the query is an undefined header.
@@ -139,6 +146,11 @@ internal static class DeviceFeatureRequirements
             // is correct for every firmware before v3.9.0.
             [DeviceFeature.PwmFrequencyFloor] = new(
                 MinVersion: PwmFrequencyFloorMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.Identify] = new(
+                MinVersion: IdentifyMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),
 

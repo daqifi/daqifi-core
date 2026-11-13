@@ -75,6 +75,13 @@ public enum DeviceFeature
     PwmFrequencyFloor,
 
     /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify,
+
+    /// <summary>
     /// The stored streaming rate readback (<c>SYSTem:STReam:START?</c>), which answers the rate
     /// the device will stream at — the last one a start set, which a stop deliberately does not
     /// revert, or the 1 Hz boot default before any start. Firmware-gated: introduced by firmware
