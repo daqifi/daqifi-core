@@ -64,8 +64,10 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> Sy
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
 Daqifi.Core.Device.DaqifiStreamingDevice.GetIdentifyAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Daqifi.Core.Device.DaqifiStreamingDevice.PwmFrequencyFloorHz.get -> int
 Daqifi.Core.Device.DaqifiStreamingDevice.SetIdentifyAsync(bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-Daqifi.Core.Device.DeviceFeature.Identify = 5 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.Identify = 6 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor = 5 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Diagnostics.MemoryDiagnostics.StreamingPoolTotal.get -> ulong?
 Daqifi.Core.Device.Diagnostics.StreamStats.PoolExhaustedSamples.get -> ulong?

@@ -394,8 +394,11 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <summary>
     /// Sets the PWM frequency, in hertz, for the whole device.
     /// </summary>
-    /// <param name="frequencyHz">The frequency in hertz, 6-50000. Values below 6 Hz are rejected because
-    /// the firmware's 16-bit period register silently wraps for them, producing a kilohertz-range output.</param>
+    /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000. The floor is
+    /// 6 Hz (<see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
+    /// floor the device advertises (<see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>). Values below it
+    /// are rejected because the firmware's 16-bit period register silently wraps for them, producing a
+    /// kilohertz-range output.</param>
     /// <remarks>
     /// All PWM channels share one hardware timer, so this applies to every PWM channel at once — there is
     /// no per-channel frequency. Changing it while channels are enabled takes effect live and rescales
@@ -407,8 +410,8 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Sets the PWM frequency, in hertz, for the whole device, without blocking the calling thread.
     /// </summary>
     /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="frequencyHz">The frequency in hertz, 6-50000. Values below 6 Hz are rejected because
-    /// the firmware's 16-bit period register silently wraps for them, producing a kilohertz-range output.</param>
+    /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000; see
+    /// <see cref="SetPwmFrequency"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>

@@ -300,7 +300,7 @@ var pwm = device.GetChannelsSnapshot()
     .First(c => c.IsPwmCapable);
 
 device.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
-device.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
+device.SetPwmFrequency(1000);     // device.PwmFrequencyFloorHz up to 50000 Hz, applies to every PWM channel
 device.SetPwmEnabled(pwm, true);  // start
 
 device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
