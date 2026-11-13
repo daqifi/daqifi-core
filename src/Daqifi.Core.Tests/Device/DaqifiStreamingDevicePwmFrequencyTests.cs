@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -88,6 +89,68 @@ public class DaqifiStreamingDevicePwmFrequencyTests
         device.Connect();
         Assert.Throws<System.ArgumentOutOfRangeException>(() => device.SetPwmFrequency(hz));
         Assert.Empty(device.PwmFrequencySends);
+    }
+
+    /// <summary>
+    /// The PWM pins of a capability document in the shape firmware v3.9.0 emits them
+    /// (<c>EmitDioChannelJson</c>), where <c>min_freq_hz</c> is the floor the firmware computes
+    /// from its clock rather than the fixed 1 Hz earlier releases print.
+    /// </summary>
+    private static string DocumentAdvertisingPwmFloor(int floorHz)
+    {
+        var pwm = $"\"pwm\":{{\"min_freq_hz\":{floorHz},\"max_freq_hz\":50000,\"resolution_bits\":16}}";
+        var pins = string.Join(",", new[] { 0, 1, 3 }.Select(id => id == 1
+            ? $"{{\"id\":{id},\"kind\":\"digital-io\",\"features\":{{\"input\":true,\"output\":true}},\"extensions\":{{}}}}"
+            : $"{{\"id\":{id},\"kind\":\"digital-io\",\"features\":{{\"input\":true,\"output\":true,{pwm}}},\"extensions\":{{}}}}"));
+        return $"{{\"schema_version\":2,\"channels\":[{pins}]}}";
+    }
+
+    private static CapturingStreamingDevice ConnectedDeviceOn(string firmwareVersion, int advertisedFloorHz)
+    {
+        var device = new CapturingStreamingDevice();
+        device.Connect();
+        device.Metadata.FirmwareVersion = firmwareVersion;
+        Assert.True(CapabilityDocumentParser.TryParse(
+            DocumentAdvertisingPwmFloor(advertisedFloorHz), out var document));
+        device.Metadata.ApplyCapabilityDocument(document);
+        return device;
+    }
+
+    [Theory]
+    [InlineData(8)] // a unit whose clock puts the floor above the fixed 6 Hz
+    [InlineData(5)] // and one whose clock puts it below
+    public void SetPwmFrequency_OnV3_9_0_UsesTheFloorTheDeviceAdvertises(int floorHz)
+    {
+        var device = ConnectedDeviceOn("3.9.0", floorHz);
+
+        Assert.Equal(floorHz, device.PwmFrequencyFloorHz);
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmFrequency(floorHz - 1));
+        Assert.Empty(device.PwmFrequencySends);
+
+        device.SetPwmFrequency(floorHz);
+
+        Assert.Equal(new[] { $"PWM:CHannel:FREQuency 0,{floorHz}" }, device.PwmFrequencySends);
+    }
+
+    [Fact]
+    public void SetPwmFrequency_BeforeV3_9_0_KeepsTheFixedFloorOverTheAdvertisedOne()
+    {
+        // v3.8.0 prints min_freq_hz 1 on every PWM pin, a frequency the hardware cannot produce.
+        var device = ConnectedDeviceOn("3.8.0", 1);
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => device.SetPwmFrequency(DaqifiStreamingDevice.MinPwmFrequencyHz - 1));
+        Assert.Empty(device.PwmFrequencySends);
+    }
+
+    [Fact]
+    public void PwmFrequencyFloorHz_WithNoCapabilityDocument_IsTheFixedFloor()
+    {
+        var device = new CapturingStreamingDevice();
+        device.Metadata.FirmwareVersion = "3.9.0";
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
     }
 
     [Fact]

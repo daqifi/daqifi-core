@@ -395,7 +395,9 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetPwmOutput(
                 agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: 50, frequencyHz: 5));
 
-        Assert.Contains("PWM frequency must be", ex.Message);
+        // The message names the device's minimum (the fixed 6 Hz here, with no capability
+        // document), which is what set_pwm_output's frequency description promises (#958).
+        Assert.Contains("PWM frequency must be 6-50000 Hz", ex.Message);
         Assert.DoesNotContain("disable_pwm", ex.Message);
         var core = Assert.IsType<ArgumentOutOfRangeException>(ex.InnerException);
         Assert.Equal("frequencyHz", core.ParamName);

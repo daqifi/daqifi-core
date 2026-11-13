@@ -30,7 +30,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `configure_digital_channels` | Enable exactly the given digital channels; disable the rest. |
 | `set_digital_direction` | Set a digital channel to `input` or `output`. |
 | `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
-| `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency 6-50000 Hz. |
+| `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency from the device's minimum up to 50000 Hz. The minimum is 6 Hz, or on firmware 3.9.0+ the one the unit reports, which depends on its clock and can differ. A lower frequency is rejected with an error that names the minimum. |
 | `disable_pwm` | Stop PWM on a channel (pin is left high-impedance). |
 | `list_analog_outputs` | The DAC channels with the voltage range each accepts and the value it is driving. |
 | `set_analog_output` | Drive a DAC channel to a voltage (**Nyquist 3 only**); range-checked before it is sent. |

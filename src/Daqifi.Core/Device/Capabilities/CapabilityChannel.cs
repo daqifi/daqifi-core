@@ -42,6 +42,21 @@ public sealed class CapabilityChannel
     /// </summary>
     public bool IsSimultaneous { get; init; }
 
+    /// <summary>
+    /// Gets how long after a sample's timestamp this analog input actually converts, in ticks of
+    /// <see cref="CapabilityTiming.TimestampHz"/>; or <c>null</c> when not stated (firmware before
+    /// v3.9.0).
+    /// </summary>
+    /// <remarks>
+    /// Every channel in a sample shares one timestamp, but multiplexed channels convert one after
+    /// another, so each is offset from that stamp by its position in the scan. Divide by
+    /// <see cref="CapabilityTiming.TimestampHz"/> for seconds. <c>0</c> means no deterministic
+    /// offset applies: the channel is <see cref="IsSimultaneous"/>, or it is not in the scan. The
+    /// values describe the channels enabled when the document was read, so re-read it after
+    /// changing the enabled set.
+    /// </remarks>
+    public int? ScanOffsetTicks { get; init; }
+
     /// <summary>Gets a value indicating whether the channel can be configured as differential.</summary>
     public bool IsDifferential { get; init; }
 
@@ -62,14 +77,21 @@ public sealed class CapabilityChannel
     /// Gets the lowest PWM frequency the pin advertises, or <c>null</c> when not stated.
     /// </summary>
     /// <remarks>
-    /// Do not use this as a floor. The device under-reports it: every supported firmware
-    /// advertises 1 Hz here, but below
-    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> (6 Hz) the firmware's 16-bit
-    /// period register silently wraps and the output runs in the kilohertz range, so a commanded
-    /// 1 Hz is not what the pin produces. <see cref="DaqifiStreamingDevice.SetPwmFrequency"/>
-    /// rejects anything below that constant, which is the value to use as the real floor. This is
-    /// the one field on the capability document known to be wrong rather than merely absent —
-    /// <see cref="PwmMaximumFrequencyHz"/> and the set of PWM-capable pins both match the hardware.
+    /// <para>
+    /// Trustworthy from firmware v3.9.0 (<see cref="DeviceFeature.PwmFrequencyFloor"/>). There the
+    /// firmware computes the floor from the peripheral clock the unit actually runs at
+    /// (ceil(PBCLK3 / 256 / 65535), the lowest frequency whose period fits the 16-bit timer at its
+    /// largest prescaler) and refuses <c>DIO:PWM:FREQ</c> below it, so the value can differ from
+    /// unit to unit.
+    /// </para>
+    /// <para>
+    /// Earlier firmware advertises a fixed 1 Hz here that the hardware cannot produce: below about
+    /// 6 Hz the 16-bit period register silently wraps and the output runs in the kilohertz range.
+    /// For those devices Core uses <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> instead.
+    /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/> picks the right one for the
+    /// connected device and is the floor <see cref="DaqifiStreamingDevice.SetPwmFrequency"/>
+    /// enforces.
+    /// </para>
     /// </remarks>
     public int? PwmMinimumFrequencyHz { get; init; }
 
