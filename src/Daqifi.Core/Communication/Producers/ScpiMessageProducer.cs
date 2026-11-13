@@ -1102,6 +1102,30 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetLanGateway => new ScpiMessage("SYSTem:COMMunicate:LAN:GATEway?");
 
     /// <summary>
+    /// Creates a query message to read the live state of the WiFi link (firmware v3.9.0+).
+    /// </summary>
+    /// <remarks>
+    /// The device answers one bare mnemonic: <c>CONNECTED</c>, <c>APIDLE</c>, <c>NOLINK</c>,
+    /// <c>INITFAULT</c> or <c>INIT</c>. With WiFi disabled, or the device in standby, it answers
+    /// SCPI error <c>-200</c> instead. Firmware older than v3.9.0 does not know the command.
+    /// Command: SYSTem:COMMunicate:LAN:CONnected?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanConnected => new ScpiMessage("SYSTem:COMMunicate:LAN:CONnected?");
+
+    /// <summary>
+    /// Creates a query message to read the WiFi mode the radio is actually running, rather than
+    /// the staged one (firmware v3.9.0+).
+    /// </summary>
+    /// <remarks>
+    /// The device answers <c>1</c> (existing network), <c>4</c> (self-hosted) or <c>0</c> (no mode
+    /// is up). Without the trailing <c>1</c>, <c>NETType?</c> reports the staged mode — what the
+    /// next apply would bring up — on every firmware. Firmware older than v3.9.0 does not take the
+    /// argument.
+    /// Command: SYSTem:COMMunicate:LAN:NETType? 1
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanActiveWifiMode => new ScpiMessage("SYSTem:COMMunicate:LAN:NETType? 1");
+
+    /// <summary>
     /// Creates a command message to disable LAN communication.
     /// </summary>
     /// <remarks>

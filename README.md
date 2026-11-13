@@ -333,6 +333,16 @@ var config = new NetworkConfiguration
 await device.UpdateNetworkConfigurationAsync(config);
 ```
 
+On firmware v3.9.0 and later, `IWifiLinkStatusProvider` (also implemented by `DaqifiStreamingDevice`) reports whether the change actually took: `GetWifiLinkStateAsync()` returns the live link state (`Connected`, `AccessPointIdle`, `NoLink`, `Initializing`, `InitializationFault`, or `Unavailable` while WiFi is off or the device is in standby), and `GetActiveWifiModeAsync()` returns the mode the radio is running rather than the staged one (`null` when none is up). Over a WiFi connection the apply usually drops the control link, so poll these over USB. Older firmware gets a `FeatureNotSupportedException`; check `device.Supports(DeviceFeature.WifiLinkStatus)` first.
+
+```csharp
+if (device.Supports(DeviceFeature.WifiLinkStatus))
+{
+    var state = await device.GetWifiLinkStateAsync();
+    var mode  = await device.GetActiveWifiModeAsync();
+}
+```
+
 ### Firmware updates
 
 `IFirmwareUpdateService` orchestrates both PIC32 and WiFi-module flashing with explicit state transitions and `IProgress<FirmwareUpdateProgress>` for UI / CLI reporting.

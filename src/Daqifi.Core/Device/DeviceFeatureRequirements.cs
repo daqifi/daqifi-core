@@ -92,6 +92,14 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware for the live WiFi status queries (<c>SYSTem:COMMunicate:LAN:CONnected?</c>
+    /// and <c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware <c>#951</c>/<c>#1186</c>), first
+    /// released in <b>v3.9.0</b>. Below it <c>CONnected?</c> is an undefined header, and
+    /// <c>NETType? 1</c> answers the <em>staged</em> mode before rejecting the argument.
+    /// </summary>
+    internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -145,7 +153,12 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.Identify] = new(
                 MinVersion: IdentifyMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.None)
+                Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.WifiLinkStatus] = new(
+                MinVersion: WifiLinkStatusMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.WiFi)
         };
 
     /// <summary>
