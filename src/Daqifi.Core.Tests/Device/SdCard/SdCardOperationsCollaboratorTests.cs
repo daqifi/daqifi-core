@@ -1980,6 +1980,56 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_ReadBeforeTheGetStopsEarly_StaleErrorIsNotBlamedOnTheGet()
+    {
+        // Review on #967: the read ahead of the GET can stop on a missing reply without reaching
+        // "No error", leaving an older -256 queued. The read after the GET then finds it, but
+        // it is not this GET's, so the legitimately empty file still downloads as empty.
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
+        host.QueuedErrors.Add("-256,\"File name not found\"");
+        host.DrainsThatStopEarly.Add(1);
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
+
+        Assert.Equal(0, result.FileSize);
+        Assert.Equal(2, host.Calls.Count(c => c == "drain"));
+
+        // The read after the GET still ran, so the stale entry is not left to trip the next
+        // connect (#898).
+        Assert.Empty(host.QueuedErrors);
+    }
+
+    [Theory]
+    [InlineData(1, typeof(SdCardFileNotFoundException))]
+    [InlineData(2, typeof(SdCardEmptyTransferException))]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_OnlyTheLastAttemptsBoundaryDecides(
+        int drainThatStopsEarly, Type expected)
+    {
+        // Each attempt gets its own boundary. If the read ahead of the first GET stops early but
+        // the read ahead of the retry reaches "No error", the retry's -256 is still its own. If
+        // the read ahead of the retry stops early, the first attempt's -256 may still be queued,
+        // so the final read cannot be pinned on the retry and the empty transfer stands.
+        var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
+        host.DrainsThatStopEarly.Add(drainThatStopsEarly);
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAnyAsync<SdCardOperationException>(
+            () => ops.DownloadSdCardFileAsync("missing.bin", destination));
+
+        Assert.IsType(expected, ex);
+        Assert.Equal(3, host.Calls.Count(c => c == "drain"));
+        Assert.Empty(host.QueuedErrors);
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_DeviceReportsFileNotFound_ThrowsSdCardFileNotFoundException()
     {
         // A file listed at 0 bytes and deleted since gives the same bare EOF marker as the empty
@@ -2746,19 +2796,26 @@ public class SdCardOperationsCollaboratorTests
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
 
         /// <summary>
-        /// What the device's SCPI error queue holds, oldest first. <see cref="DrainErrorQueueAsync"/>
-        /// hands it all back and empties it, as the real drain does when it reads to "No error".
+        /// What the device's SCPI error queue holds, oldest first.
+        /// <see cref="DrainErrorQueueUntilEmptyAsync"/> hands it all back and empties it, as the
+        /// real drain does when it reads to "No error".
         /// </summary>
         public List<string> QueuedErrors { get; } = new();
 
-        /// <summary>When set, <see cref="DrainErrorQueueAsync"/> fails with it instead of reading.</summary>
+        /// <summary>When set, <see cref="DrainErrorQueueUntilEmptyAsync"/> fails with it instead of reading.</summary>
         public Exception? ThrowOnDrain { get; set; }
+
+        /// <summary>
+        /// The drains (1-based, in order) whose first reply goes missing: they read nothing,
+        /// leave the queue as it was, and report that they did not reach "No error".
+        /// </summary>
+        public HashSet<int> DrainsThatStopEarly { get; } = new();
 
         /// <summary>The read cap each drain asked for, in order.</summary>
         public List<int> DrainCaps { get; } = new();
 
-        public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
-            int maxIterations = 256,
+        public Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(
+            int maxIterations,
             CancellationToken cancellationToken = default)
         {
             Record("drain");
@@ -2766,13 +2823,23 @@ public class SdCardOperationsCollaboratorTests
 
             if (ThrowOnDrain != null)
             {
-                return Task.FromException<IReadOnlyList<string>>(ThrowOnDrain);
+                return Task.FromException<ErrorQueueDrainResult>(ThrowOnDrain);
+            }
+
+            if (DrainsThatStopEarly.Contains(DrainCaps.Count))
+            {
+                return Task.FromResult(new ErrorQueueDrainResult(Array.Empty<string>(), ReachedEmpty: false));
             }
 
             var drained = QueuedErrors.ToArray();
             QueuedErrors.Clear();
-            return Task.FromResult<IReadOnlyList<string>>(drained);
+            return Task.FromResult(new ErrorQueueDrainResult(drained, ReachedEmpty: true));
         }
+
+        /// <summary>The SD block drains through <see cref="DrainErrorQueueUntilEmptyAsync"/>, which says whether it reached "No error".</summary>
+        public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
+            int maxIterations = 256,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();
         public void RaiseRawStreamFrame(DaqifiOutMessage message) => throw new NotSupportedException();

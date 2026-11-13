@@ -107,4 +107,12 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// blamed on the GET.
     /// </remarks>
     Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default);
+
+    /// <inheritdoc cref="DaqifiDevice.DrainErrorQueueUntilEmptyAsync"/>
+    /// <remarks>
+    /// The SD download drains the queue before each v3.9.0+ <c>SD:GET</c> as a boundary (#959).
+    /// It may blame what it reads afterwards on the GET only when that drain reached
+    /// "No error". A drain that stopped early may have left an older <c>-256</c> behind.
+    /// </remarks>
+    Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(int maxIterations, CancellationToken cancellationToken = default);
 }

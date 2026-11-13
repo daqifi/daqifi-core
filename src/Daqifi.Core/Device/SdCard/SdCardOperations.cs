@@ -1758,8 +1758,10 @@ internal sealed class SdCardOperations
                 // Empty the queue before the GET, so what it holds afterwards came from this
                 // download and not from an earlier command (a stale -256 would turn a legitimately
                 // empty file into "not found"). Read with SYSTem:ERRor? rather than cleared with
-                // *CLS, which would also reset the status and event registers.
-                await ReadErrorQueueAsync(token).ConfigureAwait(false);
+                // *CLS, which would also reset the status and event registers. Only a read that
+                // reached "No error" is a boundary: one that stopped early may have left an older
+                // entry behind, and then nothing read after the GET is blamed on it.
+                var boundaryConfirmed = await ReadErrorQueueToEmptyAsync(token).ConfigureAwait(false);
 
                 try
                 {
@@ -1775,14 +1777,14 @@ internal sealed class SdCardOperations
                         // retry its own clean queue: the first attempt's error is not its answer.
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                         {
-                            await ReadErrorQueueAsync(token).ConfigureAwait(false);
+                            boundaryConfirmed = await ReadErrorQueueToEmptyAsync(token).ConfigureAwait(false);
                         }
                     }
                 }
                 // Read the device's reason for an empty reply before blaming the SD subsystem.
                 catch (SdCardEmptyTransferException)
                 {
-                    await ThrowIfSdGetOpenFailedAsync(fileName, token).ConfigureAwait(false);
+                    await ThrowIfSdGetOpenFailedAsync(fileName, boundaryConfirmed, token).ConfigureAwait(false);
                     throw;
                 }
 
@@ -1793,7 +1795,7 @@ internal sealed class SdCardOperations
                 // otherwise be left for the next exchange to trip over (#898).
                 if (fileSize == 0)
                 {
-                    await ThrowIfSdGetOpenFailedAsync(fileName, token).ConfigureAwait(false);
+                    await ThrowIfSdGetOpenFailedAsync(fileName, boundaryConfirmed, token).ConfigureAwait(false);
                 }
             }
 
@@ -1955,9 +1957,14 @@ internal sealed class SdCardOperations
     /// The device cannot push the error while it streams the reply, so it records it and queues
     /// it at the next command it receives on the same transport, before running that command.
     /// It records it before it sends the EOF marker, so once Core has seen the marker, the first
-    /// <c>SYSTem:ERRor?</c> is enough to queue it and read it back. The queue was read empty
-    /// before the GET, in the same exclusive block, so nothing older is on it. It is still read
-    /// to empty rather than once, so nothing is left behind to make the next connect fail (#898).
+    /// <c>SYSTem:ERRor?</c> is enough to queue it and read it back. It is read to empty rather
+    /// than once, so nothing is left behind to make the next connect fail (#898).
+    /// </para>
+    /// <para>
+    /// What it reads is blamed on the GET only when <paramref name="boundaryConfirmed"/>: the read
+    /// before that GET, in the same exclusive block, reached "No error", so nothing older is on
+    /// the queue. Otherwise an older entry may be among them, so the queue is still read, to take
+    /// the GET's own error off it, but not classified, and the download's own answer stands.
     /// </para>
     /// <para>
     /// Best effort (see <see cref="ReadErrorQueueAsync"/>): if the read itself fails, the
@@ -1966,10 +1973,16 @@ internal sealed class SdCardOperations
     /// </remarks>
     /// <exception cref="SdCardFileNotFoundException">The device reported -256 or -257.</exception>
     /// <exception cref="SdCardFilesystemException">The device reported -250.</exception>
-    private async Task ThrowIfSdGetOpenFailedAsync(string fileName, CancellationToken cancellationToken)
+    private async Task ThrowIfSdGetOpenFailedAsync(
+        string fileName, bool boundaryConfirmed, CancellationToken cancellationToken)
     {
-        var queuedErrors = await ReadErrorQueueAsync(cancellationToken).ConfigureAwait(false);
-        var failure = queuedErrors == null ? null : ClassifySdGetOpenFailure(fileName, queuedErrors);
+        var drain = await ReadErrorQueueAsync(cancellationToken).ConfigureAwait(false);
+        if (!boundaryConfirmed || drain is not { } read)
+        {
+            return;
+        }
+
+        var failure = ClassifySdGetOpenFailure(fileName, read.Entries);
         if (failure != null)
         {
             throw failure;
@@ -1977,8 +1990,8 @@ internal sealed class SdCardOperations
     }
 
     /// <summary>
-    /// Reads the device's SCPI error queue until it reports "No error", and returns what it
-    /// held, or <c>null</c> when the read itself failed.
+    /// Reads the device's SCPI error queue until it reports "No error". Returns what it held and
+    /// whether it got that far, or <c>null</c> when the read itself failed.
     /// </summary>
     /// <remarks>
     /// Used on both sides of a v3.9.0+ <c>SD:GET</c> (#959): before it, to leave the queue
@@ -1987,17 +2000,27 @@ internal sealed class SdCardOperations
     /// failure is dropped. Cancellation is not: it belongs to the caller or to the download
     /// deadline.
     /// </remarks>
-    private async Task<IReadOnlyList<string>?> ReadErrorQueueAsync(CancellationToken cancellationToken)
+    private async Task<ErrorQueueDrainResult?> ReadErrorQueueAsync(CancellationToken cancellationToken)
     {
         try
         {
-            return await _host.DrainErrorQueueAsync(SdGetErrorQueueDrainCap, cancellationToken)
+            return await _host.DrainErrorQueueUntilEmptyAsync(SdGetErrorQueueDrainCap, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reads the error queue as the boundary ahead of a v3.9.0+ <c>SD:GET</c>, and returns
+    /// whether it reached "No error". False when the read failed or stopped early.
+    /// </summary>
+    private async Task<bool> ReadErrorQueueToEmptyAsync(CancellationToken cancellationToken)
+    {
+        var drain = await ReadErrorQueueAsync(cancellationToken).ConfigureAwait(false);
+        return drain?.ReachedEmpty == true;
     }
 
     /// <summary>
