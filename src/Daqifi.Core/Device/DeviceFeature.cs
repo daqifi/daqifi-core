@@ -72,5 +72,12 @@ public enum DeviceFeature
     /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
     /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>.
     /// </remarks>
-    PwmFrequencyFloor
+    PwmFrequencyFloor,
+
+    /// <summary>
+    /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
+    /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
+    /// released in <b>v3.9.0</b>; every board has the LEDs.
+    /// </summary>
+    Identify
 }
