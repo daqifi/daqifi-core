@@ -1262,19 +1262,6 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetSystemErrorCount => new ScpiMessage("SYSTem:ERRor:COUNt?");
 
     /// <summary>
-    /// Creates a command message that empties the device's SCPI error queue and clears its status
-    /// event registers, without sending a reply.
-    /// </summary>
-    /// <remarks>
-    /// Because nothing comes back, it can be sent inside a raw SD capture just before
-    /// <c>SYSTem:STORage:SD:GET</c> without putting bytes ahead of the file. That marks where the
-    /// queue starts for that GET, so an open failure read off the queue afterwards can only belong
-    /// to it (#959).
-    /// Command: *CLS
-    /// </remarks>
-    internal static IOutboundMessage<string> ClearStatus => new ScpiMessage("*CLS");
-
-    /// <summary>
     /// Creates a query message to read streaming performance counters.
     /// </summary>
     /// <remarks>

@@ -1742,14 +1742,31 @@ public class SdCardOperationsCollaboratorTests
         return host;
     }
 
-    /// <summary>Asserts every GET went out immediately behind a <c>*CLS</c>.</summary>
-    private static void AssertEveryGetFollowsAClear(FakeHost host, string fileName)
+    /// <summary>
+    /// Asserts the download held the device from its first error-queue read to its last, and
+    /// that every GET went out with the queue just read empty, by SYSTem:ERRor? and not by
+    /// <c>*CLS</c>, which would also reset the status registers.
+    /// </summary>
+    private static void AssertEveryGetFollowsAnEmptyQueue(FakeHost host, string fileName)
     {
         var calls = host.Calls.ToList();
+        var trace = string.Join(" | ", calls);
         var get = $"send:SYSTem:STORage:SD:GET \"{fileName}\"";
         var getIndexes = Enumerable.Range(0, calls.Count).Where(i => calls[i] == get).ToList();
         Assert.NotEmpty(getIndexes);
-        Assert.All(getIndexes, i => Assert.Equal("send:*CLS", calls[i - 1]));
+
+        var begin = calls.IndexOf("exclusive:begin");
+        var end = calls.IndexOf("exclusive:end");
+        Assert.True(begin >= 0 && begin < calls.IndexOf("drain") && calls.LastIndexOf("drain") < end, trace);
+
+        var previous = begin;
+        foreach (var i in getIndexes)
+        {
+            Assert.True(calls.Skip(previous + 1).Take(i - previous - 1).Contains("drain"), trace);
+            previous = i;
+        }
+
+        Assert.DoesNotContain(calls, c => c.Contains("*CLS", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -1773,20 +1790,20 @@ public class SdCardOperationsCollaboratorTests
         Assert.Contains("missing.bin", ex.Message, StringComparison.Ordinal);
         Assert.Empty(destination.ToArray());
 
-        // Only the final attempt's entry: the *CLS ahead of the retry cleared the first one.
+        // Only the final attempt's entry: the read ahead of the retry took the first one.
         Assert.Equal(new[] { queuedError }, ex.RawDeviceResponse);
-        AssertEveryGetFollowsAClear(host, "missing.bin");
+        AssertEveryGetFollowsAnEmptyQueue(host, "missing.bin");
 
-        // Read once, after the last GET, while the download still owns the device.
+        // Read before the GET, before the retry, and after the last GET.
         var calls = host.Calls.ToList();
-        Assert.Equal(1, calls.Count(c => c == "drain"));
+        Assert.Equal(3, calls.Count(c => c == "drain"));
         Assert.True(
-            calls.IndexOf("drain") > calls.LastIndexOf("send:SYSTem:STORage:SD:GET \"missing.bin\""),
+            calls.LastIndexOf("drain") > calls.LastIndexOf("send:SYSTem:STORage:SD:GET \"missing.bin\""),
             string.Join(" | ", calls));
 
         // Drained to empty, not read once: a full firmware queue holds 17 entries, and two left
         // over make the next connect fail (#898).
-        Assert.True(host.DrainCaps.Single() >= 18, $"drain cap {host.DrainCaps.Single()}");
+        Assert.All(host.DrainCaps, cap => Assert.True(cap >= 18, $"drain cap {cap}"));
         Assert.Empty(host.QueuedErrors);
     }
 
@@ -1820,15 +1837,15 @@ public class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("data.bin", destination));
 
         Assert.Equal("data.bin", ex.FileName);
-        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
+        Assert.Equal(3, host.Calls.Count(c => c == "drain"));
         Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"data.bin\""));
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_NeitherClearsNorReadsTheErrorQueue()
+    public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_DoesNotReadTheErrorQueue()
     {
         // Older firmware queues nothing for an open failure, so the queue cannot answer and the
-        // download puts exactly the same commands on the wire as before.
+        // download puts exactly the same commands on the wire as before, in one capture.
         var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
         host.SupportedFeatures.Clear();
         var ops = new SdCardOperations(host);
@@ -1838,14 +1855,63 @@ public class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("missing.bin", destination));
 
         Assert.DoesNotContain("drain", host.Calls);
-        Assert.DoesNotContain("send:*CLS", host.Calls);
+        Assert.DoesNotContain("exclusive:begin", host.Calls);
+        Assert.Equal(1, host.RawCaptureCount);
+        Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"missing.bin\""));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EmptyGetOnV390_AnotherCallersQueueReadAtTheCaptureBoundary_DoesNotTakeTheGetsError()
+    {
+        // Review on #967: a raw capture lets go of the device when it ends. Another caller's
+        // SYSTem:ERRor? run at that point would pop the GET's -256 before the download read it,
+        // and the missing file would be reported as an empty transfer again.
+        var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
+        var taken = new List<string>();
+        host.AfterRawCapture = () => host.RunAsAnotherCaller("SYSTem:ERRor?", () =>
+        {
+            taken.AddRange(host.QueuedErrors);
+            host.QueuedErrors.Clear();
+        });
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<SdCardFileNotFoundException>(
+            () => ops.DownloadSdCardFileAsync("missing.bin", destination));
+
+        Assert.Equal(-256, ex.ScpiErrorCode);
+        Assert.Empty(taken);
+        var calls = host.Calls.ToList();
+        Assert.True(calls.IndexOf("other:SYSTem:ERRor?") > calls.IndexOf("exclusive:end"), string.Join(" | ", calls));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_AnotherCallersFailingCommandAtTheCaptureBoundary_IsNotBlamedOnTheGet()
+    {
+        // The other half of the same gap: another caller's command that fails there queues an
+        // error of its own, which the download's read would then blame on its GET.
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
+        host.AfterRawCapture = () => host.RunAsAnotherCaller(
+            "failing command", () => host.QueuedErrors.Add("-250,\"Mass storage error\""));
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
+
+        Assert.Equal(0, result.FileSize);
+        Assert.Equal(new[] { "-250,\"Mass storage error\"" }, host.QueuedErrors);
     }
 
     [Fact]
     public async Task DownloadSdCardFileAsync_ListedEmptyFileOnV390_StaleFileErrorQueued_ReportsAnEmptyDownload()
     {
         // Review on #967: a legitimately empty file queues nothing, so a -256 an earlier command
-        // left behind must not be blamed on it. The *CLS ahead of the GET discards it.
+        // left behind must not be blamed on it. The read ahead of the GET takes it off the queue.
         var host = new FakeHost();
         host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
         host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
@@ -1859,15 +1925,15 @@ public class SdCardOperationsCollaboratorTests
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
         Assert.Equal(0, result.FileSize);
-        AssertEveryGetFollowsAClear(host, "empty.bin");
+        AssertEveryGetFollowsAnEmptyQueue(host, "empty.bin");
         Assert.Empty(host.QueuedErrors);
     }
 
     [Fact]
     public async Task DownloadSdCardFileAsync_EmptyGetOnV390_StaleEntriesQueued_OnlyThisGetsErrorCounts()
     {
-        // Stale entries, including an open failure from some earlier command, are cleared
-        // before the GET, so the exception carries only what this GET left behind.
+        // Stale entries, including an open failure from some earlier command, are read off the
+        // queue before the GET, so the exception carries only what this GET left behind.
         var host = HostWithEmptyGetOnV390(
             "-256,\"File name not found\"",
             "-200,\"Execution error\"",
@@ -1895,7 +1961,7 @@ public class SdCardOperationsCollaboratorTests
         await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => ops.DownloadSdCardFileAsync("data.bin", destination));
 
-        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
+        AssertEveryGetFollowsAnEmptyQueue(host, "data.bin");
         Assert.Empty(host.QueuedErrors);
     }
 
@@ -1950,14 +2016,14 @@ public class SdCardOperationsCollaboratorTests
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
         Assert.Equal(0, result.FileSize);
-        Assert.Equal(1, host.Calls.Count(c => c == "drain"));
+        Assert.Equal(2, host.Calls.Count(c => c == "drain"));
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_FileWithContentOnV390_DoesNotReadTheErrorQueue()
+    public async Task DownloadSdCardFileAsync_FileWithContentOnV390_ReadsTheErrorQueueOnlyBeforeTheGet()
     {
         // Only an empty reply can hide an open failure; a download that delivered content pays
-        // no extra exchange.
+        // only the read that empties the queue ahead of its GET.
         var payload = new byte[] { 1, 2, 3 };
         var host = new FakeHost
         {
@@ -1970,7 +2036,9 @@ public class SdCardOperationsCollaboratorTests
         var result = await ops.DownloadSdCardFileAsync("data.bin", destination);
 
         Assert.Equal(payload.Length, result.FileSize);
-        Assert.DoesNotContain("drain", host.Calls);
+        var calls = host.Calls.ToList();
+        Assert.Equal(1, calls.Count(c => c == "drain"));
+        Assert.True(calls.IndexOf("drain") < calls.IndexOf("send:SYSTem:STORage:SD:GET \"data.bin\""), string.Join(" | ", calls));
     }
 
     [Fact]
@@ -2486,8 +2554,8 @@ public class SdCardOperationsCollaboratorTests
         /// <summary>
         /// The error each <c>SD:GET</c> leaves queued, by attempt (the last entry repeats); null
         /// means that attempt queued nothing. The real device queues it at the next command it
-        /// receives, which here is always a <c>*CLS</c> or the drain, so adding it at the GET is
-        /// the same thing.
+        /// receives, which on the v3.9.0 path is always the drain, so adding it at the GET is the
+        /// same thing.
         /// </summary>
         public List<string?> ErrorQueuedByGet { get; } = new();
 
@@ -2495,11 +2563,7 @@ public class SdCardOperationsCollaboratorTests
 
         private void ModelErrorQueue(string command)
         {
-            if (command == "*CLS")
-            {
-                QueuedErrors.Clear();
-            }
-            else if (command.StartsWith("SYSTem:STORage:SD:GET ", StringComparison.Ordinal) && ErrorQueuedByGet.Count > 0)
+            if (command.StartsWith("SYSTem:STORage:SD:GET ", StringComparison.Ordinal) && ErrorQueuedByGet.Count > 0)
             {
                 var queued = ErrorQueuedByGet[Math.Min(_getsSent, ErrorQueuedByGet.Count - 1)];
                 _getsSent++;
@@ -2582,7 +2646,77 @@ public class SdCardOperationsCollaboratorTests
             Record("rawcapture");
 
             var stream = RawCaptureStreamFactory?.Invoke() ?? new MemoryStream();
-            await rawAction(stream, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await rawAction(stream, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                AfterRawCapture?.Invoke();
+            }
+        }
+
+        /// <summary>
+        /// Runs once each raw capture has finished, however it finished: the point where the real
+        /// capture lets go of the device lock, and where another caller's waiting command would
+        /// run next.
+        /// </summary>
+        public Action? AfterRawCapture { get; set; }
+
+        private int _exclusiveDepth;
+        private readonly List<Action> _heldForOtherCallers = new();
+
+        /// <summary>
+        /// Models the device lock: records where the block starts and ends, and holds back any
+        /// <see cref="RunAsAnotherCaller"/> command until it ends, as the real lock makes another
+        /// caller wait.
+        /// </summary>
+        public async Task RunExclusiveAsync(
+            Func<CancellationToken, Task> operation,
+            CancellationToken cancellationToken = default)
+        {
+            Record("exclusive:begin");
+            _exclusiveDepth++;
+            try
+            {
+                await operation(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _exclusiveDepth--;
+                Record("exclusive:end");
+                if (_exclusiveDepth == 0)
+                {
+                    var held = _heldForOtherCallers.ToArray();
+                    _heldForOtherCallers.Clear();
+                    foreach (var command in held)
+                    {
+                        command();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Another caller's command: it runs now, or, while an exclusive block is in progress,
+        /// once that block ends. Recorded as <c>other:</c> + <paramref name="name"/> when it runs.
+        /// </summary>
+        public void RunAsAnotherCaller(string name, Action command)
+        {
+            void Run()
+            {
+                Record("other:" + name);
+                command();
+            }
+
+            if (_exclusiveDepth > 0)
+            {
+                _heldForOtherCallers.Add(Run);
+            }
+            else
+            {
+                Run();
+            }
         }
 
         // Outside the SD block's remit — reaching for any of these is a regression, not a refinement.
