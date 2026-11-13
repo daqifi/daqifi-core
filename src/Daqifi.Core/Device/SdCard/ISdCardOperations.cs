@@ -150,8 +150,9 @@ public interface ISdCardOperations
     /// <para>
     /// The device accepts the change only while SD storage is off and idle. This call refuses
     /// while this object is running an SD log rather than stopping it: stop the log with
-    /// <see cref="StopSdCardLoggingAsync"/> first. A live stream that is not going to the card is
-    /// paused for the command and resumed afterwards, as the other SD operations do.
+    /// <see cref="StopSdCardLoggingAsync"/> first. A live stream this object is running is paused
+    /// for the command and resumed afterwards, as the other SD operations do. Nothing else is
+    /// stopped: an SD log another connection is recording is left to the device to refuse.
     /// </para>
     /// <para>
     /// A change takes a second or two. The device applies it by re-initializing the card, which

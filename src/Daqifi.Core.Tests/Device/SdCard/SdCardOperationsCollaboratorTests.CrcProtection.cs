@@ -87,11 +87,11 @@ public partial class SdCardOperationsCollaboratorTests
         // No SD:ENAble and no LAN switch: the command needs SD storage OFF, and turning it on (as
         // the file operations' bus switch does) is exactly what the firmware refuses it for. And
         // no SYSTem:ERRor?: nothing failed, so nothing on the device's error queue is touched.
+        // No stop either: this object is not streaming, and the stop is device-wide.
         Assert.Equal(
             new[]
             {
                 "ensure:" + DeviceFeature.SdCardCrcProtection,
-                "send:" + StopStreaming,
                 "exchange:begin",
                 "send:" + ProtectOn,
                 "send:" + ErrorCount,
@@ -327,6 +327,28 @@ public partial class SdCardOperationsCollaboratorTests
 
         Assert.True(host.IsStreaming);
         Assert.Equal(1, host.StartStreamingCallCount);
+        // This object's own stream is stopped before the command.
+        var calls = host.Calls.ToList();
+        Assert.InRange(calls.IndexOf("send:" + StopStreaming), 0, calls.IndexOf("send:" + ProtectOn) - 1);
+    }
+
+    [Fact]
+    public async Task SetSdCardCrcProtectionAsync_LocallyIdleWhileAnotherConnectionLogs_LeavesTheRefusalToTheDevice()
+    {
+        // A connection made with PreserveActiveStream onto a board another connection is logging
+        // from: neither flag is set here, but the device has SD storage on and refuses (-221).
+        // A stop sent first would end that recording, since the device has one stream for all.
+        var host = new FakeHost();
+        host.EnqueueResponse("**ERROR: -221, \"Settings conflict\"", "1");
+        host.EnqueueResponse("-221,\"Settings conflict\"");
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.SetSdCardCrcProtectionAsync(true));
+
+        Assert.Contains("send:" + ProtectOn, host.Calls);
+        Assert.DoesNotContain("send:" + StopStreaming, host.Calls);
+        Assert.Equal(0, host.StartStreamingCallCount);
+        Assert.False(host.IsStreaming);
     }
 
     [Fact]

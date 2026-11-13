@@ -1136,7 +1136,11 @@ internal sealed class SdCardOperations
                 throw new SdCardBusyException(Array.Empty<string>());
             }
 
-            var wasStreaming = PauseStreamingForSdOperation();
+            // Only a stream this object is running is paused, unlike the file operations' stop.
+            // The stop is device-wide: on a connection made with PreserveActiveStream it would
+            // end an SD log another connection is recording, which this object cannot see. With
+            // that log running the device refuses the change itself (-221) and the log goes on.
+            var wasStreaming = _host.IsStreaming && PauseStreamingForSdOperation();
 
             try
             {
