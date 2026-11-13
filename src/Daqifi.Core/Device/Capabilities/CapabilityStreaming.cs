@@ -57,6 +57,18 @@ public sealed class CapabilityStreaming
     /// </summary>
     public string? RateValidation { get; init; }
 
+    /// <summary>
+    /// Gets the individual limits <see cref="CurrentMaximumRateHz"/> is the minimum of, and so which
+    /// one binds; or <c>null</c> when not stated (firmware before v3.9.0).
+    /// </summary>
+    public CapabilityRateCapTerms? CapTerms { get; init; }
+
+    /// <summary>
+    /// Gets the device's streaming timebase, or <c>null</c> when not stated (firmware before
+    /// v3.8.0).
+    /// </summary>
+    public CapabilityTiming? Timing { get; init; }
+
     /// <summary>Gets the device's rate-prediction formula, or <c>null</c> when not stated.</summary>
     public CapabilityRateModel? RateModel { get; init; }
 

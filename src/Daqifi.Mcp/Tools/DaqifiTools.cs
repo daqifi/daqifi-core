@@ -135,7 +135,7 @@ public static class DaqifiTools
         [Description("The device_id to control.")] string deviceId,
         [Description("The PWM-capable digital channel number.")] int channel,
         [Description("Duty cycle in whole percent, 1-100. To stop the output use disable_pwm, not duty 0.")] int dutyCyclePercent,
-        [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the current session frequency (defaults to 1000 Hz until explicitly set).")] int frequencyHz = 0,
+        [Description("Hz, device-wide: from the device's minimum (6 Hz; on firmware 3.9.0+ the unit's own, which can differ) to 50000. Lower is rejected, naming the minimum. 0 keeps the session frequency (default 1000).")] int frequencyHz = 0,
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz, cancellationToken));
 

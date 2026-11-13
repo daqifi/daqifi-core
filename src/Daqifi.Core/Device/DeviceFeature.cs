@@ -60,6 +60,21 @@ public enum DeviceFeature
     SdListingEndMarker,
 
     /// <summary>
+    /// A truthful PWM frequency floor in the capability document
+    /// (<c>channels[].features.pwm.min_freq_hz</c>). Firmware-gated: the firmware computes it
+    /// from the peripheral clock the unit actually runs at and refuses <c>DIO:PWM:FREQ</c>
+    /// below it, both from firmware <c>#902</c>/<c>#1244</c>, first released in <b>v3.9.0</b>.
+    /// </summary>
+    /// <remarks>
+    /// Like <see cref="SdListingEndMarker"/>, this does not decide whether to send a command; it
+    /// decides whether a value the device reports can be believed. Earlier firmware advertises
+    /// a fixed 1 Hz that the hardware cannot produce, so there Core keeps
+    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
+    /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>.
+    /// </remarks>
+    PwmFrequencyFloor,
+
+    /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
     /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
     /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:

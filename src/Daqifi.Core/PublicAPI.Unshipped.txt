@@ -3,6 +3,59 @@ Daqifi.Core.Communication.Producers.ProducerThreadNotExitedException
 Daqifi.Core.Communication.Producers.ProducerThreadNotExitedException.ProducerThreadNotExitedException() -> void
 Daqifi.Core.Communication.Producers.ProducerThreadNotExitedException.ProducerThreadNotExitedException(string! message) -> void
 Daqifi.Core.Communication.Producers.ProducerThreadNotExitedException.ProducerThreadNotExitedException(string! message, System.Exception! innerException) -> void
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource.Factory = 2 -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource.None = 1 -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource.Unknown = 0 -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource.User = 3 -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus.CapabilityCalibrationStatus() -> void
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus.FactoryPresent.get -> bool?
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus.FactoryPresent.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus.Source.get -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationSource?
+Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus.Source.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityChannel.ScanOffsetTicks.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityChannel.ScanOffsetTicks.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityIdentity.Calibration.get -> Daqifi.Core.Device.Capabilities.CapabilityCalibrationStatus?
+Daqifi.Core.Device.Capabilities.CapabilityIdentity.Calibration.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityIdentity.FirmwareCrc32.get -> string?
+Daqifi.Core.Device.Capabilities.CapabilityIdentity.FirmwareCrc32.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm.AdcAdditive = 0 -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm.ScanBound = 2 -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm.SdAdditive = 3 -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm.Transport = 1 -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.AdcAdditiveHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.AdcAdditiveHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.BindingTerm.get -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerm?
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.CapabilityRateCapTerms() -> void
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.ScanBoundHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.ScanBoundHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.SdAdditiveHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.SdAdditiveHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.TransportHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms.TransportHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityStreaming.CapTerms.get -> Daqifi.Core.Device.Capabilities.CapabilityRateCapTerms?
+Daqifi.Core.Device.Capabilities.CapabilityStreaming.CapTerms.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityStreaming.Timing.get -> Daqifi.Core.Device.Capabilities.CapabilityTiming?
+Daqifi.Core.Device.Capabilities.CapabilityStreaming.Timing.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming
+Daqifi.Core.Device.Capabilities.CapabilityTiming.ActualRateMillihertz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.ActualRateMillihertz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.CapabilityTiming() -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.ClockMatchesBuild.get -> bool?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.ClockMatchesBuild.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.PeripheralClockBuiltHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.PeripheralClockBuiltHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.PeripheralClockHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.PeripheralClockHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.StreamTimerHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.StreamTimerHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.TimestampHz.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.TimestampHz.init -> void
+Daqifi.Core.Device.Capabilities.CapabilityTiming.TimestampTicksPerSample.get -> int?
+Daqifi.Core.Device.Capabilities.CapabilityTiming.TimestampTicksPerSample.init -> void
 Daqifi.Core.Device.ChannelPopulationTimeoutException
 Daqifi.Core.Device.ChannelPopulationTimeoutException.ChannelPopulationTimeoutException(string! message, string? deviceIdentity = null, int? streamInterface = null, int unreadableResponseLines = 0, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null, System.Exception? innerException = null) -> void
 Daqifi.Core.Device.ChannelPopulationTimeoutException.DeviceIdentity.get -> string?
@@ -10,8 +63,10 @@ Daqifi.Core.Device.ChannelPopulationTimeoutException.IsDeviceResponding.get -> b
 Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
+Daqifi.Core.Device.DaqifiStreamingDevice.PwmFrequencyFloorHz.get -> int
+Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor = 5 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
-Daqifi.Core.Device.DeviceFeature.SdCardCrcProtection = 5 -> Daqifi.Core.Device.DeviceFeature
+Daqifi.Core.Device.DeviceFeature.SdCardCrcProtection = 6 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.DaqifiStreamingDevice.GetSdCardCrcProtectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardCrcProtectionAsync(bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult>!
 Daqifi.Core.Device.Diagnostics.MemoryDiagnostics.StreamingPoolTotal.get -> ulong?

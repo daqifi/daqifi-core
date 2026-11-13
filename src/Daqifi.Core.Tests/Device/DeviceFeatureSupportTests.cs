@@ -78,6 +78,19 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_PwmFrequencyFloor_RequiresV3_9_0()
+    {
+        // The firmware first computed the floor from its real clock in v3.9.0 (#902/#1244);
+        // every earlier release advertises a fixed 1 Hz. Relaxing the gate below v3.9.0 would
+        // let Core command frequencies the 16-bit timer wraps into the kilohertz range (#958).
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.PwmFrequencyFloor);
+
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Null(requirement.Boards);
+        Assert.Equal(HardwareRequirement.None, requirement.Hardware);
+    }
+
+    [Fact]
     public void RequirementTable_SdCardCrcProtection_RequiresV3_9_0AndAnSdSlot()
     {
         // SYSTem:STORage:SD:PROTect (firmware #1217/#1228) first shipped in v3.9.0; older
@@ -133,6 +146,7 @@ public class DeviceFeatureSupportTests
             new object[] { DeviceFeature.SdFileTransferOverWifi, "3.6.3", "3.7.0", "3.7.2" },
             new object[] { DeviceFeature.CapabilityDocument,     "3.4.4", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
+            new object[] { DeviceFeature.PwmFrequencyFloor,      "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.SdCardCrcProtection,    "3.8.0", "3.9.0", "3.9.1" }
         };
 

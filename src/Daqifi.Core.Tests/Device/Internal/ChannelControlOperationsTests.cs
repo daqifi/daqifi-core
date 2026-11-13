@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
@@ -659,6 +660,149 @@ public class ChannelControlOperationsTests
 
     #endregion
 
+    #region PWM frequency — the floor the device advertises (#958)
+
+    /// <summary>
+    /// A host whose capability document puts <paramref name="floorHz"/> on every PWM-capable pin
+    /// (0, 3, 4, 5, 6 and 7), the shape firmware v3.9.0 emits, with the
+    /// <see cref="DeviceFeature.PwmFrequencyFloor"/> gate open or shut.
+    /// </summary>
+    private static FakeHost HostAdvertisingPwmFloor(int? floorHz, bool floorTrusted)
+    {
+        var host = new FakeHost();
+        if (floorTrusted)
+        {
+            host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
+        }
+
+        host.Metadata.ApplyCapabilityDocument(DocumentWithPwmFloors(
+            new[] { 0, 3, 4, 5, 6, 7 }.Select(id => (id, floorHz)).ToArray()));
+        return host;
+    }
+
+    private static CapabilityDocument DocumentWithPwmFloors(params (int Id, int? FloorHz)[] pins) =>
+        new()
+        {
+            SchemaVersion = 2,
+            Channels = pins
+                .Select(pin => new CapabilityChannel
+                {
+                    Id = pin.Id,
+                    Kind = CapabilityChannelKind.DigitalIo,
+                    SupportsPwm = true,
+                    PwmMinimumFrequencyHz = pin.FloorHz,
+                    PwmMaximumFrequencyHz = DaqifiStreamingDevice.MaxPwmFrequencyHz
+                })
+                .ToArray()
+        };
+
+    [Theory]
+    [InlineData(8)] // a unit whose clock puts the floor above the fixed 6 Hz
+    [InlineData(4)] // and one whose clock puts it below
+    public void SetPwmFrequency_TrustedAdvertisedFloor_IsTheFloorEnforced(int floorHz)
+    {
+        var host = HostAdvertisingPwmFloor(floorHz, floorTrusted: true);
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(floorHz, ops.PwmFrequencyFloorHz);
+
+        var refused = Assert.Throws<ArgumentOutOfRangeException>(() => ops.SetPwmFrequency(floorHz - 1));
+        Assert.Contains($"{floorHz}-{DaqifiStreamingDevice.MaxPwmFrequencyHz} Hz", refused.Message);
+        Assert.Empty(host.Calls);
+
+        ops.SetPwmFrequency(floorHz);
+
+        Assert.Equal(new[] { $"send:PWM:CHannel:FREQuency 0,{floorHz}" }, host.Calls);
+    }
+
+    [Fact]
+    public void SetPwmFrequency_FloorNotTrusted_KeepsTheFixedFloorDespiteTheDocument()
+    {
+        // Firmware before v3.9.0 advertises 1 Hz on every PWM pin; believing it would let a
+        // frequency through that the 16-bit timer wraps into the kilohertz range.
+        var host = HostAdvertisingPwmFloor(1, floorTrusted: false);
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ops.SetPwmFrequency(DaqifiStreamingDevice.MinPwmFrequencyHz - 1));
+        Assert.Empty(host.Calls);
+    }
+
+    [Fact]
+    public void PwmFrequencyFloorHz_TrustedButNoDocument_IsTheFixedFloor()
+    {
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+    }
+
+    [Fact]
+    public void PwmFrequencyFloorHz_TrustedDocumentWithNoFloorStated_IsTheFixedFloor()
+    {
+        var host = HostAdvertisingPwmFloor(null, floorTrusted: true);
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(DaqifiStreamingDevice.MaxPwmFrequencyHz + 1)]
+    public void PwmFrequencyFloorHz_AdvertisedValueCoreCannotCommand_IsIgnored(int advertised)
+    {
+        var host = HostAdvertisingPwmFloor(advertised, floorTrusted: true);
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+    }
+
+    [Fact]
+    public void PwmFrequencyFloorHz_PinsDisagree_TakesTheHighestFloor()
+    {
+        // The firmware states one device-wide floor today. Should two pins ever differ, only the
+        // higher one is accepted by both.
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
+        host.Metadata.ApplyCapabilityDocument(DocumentWithPwmFloors((0, 5), (3, 9), (4, 7)));
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(9, ops.PwmFrequencyFloorHz);
+    }
+
+    [Fact]
+    public void PwmFrequencyFloorHz_IgnoresFloorsOnPinsWithoutPwm()
+    {
+        var host = new FakeHost();
+        host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
+        host.Metadata.ApplyCapabilityDocument(new CapabilityDocument
+        {
+            SchemaVersion = 2,
+            Channels = new[]
+            {
+                new CapabilityChannel
+                {
+                    Id = 0, Kind = CapabilityChannelKind.DigitalIo, SupportsPwm = true,
+                    PwmMinimumFrequencyHz = 7
+                },
+                // A stray floor on a pin that is not PWM-capable must not raise the device's.
+                new CapabilityChannel
+                {
+                    Id = 1, Kind = CapabilityChannelKind.DigitalIo, SupportsPwm = false,
+                    PwmMinimumFrequencyHz = 40
+                }
+            }
+        });
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Equal(7, ops.PwmFrequencyFloorHz);
+    }
+
+    #endregion
+
     #region Analog output — staging, latching, readback
 
     [Fact]
@@ -837,9 +981,10 @@ public class ChannelControlOperationsTests
     /// <summary>
     /// Minimal <see cref="IDeviceOperationHost"/> double scoped to what
     /// <see cref="ChannelControlOperations"/> actually uses: channel snapshot/lock, connection
-    /// state, <see cref="Send{T}"/>, and one text exchange for the analog-output readback. Every
-    /// other member throws <see cref="NotSupportedException"/> so a change that reaches outside
-    /// this collaborator's remit fails loudly.
+    /// state, <see cref="Send{T}"/>, one text exchange for the analog-output readback, and the
+    /// feature gate and capability document behind the PWM frequency floor. Every other member
+    /// throws <see cref="NotSupportedException"/> so a change that reaches outside this
+    /// collaborator's remit fails loudly.
     /// </summary>
     private sealed class FakeHost : IDeviceOperationHost
     {
@@ -949,13 +1094,29 @@ public class ChannelControlOperationsTests
             return Task.FromResult<IReadOnlyList<string>>(lines);
         }
 
-        public bool Supports(DeviceFeature feature) => throw new NotSupportedException();
+        /// <summary>
+        /// The features <see cref="Supports"/> reports. Empty by default, the same answer a device
+        /// with no reported firmware version gets, so the PWM floor stays the fixed constant
+        /// unless a test opts in.
+        /// </summary>
+        public HashSet<DeviceFeature> SupportedFeatures { get; } = new();
+
+        public bool Supports(DeviceFeature feature)
+        {
+            // The PWM floor is the only branch this collaborator takes on a feature.
+            Assert.Equal(DeviceFeature.PwmFrequencyFloor, feature);
+            return SupportedFeatures.Contains(feature);
+        }
 
         public void EnsureSupported(DeviceFeature feature)
             => Assert.Equal(DeviceFeature.AnalogOutput, feature);
 
+        /// <summary>
+        /// Real metadata, read only for the capability document that carries the PWM floor.
+        /// </summary>
+        public DeviceMetadata Metadata { get; } = new();
+
         // Outside this collaborator's remit — reaching for any of these is a regression.
-        public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();
