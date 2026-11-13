@@ -531,11 +531,27 @@ public class AcquisitionStatisticsTests
 
     // The two tests below are coarse guards, not instruments. They answer one yes/no question
     // each - does this allocate per call, and does attaching the aggregator cost the decode
-    // path anything - and they answer it with a hand-rolled warmup on whatever machine the
-    // suite happens to be running on, which is exactly the arrangement issue #531 was filed
-    // about. The instrument is src/Daqifi.Core.Benchmarks (issue #640): StreamDecodeBenchmarks
-    // reports allocation per frame under [MemoryDiagnoser], with BenchmarkDotNet handling
-    // warmup and tiering. Take a number from there; take a pass/fail from here.
+    // path anything - on whatever machine the suite happens to be running on. The instrument is
+    // src/Daqifi.Core.Benchmarks (issue #640): StreamDecodeBenchmarks reports allocation per frame
+    // under [MemoryDiagnoser], with BenchmarkDotNet handling warmup and tiering. Take a number
+    // from there; take a pass/fail from here.
+    //
+    // Both judge the SMALLEST of several readings, never a single one. Inside a full CI run a
+    // single measured window has repeatedly come back about 7 KB heavy (#531, #562, and the
+    // merge-queue run that bounced #965) while every other OS and framework leg of the same
+    // commit measured clean. That is a one-off, not a per-call cost: the smallest object is 24
+    // bytes, so a real per-call allocation is tens of kilobytes over these loops, and it is
+    // there in every reading.
+    //
+    // What puts those bytes in the window is not known. #531 and #562 blamed a tier-1 promotion
+    // landing mid-loop and lengthened the warmup to match the measured count; the failure came
+    // back anyway, and the theory does not survive being tested. Promotion compiles on a
+    // background thread and charges this one nothing: some 7,000 windows - promotions forced to
+    // land mid-window, concurrent GC and JIT churn, cold processes and a long-lived busy one,
+    // .NET 9 on macOS arm64 and Linux arm64/x64 - never moved the counter by a byte. So the
+    // guards do not depend on knowing. A one-off cannot land in every reading, and a per-call
+    // cost cannot stay out of any.
+    private const int AllocationReadings = 5;
 
     [Fact]
     public void Record_AfterTheFirstSamplePerChannel_AllocatesNothing()
@@ -543,37 +559,26 @@ public class AcquisitionStatisticsTests
         using var stats = new AcquisitionStatistics();
         var channel = new AnalogChannel(0);
         var sample = Sample(Epoch, 1.0);
-
-        // Warm up over the SAME count as the measurement, not a token 100.
-        //
-        // Tiered compilation promotes a hot method to tier 1 partway through a long loop, and
-        // that rejit allocates. With a 100-iteration warmup the promotion landed inside the
-        // measured window instead of before it, and the test reported ~7 KB across 10,000
-        // records -- 0.71 bytes per call, which is not a per-call allocation at all (a real one
-        // is >= 24 bytes an object, so >= 240 KB here) but was enough to fail an == 0 assertion.
-        //
-        // That is issue #531: "fails on a full net10 run, passes in isolation". It is not
-        // actually run-order dependent, it is warmup-dependent -- any change that makes
-        // RecordCore larger pushes the promotion later, and #534's scaling-comparison did.
-        // Warming to the measured count puts the promotion firmly before `before` is read.
-        //
-        // The assertion keeps its teeth: a genuine per-call allocation is three orders of
-        // magnitude above the noise this removes.
         const int iterations = 10_000;
 
-        for (var i = 0; i < iterations; i++)
+        long RecordAll()
         {
-            stats.Record(channel, sample);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < iterations; i++)
+            {
+                stats.Record(channel, sample);
+            }
+
+            return GC.GetAllocatedBytesForCurrentThread() - before;
         }
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < iterations; i++)
-        {
-            stats.Record(channel, sample);
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // Not a reading: the first pass is the one that creates the channel's accumulator.
+        RecordAll();
+        var readings = TakeReadings(RecordAll);
 
-        Assert.True(allocated == 0, $"recording {iterations:N0} samples allocated {allocated} bytes; expected none");
+        Assert.True(
+            readings.Min() == 0,
+            $"recording {iterations:N0} samples allocated on every reading ({string.Join(", ", readings)} bytes); expected none");
     }
 
     [Fact]
@@ -586,13 +591,14 @@ public class AcquisitionStatisticsTests
         // handler is subscribed, and no code on the decode path changed to accommodate one.)
         const int frames = 2_000;
 
-        var inert = MeasureDecodeAllocations(frames, attach: false);
-        var recording = MeasureDecodeAllocations(frames, attach: true);
-        var perFrame = (recording - inert) / (double)frames;
+        var inert = TakeReadings(() => MeasureDecodeAllocations(frames, attach: false));
+        var recording = TakeReadings(() => MeasureDecodeAllocations(frames, attach: true));
+        var perFrame = (recording.Min() - inert.Min()) / (double)frames;
 
         Assert.True(
             perFrame < 1.0,
-            $"attached recording added {perFrame:F2} bytes per frame ({recording - inert} bytes over {frames} frames)");
+            $"attached recording added {perFrame:F2} bytes per frame over {frames} frames " +
+            $"(bytes per reading, attached: {string.Join(", ", recording)}; inert: {string.Join(", ", inert)})");
     }
 
     private static long MeasureDecodeAllocations(int frames, bool attach)
@@ -621,19 +627,10 @@ public class AcquisitionStatisticsTests
             }
         }
 
-        // Warm up over the SAME count as the measurement, not a token 200.
-        //
-        // This is #531's cause again, in the sibling test (#559). Tiered compilation promotes
-        // a hot method to tier 1 partway through a long loop and the rejit allocates, so a
-        // short warmup leaves the promotion to land INSIDE the measured window. It shows up as
-        // a full-run-only failure -- in isolation the method is cold and the promotion falls
-        // in the warmup; in a full run earlier tests have already made it partly hot, so the
-        // threshold is crossed later, during the measurement. Nothing about run ORDER is
-        // load-bearing, which is why the issue title's "passes in isolation" is a symptom
-        // rather than the mechanism.
-        //
-        // The measurement base tick starts beyond the warmup's last one so timestamps stay
-        // monotonic: the warmup ends at 50_000 + (frames-1) * 50_000.
+        // Not measured: the first frames are the ones that create the per-channel state on both
+        // sides. The measured frames start beyond the last of these so timestamps stay monotonic
+        // (this pass ends at 50_000 + (frames - 1) * 50_000). The jump between the two reads as
+        // one timestamp gap, whichever subscriber is attached, so it cancels out.
         Push(frames, 50_000u);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -643,6 +640,21 @@ public class AcquisitionStatisticsTests
         static void Inert(object? sender, SampleReceivedEventArgs e)
         {
         }
+    }
+
+    /// <summary>
+    /// Repeats one allocation measurement <see cref="AllocationReadings"/> times. The guards above
+    /// judge the smallest reading; the rest are kept for the failure message.
+    /// </summary>
+    private static long[] TakeReadings(Func<long> measure)
+    {
+        var readings = new long[AllocationReadings];
+        for (var i = 0; i < readings.Length; i++)
+        {
+            readings[i] = measure();
+        }
+
+        return readings;
     }
 
     #endregion

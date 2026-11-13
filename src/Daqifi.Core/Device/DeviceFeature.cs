@@ -91,6 +91,24 @@ public enum DeviceFeature
     WifiLinkStatus,
 
     /// <summary>
+    /// The SCPI error an <c>SYSTem:STORage:SD:GET</c> leaves behind when the device cannot open
+    /// the file: <c>-256</c> "File name not found", <c>-257</c> "File name error" or <c>-250</c>
+    /// "Mass storage error", queued on the transport that asked and readable with
+    /// <c>SYSTem:ERRor?</c>. Firmware-gated: introduced by firmware <c>#914</c> (PR
+    /// <c>#1106</c>) and first released in <b>v3.9.0</b>; requires SD hardware.
+    /// </summary>
+    /// <remarks>
+    /// Like <see cref="SdListingEndMarker"/>, this gate decides how to read a reply, not
+    /// whether to send a command. An open failure still ends the reply with a bare
+    /// <c>__END_OF_FILE__</c>, so on the wire it looks exactly like an empty file. On firmware
+    /// that queues the error, Core reads the error queue after an empty download and raises
+    /// <see cref="SdCard.SdCardFileNotFoundException"/> or
+    /// <see cref="SdCard.SdCardFilesystemException"/> instead of reporting an empty file. Older
+    /// firmware queues nothing, so the error queue holds no answer and is not read.
+    /// </remarks>
+    SdGetOpenFailureError,
+
+    /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
     /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
     /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:
