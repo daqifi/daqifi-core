@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
@@ -349,6 +350,112 @@ public class DaqifiStreamingDeviceStoredRateTests
         Assert.Equal(ScpiMessageProducer.StartStreaming(1000).Data, device.SentCommands.Last());
     }
 
+    // ---- SD log start with an inherited rate ----------------------------------------------
+
+    /// <summary>The capability document as the device answers it once the stream is routed to the card.</summary>
+    private static string DocumentWithCurrentMaximum(int hz)
+    {
+        const string Field = "\"current_max_rate_hz\":0";
+        Assert.Contains(Field, CapabilityDocumentSamples.Nyquist1Firmware372);
+        return CapabilityDocumentSamples.Nyquist1Firmware372.Replace(Field, $"\"current_max_rate_hz\":{hz}");
+    }
+
+    private static string StartAt(int hz) => ScpiMessageProducer.StartStreaming(hz).Data;
+
+    [Fact]
+    public async Task AnInheritedRateTheSdCardCannotTake_IsLoweredBeforeTheLogStarts()
+    {
+        // A USB stream left 10,000 Hz stored. One channel with onboard diagnostics off logs
+        // protobuf to the card at no more than 7,900 Hz on firmware 3.9.0, so sending 10,000 would be refused with -222 and the
+        // log would record nothing. Before #960 this caller sent Core's 100 Hz default.
+        var device = CreateDevice(storedRateReply: "10000");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        Assert.Equal(10000, device.StreamingFrequency);
+
+        device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin", channelMask: "1");
+
+        Assert.Equal(7900, device.StreamingFrequency);
+        Assert.Contains(StartAt(7900), device.SentCommands);
+        Assert.DoesNotContain(StartAt(10000), device.SentCommands);
+
+        // Asked once the stream is routed to the card with its channels set: that is the
+        // configuration the device checks the start against.
+        var routed = device.SentCommands.IndexOf(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard).Data);
+        var channels = device.SentCommands.IndexOf(ScpiMessageProducer.EnableAdcChannels("1").Data);
+        var asked = device.SentCommands.IndexOf(DocumentCommand);
+        var started = device.SentCommands.IndexOf(StartAt(7900));
+        Assert.True(routed >= 0 && channels > routed && asked > channels && started > asked);
+    }
+
+    [Fact]
+    public async Task AnInheritedRateTheSdCardCanTake_IsLoggedAtAsItIs()
+    {
+        var device = CreateDevice(storedRateReply: "500");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin");
+
+        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Contains(StartAt(500), device.SentCommands);
+    }
+
+    [Fact]
+    public async Task WhenTheDeviceStatesNoCapForTheSdSetup_TheInheritedRateIsSentAsItIs()
+    {
+        // 0 means nothing is enabled, so there is no ceiling to lower to. The start goes out as it
+        // would have, and the device's answer to it is the device's.
+        var device = CreateDevice(storedRateReply: "10000");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(0)];
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin");
+
+        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Contains(StartAt(10000), device.SentCommands);
+    }
+
+    [Fact]
+    public async Task AChosenRate_IsSentToTheSdCardAsItIs_WithoutAskingTheDevice()
+    {
+        // The caller's rate is theirs to keep; only an inherited one is checked.
+        var device = CreateDevice(storedRateReply: "10000");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        device.StreamingFrequency = 10000;
+        device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin");
+
+        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Contains(StartAt(10000), device.SentCommands);
+        Assert.DoesNotContain(DocumentCommand, device.SentCommands);
+    }
+
+    [Fact]
+    public async Task CoresDefault_IsSentToTheSdCardAsItAlwaysWas_WithoutAskingTheDevice()
+    {
+        // Below 3.9.0 nothing is inherited: the SD start is exactly what it was before #960.
+        var device = CreateDevice(firmwareVersion: "3.8.0");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin");
+
+        Assert.Contains(StartAt(CoreDefaultHz), device.SentCommands);
+        Assert.DoesNotContain(DocumentCommand, device.SentCommands);
+    }
+
     [Fact]
     public async Task OnThePlainDevice_AMissingVersionReplyIsNotStoodInForByTheStoredRate()
     {
@@ -400,6 +507,11 @@ public class DaqifiStreamingDeviceStoredRateTests
         public Dictionary<string, string[]> Responses { get; } = new();
 
         public int TextExchangeCount { get; private set; }
+
+        /// <summary>Stands in for a USB link, which an SD log start requires.</summary>
+        public bool UsbConnection { get; set; }
+
+        public override bool IsUsbConnection => UsbConnection;
 
         public override void Send<T>(IOutboundMessage<T> message)
         {

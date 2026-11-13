@@ -116,6 +116,20 @@ internal sealed class StreamingSessionController
     /// </remarks>
     private bool _frequencyChosen;
 
+    /// <summary>
+    /// Whether <see cref="_streamingFrequency"/> was taken from the device
+    /// (<see cref="TryAdoptStoredFrequency"/>) rather than being Core's default.
+    /// </summary>
+    private bool _frequencyAdopted;
+
+    /// <summary>
+    /// Whether the rate is one this device object inherited from the device and nobody has
+    /// chosen since. The device accepted it for whatever stream last set it, which says nothing
+    /// about the interface and format the next start uses; see
+    /// <see cref="LowerInheritedFrequency"/>.
+    /// </summary>
+    internal bool IsFrequencyInherited => _frequencyAdopted && !_frequencyChosen;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
     internal int StreamingFrequency
     {
@@ -148,6 +162,7 @@ internal sealed class StreamingSessionController
     {
         StreamingFrequency = frequencyHz;
         _frequencyChosen = false;
+        _frequencyAdopted = false;
     }
 
     /// <summary>
@@ -221,6 +236,44 @@ internal sealed class StreamingSessionController
         }
 
         _streamingFrequency = frequencyHz;
+        _frequencyAdopted = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Lowers an inherited rate to the most the device says it can stream in the configuration
+    /// it is now set up for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An inherited rate was accepted for the stream that last set it, often a USB one, and an SD
+    /// log can have a lower ceiling: on an NQ1 on firmware 3.9.0, one channel with onboard
+    /// diagnostics off logs protobuf to the card at no more than 7,900 Hz
+    /// (<c>Streaming_SdAdditiveCap_NQ1</c>, <c>streaming.h</c>), under what USB sustains. Sent as it is, the device refuses the start with
+    /// <c>-222</c> and records nothing. Before #960 such a caller sent Core's 100 Hz default, so
+    /// this keeps an inherited rate from turning a log that used to start into one that
+    /// silently does not.
+    /// </para>
+    /// <para>
+    /// Only an inherited rate is lowered. A chosen one is the caller's to keep, and a cap of
+    /// <c>0</c> — nothing enabled — says nothing about a rate. Lowering leaves the rate
+    /// inherited, not chosen: the start that sends it is what makes it the session's rate.
+    /// </para>
+    /// </remarks>
+    /// <param name="maximumHz">The device's current maximum rate, in Hz.</param>
+    /// <returns><c>true</c> when the rate was lowered.</returns>
+    internal bool LowerInheritedFrequency(int maximumHz)
+    {
+        if (!IsFrequencyInherited || maximumHz <= 0 || _streamingFrequency <= maximumHz)
+        {
+            return false;
+        }
+
+        SafeTrace(
+            $"[{nameof(LowerInheritedFrequency)}] Lowered the inherited streaming frequency from "
+            + $"{_streamingFrequency} Hz to {maximumHz} Hz, the most the device can stream as it is "
+            + "now configured. The device would have refused the higher rate and streamed nothing.");
+        _streamingFrequency = maximumHz;
         return true;
     }
 

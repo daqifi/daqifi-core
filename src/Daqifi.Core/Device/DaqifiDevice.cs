@@ -3008,6 +3008,35 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
+    /// Asks the device for the most it can stream as it is configured right now — interface,
+    /// format and enabled channels — without applying anything else the capability document says.
+    /// </summary>
+    /// <remarks>
+    /// The firmware computes <c>current_max_rate_hz</c> for the interface a stream has been routed
+    /// to, so after routing it to the SD card this is the ceiling an SD log start is checked
+    /// against. The document is deliberately not applied: the routing is temporary, and a cap
+    /// that described the SD card would go on governing live starts after the log ends.
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>The device's current maximum rate in Hz, or <c>null</c> when the reply held no usable document.</returns>
+    internal async Task<int?> ReadCurrentMaximumStreamingRateAsync(CancellationToken cancellationToken)
+    {
+        var lines = await ExecuteTextCommandAsync(
+            _ =>
+            {
+                Send(ScpiMessageProducer.GetCapabilitiesJson);
+                return Task.CompletedTask;
+            },
+            responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
+            completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return CapabilityDocumentParser.TryParseLines(lines, out var document)
+            ? document.Streaming?.CurrentMaximumRateHz
+            : null;
+    }
+
+    /// <summary>
     /// Vets the capability exchange's lines and, when they hold a document this parser can
     /// trust, applies it.
     /// </summary>

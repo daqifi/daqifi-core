@@ -159,7 +159,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// the device reports. A device that has not been started since power-up reports a 1 Hz
     /// placeholder, which is not adopted: the 100 Hz default stands for it, as it does below
     /// v3.9.0, where the device cannot be asked. A 1 Hz that somebody did start at is adopted; the
-    /// capability document tells the two apart.
+    /// capability document tells the two apart. A stored rate was accepted for the stream that set
+    /// it, so while the rate is still the inherited one, an SD log start lowers it to the most the
+    /// device says the card can take before sending it; a chosen rate is sent as it is.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
@@ -1623,6 +1625,21 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     bool ISdCardOperationHost.IsLoggingToSdCard => IsLoggingToSdCard;
 
     void ISdCardOperationHost.BeginSdCardLogSession() => _session.BeginSdCardLogSession();
+
+    async Task ISdCardOperationHost.LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken)
+    {
+        // Not while a stream is running: a text exchange would misframe its frames, and its rate
+        // is one the device is already streaming at.
+        if (!_session.IsFrequencyInherited || IsStreaming)
+        {
+            return;
+        }
+
+        if (await ReadCurrentMaximumStreamingRateAsync(cancellationToken).ConfigureAwait(false) is { } maximumHz)
+        {
+            _session.LowerInheritedFrequency(maximumHz);
+        }
+    }
 
     TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 
