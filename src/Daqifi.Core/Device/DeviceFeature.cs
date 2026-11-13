@@ -60,6 +60,21 @@ public enum DeviceFeature
     SdListingEndMarker,
 
     /// <summary>
+    /// A truthful PWM frequency floor in the capability document
+    /// (<c>channels[].features.pwm.min_freq_hz</c>). Firmware-gated: the firmware computes it
+    /// from the peripheral clock the unit actually runs at and refuses <c>DIO:PWM:FREQ</c>
+    /// below it, both from firmware <c>#902</c>/<c>#1244</c>, first released in <b>v3.9.0</b>.
+    /// </summary>
+    /// <remarks>
+    /// Like <see cref="SdListingEndMarker"/>, this does not decide whether to send a command; it
+    /// decides whether a value the device reports can be believed. Earlier firmware advertises
+    /// a fixed 1 Hz that the hardware cannot produce, so there Core keeps
+    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
+    /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>.
+    /// </remarks>
+    PwmFrequencyFloor,
+
+    /// <summary>
     /// The SCPI error an <c>SYSTem:STORage:SD:GET</c> leaves behind when the device cannot open
     /// the file: <c>-256</c> "File name not found", <c>-257</c> "File name error" or <c>-250</c>
     /// "Mass storage error", queued on the transport that asked and readable with
