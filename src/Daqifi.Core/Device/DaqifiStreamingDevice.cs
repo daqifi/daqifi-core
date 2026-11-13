@@ -968,10 +968,31 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// The lowest PWM frequency the firmware reproduces correctly. Below this the firmware's
-    /// 16-bit period register silently wraps and the output runs in the kilohertz range.
+    /// The PWM frequency floor Core assumes when the device does not state a trustworthy one:
+    /// firmware before v3.9.0, or a device whose capability document has not been read. Below
+    /// this the firmware's 16-bit period register silently wraps and the output runs in the
+    /// kilohertz range.
     /// </summary>
+    /// <remarks>
+    /// The real floor depends on the peripheral clock the unit runs at
+    /// (ceil(PBCLK3 / 256 / 65535)), so this fixed value can be off by a hertz or two in either
+    /// direction on some units. Firmware v3.9.0 and newer report the real value; use
+    /// <see cref="PwmFrequencyFloorHz"/> for the floor that applies to the connected device.
+    /// </remarks>
     public const int MinPwmFrequencyHz = 6;
+
+    /// <summary>
+    /// Gets the lowest frequency <see cref="SetPwmFrequency"/> accepts on this device, in hertz.
+    /// </summary>
+    /// <remarks>
+    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.PwmFrequencyFloor"/>) with a
+    /// capability document read, this is the floor the device advertises
+    /// (<see cref="Capabilities.CapabilityChannel.PwmMinimumFrequencyHz"/>), which the firmware
+    /// computes from its actual peripheral clock and enforces itself. Otherwise it is
+    /// <see cref="MinPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
+    /// Read it when bounding a frequency input rather than hard-coding the constant.
+    /// </remarks>
+    public int PwmFrequencyFloorHz => _channelControl.PwmFrequencyFloorHz;
 
     /// <summary>
     /// The highest PWM frequency the device advertises (full duty resolution is retained

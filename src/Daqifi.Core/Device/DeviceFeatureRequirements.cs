@@ -78,6 +78,14 @@ internal static class DeviceFeatureRequirements
     internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
 
     /// <summary>
+    /// Minimum firmware whose capability document advertises the PWM frequency floor it actually
+    /// enforces (<c>features.pwm.min_freq_hz</c>, computed from the real peripheral clock;
+    /// firmware <c>#902</c>/<c>#1244</c>), first released in <b>v3.9.0</b>. Below this version the
+    /// field is a fixed 1 Hz the hardware cannot produce.
+    /// </summary>
+    internal static readonly FirmwareVersion PwmFrequencyFloorMinFirmware = new(3, 9, 0, null, 0);
+
+    /// <summary>
     /// Minimum firmware for the live WiFi status queries (<c>SYSTem:COMMunicate:LAN:CONnected?</c>
     /// and <c>SYSTem:COMMunicate:LAN:NETType? 1</c>, firmware <c>#951</c>/<c>#1186</c>), first
     /// released in <b>v3.9.0</b>. Below it <c>CONnected?</c> is an undefined header, and
@@ -126,6 +134,14 @@ internal static class DeviceFeatureRequirements
                 MinVersion: SdListingEndMarkerMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.SdCard),
+
+            // Also a "may I believe this value?" gate. An absent or unparseable version resolves
+            // to not-supported, which keeps the fixed MinPwmFrequencyHz floor — the reading that
+            // is correct for every firmware before v3.9.0.
+            [DeviceFeature.PwmFrequencyFloor] = new(
+                MinVersion: PwmFrequencyFloorMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.None),
 
             [DeviceFeature.WifiLinkStatus] = new(
                 MinVersion: WifiLinkStatusMinFirmware,
