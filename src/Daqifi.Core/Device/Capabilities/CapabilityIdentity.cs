@@ -29,4 +29,22 @@ public sealed class CapabilityIdentity
 
     /// <summary>Gets the hardware revision string, e.g. <c>"2.0.0"</c>.</summary>
     public string? HardwareRevision { get; init; }
+
+    /// <summary>
+    /// Gets the CRC32 of the flashed firmware image as eight hexadecimal digits, e.g.
+    /// <c>"0E9DEE9C"</c>, or <c>null</c> when not stated (firmware before v3.8.0).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FirmwareRevision"/> names a release, so every build between two releases reports
+    /// the same one; this tells two builds apart. It covers program flash only, not saved
+    /// settings, so it does not change when a setting is saved. The firmware repository's
+    /// <c>tools/hexcrc.py</c> computes the same value from a <c>.hex</c> file.
+    /// </remarks>
+    public string? FirmwareCrc32 { get; init; }
+
+    /// <summary>
+    /// Gets whether the device holds a factory calibration and which coefficients are in effect, or
+    /// <c>null</c> when not stated (firmware before v3.9.0).
+    /// </summary>
+    public CapabilityCalibrationStatus? Calibration { get; init; }
 }

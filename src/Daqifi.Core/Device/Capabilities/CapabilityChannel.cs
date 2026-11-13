@@ -42,6 +42,21 @@ public sealed class CapabilityChannel
     /// </summary>
     public bool IsSimultaneous { get; init; }
 
+    /// <summary>
+    /// Gets how long after a sample's timestamp this analog input actually converts, in ticks of
+    /// <see cref="CapabilityTiming.TimestampHz"/>; or <c>null</c> when not stated (firmware before
+    /// v3.9.0).
+    /// </summary>
+    /// <remarks>
+    /// Every channel in a sample shares one timestamp, but multiplexed channels convert one after
+    /// another, so each is offset from that stamp by its position in the scan. Divide by
+    /// <see cref="CapabilityTiming.TimestampHz"/> for seconds. <c>0</c> means no deterministic
+    /// offset applies: the channel is <see cref="IsSimultaneous"/>, or it is not in the scan. The
+    /// values describe the channels enabled when the document was read, so re-read it after
+    /// changing the enabled set.
+    /// </remarks>
+    public int? ScanOffsetTicks { get; init; }
+
     /// <summary>Gets a value indicating whether the channel can be configured as differential.</summary>
     public bool IsDifferential { get; init; }
 
