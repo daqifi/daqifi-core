@@ -52,7 +52,8 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// <summary>
     /// When the streaming rate is one the device object inherited from the device rather than
     /// one anybody chose, lowers it to the most the device says it can stream with the
-    /// interface, format and channels now configured. Does nothing for a chosen rate.
+    /// interface, format and channels now configured, or to Core's default when that cannot be
+    /// read. Does nothing for a chosen rate.
     /// </summary>
     /// <remarks>
     /// Called by an SD log start after it has routed the stream to the card and before it sends

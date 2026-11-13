@@ -161,7 +161,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// v3.9.0, where the device cannot be asked. A 1 Hz that somebody did start at is adopted; the
     /// capability document tells the two apart. A stored rate was accepted for the stream that set
     /// it, so while the rate is still the inherited one, an SD log start lowers it to the most the
-    /// device says the card can take before sending it; a chosen rate is sent as it is.
+    /// device says the card can take before sending it, or to 100 Hz when the device does not
+    /// say; a chosen rate is sent as it is.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
@@ -282,7 +283,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         _lanChipInfoOperations = new LanChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
 
-        _session.SetDefaultFrequency(100);
+        _session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
 
         // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
         // an intentional Disconnected as well as an unexpected drop (which sets Lost, not
@@ -1635,10 +1636,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             return;
         }
 
-        if (await ReadCurrentMaximumStreamingRateAsync(cancellationToken).ConfigureAwait(false) is { } maximumHz)
-        {
-            _session.LowerInheritedFrequency(maximumHz);
-        }
+        // A cap that cannot be read lowers the rate to Core's default rather than sending a rate
+        // nothing has shown the card can take.
+        _session.LowerInheritedFrequency(
+            await ReadCurrentMaximumStreamingRateAsync(cancellationToken).ConfigureAwait(false));
     }
 
     TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;

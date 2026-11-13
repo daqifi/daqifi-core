@@ -406,21 +406,63 @@ public class DaqifiStreamingDeviceStoredRateTests
         Assert.Contains(StartAt(500), device.SentCommands);
     }
 
-    [Fact]
-    public async Task WhenTheDeviceStatesNoCapForTheSdSetup_TheInheritedRateIsSentAsItIs()
+    /// <summary>A cap reply Core cannot get a usable maximum from, by the way it went wrong.</summary>
+    private static string[] UnusableCapReply(string kind)
     {
-        // 0 means nothing is enabled, so there is no ceiling to lower to. The start goes out as it
-        // would have, and the device's answer to it is the device's.
+        const string Field = "\"current_max_rate_hz\":0,";
+        var sample = CapabilityDocumentSamples.Nyquist1Firmware372;
+        Assert.Contains(Field, sample);
+        return kind switch
+        {
+            "lost" => [],
+            "truncated" => [sample[..(sample.Length / 2)]],
+            "no maximum" => [sample.Replace(Field, string.Empty)],
+            "zero maximum" => [DocumentWithCurrentMaximum(0)],
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+        };
+    }
+
+    [Theory]
+    [InlineData("lost")]
+    [InlineData("truncated")]
+    [InlineData("no maximum")]
+    [InlineData("zero maximum")]
+    public async Task WhenTheSdCapCannotBeRead_AnInheritedRateFallsBackToCoresDefault(string kind)
+    {
+        // The rate was read, but nothing shows the card can take it. Sending it could be refused
+        // with -222 and record nothing; Core's default is what this caller sent before #960.
         var device = CreateDevice(storedRateReply: "10000");
         device.UsbConnection = true;
         await device.ReadCapabilityDocumentAsync();
-        device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(0)];
+        Assert.Equal(10000, device.StreamingFrequency);
+
+        device.Responses[DocumentCommand] = UnusableCapReply(kind);
         device.SentCommands.Clear();
 
         await device.StartSdCardLoggingSessionAsync("log.bin");
 
-        Assert.Equal(10000, device.StreamingFrequency);
-        Assert.Contains(StartAt(10000), device.SentCommands);
+        Assert.Contains(DocumentCommand, device.SentCommands);
+        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Contains(StartAt(CoreDefaultHz), device.SentCommands);
+        Assert.DoesNotContain(StartAt(10000), device.SentCommands);
+    }
+
+    [Theory]
+    [InlineData("lost")]
+    [InlineData("zero maximum")]
+    public async Task WhenTheSdCapCannotBeRead_AnInheritedRateBelowCoresDefaultIsKept(string kind)
+    {
+        // A rate under the default asks less of the device than the start this caller used to send.
+        var device = CreateDevice(storedRateReply: "50");
+        device.UsbConnection = true;
+        await device.ReadCapabilityDocumentAsync();
+        device.Responses[DocumentCommand] = UnusableCapReply(kind);
+        device.SentCommands.Clear();
+
+        await device.StartSdCardLoggingSessionAsync("log.bin");
+
+        Assert.Equal(50, device.StreamingFrequency);
+        Assert.Contains(StartAt(50), device.SentCommands);
     }
 
     [Fact]

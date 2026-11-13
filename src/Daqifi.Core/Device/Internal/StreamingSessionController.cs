@@ -166,6 +166,12 @@ internal sealed class StreamingSessionController
     }
 
     /// <summary>
+    /// The rate a new device object starts at, and the rate every start sent before Core could
+    /// read the device's stored one (#960).
+    /// </summary>
+    internal const int CoreDefaultFrequencyHz = 100;
+
+    /// <summary>
     /// The rate the firmware stores from power-up until something starts a stream: 1 Hz
     /// (<c>COMMON_STREAMING_RUNTIME_DEFAULTS</c>, <c>CommonRuntimeDefaults.h</c> at v3.9.0).
     /// </summary>
@@ -242,38 +248,56 @@ internal sealed class StreamingSessionController
 
     /// <summary>
     /// Lowers an inherited rate to the most the device says it can stream in the configuration
-    /// it is now set up for.
+    /// it is now set up for, or to <see cref="CoreDefaultFrequencyHz"/> when the device does not
+    /// say.
     /// </summary>
     /// <remarks>
     /// <para>
     /// An inherited rate was accepted for the stream that last set it, often a USB one, and an SD
     /// log can have a lower ceiling: on an NQ1 on firmware 3.9.0, one channel with onboard
     /// diagnostics off logs protobuf to the card at no more than 7,900 Hz
-    /// (<c>Streaming_SdAdditiveCap_NQ1</c>, <c>streaming.h</c>), under what USB sustains. Sent as it is, the device refuses the start with
-    /// <c>-222</c> and records nothing. Before #960 such a caller sent Core's 100 Hz default, so
-    /// this keeps an inherited rate from turning a log that used to start into one that
-    /// silently does not.
+    /// (<c>Streaming_SdAdditiveCap_NQ1</c>, <c>streaming.h</c>), under what USB sustains. Sent as
+    /// it is, the device refuses the start with <c>-222</c> and records nothing. Before #960 such
+    /// a caller sent Core's 100 Hz default, so this keeps an inherited rate from turning a log
+    /// that used to start into one that silently does not.
     /// </para>
     /// <para>
-    /// Only an inherited rate is lowered. A chosen one is the caller's to keep, and a cap of
-    /// <c>0</c> — nothing enabled — says nothing about a rate. Lowering leaves the rate
-    /// inherited, not chosen: the start that sends it is what makes it the session's rate.
+    /// With no usable ceiling — the reply was lost or cut short, it has no
+    /// <c>current_max_rate_hz</c>, or that is <c>0</c> — nothing shows the inherited rate is safe,
+    /// so a rate above <see cref="CoreDefaultFrequencyHz"/> is lowered to it: the rate this
+    /// caller sent before #960. A rate at or below it is kept, since it asks less of the device.
+    /// </para>
+    /// <para>
+    /// Only an inherited rate is lowered. A chosen one is the caller's to keep. Lowering leaves
+    /// the rate inherited, not chosen: the start that sends it is what makes it the session's
+    /// rate.
     /// </para>
     /// </remarks>
-    /// <param name="maximumHz">The device's current maximum rate, in Hz.</param>
+    /// <param name="maximumHz">
+    /// The device's current maximum rate, in Hz; <c>null</c> when it could not be read.
+    /// </param>
     /// <returns><c>true</c> when the rate was lowered.</returns>
-    internal bool LowerInheritedFrequency(int maximumHz)
+    internal bool LowerInheritedFrequency(int? maximumHz)
     {
-        if (!IsFrequencyInherited || maximumHz <= 0 || _streamingFrequency <= maximumHz)
+        if (!IsFrequencyInherited)
+        {
+            return false;
+        }
+
+        var capKnown = maximumHz is > 0;
+        var ceilingHz = capKnown ? maximumHz!.Value : CoreDefaultFrequencyHz;
+        if (_streamingFrequency <= ceilingHz)
         {
             return false;
         }
 
         SafeTrace(
             $"[{nameof(LowerInheritedFrequency)}] Lowered the inherited streaming frequency from "
-            + $"{_streamingFrequency} Hz to {maximumHz} Hz, the most the device can stream as it is "
-            + "now configured. The device would have refused the higher rate and streamed nothing.");
-        _streamingFrequency = maximumHz;
+            + $"{_streamingFrequency} Hz to {ceilingHz} Hz, "
+            + (capKnown
+                ? "the most the device can stream as it is now configured. The device would have refused the higher rate and streamed nothing."
+                : "Core's default, because the device did not report a usable maximum for how it is now configured."));
+        _streamingFrequency = ceilingHz;
         return true;
     }
 

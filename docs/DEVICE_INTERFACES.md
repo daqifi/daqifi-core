@@ -486,7 +486,9 @@ have a lower ceiling: on an NQ1, one channel with onboard diagnostics off logs p
 at no more than 7,900 Hz. So when the rate is still the inherited one,
 `StartSdCardLoggingSessionAsync` asks the device for its maximum once the stream is routed to the
 card and lowers the rate to it if needed, rather than send a start the device would refuse with
-nothing recorded. A rate you chose is sent as it is.
+nothing recorded. If that answer is lost or gives no usable maximum, a rate above 100 Hz is lowered
+to 100 Hz, the rate such a start sent before the stored rate could be read. A rate you chose is
+sent as it is.
 
 ### Manual Device Connection (Advanced)
 
