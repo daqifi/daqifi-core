@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using Daqifi.Core.Device.Capabilities;
 
 namespace Daqifi.Core.Device.Internal;
 
@@ -17,31 +18,37 @@ namespace Daqifi.Core.Device.Internal;
 /// Sharing the exchange means the reply has to be told apart from the schema version, which is
 /// also a bare integer. The document is the anchor: the version is answered before it and the
 /// rate after it, so the rate is the first line after the document and the version is only ever
-/// looked for before it (<see cref="IndexOfDocumentLine"/>). Anything else in the rate's
-/// position — an error line from firmware that does not know the query, a value that is not a
-/// plain unsigned integer, or no line at all — is not the rate, and the reply is refused rather
-/// than guessed at. Without a document line there is no anchor, so that is refused too: the two
-/// remaining integers could be in either order.
+/// looked for before it. The anchor is the line the capability parser accepts
+/// (<see cref="FindCapabilityDocument"/>), not merely the first line that opens an object, so
+/// unrelated JSON ahead of the reply cannot move it. Anything else in the rate's position — an
+/// error line from firmware that does not know the query, a value that is not a plain unsigned
+/// integer, or no line at all — is not the rate, and the reply is refused rather than guessed
+/// at. Without a document there is no anchor, so that is refused too: the two remaining integers
+/// could be in either order.
 /// </para>
 /// </remarks>
 internal static class StoredStreamingRateReply
 {
     /// <summary>
-    /// Finds the capability document in the lines of a capability exchange: the first line that
-    /// starts with <c>{</c>, or <c>-1</c> when there is none.
+    /// Finds the capability document in the lines of a capability exchange: the first line
+    /// <see cref="CapabilityDocumentParser.TryParse"/> accepts, the same one
+    /// <see cref="CapabilityDocumentParser.TryParseLines"/> would return.
     /// </summary>
     /// <param name="lines">Every line the exchange returned, in order.</param>
-    /// <returns>The index of the document line, or <c>-1</c>.</returns>
-    internal static int IndexOfDocumentLine(IReadOnlyList<string> lines)
+    /// <param name="document">The parsed document, or <c>null</c> when no line parsed.</param>
+    /// <returns>The index of the document's line, or <c>-1</c> when no line parsed.</returns>
+    internal static int FindCapabilityDocument(IReadOnlyList<string> lines, out CapabilityDocument? document)
     {
         for (var i = 0; i < lines.Count; i++)
         {
-            if (lines[i]?.TrimStart().StartsWith('{') == true)
+            var line = lines[i]?.Trim();
+            if (!string.IsNullOrEmpty(line) && line[0] == '{' && CapabilityDocumentParser.TryParse(line, out document))
             {
                 return i;
             }
         }
 
+        document = null;
         return -1;
     }
 
@@ -49,17 +56,20 @@ internal static class StoredStreamingRateReply
     /// Finds the stored-rate reply in the lines of a capability exchange.
     /// </summary>
     /// <param name="lines">Every line the exchange returned, in order.</param>
+    /// <param name="documentIndex">
+    /// The index of the capability document's line, from <see cref="FindCapabilityDocument"/>;
+    /// <c>-1</c> when there is none.
+    /// </param>
     /// <param name="rateHz">
     /// The reported rate, in Hz, when this returns <c>true</c>. Not range-checked against the
     /// device, and the 1 Hz boot placeholder is returned like any other value: what to adopt is the
     /// caller's decision, since the ceiling is the device's.
     /// </param>
     /// <returns><c>true</c> when the line after the document is a plain unsigned integer that fits in an <see cref="int"/>.</returns>
-    internal static bool TryParse(IReadOnlyList<string> lines, out int rateHz)
+    internal static bool TryParse(IReadOnlyList<string> lines, int documentIndex, out int rateHz)
     {
         rateHz = 0;
 
-        var documentIndex = IndexOfDocumentLine(lines);
         if (documentIndex < 0)
         {
             return false;

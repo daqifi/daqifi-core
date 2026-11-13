@@ -2964,7 +2964,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var document = TryApplyCapabilityDocument(lines);
+        // One parse anchors everything else: the version is looked for before this line and the
+        // stored rate is the line after it.
+        var documentIndex = StoredStreamingRateReply.FindCapabilityDocument(lines, out var parsedDocument);
+        var document = TryApplyCapabilityDocument(lines, documentIndex, parsedDocument);
 
         // After the document, so the rate is checked against the sampling ceiling the document
         // may just have set. Whether a rate has been configured at all is only taken from a
@@ -2974,7 +2977,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // started at: START? answers 1 for both.
         if (readStoredStreamingRate)
         {
-            if (StoredStreamingRateReply.TryParse(lines, out var storedRateHz))
+            if (StoredStreamingRateReply.TryParse(lines, documentIndex, out var storedRateHz))
             {
                 var rateConfigured = document?.Streaming?.Timing?.ActualRateMillihertz is { } actualRateMillihertz
                     ? actualRateMillihertz != 0
@@ -3009,14 +3012,18 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// trust, applies it.
     /// </summary>
     /// <param name="lines">The lines of the capability exchange.</param>
+    /// <param name="documentIndex">The index of the document's line in <paramref name="lines"/>, or <c>-1</c>.</param>
+    /// <param name="document">The document parsed from that line, or <c>null</c> when no line parsed.</param>
     /// <returns>The applied document, or <c>null</c> when nothing was applied.</returns>
-    private CapabilityDocument? TryApplyCapabilityDocument(IReadOnlyList<string> lines)
+    private CapabilityDocument? TryApplyCapabilityDocument(
+        IReadOnlyList<string> lines,
+        int documentIndex,
+        CapabilityDocument? document)
     {
         // The version is only looked for before the document, which is where its query puts it.
         // On firmware 3.9.0+ the stored-rate reply follows the document and is a bare integer
         // too, so a version reply that never arrived would otherwise be stood in for by the rate
         // — and a device storing 2 Hz would vouch for a schema-2 document nothing checked.
-        var documentIndex = StoredStreamingRateReply.IndexOfDocumentLine(lines);
         var versionLines = documentIndex >= 0 ? lines.Take(documentIndex) : lines;
 
         if (!CapabilityDocumentParser.TryParseApiVersion(versionLines, out var apiVersion))
@@ -3036,7 +3043,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
-        if (!CapabilityDocumentParser.TryParseLines(lines, out var document))
+        if (document == null)
         {
             SafeLog(() => _logger.LogDebug(
                 "[ReadCapabilityDocumentAsync] The capability document did not parse; keeping board-derived capabilities."));

@@ -188,6 +188,39 @@ public class DaqifiStreamingDeviceStoredRateTests
     }
 
     [Fact]
+    public async Task UnrelatedJsonAheadOfTheCapabilityReply_DoesNotHideTheStoredRate()
+    {
+        // The capability parser skips JSON that is not a capability document and applies the one
+        // after it. The rate is anchored to that same document, not to the first line that
+        // opens an object, so the document and the rate are both taken.
+        var device = CreateDevice(storedRateReply: "500");
+        device.Responses[DocumentCommand] = ["{}", CapabilityDocumentSamples.Nyquist1Firmware372];
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.NotNull(document);
+        Assert.Equal(500, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task TheConfiguredFlag_ComesFromTheAcceptedDocument_NotFromEarlierJson()
+    {
+        // JSON ahead of the reply that says no rate was configured is not the capability document
+        // (it has no schema version). The accepted document says one was, so 1 Hz is adopted.
+        var device = CreateDevice(storedRateReply: "1");
+        device.Responses[DocumentCommand] =
+        [
+            "{\"streaming\":{\"timing\":{\"actual_rate_millihz\":0}}}",
+            DocumentWithActualRate(1000)
+        ];
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.NotNull(document);
+        Assert.Equal(1, device.StreamingFrequency);
+    }
+
+    [Fact]
     public async Task TheBootPlaceholderDoesNotUndoARateAdoptedEarlier()
     {
         // A device power-cycled between two reads comes back on its placeholder. That says nothing
