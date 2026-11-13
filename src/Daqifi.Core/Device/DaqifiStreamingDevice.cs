@@ -25,7 +25,7 @@ namespace Daqifi.Core.Device;
 /// Represents a DAQiFi device that supports data streaming functionality.
 /// Extends the base DaqifiDevice with streaming-specific operations.
 /// </summary>
-public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
+public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
     /// Shortest time <see cref="StartStreamingAsync"/> gives the device to send its first stream
@@ -256,6 +256,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         _channelControl = new ChannelControlOperations(this);
         _administration = new DeviceAdministrationOperations(this);
         _networkOperations = new NetworkConfigurationOperations(this);
+        _wifiLinkStatusOperations = new WifiLinkStatusOperations(this);
         _sdCardOperations = new SdCardOperations(this);
         _lanChipInfoOperations = new LanChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
@@ -1334,6 +1335,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>WiFi/LAN configuration (<see cref="INetworkConfigurable"/>).</summary>
     private NetworkConfigurationOperations _networkOperations = null!;
 
+    /// <summary>Live WiFi link state and active mode (<see cref="IWifiLinkStatusProvider"/>).</summary>
+    private WifiLinkStatusOperations _wifiLinkStatusOperations = null!;
+
     /// <summary>SD card operations (<see cref="ISdCardOperations"/>) and the shared-SPI handover.</summary>
     private SdCardOperations _sdCardOperations = null!;
 
@@ -1365,6 +1369,24 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     /// <inheritdoc />
     public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
+
+    #endregion
+
+    #region IWifiLinkStatusProvider
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync{TResult}(Func{CancellationToken, Task{TResult}}, CancellationToken)"/>:
+    /// on the standby path the query, the error-count read and the conditional pop of its own
+    /// <c>-200</c> are three exchanges, and the pop is only safe if no other caller can drain the
+    /// queue or add to it in between.
+    /// </remarks>
+    public Task<WifiLinkState> GetWifiLinkStateAsync(CancellationToken cancellationToken = default)
+        => RunExclusiveAsync(ct => _wifiLinkStatusOperations.GetWifiLinkStateAsync(ct), cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WifiMode?> GetActiveWifiModeAsync(CancellationToken cancellationToken = default)
+        => _wifiLinkStatusOperations.GetActiveWifiModeAsync(cancellationToken);
 
     #endregion
 
