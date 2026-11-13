@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Collections.Generic;
 using System.Net;
 using Xunit;
@@ -169,6 +170,16 @@ public class DaqifiDeviceTests
         Assert.Equal(55, device.Metadata.Health.BatteryPercent);
     }
 
+    /// <summary>
+    /// The deadline the two-caller refresh tests hand to <c>RefreshDeviceStatusAsync</c>, and the
+    /// longest they wait for anything themselves. A hang-breaker, not an expectation. A refresh's
+    /// deadline also covers the time it spends queued behind another caller, so a short one can
+    /// run out on a loaded runner before the test gets round to answering the first caller; the
+    /// queued caller then completes with a timeout that no reply caused, and every assertion
+    /// about what a reply does to it is reading the wrong thing.
+    /// </summary>
+    private static readonly TimeSpan RefreshHangBreaker = TimeSpan.FromSeconds(30);
+
     [Fact]
     public async Task RefreshDeviceStatusAsync_ConcurrentCalls_AreNotCompletedByEachOthersReply()
     {
@@ -178,11 +189,11 @@ public class DaqifiDeviceTests
         var device = new TestableDaqifiDevice("TestDevice");
         device.Connect();
 
-        var first = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+        var first = device.RefreshDeviceStatusAsync(RefreshHangBreaker);
 
         // The second call must be queued behind the first, not racing it: at this point only
         // one request can have gone out.
-        var second = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+        var second = device.RefreshDeviceStatusAsync(RefreshHangBreaker);
 
         await Task.Delay(50);
         Assert.Single(device.SentCommands);
@@ -196,8 +207,15 @@ public class DaqifiDeviceTests
         Assert.False(second.IsCompleted);
 
         // The second caller's own request goes out once it holds the gate, and its own reply
-        // completes it.
-        Assert.Equal(2, device.SentCommands.Count);
+        // completes it. Waited for rather than assumed: the second caller is resumed on the
+        // thread pool, and how soon that happens after the first lets go is the runner's
+        // business, not this test's.
+        await WaitUntil.ThatAsync(
+            () => device.SentCommands.Count == 2,
+            "the queued refresh never sent its own request once the first caller had finished",
+            RefreshHangBreaker);
+        Assert.False(second.IsCompleted);
+
         device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 22 });
         await second;
 
@@ -246,13 +264,13 @@ public class DaqifiDeviceTests
         var device = new TestableDaqifiDevice("TestDevice");
         device.Connect();
 
-        var first = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+        var first = device.RefreshDeviceStatusAsync(RefreshHangBreaker);
 
         await Task.Delay(50);
         Assert.Single(device.SentCommands);
 
         // A second caller, now queued on the gate rather than racing the first.
-        var second = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+        var second = device.RefreshDeviceStatusAsync(RefreshHangBreaker);
 
         await Task.Delay(50);
         Assert.Single(device.SentCommands);
@@ -268,15 +286,10 @@ public class DaqifiDeviceTests
 
         // The queued caller is woken the moment the first lets go, gets as far as the send,
         // and is told plainly that the device went away. The exception TYPE is the whole
-        // assertion: a stranded waiter would instead sit on the gate until its own 5s deadline
-        // and report a TimeoutException, which says nothing true about what happened.
-        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        // assertion: a stranded waiter would instead sit on the gate until its own deadline and
+        // report a TimeoutException, which says nothing true about what happened. No stopwatch
+        // beside it -- how long a woken caller takes to be scheduled is not what is under test.
         await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second);
-        elapsed.Stop();
-
-        Assert.True(
-            elapsed.Elapsed < TimeSpan.FromSeconds(3),
-            $"the queued refresh should fail as soon as the gate is free, but took {elapsed.Elapsed}");
 
         // It never reached the wire, so the first caller's request is still the only one sent.
         Assert.Single(device.SentCommands);
