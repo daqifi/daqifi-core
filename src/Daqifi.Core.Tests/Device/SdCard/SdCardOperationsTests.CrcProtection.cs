@@ -56,7 +56,14 @@ public partial class SdCardOperationsTests
     public async Task SetSdCardCrcProtectionAsync_OnV3_9_0_SendsTheCommandAndReportsItApplied()
     {
         var device = NyquistOn("3.9.0");
-        device.CannedTextResponse = new() { "7797608448,7798738944" };
+        // One canned reply serves every exchange: the storage space for the mount, the card's
+        // identity with CRC on for the mode read, and an empty error queue's count for the set.
+        device.CannedTextResponse = new()
+        {
+            "7797608448,7798738944",
+            "3,\"SD\",\"SC64G\",8.0,305419896,2021-05,1,0",
+            "0",
+        };
         device.Connect();
 
         var result = await device.SetSdCardCrcProtectionAsync(true);

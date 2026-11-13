@@ -156,10 +156,12 @@ public interface ISdCardOperations
     /// <para>
     /// A change takes a second or two. The device applies it by re-initializing the card, which
     /// cannot be mounted until the device picks it up again at its next card check. This call
-    /// confirms a card is ready by mounting it (the storage-space query), so an SD log or file
-    /// operation started right after it finds the card. That check runs even when the value did
-    /// not change, so an empty slot reports <see cref="SdCardCrcProtectionResult.Pending"/>
-    /// rather than <see cref="SdCardCrcProtectionResult.Applied"/>.
+    /// confirms a card is ready by mounting it (the storage-space query) and then reads back the
+    /// mode the card came up in, so an SD log or file operation started right after it finds the
+    /// card in that mode. That check runs even when the value did not change, so an empty slot
+    /// reports <see cref="SdCardCrcProtectionResult.Pending"/> rather than
+    /// <see cref="SdCardCrcProtectionResult.Applied"/>. Calls on one device run one at a time,
+    /// each through to its confirmation.
     /// </para>
     /// <para>
     /// <b>The device forgets the setting every time it boots</b>, and Core does not re-apply it.
@@ -195,7 +197,9 @@ public interface ISdCardOperations
     /// <exception cref="SdCardOperationException">
     /// Thrown when the device answered with any other SCPI error, or did not answer at all; in
     /// the second case whether the setting changed is unknown, and
-    /// <see cref="GetSdCardCrcProtectionAsync"/> reads what the device holds.
+    /// <see cref="GetSdCardCrcProtectionAsync"/> reads what the device holds. Also thrown when
+    /// the card came back in the other mode, because something other than this call (another
+    /// connection, a raw command) changed the setting while it waited.
     /// </exception>
     /// <exception cref="NotSupportedException">
     /// Thrown by an implementation written before this member existed, which inherits the default

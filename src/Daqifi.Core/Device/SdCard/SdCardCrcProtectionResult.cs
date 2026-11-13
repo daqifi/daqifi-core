@@ -8,8 +8,8 @@ public enum SdCardCrcProtectionResult
 {
     /// <summary>
     /// A card is in the slot, initialized in the requested mode, and mountable: Core mounted it
-    /// to check. Every write it takes from now on uses that mode, and the next SD operation finds
-    /// it ready.
+    /// and read its mode back to check. Every write it takes from now on uses that mode, and the
+    /// next SD operation finds it ready.
     /// </summary>
     Applied = 0,
 

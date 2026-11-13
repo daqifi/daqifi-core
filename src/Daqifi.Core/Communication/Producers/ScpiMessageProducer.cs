@@ -347,6 +347,20 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetSdCrcProtection => new ScpiMessage("SYSTem:STORage:SD:PROTect?");
 
     /// <summary>
+    /// Creates a query message for the SD card's identity and, from firmware v3.9.0, the CRC mode
+    /// the card was last initialized in.
+    /// </summary>
+    /// <remarks>
+    /// Answers <c>mid,"oid","pnm",major.minor,serial,yyyy-mm,crc,resyncs</c>; firmware v3.9.0
+    /// (firmware #1217) appended the last two fields. Answered from the driver's cached state with
+    /// no presence check, so it means "the card in the slot" only straight after a successful
+    /// mount, which is how <see cref="Device.SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/>
+    /// uses it.
+    /// Command: SYSTem:STORage:SD:INFO?
+    /// </remarks>
+    internal static IOutboundMessage<string> GetSdCardInfo => new ScpiMessage("SYSTem:STORage:SD:INFO?");
+
+    /// <summary>
     /// Creates a command message to run an SD card write speed benchmark.
     /// </summary>
     /// <param name="size">The size in bytes to benchmark.</param>
