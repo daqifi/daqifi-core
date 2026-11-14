@@ -1146,7 +1146,16 @@ public class FirmwareUpdateServiceTests
             enumerator,
             options);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(120));
+        // Cancel on reaching WaitingForBootloader rather than on a timer: a timer can fire before
+        // the update even starts (ending in Idle) on a loaded CI runner.
+        using var cts = new CancellationTokenSource();
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.WaitingForBootloader)
+            {
+                cts.Cancel();
+            }
+        };
         var hexPath = CreateTempFile();
         try
         {
@@ -1254,7 +1263,16 @@ public class FirmwareUpdateServiceTests
         var stateEvents = new List<FirmwareUpdateStateChangedEventArgs>();
         service.StateChanged += (_, args) => stateEvents.Add(args);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(120));
+        // Cancel on reaching WaitingForBootloader rather than on a timer: a timer can fire before
+        // the update even starts (ending in Idle) on a loaded CI runner.
+        using var cts = new CancellationTokenSource();
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.WaitingForBootloader)
+            {
+                cts.Cancel();
+            }
+        };
         var hexPath = CreateTempFile();
         try
         {
@@ -1799,7 +1817,16 @@ public class FirmwareUpdateServiceTests
         var events = new List<FirmwareUpdateStateChangedEventArgs>();
         service.StateChanged += (_, args) => events.Add(args);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        // Cancel as the update-mode request goes out rather than on a timer, so the cancel always
+        // lands in the pause before the apply, however slow the runner is.
+        using var cts = new CancellationTokenSource();
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            {
+                cts.Cancel();
+            }
+        };
         var firmwareDir = CreateTempDirectory();
         File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
         try
@@ -2698,8 +2725,16 @@ public class FirmwareUpdateServiceTests
         var firmwareDir = CreateTempDirectory();
         File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
 
+        // Cancel as the update-mode request goes out rather than on a timer, so the cancel always
+        // lands in the pause before the apply, however slow the runner is.
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            {
+                cts.Cancel();
+            }
+        };
 
         try
         {
