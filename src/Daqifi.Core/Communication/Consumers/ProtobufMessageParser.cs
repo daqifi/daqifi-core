@@ -246,6 +246,17 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             // extend past the buffer end and thus past that frame). If none
             // exists, this really is a partial: preserve it and wait.
             //
+            // The scan cannot tell those two apart on its own, because a real frame's
+            // body is full of complete sub-messages: a status reply carries strings,
+            // byte fields and packed calibration arrays, and any of them can parse as
+            // a frame of its own. Scanning the first half of a split status reply
+            // found one of those, skipped into the reply's body, and lost it — about
+            // 1 connect in 30 on the bench, 564 of 571 split points offline (#926).
+            // So the scan only runs when the bytes after the prefix are not the start
+            // of a protobuf message: a real partial frame reads as a clean run of
+            // fields to the end of the buffer, while ASCII noise hits a field tag no
+            // message can carry (see BodyPrefixIsWellFormed).
+            //
             // Only do this when no frame has been read yet from this buffer. Once
             // one frame has come out of it, a trailing under-buffered frame is
             // overwhelmingly a genuine split frame to wait for (the normal
@@ -255,7 +266,19 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             // the next buffer, where no frame has been read yet and the scan runs.
             // Discovery always reaches here with zero frames read, so it recovers
             // on the first reply.
-            if (!anyFrameRead)
+            // Echoed command text is recognized for what it is first: a line of printable
+            // ASCII ending in CR LF, which no DaqifiOutMessage frame starts with (see
+            // TryReadLeadingTextLine). Skipping the whole line lands on whatever follows it —
+            // the reply, complete or still arriving — without depending on how the text's
+            // bytes happen to read as protobuf fields.
+            if (!anyFrameRead && TryReadLeadingTextLine(remainingData, out var lineLength))
+            {
+                nextOffset = offset + lineLength;
+                return ProtobufFrameStep.Resync;
+            }
+
+            if (!anyFrameRead
+                && !BodyPrefixIsWellFormed(remainingData.Slice(prefixBytes), messageLength))
             {
                 var nextFrameIndex = FindNextParseableFrameStart(data, offset + 1);
                 if (nextFrameIndex >= 0)
@@ -355,6 +378,150 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="data"/> starts with a complete line of text: printable
+    /// ASCII (possibly none) ending in CR LF, the shape of a command the device echoes back
+    /// and of its <c>DAQIFI&gt;</c> prompt (#268). <paramref name="lineLength"/> includes the
+    /// CR LF.
+    /// </summary>
+    /// <remarks>
+    /// A real frame does not look like this. Its body starts with a field tag and soon carries a
+    /// length or a varint below 0x20, which is not printable; and CR LF at the front would be a
+    /// 13-byte frame whose first tag is field 1 with wire type 2, while field 1
+    /// (<c>msg_time_stamp</c>) is a varint. Only called on the wait path, where the frame the
+    /// first byte declares is not fully buffered.
+    /// </remarks>
+    private static bool TryReadLeadingTextLine(ReadOnlySpan<byte> data, out int lineLength)
+    {
+        lineLength = 0;
+
+        for (var i = 0; i < data.Length; i++)
+        {
+            var b = data[i];
+            if (b == (byte)'\r')
+            {
+                if (i + 1 < data.Length && data[i + 1] == (byte)'\n')
+                {
+                    lineLength = i + 2;
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (b < 0x20 || b > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="body"/> — the buffered start of a frame whose body is
+    /// <paramref name="declaredLength"/> bytes long — reads as a run of protobuf fields up to
+    /// the end of the buffer: the start of a real message that the rest of the frame will
+    /// complete (#926).
+    /// </summary>
+    /// <remarks>
+    /// Each field is a tag, then a value whose size the tag's wire type sets. A real message
+    /// walks cleanly: every tag has a field number above zero and a wire type in {0,1,2,5}, and
+    /// every length stays inside the declared body. The walk is allowed to run off the end of
+    /// the buffer, because that is what a partial frame does. Noise does not walk cleanly for
+    /// long: the #268 echo, <c>SYSTem:SYSInfoPB?\r\n</c> ahead of a status reply, reads as two
+    /// eight-byte fields and then meets the reply's own length prefix as a tag of wire type 4.
+    /// Field numbers are not checked against <see cref="DaqifiOutMessage"/>'s, so a field
+    /// added by newer firmware still walks.
+    /// </remarks>
+    private static bool BodyPrefixIsWellFormed(ReadOnlySpan<byte> body, int declaredLength)
+    {
+        var position = 0;
+        var end = Math.Min(body.Length, declaredLength);
+
+        while (position < end)
+        {
+            if (!TryReadVarint(body, ref position, out var tag, out var tagTruncated))
+            {
+                return tagTruncated;
+            }
+
+            var fieldNumber = tag >> 3;
+            if (fieldNumber == 0)
+            {
+                return false;
+            }
+
+            switch (tag & 0x07)
+            {
+                case 0:
+                    if (!TryReadVarint(body, ref position, out _, out var valueTruncated))
+                    {
+                        return valueTruncated;
+                    }
+
+                    break;
+                case 1:
+                    position += 8;
+                    break;
+                case 5:
+                    position += 4;
+                    break;
+                case 2:
+                    if (!TryReadVarint(body, ref position, out var length, out var lengthTruncated))
+                    {
+                        return lengthTruncated;
+                    }
+
+                    if (length > (ulong)(declaredLength - position))
+                    {
+                        return false;
+                    }
+
+                    position += (int)length;
+                    break;
+                default:
+                    return false;
+            }
+
+            if (position > declaredLength)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads a varint of up to 10 bytes at <paramref name="position"/>. Returns false when it
+    /// runs off the end of <paramref name="data"/> (<paramref name="truncated"/> true) or is
+    /// longer than any varint can be (<paramref name="truncated"/> false).
+    /// </summary>
+    private static bool TryReadVarint(ReadOnlySpan<byte> data, ref int position, out ulong value, out bool truncated)
+    {
+        value = 0;
+        truncated = false;
+
+        for (var i = 0; i < 10; i++)
+        {
+            if (position >= data.Length)
+            {
+                truncated = true;
+                return false;
+            }
+
+            var b = data[position++];
+            value |= (ulong)(b & 0x7F) << (7 * i);
+            if ((b & 0x80) == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -35,7 +35,7 @@ public class CompositeMessageParserBenchCaptureTests
     /// two-byte "C8 04" varint prefix plus a 584-byte body — and lands on the capture's
     /// byte statistics (24.0% printable, 40.5% null).
     /// </summary>
-    private static DaqifiOutMessage BuildStatusMessage()
+    internal static DaqifiOutMessage BuildStatusMessage()
     {
         var status = new DaqifiOutMessage
         {
