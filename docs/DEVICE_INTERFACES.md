@@ -448,7 +448,7 @@ await device.InitializeAsync();
 | `SYSTem:STReam:FORmat 0` | sent | **skipped** |
 | `SYSTem:ERRor?` | sent | **skipped** — would pop the other session's error |
 | `SYSTem:STReam:INTerface` (USB routing) | sent | **skipped** — would steal the stream |
-| `SYSTem:SYSInfoPB?` + capability query | sent | sent — read-only |
+| `SYSTem:SYSInfoPB?` + capability query (+ `SYSTem:STReam:START?` on firmware 3.9.0+) | sent | sent — read-only |
 
 The observing session is fully usable for status, metadata, and channel inspection, and reaches
 `DeviceState.Ready` exactly as a normal connection does. What it is **not** is configured to stream:
@@ -462,6 +462,33 @@ a second controlling session. Within one process, prefer
 [`DaqifiDeviceRegistry`](#managing-multiple-devices-daqifideviceregistry) — it refuses to open the
 same physical unit twice at all, so the conflict never arises. Across processes there is no
 protection beyond both sides opting in to `PreserveActiveStream`.
+
+### The streaming rate a new connection reports
+
+The stopped stream keeps its rate: the device stores the last rate it was started at, and a stop
+does not revert it. On firmware **3.9.0 and newer**, initialization reads that stored rate
+(`SYSTem:STReam:START?`) and `StreamingFrequency` reports it — so a device another client, an SD
+log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming()` without setting a
+rate keeps it there.
+
+Until something starts a stream after power-up, the device stores a 1 Hz placeholder. Core does not
+adopt that: a freshly powered device reads 100 Hz, as it always has. A 1 Hz that somebody did start
+at is adopted — the capability document read in the same exchange says whether any rate has been
+configured since power-up (`streaming.timing.actual_rate_millihz` is 0 until one has).
+
+This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
+through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect
+resumes at it whatever the device reports when it comes back. On firmware below 3.9.0 the device
+cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
+
+A stored rate was accepted for the stream that set it, which is often a USB one, and an SD log can
+have a lower ceiling: on an NQ1, one channel with onboard diagnostics off logs protobuf to the card
+at no more than 7,900 Hz. So when the rate is still the inherited one,
+`StartSdCardLoggingSessionAsync` asks the device for its maximum once the stream is routed to the
+card and lowers the rate to it if needed, rather than send a start the device would refuse with
+nothing recorded. If that answer is lost or gives no usable maximum, a rate above 100 Hz is lowered
+to 100 Hz, the rate such a start sent before the stored rate could be read. A rate you chose is
+sent as it is.
 
 ### Manual Device Connection (Advanced)
 

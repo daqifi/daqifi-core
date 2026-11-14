@@ -855,6 +855,21 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task StartSdCardLoggingSessionAsync_SendsTheRateLeftByTheInheritedRateCheck()
+    {
+        // #960 review: a rate inherited from a faster USB stream is checked against the SD
+        // configuration once, before the start, and the start carries whatever the check left.
+        var host = new FakeHost { StreamingFrequency = 10000, InheritedRateLoweredTo = 7900 };
+        var ops = new SdCardOperations(host);
+
+        await ops.StartSdCardLoggingSessionAsync("data.bin", channelMask: "1");
+
+        Assert.Equal(new[] { 10000 }, host.InheritedRateChecks);
+        Assert.Contains("send:SYSTem:StartStreamData 7900", host.Calls);
+        Assert.DoesNotContain("send:SYSTem:StartStreamData 10000", host.Calls);
+    }
+
+    [Fact]
     public async Task StartSdCardLoggingSessionAsync_ChannelMask_EnablesItBeforeStreamingStarts()
     {
         var host = new FakeHost();
@@ -2507,6 +2522,27 @@ public class SdCardOperationsCollaboratorTests
         {
             IsStreaming = true;
             IsLoggingToSdCard = true;
+        }
+
+        /// <summary>
+        /// The rate <see cref="LowerInheritedStreamingFrequencyAsync"/> lowers
+        /// <see cref="StreamingFrequency"/> to, standing in for an inherited rate the device's
+        /// current cap is below; <c>null</c> leaves the rate alone, as a chosen rate is.
+        /// </summary>
+        public int? InheritedRateLoweredTo { get; set; }
+
+        /// <summary>The value of <see cref="StreamingFrequency"/> when the rate was checked.</summary>
+        public List<int> InheritedRateChecks { get; } = new();
+
+        public Task LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken)
+        {
+            InheritedRateChecks.Add(StreamingFrequency);
+            if (InheritedRateLoweredTo is { } lowered)
+            {
+                StreamingFrequency = lowered;
+            }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>Number of times <see cref="StartStreaming"/> was called, for tests that only

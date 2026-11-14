@@ -149,6 +149,21 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// reaches the hardware — consistent with the client-side guards Core already applies
     /// to PWM (#306) and channel bounds (#300).
     /// </summary>
+    /// <remarks>
+    /// A new device object starts at 100 Hz. On firmware v3.9.0 and newer
+    /// (<see cref="DeviceFeature.StoredStreamingRateQuery"/>), initialization replaces that with
+    /// the rate the device has stored — the one another client, an SD log, or an earlier session
+    /// last started it at — so this reports the device's rate rather than Core's guess (#960).
+    /// That happens only while no rate has been chosen on this object: once it is set here or a
+    /// stream is started, the chosen rate stands, and an automatic reconnect resumes at it whatever
+    /// the device reports. A device that has not been started since power-up reports a 1 Hz
+    /// placeholder, which is not adopted: the 100 Hz default stands for it, as it does below
+    /// v3.9.0, where the device cannot be asked. A 1 Hz that somebody did start at is adopted; the
+    /// capability document tells the two apart. A stored rate was accepted for the stream that set
+    /// it, so while the rate is still the inherited one, an SD log start lowers it to the most the
+    /// device says the card can take before sending it, or to 100 Hz when the device does not
+    /// say; a chosen rate is sent as it is.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
     /// </exception>
@@ -177,6 +192,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
               + "Read MaximumStreamingFrequencyHz to see the limit. This member will be removed "
               + "in a future major version.")]
     public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
+
+    /// <summary>
+    /// Adopts the rate the device reported it has stored, unless a rate has been chosen on this
+    /// device; see <see cref="StreamingFrequency"/>.
+    /// </summary>
+    internal override void OnStoredStreamingRateRead(int rateHz, bool? rateConfigured) =>
+        _session.TryAdoptStoredFrequency(rateHz, rateConfigured);
 
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.
@@ -246,7 +268,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // method, so they are always in place before the device is handed to a caller.
         //
         // The session controller is built first because IsStreaming and StreamingFrequency now
-        // read through it, and both the StreamingFrequency assignment at the bottom of this
+        // read through it, and both the default-rate assignment at the bottom of this
         // method and anything a collaborator's constructor might read would otherwise find it
         // null.
         _session = new StreamingSessionController(this);
@@ -261,7 +283,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         _lanChipInfoOperations = new LanChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
 
-        StreamingFrequency = 100;
+        _session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
 
         // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
         // an intentional Disconnected as well as an unexpected drop (which sets Lost, not
@@ -1604,6 +1626,21 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     bool ISdCardOperationHost.IsLoggingToSdCard => IsLoggingToSdCard;
 
     void ISdCardOperationHost.BeginSdCardLogSession() => _session.BeginSdCardLogSession();
+
+    async Task ISdCardOperationHost.LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken)
+    {
+        // Not while a stream is running: a text exchange would misframe its frames, and its rate
+        // is one the device is already streaming at.
+        if (!_session.IsFrequencyInherited || IsStreaming)
+        {
+            return;
+        }
+
+        // A cap that cannot be read lowers the rate to Core's default rather than sending a rate
+        // nothing has shown the card can take.
+        _session.LowerInheritedFrequency(
+            await ReadCurrentMaximumStreamingRateAsync(cancellationToken).ConfigureAwait(false));
+    }
 
     TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 

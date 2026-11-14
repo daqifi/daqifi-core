@@ -50,6 +50,21 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     void BeginSdCardLogSession();
 
     /// <summary>
+    /// When the streaming rate is one the device object inherited from the device rather than
+    /// one anybody chose, lowers it to the most the device says it can stream with the
+    /// interface, format and channels now configured, or to Core's default when that cannot be
+    /// read. Does nothing for a chosen rate.
+    /// </summary>
+    /// <remarks>
+    /// Called by an SD log start after it has routed the stream to the card and before it sends
+    /// the start, because that is the configuration the device will check the rate against
+    /// (<see cref="Internal.StreamingSessionController.LowerInheritedFrequency"/>).
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>A task that completes once the rate has been checked.</returns>
+    Task LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Overall wall-clock budget for one SD card download, read through the device so a
     /// subclass's override of it still applies.
     /// </summary>

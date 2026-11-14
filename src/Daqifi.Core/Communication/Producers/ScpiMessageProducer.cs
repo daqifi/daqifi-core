@@ -409,6 +409,19 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetStreamInterface => new ScpiMessage("SYSTem:STReam:INTerface?");
 
     /// <summary>
+    /// Creates a query message to read the device's stored streaming rate.
+    /// </summary>
+    /// <remarks>
+    /// Returns a single unsigned integer, in Hz: the rate the device streams at when started
+    /// without one. That is the last rate a start set — a stop deliberately does not revert it —
+    /// or the 1 Hz boot default before any start. It says nothing about whether a stream is
+    /// running.
+    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.StoredStreamingRateQuery"/>).
+    /// Command: SYSTem:STReam:START?
+    /// </remarks>
+    public static IOutboundMessage<string> GetStoredStreamingRate => new ScpiMessage("SYSTem:STReam:START?");
+
+    /// <summary>
     /// The wire command <see cref="StartStreaming"/> emits, without its frequency argument. Exposed so
     /// callers that must recognize this command from raw command text — e.g.
     /// <see cref="Device.Internal.SessionCommandInterpreter"/> — have a single source of truth instead
