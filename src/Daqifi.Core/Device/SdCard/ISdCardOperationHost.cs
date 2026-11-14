@@ -89,6 +89,18 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     TimeSpan SdInterfaceSettleDelay { get; }
 
     /// <summary>
+    /// Wait before asking the device again after it answered "No SD Card Detected", read
+    /// through the device so a subclass's override of it still applies (#896).
+    /// </summary>
+    /// <remarks>
+    /// The firmware answers presence from its last card-detect poll, which backs off to 5 s
+    /// while no card is seen, so a "no card" answer can be seconds stale. It kicks a fresh poll
+    /// as it answers and leaves the host to ask again. A test double shortens it to
+    /// <see cref="TimeSpan.Zero"/>, as it does <see cref="SdInterfaceSettleDelay"/>.
+    /// </remarks>
+    TimeSpan SdNoCardRecheckDelay { get; }
+
+    /// <summary>
     /// The clock the SD operations measure their budgets and settle delays on (issue #637).
     /// </summary>
     /// <remarks>

@@ -45,6 +45,16 @@ internal sealed class SdCardOperations
     private const int SD_LIST_MAX_RETRIES = 1;
 
     /// <summary>
+    /// How many times a listing or storage query asks again after the device answered
+    /// "No SD Card Detected", <see cref="ISdCardOperationHost.SdNoCardRecheckDelay"/> apart,
+    /// before reporting the card absent (#896). The firmware's answer can be a stale card-detect
+    /// poll; it starts a fresh poll as it answers, so the next query sees the real state. Two
+    /// rechecks a second apart cover that with room to spare, and cost a card that really is
+    /// absent about two seconds, on an SD call only.
+    /// </summary>
+    private const int SD_NO_CARD_MAX_RECHECKS = 2;
+
+    /// <summary>
     /// SCPI error the device queues when <c>SD:GET</c> names a file or directory that is not on
     /// the card (firmware v3.9.0+, <c>SD_ASYNC_ERR_FILE_NOT_FOUND</c>).
     /// </summary>
@@ -301,6 +311,9 @@ internal sealed class SdCardOperations
     /// </remarks>
     private TimeSpan SdInterfaceSettleDelay => _host.SdInterfaceSettleDelay;
 
+    /// <inheritdoc cref="ISdCardOperationHost.SdNoCardRecheckDelay"/>
+    private TimeSpan SdNoCardRecheckDelay => _host.SdNoCardRecheckDelay;
+
     /// <inheritdoc cref="ISdCardOperations.SdCardFiles" />
     internal IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardFiles;
 
@@ -439,7 +452,13 @@ internal sealed class SdCardOperations
     /// hand back the entries it did get as the card's contents. A reply that explains its own
     /// missing marker — no card, an unreadable directory, any firmware status text — keeps its
     /// more specific answer from <see cref="GetSdCardListError"/> instead, and is not
-    /// retried (closes #887).
+    /// retried as incomplete (closes #887).
+    /// </para>
+    /// <para>
+    /// A "No SD Card Detected" answer is asked again, up to twice, a second apart, before
+    /// <see cref="SdCardNotPresentException"/> is thrown. The firmware answers it from its last
+    /// card-detect poll, which can be seconds out of date right after a connect; the first query
+    /// of a session would otherwise report a card that is there as missing (#896).
     /// </para>
     /// </remarks>
     internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
@@ -473,17 +492,22 @@ internal sealed class SdCardOperations
         try
         {
             SdListVerdict verdict = default;
+            var transientRetries = 0;
+            var noCardRechecks = 0;
+            TimeSpan? delayBeforeNextAttempt = null;
 
-            // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
-            // timing issue, and an unterminated response can be a one-off stall, so both are
-            // retried once after an additional settle delay before being surfaced.
-            for (var attempt = 0; attempt <= SD_LIST_MAX_RETRIES; attempt++)
+            // A SCPI error here is often a transient timing issue, and an unterminated response
+            // can be a one-off stall, so both are retried SD_LIST_MAX_RETRIES times after an
+            // additional settle delay before being surfaced. A "no card" answer has its own,
+            // longer schedule (SD_NO_CARD_MAX_RECHECKS): it can be the firmware's stale
+            // card-detect poll, which a 100 ms retry is too soon to outlast (#896).
+            while (true)
             {
-                if (attempt > 0)
+                if (delayBeforeNextAttempt is { } delay)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(delay, Clock, cancellationToken).ConfigureAwait(false);
                 }
 
                 // The SPI bus switch and its settle wait run as the exchange's prepare phase, and
@@ -520,10 +544,23 @@ internal sealed class SdCardOperations
                 // walk cut short by the shared SPI bus being briefly unavailable is exactly the
                 // transient this loop exists for.
                 verdict = ClassifySdListReply(lines);
-                if (!verdict.ShouldReadAgain)
+                if (verdict.Kind == SdListVerdictKind.NoCard)
+                {
+                    if (noCardRechecks++ < SD_NO_CARD_MAX_RECHECKS)
+                    {
+                        delayBeforeNextAttempt = SdNoCardRecheckDelay;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (!verdict.ShouldReadAgain || transientRetries++ >= SD_LIST_MAX_RETRIES)
                 {
                     break;
                 }
+
+                delayBeforeNextAttempt = SdInterfaceSettleDelay;
             }
 
             if (verdict.Kind == SdListVerdictKind.DirectoryNotFound)
@@ -1001,36 +1038,52 @@ internal sealed class SdCardOperations
             // phase, so both halves are held by the one lock acquisition rather than only the
             // switch (#407). The settle wait also moves ahead of the exchange's stale-line
             // boundary instead of blocking a thread inside it.
-            var lines = await _host.ExecuteTextCommandAsync(
-                () => _host.Send(ScpiMessageProducer.GetSdSpace),
-                responseTimeoutMs: 3000,
-                cancellationToken: cancellationToken,
-                prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
+            IReadOnlyList<string> lines;
+            var transientRetries = 0;
+            var noCardRechecks = 0;
+            TimeSpan? delayBeforeNextAttempt = null;
 
-            // Only retry transient SCPI errors. A "No SD Card Detected" line
-            // is non-transient — retrying just delays the typed exception and
-            // risks misclassification if the marker isn't repeated on retry.
-            if (ScpiResponseClassifier.ContainsScpiError(lines) && !ContainsNoSdCardMarker(lines))
+            while (true)
             {
-                for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                if (delayBeforeNextAttempt is { } delay)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
-
-                    lines = await _host.ExecuteTextCommandAsync(
-                        () => _host.Send(ScpiMessageProducer.GetSdSpace),
-                        responseTimeoutMs: 3000,
-                        cancellationToken: cancellationToken,
-                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
-
-                    if (!ScpiResponseClassifier.ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
-                    {
-                        break;
-                    }
+                    await Task.Delay(delay, Clock, cancellationToken).ConfigureAwait(false);
                 }
+
+                lines = await _host.ExecuteTextCommandAsync(
+                    () => _host.Send(ScpiMessageProducer.GetSdSpace),
+                    responseTimeoutMs: 3000,
+                    cancellationToken: cancellationToken,
+                    prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                    finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
+
+                // "No SD Card Detected" is not trusted on first sight. The firmware answers it from
+                // its last card-detect poll, which can be seconds stale, and starts a fresh poll as
+                // it answers, so asking again a second later gets the real state. A card that is
+                // really absent still reports absent, after SD_NO_CARD_MAX_RECHECKS (#896). This is
+                // its own schedule, not the transient one below: 100 ms is too soon to outlast a
+                // poll that backs off to 5 s.
+                if (ContainsNoSdCardMarker(lines))
+                {
+                    if (noCardRechecks++ < SD_NO_CARD_MAX_RECHECKS)
+                    {
+                        delayBeforeNextAttempt = SdNoCardRecheckDelay;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                // Any other SCPI error is retried as a transient timing failure.
+                if (!ScpiResponseClassifier.ContainsScpiError(lines)
+                    || transientRetries++ >= SD_LIST_MAX_RETRIES)
+                {
+                    break;
+                }
+
+                delayBeforeNextAttempt = SdInterfaceSettleDelay;
             }
 
             if (SdCardSpaceParser.TryParseLines(lines, out var storage))

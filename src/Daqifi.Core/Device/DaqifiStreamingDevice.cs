@@ -1524,6 +1524,18 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </remarks>
     internal virtual TimeSpan SdInterfaceSettleDelay => TimeSpan.FromMilliseconds(100);
 
+    /// <summary>
+    /// How long to wait before asking the device again after it reported no SD card (#896).
+    /// </summary>
+    /// <remarks>
+    /// The firmware answers "is a card present?" from its last card-detect poll, which backs
+    /// off to once every 5 s while no card is seen, and it starts a fresh poll as it answers
+    /// rather than waiting for one. A negative answer can therefore be seconds out of date, and
+    /// the firmware leaves it to the host to ask again. Virtual as a test seam, for the same
+    /// reason as <see cref="SdInterfaceSettleDelay"/>.
+    /// </remarks>
+    internal virtual TimeSpan SdNoCardRecheckDelay => TimeSpan.FromSeconds(1);
+
     #endregion
 
     #region ILanChipInfoProvider
@@ -1661,6 +1673,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     TimeSpan ISdCardOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
 
     TimeSpan ISdCardOperationHost.SdInterfaceSettleDelay => SdInterfaceSettleDelay;
+
+    TimeSpan ISdCardOperationHost.SdNoCardRecheckDelay => SdNoCardRecheckDelay;
 
     /// <inheritdoc />
     TimeProvider ISdCardOperationHost.TimeProvider => Clock;
