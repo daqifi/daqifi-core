@@ -1406,8 +1406,7 @@ public partial class SdCardOperationsTests
             "Error !! No SD Card Detected",
             "**ERROR: -200, \"Execution error\""
         };
-        device.ResponseSequence.Enqueue(response);
-        device.ResponseSequence.Enqueue(new List<string>(response));
+        EnqueueAbsentCard(device, response);
         device.Connect();
 
         // Act & Assert
@@ -1533,19 +1532,19 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndNoCard_KeepsTheMoreSpecificAnswerWithoutRetrying()
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndNoCard_KeepsTheMoreSpecificAnswer()
     {
         // A reply that explains its own missing marker keeps the better exception. "No SD card"
-        // is a more useful answer than "incomplete", and it is already definite, so it must not
-        // be re-read as an unexplained short walk and must not cost an extra exchange.
+        // is a more useful answer than "incomplete", so it must not be re-read as an unexplained
+        // short walk. The only extra exchanges are the "no card" rechecks (#896).
         var device = MarkerCapableDevice();
-        device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected" });
+        EnqueueAbsentCard(device, new List<string> { "Error !! No SD Card Detected" });
         device.Connect();
 
         await Assert.ThrowsAsync<SdCardNotPresentException>(
             () => device.GetSdCardFilesAsync());
 
-        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        Assert.Equal(AbsentCardExchanges, device.ExecuteTextCommandCallCount);
     }
 
     [Fact]
@@ -2130,8 +2129,7 @@ public partial class SdCardOperationsTests
             "Error !! No SD Card Detected",
             "**ERROR: -200, \"Execution error\""
         };
-        device.ResponseSequence.Enqueue(response);
-        device.ResponseSequence.Enqueue(new List<string>(response));
+        EnqueueAbsentCard(device, response);
         device.Connect();
 
         // Act
@@ -2171,8 +2169,7 @@ public partial class SdCardOperationsTests
     {
         // Arrange - persistent error path must still restore the LAN interface
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
-        device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
+        EnqueueAbsentCard(device, new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
         device.Connect();
 
         // Act
@@ -2490,10 +2487,10 @@ public partial class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardStorageAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
     {
-        // The "No SD Card Detected" marker is non-transient, so the method must
-        // short-circuit on the first attempt instead of retrying.
+        // A card that is really absent answers "no card" to the first query and to all of
+        // its rechecks (#896), and only then is reported absent.
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.ResponseSequence.Enqueue(new List<string>
+        EnqueueAbsentCard(device, new List<string>
         {
             "Error !! No SD Card Detected",
             "**ERROR: -200, \"Execution error\""
@@ -2503,14 +2500,14 @@ public partial class SdCardOperationsTests
         var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
             () => device.GetSdCardStorageAsync());
         Assert.Contains("**ERROR", ex.LastScpiError);
-        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        Assert.Equal(AbsentCardExchanges, device.ExecuteTextCommandCallCount);
     }
 
     [Fact]
     public async Task GetSdCardStorageAsync_OnError_StillRestoresLanInterface()
     {
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
+        EnqueueAbsentCard(device, new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
         device.Connect();
 
         await Assert.ThrowsAsync<SdCardNotPresentException>(
@@ -3764,10 +3761,27 @@ public partial class SdCardOperationsTests
     /// A testable device that returns different responses on successive calls to
     /// ExecuteTextCommandAsync, allowing tests to verify retry behavior.
     /// </summary>
+    /// <summary>
+    /// Exchanges an SD query makes against a card that is really absent: the first answer and
+    /// the three rechecks a "no card" answer gets before it is believed (#896).
+    /// </summary>
+    private const int AbsentCardExchanges = 4;
+
+    /// <summary>Queues one "no card" reply per exchange an absent card is asked.</summary>
+    private static void EnqueueAbsentCard(RetryableSdCardStreamingDevice device, List<string> response)
+    {
+        for (var i = 0; i < AbsentCardExchanges; i++)
+        {
+            device.ResponseSequence.Enqueue(new List<string>(response));
+        }
+    }
+
     private class RetryableSdCardStreamingDevice : DaqifiStreamingDevice
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
         public Queue<List<string>> ResponseSequence { get; } = new();
         public int ExecuteTextCommandCallCount { get; private set; }
@@ -3917,6 +3931,8 @@ public partial class SdCardOperationsTests
         /// land in and set <see cref="SettleDelay"/> back to production's value.
         /// </remarks>
         internal override TimeSpan SdInterfaceSettleDelay => SettleDelay;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
 
         /// <summary>
         /// The settle period this double reports. <see cref="TimeSpan.Zero"/> unless a test needs
@@ -4149,6 +4165,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
@@ -4314,6 +4332,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private readonly MultiAttemptSdFileStream _stream;
         private int _getCommandCount;
         private int _executeTextCommandCallCount;
@@ -4488,6 +4508,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private readonly TaskCompletionSource _asyncPark = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ManualResetEventSlim _syncPark = new(false);
         private readonly ParkMode _mode;
@@ -4574,6 +4596,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private readonly SlowChunkStream _stream;
         private readonly TimeSpan _budget;
 
@@ -4672,6 +4696,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         public TestableNonUsbStreamingDevice(string name, IPAddress? ipAddress = null)
             : base(name, ipAddress)
         {
@@ -4694,6 +4720,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
@@ -4783,6 +4811,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         private readonly byte[] _fileData;
         private readonly int _chunkSize;
 
@@ -4816,6 +4846,8 @@ public partial class SdCardOperationsTests
     {
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
+
+        internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
         public SilentWifiDownloadDevice(string name)
             : base(name)
         {

@@ -95,6 +95,12 @@ public partial class SdCardOperationsCollaboratorTests
 
     private const string NoErrorTerminator = "0,\"No error\"";
 
+    /// <summary>
+    /// Exchanges an SD query makes against a card that is really absent: the first answer and
+    /// the three rechecks a "no card" answer gets before it is believed (#896).
+    /// </summary>
+    private const int AbsentCardExchanges = 4;
+
     #region Construction
 
     [Fact]
@@ -354,10 +360,11 @@ public partial class SdCardOperationsCollaboratorTests
     public async Task GetSdCardFilesAsync_NoSdCard_ThrowsNotPresent()
     {
         var host = new FakeHost();
-        host.EnqueueResponse("No SD Card Detected", NoErrorTerminator);
+        host.EnqueueAbsentCardResponse("No SD Card Detected", NoErrorTerminator);
         var ops = new SdCardOperations(host);
 
         await Assert.ThrowsAsync<SdCardNotPresentException>(() => ops.GetSdCardFilesAsync());
+        Assert.Equal(AbsentCardExchanges, host.ExchangeCount);
     }
 
     [Fact]
@@ -548,7 +555,7 @@ public partial class SdCardOperationsCollaboratorTests
         // the error classifier already applies. An absent card is a fault and must not
         // read as an empty card (#730).
         var host = new FakeHost();
-        host.EnqueueResponse(
+        host.EnqueueAbsentCardResponse(
             "Error !! No SD Card Detected",
             "[Error:5]Failed to open directory [DAQiFi]",
             NoErrorTerminator);
@@ -615,18 +622,131 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task GetSdCardStorageAsync_NoCardMarker_IsNotRetried()
+    public async Task GetSdCardStorageAsync_CardReallyAbsent_ThrowsNotPresentAfterTheRechecks()
     {
-        // "No SD Card Detected" is not a transient timing failure; retrying only delays the typed
-        // exception and risks misclassification if the marker is absent second time round. The
-        // exchange count is the only place that distinction is observable.
+        // A card that is not there answers "no card" every time, so the rechecks change nothing
+        // but the time it takes to say so.
         var host = new FakeHost();
-        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", "No SD Card Detected");
+        host.EnqueueAbsentCardResponse("**ERROR: -200,\"Execution error\"", "No SD Card Detected");
         var ops = new SdCardOperations(host);
 
         await Assert.ThrowsAsync<SdCardNotPresentException>(() => ops.GetSdCardStorageAsync());
 
+        Assert.Equal(AbsentCardExchanges, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_StaleNoCardAnswer_RechecksAndReturnsTheStorage()
+    {
+        // #896: the first SD query after a connect can get the firmware's stale card-detect poll.
+        // The firmware starts a fresh poll as it answers, so the recheck sees the card.
+        var host = new FakeHost();
+        host.EnqueueResponse("Error !! No SD Card Detected", "**ERROR: -200,\"Execution error\"");
+        host.EnqueueResponse("1000,2000");
+        var ops = new SdCardOperations(host);
+
+        var storage = await ops.GetSdCardStorageAsync();
+
+        Assert.Equal(1000L, storage.FreeBytes);
+        Assert.Equal(2000L, storage.TotalBytes);
+        Assert.Equal(2, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_StaleNoCardAnswer_WaitsTheRecheckDelayBeforeAskingAgain()
+    {
+        // 100 ms (the transient retry) is too soon for a detect poll that backs off to 5 s; the
+        // recheck has its own delay, and the second query must not go out before it has passed.
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost
+        {
+            TimeProvider = clock,
+            SdInterfaceSettleDelay = TimeSpan.Zero,
+            SdNoCardRecheckDelay = TimeSpan.FromSeconds(1),
+        };
+        host.EnqueueResponse("Error !! No SD Card Detected", "**ERROR: -200,\"Execution error\"");
+        host.EnqueueResponse("1000,2000");
+        var ops = new SdCardOperations(host);
+
+        var query = ops.GetSdCardStorageAsync();
+        Assert.False(query.IsCompleted);
         Assert.Equal(1, host.ExchangeCount);
+
+        clock.Advance(TimeSpan.FromMilliseconds(999));
+        Assert.False(query.IsCompleted);
+        Assert.Equal(1, host.ExchangeCount);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var storage = await query.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1000L, storage.FreeBytes);
+        Assert.Equal(2, host.ExchangeCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StaleNoCardAnswer_UntilTheNextFiveSecondPoll_IsOutlastedByTheRechecks(bool storage)
+    {
+        // Firmware before v3.9.0 does not start a fresh card-detect poll when it answers "no
+        // card", and its poll backs off to once every 5 s. A card inserted just after a negative
+        // poll is reported missing until the next one, so the rechecks must span more than 5 s.
+        var clock = new FakeTimeProvider();
+        var start = clock.GetUtcNow();
+        var host = new FakeHost
+        {
+            TimeProvider = clock,
+            SdInterfaceSettleDelay = TimeSpan.Zero,
+            SdNoCardRecheckDelay = TimeSpan.FromSeconds(1),
+        };
+        host.Responder = () => clock.GetUtcNow() - start < TimeSpan.FromSeconds(5)
+            ? new[] { "Error !! No SD Card Detected", "**ERROR: -200,\"Execution error\"", NoErrorTerminator }
+            : storage
+                ? new[] { "1000,2000" }
+                : new[] { "Daqifi/a.bin 10", NoErrorTerminator };
+        var ops = new SdCardOperations(host);
+
+        Task query = storage ? ops.GetSdCardStorageAsync() : ops.GetSdCardFilesAsync();
+        for (var second = 0; second < 10 && !query.IsCompleted; second++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await query.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(clock.GetUtcNow() - start >= TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_StaleNoCardAnswer_RechecksAndReturnsTheListing()
+    {
+        // #896, listing path: a stale "no card" must not reach the caller as a missing card when
+        // the next answer lists the files.
+        var host = new FakeHost();
+        host.EnqueueResponse("Error !! No SD Card Detected", "**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.Equal(new[] { "a.bin" }, files.Select(f => f.FileName));
+        Assert.Equal(2, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_StaleNoCardThenTransientError_StillGetsItsTransientRetry()
+    {
+        // The two schedules are counted apart: a recheck that lands on a -200 still gets the
+        // ordinary transient retry rather than surfacing the error.
+        var host = new FakeHost();
+        host.EnqueueResponse("Error !! No SD Card Detected", NoErrorTerminator);
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.Single(files);
+        Assert.Equal(3, host.ExchangeCount);
     }
 
     [Fact]
@@ -2560,6 +2680,12 @@ public partial class SdCardOperationsCollaboratorTests
         public TimeSpan SdInterfaceSettleDelay { get; set; } = TimeSpan.FromMilliseconds(100);
 
         /// <summary>
+        /// Zero by default, so a test of a missing card does not wait out the real rechecks; the
+        /// tests of the recheck schedule set it and step <see cref="TimeProvider"/> through it.
+        /// </summary>
+        public TimeSpan SdNoCardRecheckDelay { get; set; } = TimeSpan.Zero;
+
+        /// <summary>
         /// The clock the SD operations read (issue #637). Settable so a test can hand them a
         /// <c>FakeTimeProvider</c> and step one of the budgets above forward rather than spend it.
         /// </summary>
@@ -2603,9 +2729,27 @@ public partial class SdCardOperationsCollaboratorTests
         /// <see cref="IsConnected"/> check that gates it.</summary>
         public bool ThrowOnStartStreaming { get; set; }
 
+        /// <summary>
+        /// When set, answers every exchange in place of the queue, so a reply can depend on the
+        /// time on <see cref="TimeProvider"/> rather than on how many exchanges came before it.
+        /// </summary>
+        public Func<IReadOnlyList<string>>? Responder { get; set; }
+
         public void EnqueueResponse(params string[] lines)
         {
             lock (_responses) { _responses.Enqueue(lines); }
+        }
+
+        /// <summary>
+        /// Queues the same reply for the first query and each of its "no card" rechecks, as a
+        /// device with no card fitted gives it every time it is asked.
+        /// </summary>
+        public void EnqueueAbsentCardResponse(params string[] lines)
+        {
+            for (var i = 0; i < AbsentCardExchanges; i++)
+            {
+                EnqueueResponse(lines);
+            }
         }
 
         private void Record(string call)
@@ -2707,6 +2851,11 @@ public partial class SdCardOperationsCollaboratorTests
 
                 setupAction();
                 AfterExchangeSetup?.Invoke(index);
+
+                if (Responder != null)
+                {
+                    return Responder();
+                }
 
                 lock (_responses)
                 {
