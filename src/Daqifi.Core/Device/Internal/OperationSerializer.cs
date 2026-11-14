@@ -147,6 +147,30 @@ internal sealed class OperationSerializer : IDisposable
         _operationLockGeneration.Value != 0
         && _operationLockGeneration.Value == Volatile.Read(ref _operationGeneration);
 
+    /// <summary>
+    /// True when another flow owns the device for an operation right now, so a send from this
+    /// flow would be parked by <see cref="TryDeferSend{T}"/>.
+    /// </summary>
+    /// <remarks>
+    /// A point-in-time answer. It lets a caller leave alone what a running raw capture stopped
+    /// on purpose: the device's reader (issue #975).
+    /// </remarks>
+    internal bool IsOperationInFlightElsewhere
+    {
+        get
+        {
+            if (OwnsCurrentSession)
+            {
+                return false;
+            }
+
+            lock (_deferralGate)
+            {
+                return _operationInFlight;
+            }
+        }
+    }
+
     /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync{TResult}(Func{CancellationToken, Task{TResult}}, CancellationToken)"/>
     internal async Task<TResult> RunExclusiveAsync<TResult>(
         Func<CancellationToken, Task<TResult>> operation,

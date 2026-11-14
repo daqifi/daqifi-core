@@ -32,6 +32,16 @@ internal interface IStreamingSessionHost
     /// <inheritdoc cref="DaqifiDevice.EnsureConnected()"/>
     void EnsureConnected();
 
+    /// <summary>
+    /// Starts the device's reader again when a raw capture left it stopped (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="DaqifiDevice.EnsureMessageReaderRunning"/>.
+    /// </remarks>
+    /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">The reader is stopped and cannot start.</exception>
+    /// <exception cref="DeviceNotConnectedException">A teardown disposed the reader.</exception>
+    void EnsureMessageReaderRunning();
+
     /// <inheritdoc cref="DaqifiDevice.PreserveActiveStream"/>
     bool PreserveActiveStream { get; }
 

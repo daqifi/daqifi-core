@@ -1093,9 +1093,11 @@ internal sealed class TextExchangeEngine
     /// instance would be a second concurrent reader on it, which is exactly the framing
     /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
     /// The consumer is left stopped. The next text exchange asks it to start again before it
-    /// relies on it (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>), and fails with the same
+    /// relies on it (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>), and so does a stream
+    /// start (<see cref="DaqifiDevice.EnsureMessageReaderRunning"/>); each fails with the same
     /// refusal if the stream is still stuck, so the problem is surfaced rather than read as
-    /// silence.
+    /// silence. The refusal is also raised on the device's <c>ErrorOccurred</c> surface at once
+    /// (issue #975), because the log line alone does not reach a caller that gives Core no logger.
     /// </para>
     /// <para>
     /// The inbound handler is re-attached whether or not the start succeeds. Left detached after a
@@ -1126,6 +1128,14 @@ internal sealed class TextExchangeEngine
                 ex,
                 "The previous message consumer thread did not exit, so the consumer was left stopped. "
                 + "The device stream appears stuck; a reconnect is required to resume inbound messages."));
+
+            // The log line is not enough: a caller that gives Core no logger never sees it, and
+            // the device still reports Connected (issue #975).
+            _host.ReportReaderRestartFailure(new ConsumerThreadNotExitedException(
+                "After a raw capture, the device's message reader could not start again because its "
+                + "previous thread has not exited. The device stream appears stuck. No stream frame "
+                + "or reply is read until the reader starts again; reconnect the device.",
+                ex));
         }
         catch (Exception ex)
         {

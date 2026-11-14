@@ -82,6 +82,63 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         => ConnectionGuard.EnsureConnected(IsConnected, cancellationToken);
 
     /// <summary>
+    /// Starts the device's reader again when a raw capture left it stopped, so that a command
+    /// whose answer arrives as stream frames is not sent to a device that nothing reads
+    /// (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A no-op on a running reader, which is every reader except one that a raw capture could
+    /// not restart because its stream was stuck. It is also a no-op on a device without a reader,
+    /// and while a raw capture is running: that capture stopped the reader on purpose, and its
+    /// own restart runs before the send this guards is replayed.
+    /// </para>
+    /// <para>
+    /// A text exchange asks the same question of the reader before it relies on it
+    /// (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>). A stream start is not a text
+    /// exchange, so before this it sent the start command to a stopped reader and reported a
+    /// running session that never delivered a frame.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">The name of the operation that needs the reader, for the exception message.</param>
+    /// <exception cref="ConsumerThreadNotExitedException">The reader is stopped, and it cannot start because its previous thread has not exited.</exception>
+    /// <exception cref="DeviceNotConnectedException">A teardown disposed the reader.</exception>
+    internal void EnsureMessageReaderRunning(string operation)
+    {
+        // Snapshotted once: a teardown nulls the field.
+        var consumer = _messageConsumer;
+        if (consumer == null || consumer.IsRunning)
+        {
+            return;
+        }
+
+        if (_isInsideTextExchange.Value || _operations.IsOperationInFlightElsewhere)
+        {
+            return;
+        }
+
+        try
+        {
+            consumer.Start();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new DeviceNotConnectedException(
+                $"{operation} cannot run because the device's connection was torn down.",
+                ex,
+                isShuttingDown: true);
+        }
+        catch (ConsumerThreadNotExitedException ex)
+        {
+            throw new ConsumerThreadNotExitedException(
+                $"{operation} cannot run because the device's message reader is stopped and its "
+                + "previous thread has not exited. The device stream appears stuck. Nothing would "
+                + "read the device's answer, so the command was not sent. Reconnect the device.",
+                ex);
+        }
+    }
+
+    /// <summary>
     /// Gets the device metadata containing part number, firmware version, etc.
     /// </summary>
     public DeviceMetadata Metadata { get; } = new DeviceMetadata();
@@ -2397,6 +2454,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     /// <inheritdoc />
     IMessageConsumer<WireMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
+
+    /// <inheritdoc />
+    void ITextExchangeHost.ReportReaderRestartFailure(Exception error)
+        => RaiseDeviceError(DeviceErrorSource.MessageConsumer, error);
 
     /// <inheritdoc />
     /// <remarks>Detaches first, so attaching twice still leaves exactly one subscription.</remarks>

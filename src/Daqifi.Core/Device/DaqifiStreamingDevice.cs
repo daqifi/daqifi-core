@@ -349,6 +349,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// command and so can do neither.
     /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">
+    /// Thrown when an earlier SD file download left the device's message reader stopped and it
+    /// cannot start again, because its stream is stuck. The start command is not sent, since
+    /// nothing would read the stream; reconnect the device (issue #975).
+    /// </exception>
     public void StartStreaming() => _session.StartStreaming();
 
     /// <summary>
@@ -386,6 +391,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">
+    /// Thrown when the device's message reader is stopped and cannot start again; see
+    /// <see cref="StartStreaming"/>.
+    /// </exception>
     /// <exception cref="DeviceCommandFailedException">
     /// Thrown when the device sent no frame and its error queue holds a refusal of the start.
     /// </exception>
@@ -1710,6 +1719,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     // a subclass override of Send{T} still intercepts every command the session issues.
 
     void IStreamingSessionHost.EnsureConnected() => EnsureConnected();
+
+    void IStreamingSessionHost.EnsureMessageReaderRunning() => EnsureMessageReaderRunning(nameof(StartStreaming));
 
     bool IStreamingSessionHost.PreserveActiveStream => PreserveActiveStream;
 

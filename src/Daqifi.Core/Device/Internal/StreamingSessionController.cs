@@ -341,6 +341,11 @@ internal sealed class StreamingSessionController
 
         if (IsStreaming) return;
 
+        // Before anything about the session changes, and before the start command is sent: a
+        // stream start whose frames nothing reads is a running session that delivers nothing,
+        // with no error anywhere (issue #975). A reader that cannot start throws here instead.
+        _host.EnsureMessageReaderRunning();
+
         ApplyRateCap();
 
         // The rate a stream ran at is the one a reconnect resumes it at, whatever the device

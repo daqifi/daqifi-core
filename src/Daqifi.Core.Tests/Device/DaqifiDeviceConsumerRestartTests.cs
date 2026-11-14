@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Communication.Messages;
+using System.Collections.Concurrent;
 using System.Reflection;
 
 namespace Daqifi.Core.Tests.Device;
@@ -165,6 +166,129 @@ public class DaqifiDeviceConsumerRestartTests
         device.Disconnect();
     }
 
+    [Fact]
+    public async Task RawCapture_OnAStuckStream_RaisesErrorOccurredForTheReader()
+    {
+        // Issue #975: the refusal used to reach a log line only, and a caller that gives Core no
+        // logger never saw it while the device kept reporting Connected.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new ConsumerRestartTestableDevice("Stuck Device", transport);
+        var errors = new ConcurrentQueue<DeviceErrorEventArgs>();
+        device.ErrorOccurred += (_, e) => errors.Enqueue(e);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+
+        var error = Assert.Single(errors);
+        Assert.Equal(DeviceErrorSource.MessageConsumer, error.Source);
+        var refusal = Assert.IsType<ConsumerThreadNotExitedException>(error.Error);
+        Assert.IsType<ConsumerThreadNotExitedException>(refusal.InnerException);
+        Assert.Contains("raw capture", refusal.Message);
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task RawCapture_WhenTheReaderRestarts_RaisesNoError()
+    {
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new ConsumerRestartTestableDevice("Prompt Device", transport);
+        var errors = 0;
+        device.ErrorOccurred += (_, _) => Interlocked.Increment(ref errors);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+
+        Assert.True(GetMessageConsumer(device)!.IsRunning);
+        Assert.Equal(0, Volatile.Read(ref errors));
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task StartStreaming_AfterARawCaptureLeftTheReaderStuck_ThrowsAndSendsNoStartCommand()
+    {
+        // Issue #975: a stream start is not a text exchange, so it used to send the start
+        // command to a stopped reader and report a running session that delivered nothing.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new StreamingConsumerRestartTestableDevice("Stuck Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+        Assert.False(GetMessageConsumer(device)!.IsRunning);
+
+        var refusal = Assert.Throws<ConsumerThreadNotExitedException>(() => device.StartStreaming());
+
+        Assert.Contains(nameof(DaqifiStreamingDevice.StartStreaming), refusal.Message);
+        Assert.False(device.IsStreaming);
+        Assert.DoesNotContain(device.SentCommands, c => c.Contains("StartStreamData", StringComparison.OrdinalIgnoreCase));
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task StartStreaming_AfterTheStuckReadReturns_RevivesTheReaderAndSendsTheStart()
+    {
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new StreamingConsumerRestartTestableDevice("Recovering Device", transport);
+
+        device.Connect();
+        var original = GetMessageConsumer(device);
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+        await device.CallRawCaptureAsync((_, _) => Task.CompletedTask);
+        Assert.False(original!.IsRunning);
+
+        transport.ReleaseReaders();
+        device.StartStreaming();
+
+        var after = GetMessageConsumer(device);
+        Assert.Same(original, after);
+        Assert.True(after!.IsRunning);
+        Assert.True(device.IsStreaming);
+        Assert.Contains(device.SentCommands, c => c.Contains("StartStreamData", StringComparison.OrdinalIgnoreCase));
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task StartStreaming_DuringARawCaptureOnAnotherFlow_LeavesTheStoppedReaderAlone()
+    {
+        // The capture stopped the reader on purpose. Starting it now would put a reader on the
+        // stream that the capture reads, so the start's command is parked and the reader waits
+        // for the capture's own restart.
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new StreamingConsumerRestartTestableDevice("Capturing Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+
+        using var inCapture = new ManualResetEventSlim(false);
+        using var endCapture = new ManualResetEventSlim(false);
+        var capture = Task.Run(() => device.CallRawCaptureAsync((_, _) =>
+        {
+            inCapture.Set();
+            endCapture.Wait(TimeSpan.FromSeconds(10));
+            return Task.CompletedTask;
+        }));
+
+        Assert.True(inCapture.Wait(TimeSpan.FromSeconds(10)));
+        device.StartStreaming();
+        var runningDuringCapture = GetMessageConsumer(device)!.IsRunning;
+
+        endCapture.Set();
+        await capture;
+
+        Assert.False(runningDuringCapture);
+        Assert.True(GetMessageConsumer(device)!.IsRunning);
+
+        device.Disconnect();
+    }
+
     private static int InboundSubscriberCount(DaqifiDevice device)
     {
         var consumer = GetMessageConsumer(device)!;
@@ -200,6 +324,35 @@ public class DaqifiDeviceConsumerRestartTests
         public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)
         {
             return ExecuteRawCaptureAsync(rawAction);
+        }
+    }
+
+    /// <summary>
+    /// The streaming counterpart of <see cref="ConsumerRestartTestableDevice"/>: exposes the raw
+    /// capture and records every text command the device sends.
+    /// </summary>
+    private sealed class StreamingConsumerRestartTestableDevice : DaqifiStreamingDevice
+    {
+        public StreamingConsumerRestartTestableDevice(string name, IStreamTransport transport)
+            : base(name, transport)
+        {
+        }
+
+        public ConcurrentQueue<string> SentCommands { get; } = new();
+
+        public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)
+        {
+            return ExecuteRawCaptureAsync(rawAction);
+        }
+
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+            if (message is IOutboundMessage<string> text)
+            {
+                SentCommands.Enqueue(text.Data);
+            }
+
+            base.Send(message);
         }
     }
 
