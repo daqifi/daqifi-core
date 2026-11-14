@@ -86,20 +86,64 @@ public class ProtobufMessageParserSplitFrameTests
     }
 
     [Fact]
-    public void EchoedCommandAheadOfASplitStatusReply_IsStillSkipped()
+    public void EchoedCommandAheadOfASplitStatusReply_ComesOutWholeAtEverySplitPointInsideTheFrame()
     {
-        // #268 must keep working: the echoed command text is noise, and the reply behind it is
-        // recovered even when its own bytes arrive in a second read.
+        // #268 must keep working when the reply behind the echoed command arrives in two
+        // reads, wherever inside the frame the boundary falls.
         var status = CompositeMessageParserBenchCaptureTests.BuildStatusMessage();
         var frame = Delimited(status);
         var echo = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n");
         var data = echo.Concat(frame).Concat(Encoding.ASCII.GetBytes("\r\nDAQIFI>")).ToArray();
 
-        foreach (var split in new[] { echo.Length + frame.Length, data.Length })
+        var lost = new List<int>();
+        for (var split = echo.Length + 1; split < echo.Length + frame.Length; split++)
         {
             var parsed = ParseInReads(data[..split], data[split..]);
-
-            Assert.Equal(status, Assert.Single(parsed));
+            if (parsed.Count != 1 || !parsed[0].Equals(status))
+            {
+                lost.Add(split);
+            }
         }
+
+        Assert.True(
+            lost.Count == 0,
+            $"{lost.Count} of {frame.Length - 1} split points lost the reply, first at byte {lost.FirstOrDefault()}.");
+    }
+
+    [Fact]
+    public void EchoedCommandThatReadsAsProtobufFields_IsStillSkipped()
+    {
+        // The echo can happen to read as a run of well-formed protobuf fields for the length its
+        // first byte declares. It is skipped as a line of text, so the complete reply behind it
+        // is read rather than waited on.
+        var status = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 7,
+            AnalogInPortNum = 16,
+            HostName = "xx",
+        };
+        var data = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n")
+            .Concat(Delimited(status))
+            .Concat(Encoding.ASCII.GetBytes("\r\nDAQIFI>"))
+            .ToArray();
+
+        var parsed = ParseInReads(data);
+
+        Assert.Equal(status, Assert.Single(parsed));
+    }
+
+    [Theory]
+    [InlineData("SYSTem:SYSInfoPB?\r\n")]
+    [InlineData("\r\nDAQIFI>SYSTem:SYSInfoPB?\r\n")]
+    [InlineData("SYSTem:STReam:INTerface 0\r\nSYSTem:SYSInfoPB?\r\n")]
+    public void EchoedLinesAheadOfAStatusReplyFedOneByteAtATime_ComeOutOnce(string echo)
+    {
+        var status = CompositeMessageParserBenchCaptureTests.BuildStatusMessage();
+        var data = Encoding.ASCII.GetBytes(echo).Concat(Delimited(status)).ToArray();
+
+        var parsed = ParseInReads(data.Select(b => new[] { b }).ToArray());
+
+        Assert.Equal(status, Assert.Single(parsed));
     }
 }

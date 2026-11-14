@@ -266,6 +266,17 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             // the next buffer, where no frame has been read yet and the scan runs.
             // Discovery always reaches here with zero frames read, so it recovers
             // on the first reply.
+            // Echoed command text is recognized for what it is first: a line of printable
+            // ASCII ending in CR LF, which no DaqifiOutMessage frame starts with (see
+            // TryReadLeadingTextLine). Skipping the whole line lands on whatever follows it —
+            // the reply, complete or still arriving — without depending on how the text's
+            // bytes happen to read as protobuf fields.
+            if (!anyFrameRead && TryReadLeadingTextLine(remainingData, out var lineLength))
+            {
+                nextOffset = offset + lineLength;
+                return ProtobufFrameStep.Resync;
+            }
+
             if (!anyFrameRead
                 && !BodyPrefixIsWellFormed(remainingData.Slice(prefixBytes), messageLength))
             {
@@ -367,6 +378,46 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="data"/> starts with a complete line of text: printable
+    /// ASCII (possibly none) ending in CR LF, the shape of a command the device echoes back
+    /// and of its <c>DAQIFI&gt;</c> prompt (#268). <paramref name="lineLength"/> includes the
+    /// CR LF.
+    /// </summary>
+    /// <remarks>
+    /// A real frame does not look like this. Its body starts with a field tag and soon carries a
+    /// length or a varint below 0x20, which is not printable; and CR LF at the front would be a
+    /// 13-byte frame whose first tag is field 1 with wire type 2, while field 1
+    /// (<c>msg_time_stamp</c>) is a varint. Only called on the wait path, where the frame the
+    /// first byte declares is not fully buffered.
+    /// </remarks>
+    private static bool TryReadLeadingTextLine(ReadOnlySpan<byte> data, out int lineLength)
+    {
+        lineLength = 0;
+
+        for (var i = 0; i < data.Length; i++)
+        {
+            var b = data[i];
+            if (b == (byte)'\r')
+            {
+                if (i + 1 < data.Length && data[i + 1] == (byte)'\n')
+                {
+                    lineLength = i + 2;
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (b < 0x20 || b > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
