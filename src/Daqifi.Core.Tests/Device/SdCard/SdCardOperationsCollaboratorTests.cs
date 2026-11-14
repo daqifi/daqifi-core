@@ -97,9 +97,9 @@ public partial class SdCardOperationsCollaboratorTests
 
     /// <summary>
     /// Exchanges an SD query makes against a card that is really absent: the first answer and
-    /// the two rechecks a "no card" answer gets before it is believed (#896).
+    /// the three rechecks a "no card" answer gets before it is believed (#896).
     /// </summary>
-    private const int AbsentCardExchanges = 3;
+    private const int AbsentCardExchanges = 4;
 
     #region Construction
 
@@ -681,6 +681,39 @@ public partial class SdCardOperationsCollaboratorTests
 
         Assert.Equal(1000L, storage.FreeBytes);
         Assert.Equal(2, host.ExchangeCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StaleNoCardAnswer_UntilTheNextFiveSecondPoll_IsOutlastedByTheRechecks(bool storage)
+    {
+        // Firmware before v3.9.0 does not start a fresh card-detect poll when it answers "no
+        // card", and its poll backs off to once every 5 s. A card inserted just after a negative
+        // poll is reported missing until the next one, so the rechecks must span more than 5 s.
+        var clock = new FakeTimeProvider();
+        var start = clock.GetUtcNow();
+        var host = new FakeHost
+        {
+            TimeProvider = clock,
+            SdInterfaceSettleDelay = TimeSpan.Zero,
+            SdNoCardRecheckDelay = TimeSpan.FromSeconds(1),
+        };
+        host.Responder = () => clock.GetUtcNow() - start < TimeSpan.FromSeconds(5)
+            ? new[] { "Error !! No SD Card Detected", "**ERROR: -200,\"Execution error\"", NoErrorTerminator }
+            : storage
+                ? new[] { "1000,2000" }
+                : new[] { "Daqifi/a.bin 10", NoErrorTerminator };
+        var ops = new SdCardOperations(host);
+
+        Task query = storage ? ops.GetSdCardStorageAsync() : ops.GetSdCardFilesAsync();
+        for (var second = 0; second < 10 && !query.IsCompleted; second++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await query.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(clock.GetUtcNow() - start >= TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -2696,6 +2729,12 @@ public partial class SdCardOperationsCollaboratorTests
         /// <see cref="IsConnected"/> check that gates it.</summary>
         public bool ThrowOnStartStreaming { get; set; }
 
+        /// <summary>
+        /// When set, answers every exchange in place of the queue, so a reply can depend on the
+        /// time on <see cref="TimeProvider"/> rather than on how many exchanges came before it.
+        /// </summary>
+        public Func<IReadOnlyList<string>>? Responder { get; set; }
+
         public void EnqueueResponse(params string[] lines)
         {
             lock (_responses) { _responses.Enqueue(lines); }
@@ -2812,6 +2851,11 @@ public partial class SdCardOperationsCollaboratorTests
 
                 setupAction();
                 AfterExchangeSetup?.Invoke(index);
+
+                if (Responder != null)
+                {
+                    return Responder();
+                }
 
                 lock (_responses)
                 {

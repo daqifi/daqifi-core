@@ -1525,7 +1525,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     internal virtual TimeSpan SdInterfaceSettleDelay => TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// How long to wait before asking the device again after it reported no SD card (#896).
+    /// The step of the recheck schedule after the device reports no SD card (#896): the
+    /// <c>n</c>th recheck waits <c>n</c> times this.
     /// </summary>
     /// <remarks>
     /// The firmware answers "is a card present?" from its last card-detect poll, which backs

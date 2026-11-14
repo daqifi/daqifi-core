@@ -89,8 +89,9 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     TimeSpan SdInterfaceSettleDelay { get; }
 
     /// <summary>
-    /// Wait before asking the device again after it answered "No SD Card Detected", read
-    /// through the device so a subclass's override of it still applies (#896).
+    /// Step of the recheck schedule after the device answered "No SD Card Detected" — the
+    /// <c>n</c>th recheck waits <c>n</c> times this — read through the device so a subclass's
+    /// override of it still applies (#896).
     /// </summary>
     /// <remarks>
     /// The firmware answers presence from its last card-detect poll, which backs off to 5 s

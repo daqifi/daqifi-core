@@ -46,13 +46,19 @@ internal sealed class SdCardOperations
 
     /// <summary>
     /// How many times a listing or storage query asks again after the device answered
-    /// "No SD Card Detected", <see cref="ISdCardOperationHost.SdNoCardRecheckDelay"/> apart,
-    /// before reporting the card absent (#896). The firmware's answer can be a stale card-detect
-    /// poll; it starts a fresh poll as it answers, so the next query sees the real state. Two
-    /// rechecks a second apart cover that with room to spare, and cost a card that really is
-    /// absent about two seconds, on an SD call only.
+    /// "No SD Card Detected", before reporting the card absent (#896). Recheck <c>n</c> waits
+    /// <c>n</c> × <see cref="ISdCardOperationHost.SdNoCardRecheckDelay"/>, so the three cover
+    /// 1 + 2 + 3 = 6 s.
     /// </summary>
-    private const int SD_NO_CARD_MAX_RECHECKS = 2;
+    /// <remarks>
+    /// The firmware answers presence from its last card-detect poll. That poll runs once a
+    /// second, and once every 5 s after ten polls in a row see no card. Firmware v3.9.0 starts a
+    /// fresh poll as it answers, so the first recheck sees the real state. Older supported
+    /// firmware does not: its answer can stay stale until the next scheduled poll, up to 5 s
+    /// later. Six seconds covers that and the card's start-up. A card that is really absent is
+    /// reported about 6 s later, on an SD call only.
+    /// </remarks>
+    private const int SD_NO_CARD_MAX_RECHECKS = 3;
 
     /// <summary>
     /// SCPI error the device queues when <c>SD:GET</c> names a file or directory that is not on
@@ -455,10 +461,10 @@ internal sealed class SdCardOperations
     /// retried as incomplete (closes #887).
     /// </para>
     /// <para>
-    /// A "No SD Card Detected" answer is asked again, up to twice, a second apart, before
+    /// A "No SD Card Detected" answer is asked again up to three times, over about 6 s, before
     /// <see cref="SdCardNotPresentException"/> is thrown. The firmware answers it from its last
-    /// card-detect poll, which can be seconds out of date right after a connect; the first query
-    /// of a session would otherwise report a card that is there as missing (#896).
+    /// card-detect poll, which can be up to 5 s out of date on firmware before v3.9.0; the first
+    /// query of a session would otherwise report a card that is there as missing (#896).
     /// </para>
     /// </remarks>
     internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
@@ -548,7 +554,7 @@ internal sealed class SdCardOperations
                 {
                     if (noCardRechecks++ < SD_NO_CARD_MAX_RECHECKS)
                     {
-                        delayBeforeNextAttempt = SdNoCardRecheckDelay;
+                        delayBeforeNextAttempt = SdNoCardRecheckDelay * noCardRechecks;
                         continue;
                     }
 
@@ -1060,16 +1066,15 @@ internal sealed class SdCardOperations
                     finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                 // "No SD Card Detected" is not trusted on first sight. The firmware answers it from
-                // its last card-detect poll, which can be seconds stale, and starts a fresh poll as
-                // it answers, so asking again a second later gets the real state. A card that is
-                // really absent still reports absent, after SD_NO_CARD_MAX_RECHECKS (#896). This is
-                // its own schedule, not the transient one below: 100 ms is too soon to outlast a
-                // poll that backs off to 5 s.
+                // its last card-detect poll, which can be seconds stale, so it is asked again on the
+                // schedule SD_NO_CARD_MAX_RECHECKS describes. A card that is really absent still
+                // reports absent, after the last recheck (#896). This is its own schedule, not the
+                // transient one below: 100 ms is too soon to outlast a poll that backs off to 5 s.
                 if (ContainsNoSdCardMarker(lines))
                 {
                     if (noCardRechecks++ < SD_NO_CARD_MAX_RECHECKS)
                     {
-                        delayBeforeNextAttempt = SdNoCardRecheckDelay;
+                        delayBeforeNextAttempt = SdNoCardRecheckDelay * noCardRechecks;
                         continue;
                     }
 

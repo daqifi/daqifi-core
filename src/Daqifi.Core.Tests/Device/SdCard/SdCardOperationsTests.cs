@@ -2487,7 +2487,7 @@ public partial class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardStorageAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
     {
-        // A card that is really absent answers "no card" to the first query and to both of
+        // A card that is really absent answers "no card" to the first query and to all of
         // its rechecks (#896), and only then is reported absent.
         var device = new RetryableSdCardStreamingDevice("TestDevice");
         EnqueueAbsentCard(device, new List<string>
@@ -3763,9 +3763,9 @@ public partial class SdCardOperationsTests
     /// </summary>
     /// <summary>
     /// Exchanges an SD query makes against a card that is really absent: the first answer and
-    /// the two rechecks a "no card" answer gets before it is believed (#896).
+    /// the three rechecks a "no card" answer gets before it is believed (#896).
     /// </summary>
-    private const int AbsentCardExchanges = 3;
+    private const int AbsentCardExchanges = 4;
 
     /// <summary>Queues one "no card" reply per exchange an absent card is asked.</summary>
     private static void EnqueueAbsentCard(RetryableSdCardStreamingDevice device, List<string> response)
