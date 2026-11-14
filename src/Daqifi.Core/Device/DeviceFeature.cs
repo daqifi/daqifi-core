@@ -109,6 +109,21 @@ public enum DeviceFeature
     SdGetOpenFailureError,
 
     /// <summary>
+    /// The stored streaming rate readback (<c>SYSTem:STReam:START?</c>), which answers the rate
+    /// the device will stream at — the last one a start set, which a stop deliberately does not
+    /// revert, or the 1 Hz boot default before any start. Firmware-gated: introduced by firmware
+    /// <c>#1007</c>/<c>#1014</c> and first released in <b>v3.9.0</b>.
+    /// </summary>
+    /// <remarks>
+    /// Core asks it during the capability read so that
+    /// <see cref="DaqifiStreamingDevice.StreamingFrequency"/> reports the device's rate rather
+    /// than Core's own default, for as long as no rate has been chosen on this device object. The
+    /// 1 Hz boot placeholder is not adopted. Below v3.9.0 the query is not sent and the default
+    /// stands.
+    /// </remarks>
+    StoredStreamingRateQuery,
+
+    /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
     /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
     /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:

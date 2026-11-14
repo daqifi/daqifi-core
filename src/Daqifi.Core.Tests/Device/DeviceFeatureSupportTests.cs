@@ -150,6 +150,18 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_StoredStreamingRateQuery_RequiresV3_9_0_OnEveryBoard()
+    {
+        // SYSTem:STReam:START? (firmware #1007/#1014) first shipped in v3.9.0. Below it the query
+        // is an undefined header, so asking it would leave an error in the device's queue.
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.StoredStreamingRateQuery);
+
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Null(requirement.Boards);
+        Assert.Equal(HardwareRequirement.None, requirement.Hardware);
+    }
+
+    [Fact]
     public void EnsureSupported_Identify_OnV3_8_0_ReportsV3_9_0AsTheRequiredVersion()
     {
         // The bench Nq1 runs 3.8.0: the refusal must name the upgrade that fixes it.
@@ -190,6 +202,7 @@ public class DeviceFeatureSupportTests
             new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.PwmFrequencyFloor,      "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.Identify,               "3.8.0", "3.9.0", "3.10.0" },
+            new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.SdCardCrcProtection,    "3.8.0", "3.9.0", "3.9.1" }
         };
 

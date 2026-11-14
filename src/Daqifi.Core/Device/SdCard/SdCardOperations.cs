@@ -1577,6 +1577,11 @@ internal sealed class SdCardOperations
                 await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
             }
 
+            // Checked here, once the stream is routed to the card in its format and channel set:
+            // that is the configuration the device checks the rate against. A rate inherited
+            // from a faster USB stream would otherwise be refused, and nothing recorded.
+            await _host.LowerInheritedStreamingFrequencyAsync(cancellationToken).ConfigureAwait(false);
+
             _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
 
             _host.BeginSdCardLogSession();

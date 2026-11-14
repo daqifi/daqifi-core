@@ -104,6 +104,32 @@ internal sealed class StreamingSessionController
 
     private int _streamingFrequency;
 
+    /// <summary>
+    /// Whether <see cref="_streamingFrequency"/> is a rate somebody chose — a caller set it, or a
+    /// stream was started at it — rather than the default this device object was built with.
+    /// </summary>
+    /// <remarks>
+    /// Only an unchosen rate gives way to the one the device reports it has stored
+    /// (<see cref="TryAdoptStoredFrequency"/>). A chosen one is the caller's intent, and a
+    /// reconnect has to restore it: a device that was power-cycled while it was away reports its
+    /// 1 Hz boot default, and adopting that would resume the stream at 1 Hz.
+    /// </remarks>
+    private bool _frequencyChosen;
+
+    /// <summary>
+    /// Whether <see cref="_streamingFrequency"/> was taken from the device
+    /// (<see cref="TryAdoptStoredFrequency"/>) rather than being Core's default.
+    /// </summary>
+    private bool _frequencyAdopted;
+
+    /// <summary>
+    /// Whether the rate is one this device object inherited from the device and nobody has
+    /// chosen since. The device accepted it for whatever stream last set it, which says nothing
+    /// about the interface and format the next start uses; see
+    /// <see cref="LowerInheritedFrequency"/>.
+    /// </summary>
+    internal bool IsFrequencyInherited => _frequencyAdopted && !_frequencyChosen;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
     internal int StreamingFrequency
     {
@@ -123,7 +149,156 @@ internal sealed class StreamingSessionController
             }
 
             _streamingFrequency = value;
+            _frequencyChosen = true;
         }
+    }
+
+    /// <summary>
+    /// Sets the rate a new device object starts with. It is Core's assumption, not anyone's
+    /// choice, so the device's own stored rate replaces it once that is read.
+    /// </summary>
+    /// <param name="frequencyHz">The default rate, validated as the setter validates it.</param>
+    internal void SetDefaultFrequency(int frequencyHz)
+    {
+        StreamingFrequency = frequencyHz;
+        _frequencyChosen = false;
+        _frequencyAdopted = false;
+    }
+
+    /// <summary>
+    /// The rate a new device object starts at, and the rate every start sent before Core could
+    /// read the device's stored one (#960).
+    /// </summary>
+    internal const int CoreDefaultFrequencyHz = 100;
+
+    /// <summary>
+    /// The rate the firmware stores from power-up until something starts a stream: 1 Hz
+    /// (<c>COMMON_STREAMING_RUNTIME_DEFAULTS</c>, <c>CommonRuntimeDefaults.h</c> at v3.9.0).
+    /// </summary>
+    /// <remarks>
+    /// The firmware itself calls it a placeholder that describes no real rate
+    /// (<c>streaming.h</c>, <c>Streaming_NoteRateConfigured</c>): it is the one rate legal in every
+    /// configuration, not one anybody asked for.
+    /// </remarks>
+    internal const int FirmwareBootDefaultStoredRateHz = 1;
+
+    /// <summary>
+    /// Takes the streaming rate the device reports it has stored (<c>SYSTem:STReam:START?</c>,
+    /// firmware v3.9.0) as this device's rate, unless a rate has already been chosen here or the
+    /// device has never had one configured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this, a device that another client — or an SD log — had set to 1000 Hz was
+    /// reported at Core's 100 Hz default, and the next start silently changed its rate (#960).
+    /// </para>
+    /// <para>
+    /// A device nothing has started since power-up stores the
+    /// <see cref="FirmwareBootDefaultStoredRateHz"/> placeholder, which is not adopted: doing so
+    /// would make every freshly powered device stream at 1 Hz where Core has always started at
+    /// 100 Hz. <paramref name="rateConfigured"/> is what tells it apart from a 1 Hz somebody did
+    /// start at. When it is unknown — no trusted capability document, or one without the
+    /// timing block — a reported 1 Hz is taken to be the placeholder, which reports a deliberate
+    /// 1 Hz at Core's rate: what every connect reported before the device could be asked.
+    /// </para>
+    /// <para>
+    /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
+    /// fail a connect that is otherwise fine. A rate outside <c>1..MaxSamplingRate</c> is left
+    /// alone, and the ceiling is read once and the backing field assigned directly, for the same
+    /// reason <see cref="TrackSessionCommand"/> gives. Adopting it does not count as choosing it,
+    /// so a later read can still bring the rate up to date.
+    /// </para>
+    /// </remarks>
+    /// <param name="frequencyHz">The rate the device reported, in Hz.</param>
+    /// <param name="rateConfigured">
+    /// Whether the device has had a rate configured since power-up, as its capability document
+    /// states it; <c>null</c> when that is unknown.
+    /// </param>
+    /// <returns><c>true</c> when the rate was adopted.</returns>
+    internal bool TryAdoptStoredFrequency(int frequencyHz, bool? rateConfigured)
+    {
+        if (_frequencyChosen)
+        {
+            return false;
+        }
+
+        var isPlaceholder = rateConfigured == false
+                            || (rateConfigured == null && frequencyHz == FirmwareBootDefaultStoredRateHz);
+        if (isPlaceholder)
+        {
+            SafeTrace(
+                $"[{nameof(TryAdoptStoredFrequency)}] The device reports {frequencyHz} Hz but has had no rate "
+                + $"configured since power-up; keeping {_streamingFrequency} Hz.");
+            return false;
+        }
+
+        var maxSamplingRate = Math.Max(1, _host.MaxSamplingRate);
+        if (frequencyHz < 1 || frequencyHz > maxSamplingRate)
+        {
+            SafeTrace(
+                $"[{nameof(TryAdoptStoredFrequency)}] Ignoring the device's stored streaming rate of {frequencyHz} Hz, "
+                + $"which is outside 1..{maxSamplingRate} Hz; keeping {_streamingFrequency} Hz.");
+            return false;
+        }
+
+        _streamingFrequency = frequencyHz;
+        _frequencyAdopted = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Lowers an inherited rate to the most the device says it can stream in the configuration
+    /// it is now set up for, or to <see cref="CoreDefaultFrequencyHz"/> when the device does not
+    /// say.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An inherited rate was accepted for the stream that last set it, often a USB one, and an SD
+    /// log can have a lower ceiling: on an NQ1 on firmware 3.9.0, one channel with onboard
+    /// diagnostics off logs protobuf to the card at no more than 7,900 Hz
+    /// (<c>Streaming_SdAdditiveCap_NQ1</c>, <c>streaming.h</c>), under what USB sustains. Sent as
+    /// it is, the device refuses the start with <c>-222</c> and records nothing. Before #960 such
+    /// a caller sent Core's 100 Hz default, so this keeps an inherited rate from turning a log
+    /// that used to start into one that silently does not.
+    /// </para>
+    /// <para>
+    /// With no usable ceiling — the reply was lost or cut short, it has no
+    /// <c>current_max_rate_hz</c>, or that is <c>0</c> — nothing shows the inherited rate is safe,
+    /// so a rate above <see cref="CoreDefaultFrequencyHz"/> is lowered to it: the rate this
+    /// caller sent before #960. A rate at or below it is kept, since it asks less of the device.
+    /// </para>
+    /// <para>
+    /// Only an inherited rate is lowered. A chosen one is the caller's to keep. Lowering leaves
+    /// the rate inherited, not chosen: the start that sends it is what makes it the session's
+    /// rate.
+    /// </para>
+    /// </remarks>
+    /// <param name="maximumHz">
+    /// The device's current maximum rate, in Hz; <c>null</c> when it could not be read.
+    /// </param>
+    /// <returns><c>true</c> when the rate was lowered.</returns>
+    internal bool LowerInheritedFrequency(int? maximumHz)
+    {
+        if (!IsFrequencyInherited)
+        {
+            return false;
+        }
+
+        var capKnown = maximumHz is > 0;
+        var ceilingHz = capKnown ? maximumHz!.Value : CoreDefaultFrequencyHz;
+        if (_streamingFrequency <= ceilingHz)
+        {
+            return false;
+        }
+
+        SafeTrace(
+            $"[{nameof(LowerInheritedFrequency)}] Lowered the inherited streaming frequency from "
+            + $"{_streamingFrequency} Hz to {ceilingHz} Hz, "
+            + (capKnown
+                ? "the most the device can stream as it is now configured. The device would have refused the higher rate and streamed nothing."
+                : "Core's default, because the device did not report a usable maximum for how it is now configured."));
+        _streamingFrequency = ceilingHz;
+        return true;
     }
 
     /// <summary>
@@ -167,6 +342,10 @@ internal sealed class StreamingSessionController
         if (IsStreaming) return;
 
         ApplyRateCap();
+
+        // The rate a stream ran at is the one a reconnect resumes it at, whatever the device
+        // reports afterwards.
+        _frequencyChosen = true;
 
         BeginStreamingSession();
 
@@ -336,6 +515,7 @@ internal sealed class StreamingSessionController
                 // Frequency first: anything observing IsStreaming must never catch it true next
                 // to a rate belonging to a previous session.
                 _streamingFrequency = effect.StreamingFrequency;
+                _frequencyChosen = true;
 
                 // A restart while already streaming is not a session boundary — the typed API
                 // cannot even express it (StartStreaming returns early) — so there is nothing to
