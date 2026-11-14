@@ -1102,7 +1102,10 @@ public class ContinuousDeviceFinderTests
     {
         var device = Wifi("AA:BB:CC:DD:EE:01");
         var inner = new ScriptedDeviceFinder(new[] { (IReadOnlyList<IDeviceInfo>)new[] { device } });
-        using var finder = NewFinder(inner);
+        // Every pass after the first is empty, so with the default threshold a loaded runner can
+        // fit two 10 ms passes between the signal and StopAsync and legitimately drop the device.
+        // A huge threshold keeps it in Devices for the life of the test.
+        using var finder = NewFinder(inner, missThreshold: 1_000_000);
 
         var discoveredSignal = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         finder.DeviceDiscovered += (_, e) => discoveredSignal.TrySetResult(e.DeviceInfo);

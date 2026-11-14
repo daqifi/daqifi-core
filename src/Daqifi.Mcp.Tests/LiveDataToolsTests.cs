@@ -116,7 +116,17 @@ public class LiveSampleCaptureTests
     /// regression in its stop conditions would otherwise park the run forever; bounded waits turn
     /// that into a fast, named failure instead.
     /// </summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
+    /// <remarks>
+    /// Generous on purpose. The bound is a hang guard, not a latency assertion, and it loses a race
+    /// it should never be in when the thread pool is starved: on a 2-core CI runner the other test
+    /// classes in this assembly can hold every worker for seconds. The drain's own cancellation
+    /// callback is queued first, but the continuation it schedules lands behind the bound's timeout
+    /// callback, so a 10 s bound failed with a TimeoutException on drains that were working
+    /// (DrainAsync_CallerCancels_Propagates, _WindowElapsesWithNoSamples_, _StartingTheStreamFails_
+    /// all hit it on CI). A real stop-condition regression still hangs forever, so 60 s catches it
+    /// just as surely.
+    /// </remarks>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
 
     // The device stream must not be started until the enumeration is subscribed, or the first
     // samples of a capture are decoded while nothing is listening. Core subscribes in the

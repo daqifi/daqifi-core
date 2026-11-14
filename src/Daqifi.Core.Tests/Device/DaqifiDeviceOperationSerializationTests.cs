@@ -970,13 +970,18 @@ public class DaqifiDeviceOperationSerializationTests
 
         // Bounded by TIME, not by a fixed count. A count is the wrong knob for a race sampler:
         // it makes a slow CI runner pay for the fast one's density. This keeps the cost fixed
-        // and lets a fast machine take more samples inside it.
+        // and lets a fast machine take more samples inside it. A loaded runner can take tens of
+        // milliseconds per wake (CI once fit only 50 into 2s), so the loop keeps going past the
+        // budget until it has a meaningful floor of samples, up to a hard ceiling.
+        const int minimumAttempts = 100;
         var samplingBudget = TimeSpan.FromSeconds(2);
+        var samplingCeiling = TimeSpan.FromSeconds(30);
         var clock = Stopwatch.StartNew();
         var attempts = 0;
         var phantomIdles = 0;
 
-        while (clock.Elapsed < samplingBudget)
+        while ((clock.Elapsed < samplingBudget || attempts < minimumAttempts)
+               && clock.Elapsed < samplingCeiling)
         {
             attempts++;
             producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
@@ -1006,8 +1011,8 @@ public class DaqifiDeviceOperationSerializationTests
 
         // A race sampler that took almost no samples is not evidence of anything, and would pass
         // silently if the loop above ever became a no-op.
-        Assert.True(attempts > 100,
-            $"Only {attempts} handover samples fit in {samplingBudget.TotalSeconds:0}s; that is "
+        Assert.True(attempts >= minimumAttempts,
+            $"Only {attempts} handover samples fit in {samplingCeiling.TotalSeconds:0}s; that is "
             + "too few for the absence of a phantom idle to mean much.");
     }
 
