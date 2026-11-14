@@ -84,6 +84,12 @@ internal static class DeviceFeatureRequirements
     /// field is a fixed 1 Hz the hardware cannot produce.
     /// </summary>
     internal static readonly FirmwareVersion PwmFrequencyFloorMinFirmware = new(3, 9, 0, null, 0);
+    /// <summary>
+    /// Minimum firmware for CRC-protected SD writes (<c>SYSTem:STORage:SD:PROTect</c>, firmware
+    /// <c>#1217</c>/<c>#1228</c>), first released in <b>v3.9.0</b>. Older firmware answers the
+    /// command with <c>-113</c> (undefined header).
+    /// </summary>
+    internal static readonly FirmwareVersion SdCardCrcProtectionMinFirmware = new(3, 9, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware for <c>SYSTem:IDENtify</c> / <c>SYSTem:IDENtify?</c> (firmware
@@ -186,7 +192,12 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.StoredStreamingRateQuery] = new(
                 MinVersion: StoredStreamingRateQueryMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.None)
+                Hardware: HardwareRequirement.None),
+
+            [DeviceFeature.SdCardCrcProtection] = new(
+                MinVersion: SdCardCrcProtectionMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.SdCard)
         };
 
     /// <summary>

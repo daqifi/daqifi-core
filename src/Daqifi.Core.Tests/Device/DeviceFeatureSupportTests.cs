@@ -91,6 +91,18 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_SdCardCrcProtection_RequiresV3_9_0AndAnSdSlot()
+    {
+        // SYSTem:STORage:SD:PROTect (firmware #1217/#1228) first shipped in v3.9.0; older
+        // firmware answers it with -113.
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdCardCrcProtection);
+
+        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Null(requirement.Boards);
+        Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
+    }
+
+    [Fact]
     public void Supports_SdListingEndMarker_OnMarkerCapableFirmwareWithAnUnknownBoard_IsSupported()
     {
         // This gate carries HardwareRequirement.SdCard like its SD siblings, and that is only
@@ -190,7 +202,8 @@ public class DeviceFeatureSupportTests
             new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.PwmFrequencyFloor,      "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.Identify,               "3.8.0", "3.9.0", "3.10.0" },
-            new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" }
+            new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" },
+            new object[] { DeviceFeature.SdCardCrcProtection,    "3.8.0", "3.9.0", "3.9.1" }
         };
 
     [Theory]

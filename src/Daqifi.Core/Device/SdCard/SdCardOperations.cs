@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -107,6 +108,32 @@ internal sealed class SdCardOperations
     /// </summary>
     private const int ScpiErrorCodeUndefinedHeader = -113;
 
+    /// <summary>libscpi's <c>SCPI_ERROR_EXECUTION_ERROR</c>.</summary>
+    private const int ScpiErrorCodeExecutionError = -200;
+
+    /// <summary>libscpi's <c>SCPI_ERROR_SETTINGS_CONFLICT</c>.</summary>
+    private const int ScpiErrorCodeSettingsConflict = -221;
+
+    /// <summary>
+    /// How long <c>SYSTem:STORage:SD:PROTect</c> may take to answer, in milliseconds. The
+    /// firmware holds its reply for up to two seconds (<c>SCPI_SD_PROTECT_APPLY_MS</c>) while it
+    /// waits for the SD driver to drop the card for re-initialization, and only then reports a
+    /// change it could not apply; the rest is margin for a WiFi link.
+    /// </summary>
+    private const int SD_PROTECT_RESPONSE_TIMEOUT_MS = 5000;
+
+    /// <summary>
+    /// How long <see cref="SetSdCardCrcProtectionAsync"/> keeps trying to mount the card after the
+    /// device has accepted a change, before it reports <see cref="SdCardCrcProtectionResult.Pending"/>.
+    /// </summary>
+    /// <remarks>
+    /// The device applies a change by dropping the card, and picks it up again at its next
+    /// card-detect poll, about a second later (measured on firmware v3.9.0: unmountable for
+    /// 0.5–1.0 s). Several polls' worth, so one slow init does not read as a card that never
+    /// came back.
+    /// </remarks>
+    private static readonly TimeSpan SdProtectCardReadyTimeout = TimeSpan.FromSeconds(4);
+
     private readonly ISdCardOperationHost _host;
 
     private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -127,6 +154,20 @@ internal sealed class SdCardOperations
     /// the device is disposed, which would otherwise fault a continuation nobody observes.
     /// </remarks>
     private readonly SemaphoreSlim _sdDownloadGate = new(1, 1);
+
+    /// <summary>
+    /// Runs one <see cref="SetSdCardCrcProtectionAsync"/> at a time, from the set to the end of
+    /// its confirmation. The device keeps one setting, so an opposite call that got in while this
+    /// one waited for the card would leave the card in the other mode, and this call's mount
+    /// would look like its own change arriving.
+    /// </summary>
+    /// <remarks>
+    /// An SD log start takes it too, around its claim on the bus, so a start can never land
+    /// between a change's log check and its defensive stream stop, which would end the new log.
+    /// A start that arrives during a change waits for the change to be confirmed.
+    /// Not disposed, for the reason <see cref="_sdDownloadGate"/> is not.
+    /// </remarks>
+    private readonly SemaphoreSlim _sdProtectGate = new(1, 1);
 
     /// <summary>
     /// Who has the SPI bus that the LAN module and the SD card share, as far as the commands
@@ -1072,6 +1113,350 @@ internal sealed class SdCardOperations
         _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
     }
 
+    /// <inheritdoc cref="ISdCardOperations.SetSdCardCrcProtectionAsync" />
+    /// <remarks>
+    /// <para>
+    /// No bus switch: unlike the file operations this neither mounts the card through the file
+    /// system nor turns SD storage on, so it leaves the bus record (issue #941) as it found it.
+    /// The firmware is what decides whether SD storage is off and idle, and says so with
+    /// <c>-221</c>. Refusing locally on <see cref="SdBusMode.SdBorrowed"/> would not be safe, for
+    /// the reason that record's remarks give: a borrow is not always handed back.
+    /// </para>
+    /// <para>
+    /// The device's answer is read from the reply itself. Both transports write a refusal straight
+    /// to the wire as <c>**ERROR: &lt;code&gt;, ...</c> when the command pushes it, so the error
+    /// line in this exchange belongs to this command. The <c>SYSTem:ERRor:COUNt?</c> sent after it
+    /// is the terminator: its reply proves the device got past the set (which can hold its reply
+    /// for two seconds), and, unlike <c>SYSTem:ERRor?</c>, it reads the error queue without taking
+    /// anything off it. See <see cref="ClearOwnRefusalAsync"/> for what happens to a refusal.
+    /// </para>
+    /// <para>
+    /// Calls run one at a time (<see cref="_sdProtectGate"/>), set and confirmation together, and
+    /// a log start waits for the gate to make its claim. The log check is made again once the
+    /// gate is held, because a log can start while this call waits behind another; from then to
+    /// the end of the call no log start can claim the bus.
+    /// </para>
+    /// </remarks>
+    internal async Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected();
+        _host.EnsureSupported(DeviceFeature.SdCardCrcProtection);
+
+        // The device takes this only with SD storage off and idle. A log this object is running
+        // has SD storage on, and turning it off to make room would end the recording, so refuse
+        // without sending anything — the answer every other SD operation gives during a log.
+        if (IsBusHeldByLog())
+        {
+            throw new SdCardBusyException(Array.Empty<string>());
+        }
+
+        await _sdProtectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            // Again, now the gate is held: a log may have started while this call waited behind
+            // another, and the defensive stop below would end it. Log starts claim the bus only
+            // while holding this gate, so the answer holds until the gate is released.
+            if (IsBusHeldByLog())
+            {
+                throw new SdCardBusyException(Array.Empty<string>());
+            }
+
+            // Only a stream this object is running is paused, unlike the file operations' stop.
+            // The stop is device-wide: on a connection made with PreserveActiveStream it would
+            // end an SD log another connection is recording, which this object cannot see. With
+            // that log running the device refuses the change itself (-221) and the log goes on.
+            var wasStreaming = _host.IsStreaming && PauseStreamingForSdOperation();
+
+            try
+            {
+                var lines = await _host.ExecuteTextCommandAsync(
+                    () =>
+                    {
+                        _host.Send(ScpiMessageProducer.SetSdCrcProtection(enabled));
+                        _host.Send(ScpiMessageProducer.GetSystemErrorCount);
+                    },
+                    responseTimeoutMs: SD_PROTECT_RESPONSE_TIMEOUT_MS,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                await ClearOwnRefusalAsync(lines, cancellationToken).ConfigureAwait(false);
+
+                var result = ClassifySdCrcProtectionReply(lines);
+
+                return result == SdCardCrcProtectionResult.Applied
+                    ? await WaitForCardInModeAsync(enabled, cancellationToken).ConfigureAwait(false)
+                    : result;
+            }
+            finally
+            {
+                RestoreStreamingIfNeeded(wasStreaming);
+            }
+        }
+        finally
+        {
+            _sdProtectGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Waits until a card can be mounted again after the device accepted a change, and checks it
+    /// came back in the requested mode, so that <see cref="SdCardCrcProtectionResult.Applied"/>
+    /// means a card is ready in that mode and an SD operation started straight after
+    /// <see cref="SetSdCardCrcProtectionAsync"/> finds it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The device answers the set as soon as its driver has dropped the card for
+    /// re-initialization, and picks the card up again only at its next detect poll. Until then
+    /// the card cannot be mounted, and the device does not wait for it: on the bench (firmware
+    /// v3.9.0) an SD log started straight after a change found "No SD card detected", fell back
+    /// to streaming over USB, and wrote no file, with nothing reported to Core. Measured
+    /// unmountable for 0.5–1.0 s after the set returned.
+    /// </para>
+    /// <para>
+    /// Readiness is <c>SYSTem:STORage:SD:SPACe?</c>, the only positive signal firmware v3.9.0 has:
+    /// it checks the card is present and then mounts it, with SD storage left off, so the bus
+    /// record (issue #941) is untouched. <c>SYSTem:STORage:SD:INFO?</c> cannot do that, since it
+    /// answers from cached state whether or not a card is there. Once a mount has worked, though,
+    /// its cache describes the card that just mounted, so it is read then to check the mode: the
+    /// device keeps one setting, and anything else that changed it in the meantime (another
+    /// connection, a raw command) leaves the card in the other mode.
+    /// </para>
+    /// <para>
+    /// No mount within <see cref="SdProtectCardReadyTimeout"/> makes this
+    /// <see cref="SdCardCrcProtectionResult.Pending"/>: the device holds the setting but no card
+    /// is ready with it. That covers an empty slot, a card that refuses CRC checking (the
+    /// firmware never mounts it while protection is on), and a card it cannot mount at all.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="SdCardOperationException">
+    /// The card mounted in the other mode: something other than this call changed the setting.
+    /// </exception>
+    private async Task<SdCardCrcProtectionResult> WaitForCardInModeAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        var start = Clock.GetTimestamp();
+
+        while (true)
+        {
+            var lines = await _host.ExecuteTextCommandAsync(
+                () =>
+                {
+                    _host.Send(ScpiMessageProducer.GetSdSpace);
+                    _host.Send(ScpiMessageProducer.GetSystemErrorCount);
+                },
+                responseTimeoutMs: 3000,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (SdCardSpaceParser.TryParseLines(lines, out _))
+            {
+                var info = await _host.ExecuteTextCommandAsync(
+                    () => _host.Send(ScpiMessageProducer.GetSdCardInfo),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (TryReadCardCrcMode(info, out var cardMode))
+                {
+                    if (cardMode == enabled)
+                    {
+                        return SdCardCrcProtectionResult.Applied;
+                    }
+
+                    throw new SdCardOperationException(
+                        $"The SD card came back with CRC protection {(cardMode ? "on" : "off")}, not {(enabled ? "on" : "off")} as requested: something other than this call changed the setting while Core was waiting for the card.",
+                        info);
+                }
+
+                // An unreadable identity line proves nothing either way; try again in the budget.
+            }
+            else
+            {
+                await ClearOwnRefusalAsync(lines, cancellationToken).ConfigureAwait(false);
+            }
+
+            // No delay between attempts: each exchange already waits out its own completion
+            // window, which paces this at a couple of attempts a second.
+            if (Clock.GetElapsedTime(start) >= SdProtectCardReadyTimeout)
+            {
+                return SdCardCrcProtectionResult.Pending;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes the refusal an exchange of <see cref="SetSdCardCrcProtectionAsync"/> just caused back
+    /// off the device's error queue, but only when nothing else is queued.
+    /// </summary>
+    /// <remarks>
+    /// The queue is first-in first-out, and <c>SYSTem:ERRor?</c> pops the OLDEST entry, so with
+    /// anything older queued it would discard that entry and leave this one behind. The exchange's
+    /// <c>SYSTem:ERRor:COUNt?</c> terminator says how many entries there are: exactly one, with
+    /// this exchange's own <c>**ERROR</c> line in the reply, can only be that refusal. With older
+    /// entries everything is left in place, in order, for whoever reads the queue; the connect
+    /// handshake drains it.
+    /// <para>
+    /// The count proves ownership only if nothing else reads or adds to the queue between the
+    /// exchange that read it and the pop, which are separate exchanges. <see cref="DaqifiStreamingDevice"/>
+    /// runs the whole of <see cref="SetSdCardCrcProtectionAsync"/> under its exclusive operation
+    /// lock for that reason, as it does the WiFi link-state read.
+    /// </para>
+    /// </remarks>
+    private async Task ClearOwnRefusalAsync(IReadOnlyList<string> lines, CancellationToken cancellationToken)
+    {
+        if (ScpiResponseClassifier.GetLastScpiErrorLine(lines) == null
+            || !TryReadErrorCount(lines, out var queued)
+            || queued != 1)
+        {
+            return;
+        }
+
+        await _host.ExecuteTextCommandAsync(
+            () => _host.Send(ScpiMessageProducer.GetSystemError),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the <c>SYSTem:ERRor:COUNt?</c> reply: the last line that is a bare non-negative
+    /// integer. Nothing else the exchanges here can produce has that shape (the storage-space
+    /// reply has a comma, error lines have text).
+    /// </summary>
+    private static bool TryReadErrorCount(IReadOnlyList<string> lines, out int count)
+    {
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            if (int.TryParse(lines[i].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out count))
+            {
+                return true;
+            }
+        }
+
+        count = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Reads the card's CRC mode from a <c>SYSTem:STORage:SD:INFO?</c> reply
+    /// (<c>mid,"oid","pnm",major.minor,serial,yyyy-mm,crc,resyncs</c>).
+    /// </summary>
+    /// <remarks>
+    /// Read from the end: the two fields firmware v3.9.0 appended are last, and the quoted name
+    /// fields before them are the card's own text, which could hold a comma.
+    /// </remarks>
+    private static bool TryReadCardCrcMode(IReadOnlyList<string> lines, out bool crcOn)
+    {
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            var fields = lines[i].Trim().Split(',');
+            if (fields.Length < 8
+                || !ulong.TryParse(fields[^1].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            {
+                continue;
+            }
+
+            switch (fields[^2].Trim())
+            {
+                case "1":
+                    crcOn = true;
+                    return true;
+                case "0":
+                    crcOn = false;
+                    return true;
+            }
+        }
+
+        crcOn = false;
+        return false;
+    }
+
+    /// <summary>
+    /// Turns the reply to <c>SYSTem:STORage:SD:PROTect n</c> + <c>SYSTem:ERRor:COUNt?</c> into the
+    /// documented outcome of <see cref="SetSdCardCrcProtectionAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The codes are the ones <c>SCPI_StorageSDProtectSet</c> pushes at firmware v3.9.0:
+    /// <c>-221</c> when SD storage is on or busy (the value is not stored), and <c>-200</c> when
+    /// the value is stored but the driver has not applied it within the firmware's two-second
+    /// wait, because the SD task is not running. <c>-113</c> is firmware that does not know the
+    /// command at all, which the version gate should already have kept from being sent.
+    /// </remarks>
+    private SdCardCrcProtectionResult ClassifySdCrcProtectionReply(IReadOnlyList<string> lines)
+    {
+        var refusal = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+
+        if (refusal == null)
+        {
+            if (TryReadErrorCount(lines, out _))
+            {
+                return SdCardCrcProtectionResult.Applied;
+            }
+
+            throw new SdCardOperationException(
+                "The device did not answer the SD CRC protection command, so whether the setting changed is unknown.",
+                lines);
+        }
+
+        if (ScpiResponseClassifier.TryExtractErrorCode(refusal, out var code))
+        {
+            switch (code)
+            {
+                case ScpiErrorCodeExecutionError:
+                    return SdCardCrcProtectionResult.Pending;
+                case ScpiErrorCodeSettingsConflict:
+                    throw new SdCardBusyException(lines, refusal);
+                case ScpiErrorCodeUndefinedHeader:
+                    throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+            }
+        }
+
+        throw new SdCardOperationException(
+            "The device refused the SD CRC protection command: " + refusal,
+            lines,
+            refusal);
+    }
+
+    /// <inheritdoc cref="ISdCardOperations.GetSdCardCrcProtectionAsync" />
+    /// <remarks>
+    /// A plain query: no bus switch and no stream pause, so it is safe during an SD log, where a
+    /// pause would end the recording.
+    /// </remarks>
+    internal async Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
+    {
+        _host.EnsureConnected();
+        _host.EnsureSupported(DeviceFeature.SdCardCrcProtection);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var lines = await _host.ExecuteTextCommandAsync(
+            () => _host.Send(ScpiMessageProducer.GetSdCrcProtection),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // The last readable answer, the line closest to the query.
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            switch (lines[i].Trim())
+            {
+                case "1":
+                    return true;
+                case "0":
+                    return false;
+            }
+        }
+
+        var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+
+        if (lastScpiError != null
+            && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var code)
+            && code == ScpiErrorCodeUndefinedHeader)
+        {
+            throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+        }
+
+        throw new SdCardOperationException(
+            lastScpiError != null
+                ? "The SD CRC protection query failed: " + lastScpiError
+                : "The SD CRC protection query returned no readable answer.",
+            lines,
+            lastScpiError);
+    }
+
     /// <summary>
     /// Starts logging data to the SD card. Compatibility overload preserving the original
     /// <see cref="Task"/> return; use <see cref="StartSdCardLoggingSessionAsync"/> to also learn
@@ -1146,13 +1531,25 @@ internal sealed class SdCardOperations
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
 
-        // Read before the claim: a start that is cancelled or fails runs the stop sequence,
-        // which stops a live stream that was running before it and has nothing to do with it.
-        var wasLiveStreaming = _host.IsStreaming && !_host.IsLoggingToSdCard;
+        // Under the CRC protection gate: a change that is running has already checked for a log
+        // and is about to send, or has sent, its defensive stream stop, which would end this one.
+        // Waiting here lets it finish and confirm the card first.
+        await _sdProtectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool wasLiveStreaming;
+        try
+        {
+            // Read before the claim: a start that is cancelled or fails runs the stop sequence,
+            // which stops a live stream that was running before it and has nothing to do with it.
+            wasLiveStreaming = _host.IsStreaming && !_host.IsLoggingToSdCard;
 
-        // Recorded before the first command, so the other SD operations — and a second start —
-        // refuse from here on rather than only once the last command has gone (issue #941).
-        ClaimBusForLogStart();
+            // Recorded before the first command, so the other SD operations — and a second start —
+            // refuse from here on rather than only once the last command has gone (issue #941).
+            ClaimBusForLogStart();
+        }
+        finally
+        {
+            _sdProtectGate.Release();
+        }
 
         try
         {

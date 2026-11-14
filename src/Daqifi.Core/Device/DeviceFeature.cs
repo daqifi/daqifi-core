@@ -121,5 +121,14 @@ public enum DeviceFeature
     /// 1 Hz boot placeholder is not adopted. Below v3.9.0 the query is not sent and the default
     /// stands.
     /// </remarks>
-    StoredStreamingRateQuery
+    StoredStreamingRateQuery,
+
+    /// <summary>
+    /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
+    /// <see cref="SdCard.ISdCardOperations.SetSdCardCrcProtectionAsync"/> and
+    /// <see cref="SdCard.ISdCardOperations.GetSdCardCrcProtectionAsync"/>. Firmware-gated:
+    /// introduced by firmware <c>#1217</c>/<c>#1228</c> and first released in <b>v3.9.0</b>;
+    /// requires SD hardware.
+    /// </summary>
+    SdCardCrcProtection
 }

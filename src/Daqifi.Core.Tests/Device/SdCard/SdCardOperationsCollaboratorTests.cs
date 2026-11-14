@@ -47,7 +47,7 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// comes back empty on firmware v3.9.0+ reads the device's queued reason through it.
 /// </para>
 /// </remarks>
-public class SdCardOperationsCollaboratorTests
+public partial class SdCardOperationsCollaboratorTests
 {
     private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 

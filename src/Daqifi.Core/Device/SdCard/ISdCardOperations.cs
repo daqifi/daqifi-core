@@ -130,6 +130,116 @@ public interface ISdCardOperations
     void SetSdCardMinimumFreeSpace(long bytes);
 
     /// <summary>
+    /// Turns CRC-protected SD card writes on or off (firmware v3.9.0 and later).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With protection on, the card checks a CRC on every block and the device writes each block
+    /// on its own. A block the card picked up from other traffic on the shared SPI bus then fails
+    /// its check and is refused, instead of being written over whatever sector it landed on. That
+    /// is the failure that corrupted the card's FAT in <c>daqifi-nyquist-firmware#1217</c>. Turn
+    /// it on when the integrity of a log matters more than how fast it can be written.
+    /// </para>
+    /// <para>
+    /// <b>It costs throughput.</b> It takes roughly two thirds off the SD write speed, leaving
+    /// about a third, so a sample rate that logs cleanly unprotected may not keep up protected. It
+    /// also makes a WiFi connection much less responsive while the device is logging to the card
+    /// (<c>daqifi-nyquist-firmware#1234</c>): commands sent over WiFi during an SD log can stall.
+    /// Both are why the device ships with it off.
+    /// </para>
+    /// <para>
+    /// The device accepts the change only while SD storage is off and idle. This call refuses
+    /// while this object is running an SD log rather than stopping it: stop the log with
+    /// <see cref="StopSdCardLoggingAsync"/> first. A live stream this object is running is paused
+    /// for the command and resumed afterwards, as the other SD operations do. Nothing else is
+    /// stopped: an SD log another connection is recording is left to the device to refuse.
+    /// </para>
+    /// <para>
+    /// A change takes a second or two. The device applies it by re-initializing the card, which
+    /// cannot be mounted until the device picks it up again at its next card check. This call
+    /// confirms a card is ready by mounting it (the storage-space query) and then reads back the
+    /// mode the card came up in, so an SD log or file operation started right after it finds the
+    /// card in that mode. That check runs even when the value did not change, so an empty slot
+    /// reports <see cref="SdCardCrcProtectionResult.Pending"/> rather than
+    /// <see cref="SdCardCrcProtectionResult.Applied"/>. Calls on one device run one at a time,
+    /// each through to its confirmation, and an SD log started during a change waits for it.
+    /// </para>
+    /// <para>
+    /// <b>The device forgets the setting every time it boots</b>, and Core does not re-apply it.
+    /// Set it again after each connect, and after a reboot. Read it back with
+    /// <see cref="GetSdCardCrcProtectionAsync"/> before a capture whose integrity matters.
+    /// </para>
+    /// <para>
+    /// Added with a default body, as <see cref="Firmware.IFirmwareUpdateService"/>'s targeted
+    /// overloads were, so an implementation of this interface written before it existed still
+    /// compiles and loads; that default throws <see cref="NotSupportedException"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns>
+    /// <see cref="SdCardCrcProtectionResult.Applied"/> once a card is mounted in the new mode,
+    /// or <see cref="SdCardCrcProtectionResult.Pending"/> when the device stored the change but no
+    /// card is ready with it yet. <see cref="SdCardCrcProtectionResult.Pending"/> lists the
+    /// causes and what each blocks.
+    /// </returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">
+    /// Thrown when the device has no SD card slot or its firmware predates v3.9.0
+    /// (<see cref="DeviceFeature.SdCardCrcProtection"/>). Nothing is sent.
+    /// </exception>
+    /// <exception cref="SdCardBusyException">
+    /// Thrown when the SD card is in use, so the setting was not changed. Either this object is
+    /// running an SD log (<see cref="IsLoggingToSdCard"/>), in which case nothing is sent, or the
+    /// device refused with SCPI <c>-221</c> (settings conflict) because its SD storage is enabled
+    /// or still busy — for example a format that is still running, or SD storage turned on by
+    /// another connection. Let it finish or turn SD storage off, then try again.
+    /// </exception>
+    /// <exception cref="SdCardOperationException">
+    /// Thrown when the device answered with any other SCPI error, or did not answer at all; in
+    /// the second case whether the setting changed is unknown, and
+    /// <see cref="GetSdCardCrcProtectionAsync"/> reads what the device holds. Also thrown when
+    /// the card came back in the other mode, because something other than this call (another
+    /// connection, a raw command) changed the setting while it waited.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Thrown by an implementation written before this member existed, which inherits the default
+    /// body. <see cref="DaqifiStreamingDevice"/> implements it.
+    /// </exception>
+    Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "This ISdCardOperations implementation does not support CRC-protected SD writes.");
+
+    /// <summary>
+    /// Reads whether CRC-protected SD card writes are on (firmware v3.9.0 and later). See
+    /// <see cref="SetSdCardCrcProtectionAsync"/> for what the setting does and what it costs.
+    /// </summary>
+    /// <remarks>
+    /// This asks the device rather than remembering the last value set, because the device
+    /// forgets the setting on every boot: a device that rebooted since it was set reports
+    /// <c>false</c> here. The answer is the value the device holds, which may still be waiting to
+    /// be applied (<see cref="SdCardCrcProtectionResult.Pending"/>). Safe to call during an SD log.
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns><c>true</c> when protection is on; otherwise <c>false</c>.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">
+    /// Thrown when the device has no SD card slot or its firmware predates v3.9.0
+    /// (<see cref="DeviceFeature.SdCardCrcProtection"/>). Nothing is sent.
+    /// </exception>
+    /// <exception cref="SdCardOperationException">
+    /// Thrown when the device answered with a SCPI error or with no readable <c>0</c> or
+    /// <c>1</c>. A live stream running at the time can bury the answer among stream data.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Thrown by an implementation written before this member existed, which inherits the default
+    /// body. <see cref="DaqifiStreamingDevice"/> implements it.
+    /// </exception>
+    Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "This ISdCardOperations implementation does not support CRC-protected SD writes.");
+
+    /// <summary>
     /// Starts logging data to the SD card.
     /// </summary>
     /// <remarks>
