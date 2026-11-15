@@ -26,6 +26,7 @@ namespace Daqifi.Core.Device.Internal;
 internal sealed class TextReplyCapture
 {
     private readonly Action<string> _onLine;
+    private readonly Action? _onLineProgress;
     private volatile bool _closed;
 
     /// <summary>
@@ -36,9 +37,16 @@ internal sealed class TextReplyCapture
     /// included. It must stay cheap and must not block: the reader dispatches nothing else while
     /// it runs.
     /// </param>
-    internal TextReplyCapture(Action<string> onLine)
+    /// <param name="onLineProgress">
+    /// Called on the reader thread, <b>inside</b> the reader's buffer lock, each time a read leaves
+    /// part of a line unframed: more of a reply is arriving, but its line end has not. It must be
+    /// cheaper still than <paramref name="onLine"/> — no I/O, no waiting, no lock the reader could
+    /// meet again. <c>null</c> when the exchange does not ask (issue #977).
+    /// </param>
+    internal TextReplyCapture(Action<string> onLine, Action? onLineProgress = null)
     {
         _onLine = onLine ?? throw new ArgumentNullException(nameof(onLine));
+        _onLineProgress = onLineProgress;
     }
 
     /// <summary>
@@ -58,6 +66,20 @@ internal sealed class TextReplyCapture
         }
 
         _onLine(line);
+    }
+
+    /// <summary>
+    /// Tells the exchange that bytes of a line it has not yet received have arrived, unless it has
+    /// already stopped listening.
+    /// </summary>
+    internal void ReportLineProgress()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _onLineProgress?.Invoke();
     }
 
     /// <summary>

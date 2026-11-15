@@ -431,6 +431,11 @@ internal sealed class TextExchangeEngine
             // read until the exchange next yielded.
             TaskCompletionSource<bool>? lineWaiter = null;
 
+            // How many reads have left part of a line unframed: the device is still sending a
+            // line that has not ended yet (issue #977). Guarded by collectedLinesGate. Only the
+            // change matters, never the number.
+            var lineProgress = 0;
+
             int CollectedLineCount()
             {
                 lock (collectedLinesGate)
@@ -530,13 +535,32 @@ internal sealed class TextExchangeEngine
                 waiter?.TrySetResult(true);
             }
 
+            // Called on the device's reader thread, INSIDE its buffer lock, when a read leaves part
+            // of a line unframed (issue #977). The wait loop below restarts its quiet window on
+            // it, so a long line that is still arriving keeps the exchange open: whole lines alone
+            // cannot show that, and a capability document is one line of ~8.5 KB. Cheap and
+            // non-blocking as the reader requires: the gate is never held across a call out of the
+            // engine, and the waiter's continuation is queued rather than run here.
+            void OnLineProgress()
+            {
+                TaskCompletionSource<bool>? waiter;
+                lock (collectedLinesGate)
+                {
+                    lineProgress++;
+                    waiter = lineWaiter;
+                    lineWaiter = null;
+                }
+
+                waiter?.TrySetResult(true);
+            }
+
             // Switch the device's reader to framing lines for this exchange. Nothing is stopped
             // or started: the reader that has been running since connect keeps running, keeps
             // reporting its read failures to the device (issue #378), and keeps its transport's
             // health sink — it only frames what it reads differently until the capture ends. That
             // is what took the consumer swap's cost out of every exchange, and the restart a stuck
             // stream could refuse, leaving no reader on the wire (issues #383, #900).
-            var capture = await _host.BeginTextCaptureAsync(OnLine, cancellationToken).ConfigureAwait(false);
+            var capture = await _host.BeginTextCaptureAsync(OnLine, OnLineProgress, cancellationToken).ConfigureAwait(false);
             try
             {
                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Reader framing text at {ElapsedMs}ms", ElapsedMs()));
@@ -709,6 +733,8 @@ internal sealed class TextExchangeEngine
                 // Wait for responses using a two-phase inactivity-based timeout:
                 // Phase 1: Wait up to responseTimeoutMs for the first response.
                 // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
+                // "Inactivity" means no bytes at all: a complete line and more of an unfinished
+                // one both restart the window (the second since issue #977).
                 //
                 // The two phases and their budgets are exactly what they have always been. What
                 // changed (issue #485) is how the loop waits: it used to tick every 50ms and
@@ -749,6 +775,17 @@ internal sealed class TextExchangeEngine
                 // Lines already collected at this point are the seed above, not news. The old
                 // loop expressed the same thing by taking its "previous count" from here.
                 var observedLineCount = CollectedLineCount();
+
+                // The same for a line still arriving: progress before this point is not news.
+                int LineProgress()
+                {
+                    lock (collectedLinesGate)
+                    {
+                        return lineProgress;
+                    }
+                }
+
+                var observedLineProgress = LineProgress();
 
                 // Checked before the loop as well as inside it, and for the same reason
                 // hasReceivedAny is seeded above: on a device that answers faster than the
@@ -792,7 +829,7 @@ internal sealed class TextExchangeEngine
                         // Registered under the gate the handler appends under, so there is no
                         // window in which a line can arrive unnoticed AND unsignalled. A line
                         // already waiting is handled without waiting at all.
-                        if (collectedLines.Count > observedLineCount)
+                        if (collectedLines.Count > observedLineCount || lineProgress != observedLineProgress)
                         {
                             lineArrived = Task.CompletedTask;
                         }
@@ -822,6 +859,17 @@ internal sealed class TextExchangeEngine
                         // The window expired with nothing new. Not an error — it is how both
                         // phases end. Fall through: the loop re-reads the clock and the line
                         // count, so a line that landed in the same instant is still counted.
+                    }
+
+                    // More of a line that has not ended: the device is still answering, so the quiet
+                    // window starts again (issue #977). It is activity, not an answer — it does not
+                    // flip hasReceivedAny, which stays a question about whole lines the projection
+                    // will keep. maxWait above still bounds a device that never ends its line.
+                    var currentProgress = LineProgress();
+                    if (currentProgress != observedLineProgress)
+                    {
+                        observedLineProgress = currentProgress;
+                        lastMessageAt = Elapsed();
                     }
 
                     var currentCount = CollectedLineCount();

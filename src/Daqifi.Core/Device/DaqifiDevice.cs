@@ -2415,7 +2415,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// The consumer and parser are snapshotted once: teardown nulls both fields, and the
     /// exchange's lock does not exclude a teardown that has given up waiting for it.
     /// </remarks>
-    async Task<IDisposable> ITextExchangeHost.BeginTextCaptureAsync(Action<string> onLine, CancellationToken cancellationToken)
+    async Task<IDisposable> ITextExchangeHost.BeginTextCaptureAsync(Action<string> onLine, Action onLineProgress, CancellationToken cancellationToken)
     {
         var consumer = _messageConsumer as StreamMessageConsumer<WireMessage>;
         var parser = _wireParser;
@@ -2450,7 +2450,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 isShuttingDown: true);
         }
 
-        var capture = new TextReplyCapture(onLine);
+        var capture = new TextReplyCapture(onLine, onLineProgress);
         consumer.Reframe(() => parser.Capture = capture);
         var scope = new TextCaptureScope(consumer, parser, capture);
 
@@ -2896,6 +2896,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// 8 ms. 250 ms is an order of magnitude of headroom over that while keeping the cost to
     /// the connect sequence small.
     /// </summary>
+    /// <remarks>
+    /// The window measures gaps between <i>bytes</i>, as the paragraph above assumes, only since
+    /// issue #977. Before it, only a complete line restarted the window, so after the
+    /// <c>APIVersion?</c> reply it measured the document's whole transfer time instead. Over
+    /// WiFi that was more than 250 ms in 5 of 27 bench reads (327 to 664 ms), and the read
+    /// returned no document and released the device while the rest of it was still arriving.
+    /// </remarks>
     private const int CapabilityDocumentCompletionTimeoutMs = 250;
 
     /// <summary>
