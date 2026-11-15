@@ -31,22 +31,38 @@ public class CapabilityDocumentSlowLinkTests
     private static readonly string Document =
         CapabilityDocumentSamples.Nyquist1Firmware380.Replace("\r", string.Empty).Replace("\n", string.Empty);
 
+    // A gap the reader saw that is this long or longer makes an attempt inconclusive: the 250 ms
+    // window is then allowed to end the read, fix or no fix. The 50 ms between this and the window
+    // is slack, not a promise. Only a runner that stalls this long is retried; the defect itself
+    // shows on every attempt, with every gap near GapMs.
+    private const int StallMs = 200;
+    private const int Attempts = 5;
+
     [Fact]
     public async Task ReadCapabilityDocumentAsync_WhenTheDocumentTakesLongerThanTheQuietWindow_ReturnsIt()
     {
-        using var transport = new SlowLinkTransport(complete: true);
-        using var device = await ConnectAsync(transport);
+        await UntilConclusiveAsync(async transport =>
+        {
+            using var device = await ConnectAsync(transport);
 
-        var document = await device.ReadCapabilityDocumentAsync();
+            var document = await device.ReadCapabilityDocumentAsync();
 
-        // Waited for, not asserted: a read that ends early returns before the wire is done.
-        WaitUntil.That(() => transport.Wire.DocumentFinishedAt is not null, "the wire to finish sending the document");
-        Assert.True(
-            transport.Wire.DocumentFinishedAt!.Value - transport.Wire.DocumentStartedAt!.Value >= TimeSpan.FromMilliseconds(500),
-            "Arrangement: the document must take longer than the 250 ms quiet window.");
-        Assert.NotNull(document);
-        Assert.Same(document, device.Metadata.CapabilityDocument);
-        await device.DisconnectAsync();
+            // Waited for, not asserted: a read that ends early returns before the wire is done.
+            WaitUntil.That(() => transport.Wire.ReaderCaughtUp, "the reader to take the whole document");
+            if (transport.Wire.LongestGap >= TimeSpan.FromMilliseconds(StallMs))
+            {
+                await device.DisconnectAsync();
+                return transport.Wire.LongestGap;
+            }
+
+            Assert.True(
+                transport.Wire.DocumentFinishedAt!.Value - transport.Wire.DocumentStartedAt!.Value >= TimeSpan.FromMilliseconds(500),
+                "Arrangement: the document must take longer than the 250 ms quiet window.");
+            Assert.NotNull(document);
+            Assert.Same(document, device.Metadata.CapabilityDocument);
+            await device.DisconnectAsync();
+            return null;
+        });
     }
 
     [Fact]
@@ -54,25 +70,59 @@ public class CapabilityDocumentSlowLinkTests
     {
         // The half that wedged the bench Nyquist's WiFi: the next exchange (the SD file list, in
         // the app) wrote SD:ENAble 1 while the document was still arriving.
-        using var transport = new SlowLinkTransport(complete: true);
-        using var device = await ConnectAsync(transport);
+        await UntilConclusiveAsync(async transport =>
+        {
+            using var device = await ConnectAsync(transport);
 
-        var read = device.ReadCapabilityDocumentAsync();
-        WaitUntil.That(() => transport.Wire.DocumentStartedAt is not null, "the document to start arriving");
-        var next = device.QueryAsync("*IDN?");
+            var read = device.ReadCapabilityDocumentAsync();
+            WaitUntil.That(() => transport.Wire.DocumentStartedAt is not null, "the document to start arriving");
+            var next = device.QueryAsync("*IDN?");
 
-        var document = await read;
-        var reply = await next;
-        WaitUntil.That(() => transport.Wire.DocumentFinishedAt is not null, "the wire to finish sending the document");
+            var document = await read;
+            var reply = await next;
+            WaitUntil.That(() => transport.Wire.ReaderCaughtUp, "the reader to take the whole document");
+            if (transport.Wire.LongestGap >= TimeSpan.FromMilliseconds(StallMs))
+            {
+                await device.DisconnectAsync();
+                return transport.Wire.LongestGap;
+            }
 
-        var idnAt = transport.Wire.ReceivedAt("*IDN?");
-        Assert.True(
-            idnAt > transport.Wire.DocumentFinishedAt,
-            $"The next exchange wrote at {idnAt?.TotalMilliseconds:F0} ms, before the document ended at "
-            + $"{transport.Wire.DocumentFinishedAt?.TotalMilliseconds:F0} ms.");
-        Assert.NotNull(document);
-        Assert.Equal(new[] { Identity }, reply);
-        await device.DisconnectAsync();
+            var idnAt = transport.Wire.ReceivedAt("*IDN?");
+            Assert.True(
+                idnAt > transport.Wire.DocumentFinishedAt,
+                $"The next exchange wrote at {idnAt?.TotalMilliseconds:F0} ms, before the document ended at "
+                + $"{transport.Wire.DocumentFinishedAt?.TotalMilliseconds:F0} ms.");
+            Assert.NotNull(document);
+            Assert.Equal(new[] { Identity }, reply);
+            await device.DisconnectAsync();
+            return null;
+        });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="attempt"/> on a fresh link until one is conclusive. An attempt returns
+    /// the stall that made it inconclusive, or null once it has asserted. A CI runner under the
+    /// full suite can pause a thread for longer than the quiet window, and then even a correct
+    /// read is cut; that is a fact about the runner, not the code, so the attempt is run again.
+    /// </summary>
+    private static async Task UntilConclusiveAsync(Func<SlowLinkTransport, Task<TimeSpan?>> attempt)
+    {
+        var stalls = new List<string>();
+        for (var i = 0; i < Attempts; i++)
+        {
+            using var transport = new SlowLinkTransport(complete: true);
+            var stall = await attempt(transport);
+            if (stall is null)
+            {
+                return;
+            }
+
+            stalls.Add($"{stall.Value.TotalMilliseconds:F0} ms");
+        }
+
+        Assert.Fail(
+            $"Every attempt stalled for {StallMs} ms or more between reads ({string.Join(", ", stalls)}), "
+            + "so none could show whether the read waits for the document.");
     }
 
     [Fact]
@@ -172,12 +222,14 @@ public class CapabilityDocumentSlowLinkTests
     private sealed class SlowLinkStream(bool complete) : Stream
     {
         private readonly Stopwatch _clock = Stopwatch.StartNew();
-        private readonly BlockingCollection<byte[]> _toHost = new();
+        private readonly BlockingCollection<(byte[] Bytes, bool Timed)> _toHost = new();
         private readonly StringBuilder _fromHost = new();
         private readonly ConcurrentDictionary<string, TimeSpan> _received = new();
         private readonly CancellationTokenSource _stop = new();
+        private readonly List<TimeSpan> _timedTakes = new();
         private byte[]? _partial;
         private int _partialOffset;
+        private bool _lastTimedTaken;
         private long _documentStartedTicks = -1;
         private long _documentFinishedTicks = -1;
 
@@ -187,11 +239,63 @@ public class CapabilityDocumentSlowLinkTests
 
         public TimeSpan? ReceivedAt(string command) => _received.TryGetValue(command, out var at) ? at : null;
 
+        /// <summary>
+        /// True once the reader has taken the document's last part, processed it, and come back
+        /// for more. Only then is <see cref="LongestGap"/> final.
+        /// </summary>
+        public bool ReaderCaughtUp
+        {
+            get
+            {
+                lock (_timedTakes)
+                {
+                    return _lastTimedTaken && _timedTakes.Count == Parts + 2;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The longest time between the reader taking one timed chunk and the next: from the
+        /// <c>2</c> line, through each part of the document, to the reader's next call after the
+        /// last part. The reader frames each chunk before it reads again, so a pause anywhere on
+        /// its thread — or on the thread that sends the parts, or in the 50 ms the read waits
+        /// before <c>JSON?</c> — shows here. Every gap the quiet window could see is one of these.
+        /// </summary>
+        public TimeSpan LongestGap
+        {
+            get
+            {
+                lock (_timedTakes)
+                {
+                    var longest = TimeSpan.Zero;
+                    for (var i = 1; i < _timedTakes.Count; i++)
+                    {
+                        var gap = _timedTakes[i] - _timedTakes[i - 1];
+                        if (gap > longest)
+                        {
+                            longest = gap;
+                        }
+                    }
+
+                    return longest;
+                }
+            }
+        }
+
         private static TimeSpan? Ticks(ref long ticks) =>
             Interlocked.Read(ref ticks) is var t and >= 0 ? TimeSpan.FromTicks(t) : null;
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            lock (_timedTakes)
+            {
+                // The first call after the last part: the reader has finished framing it.
+                if (_lastTimedTaken && _timedTakes.Count == Parts + 1)
+                {
+                    _timedTakes.Add(_clock.Elapsed);
+                }
+            }
+
             if (_partial == null)
             {
                 if (!_toHost.TryTake(out var next, 10))
@@ -199,7 +303,17 @@ public class CapabilityDocumentSlowLinkTests
                     return 0;
                 }
 
-                _partial = next;
+                if (next.Timed)
+                {
+                    lock (_timedTakes)
+                    {
+                        _timedTakes.Add(_clock.Elapsed);
+                        // The 2 line and every part are timed; the last of them ends the run.
+                        _lastTimedTaken = _timedTakes.Count == Parts + 1;
+                    }
+                }
+
+                _partial = next.Bytes;
                 _partialOffset = 0;
             }
 
@@ -235,31 +349,33 @@ public class CapabilityDocumentSlowLinkTests
             switch (command)
             {
                 case "CONFigure:CAPabilities:APIVersion?":
-                    Push("2\r\n");
+                    Push("2\r\n", timed: true);
                     break;
                 case "*IDN?":
-                    Push(Identity + "\r\n");
+                    Push(Identity + "\r\n", timed: false);
                     break;
                 case "CONFigure:CAPabilities:JSON?":
-                    _ = Task.Run(SendDocumentSlowlyAsync);
+                    // A thread of its own, not the thread pool: under the full suite the pool is
+                    // starved, and a delayed continuation there stalled the parts past the window.
+                    new Thread(SendDocumentSlowly) { IsBackground = true, Name = "Slow link" }.Start();
                     break;
             }
         }
 
-        private async Task SendDocumentSlowlyAsync()
+        private void SendDocumentSlowly()
         {
             var size = (Document.Length + Parts - 1) / Parts;
             // Stopping mid-line sends only half of the parts, and never the line end.
             var parts = complete ? Parts : Parts / 2;
             for (var i = 0; i < parts; i++)
             {
-                if (i > 0)
+                if (i > 0 && _stop.Token.WaitHandle.WaitOne(GapMs))
                 {
-                    await Task.Delay(GapMs, _stop.Token).ConfigureAwait(false);
+                    return;
                 }
 
                 var part = Document.Substring(i * size, Math.Min(size, Document.Length - i * size));
-                Push(complete && i == parts - 1 ? part + "\r\n" : part);
+                Push(complete && i == parts - 1 ? part + "\r\n" : part, timed: true);
                 Interlocked.CompareExchange(ref _documentStartedTicks, _clock.Elapsed.Ticks, -1);
             }
 
@@ -269,7 +385,7 @@ public class CapabilityDocumentSlowLinkTests
             }
         }
 
-        private void Push(string text) => _toHost.Add(Encoding.ASCII.GetBytes(text));
+        private void Push(string text, bool timed) => _toHost.Add((Encoding.ASCII.GetBytes(text), timed));
 
         protected override void Dispose(bool disposing)
         {
