@@ -285,7 +285,68 @@ public class DaqifiDeviceConsumerRestartTests
 
         Assert.False(runningDuringCapture);
         Assert.True(GetMessageConsumer(device)!.IsRunning);
+        Assert.True(device.IsStreaming);
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.Written.Contains("StartStreamData", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(5)),
+            "The parked start must reach the wire once the capture restarts the reader.");
 
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task StartStreaming_DuringARawCaptureWhoseRestartFails_SendsNoStartAndEndsTheSession()
+    {
+        // Issue #975, the concurrent half. A start on another flow during the capture cannot check
+        // the reader, because the capture stopped it on purpose, so the start is parked. When the
+        // capture then cannot restart the reader, the parked start must not go out: the session
+        // would report running and deliver nothing, and a later start would return early on it.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new StreamingConsumerRestartTestableDevice("Stuck Device", transport);
+        var errors = new ConcurrentQueue<DeviceErrorEventArgs>();
+        device.ErrorOccurred += (_, e) => errors.Enqueue(e);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+
+        using var inCapture = new ManualResetEventSlim(false);
+        using var endCapture = new ManualResetEventSlim(false);
+        var capture = Task.Run(() => device.CallRawCaptureAsync((_, _) =>
+        {
+            inCapture.Set();
+            endCapture.Wait(TimeSpan.FromSeconds(10));
+            return Task.CompletedTask;
+        }));
+
+        Assert.True(inCapture.Wait(TimeSpan.FromSeconds(10)));
+        device.StartStreaming();
+        Assert.True(device.IsStreaming);
+
+        endCapture.Set();
+        await capture;
+
+        Assert.False(GetMessageConsumer(device)!.IsRunning);
+        Assert.False(device.IsStreaming);
+
+        // Writes still work on a stuck reader. A marker sent now is written after anything that
+        // was parked, so once it is on the wire, a start that went out would be there too.
+        device.Send(new ScpiMessage("MARKER"));
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.Written.Contains("MARKER", StringComparison.Ordinal), TimeSpan.FromSeconds(5)),
+            "The marker must reach the wire.");
+        Assert.DoesNotContain("StartStreamData", transport.Written, StringComparison.OrdinalIgnoreCase);
+
+        // The caller hears that the reader is stuck. The dropped start's refusal has the same
+        // source and type a moment later, so ErrorOccurred's throttle folds it into this report.
+        var error = Assert.Single(errors);
+        Assert.Equal(DeviceErrorSource.MessageConsumer, error.Source);
+        Assert.IsType<ConsumerThreadNotExitedException>(error.Error);
+
+        // Not an early return on a session that never ran: the next start checks the reader and
+        // says why it cannot.
+        Assert.Throws<ConsumerThreadNotExitedException>(() => device.StartStreaming());
+        Assert.False(device.IsStreaming);
+
+        transport.ReleaseReaders();
         device.Disconnect();
     }
 
@@ -391,6 +452,9 @@ public class DaqifiDeviceConsumerRestartTests
 
         public void ReleaseReaders() => _stream.Release();
 
+        /// <summary>Everything written to the stream so far, as ASCII.</summary>
+        public string Written => _stream.Written;
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
@@ -459,7 +523,26 @@ public class DaqifiDeviceConsumerRestartTests
 
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
             public override void SetLength(long value) => throw new NotSupportedException();
-            public override void Write(byte[] buffer, int offset, int count) { }
+            private readonly System.Text.StringBuilder _written = new();
+
+            public string Written
+            {
+                get
+                {
+                    lock (_written)
+                    {
+                        return _written.ToString();
+                    }
+                }
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                lock (_written)
+                {
+                    _written.Append(System.Text.Encoding.ASCII.GetString(buffer, offset, count));
+                }
+            }
         }
     }
 }

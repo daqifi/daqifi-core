@@ -1726,6 +1726,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
+    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action onNotSent) =>
+        SendRequiringReader(message, nameof(StartStreaming), onNotSent);
+
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 
     int IStreamingSessionHost.MaximumStreamingFrequencyHz => MaximumStreamingFrequencyHz;

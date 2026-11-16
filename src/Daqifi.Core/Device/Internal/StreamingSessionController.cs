@@ -89,6 +89,22 @@ internal sealed class StreamingSessionController
     internal void MarkStartRefused() => _kind = StreamingSessionKind.None;
 
     /// <summary>
+    /// Records that a live start parked behind a raw capture was never sent, because the reader
+    /// could not start once the capture ended (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// Only a live session is ended: by the time the parked start is replayed, a stop on another
+    /// flow may already have ended it, or an SD log may have begun, and neither is this start's.
+    /// </remarks>
+    private void MarkParkedStartNotSent()
+    {
+        if (_kind == StreamingSessionKind.LiveStream)
+        {
+            _kind = StreamingSessionKind.None;
+        }
+    }
+
+    /// <summary>
     /// Ends the session because the connection ended. Sends nothing: there is no link to send a
     /// stop on, and <c>Disconnect()</c> does not send one either.
     /// </summary>
@@ -355,7 +371,12 @@ internal sealed class StreamingSessionController
         BeginStreamingSession();
 
         _kind = StreamingSessionKind.LiveStream;
-        _host.Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
+
+        // The check above cannot answer for a start that is parked behind a raw capture on another
+        // flow: that capture stopped the reader on purpose. The parked start checks again when it
+        // is replayed, after the capture's restart, and is dropped with the session ended if the
+        // reader still cannot start (issue #975).
+        _host.SendStreamStart(ScpiMessageProducer.StartStreaming(StreamingFrequency), MarkParkedStartNotSent);
     }
 
     /// <summary>

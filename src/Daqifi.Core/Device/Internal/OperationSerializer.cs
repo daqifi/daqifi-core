@@ -500,8 +500,13 @@ internal sealed class OperationSerializer : IDisposable
     /// block. The overflow log deliberately happens after the gate is released, so a slow logger
     /// cannot turn a fire-and-forget send into a wait.
     /// </para>
+    /// <para>
+    /// <paramref name="beforeReplay"/>, when given, runs on the replaying thread just before the
+    /// parked message is sent, and a <c>false</c> drops it. A stream start uses it to check the
+    /// reader once the operation that stopped it has ended (issue #975).
+    /// </para>
     /// </remarks>
-    internal bool TryDeferSend<T>(IOutboundMessage<T> message)
+    internal bool TryDeferSend<T>(IOutboundMessage<T> message, Func<bool>? beforeReplay = null)
     {
         if (OwnsCurrentSession)
         {
@@ -545,7 +550,15 @@ internal sealed class OperationSerializer : IDisposable
                 _deferralOverflowReported = true;
             }
 
-            backlog.Enqueue(() => _host.SendNow(message));
+            backlog.Enqueue(beforeReplay == null
+                ? () => _host.SendNow(message)
+                : () =>
+                {
+                    if (beforeReplay())
+                    {
+                        _host.SendNow(message);
+                    }
+                });
         }
 
         if (reportOverflow)
