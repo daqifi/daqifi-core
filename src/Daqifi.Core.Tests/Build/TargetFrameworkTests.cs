@@ -68,7 +68,7 @@ public class TargetFrameworkTests
         var core = TargetFrameworksOf("Daqifi.Core");
 
         Assert.NotEmpty(core);
-        Assert.Contains("net9.0", core);
+        Assert.Contains("net10.0", core);
     }
 
     [Fact]

@@ -32,12 +32,12 @@ Release is not optional — BenchmarkDotNet refuses to measure an unoptimized bu
 There is also a `Benchmarks` workflow on GitHub Actions (`workflow_dispatch`) that runs the suite
 on demand and posts the tables to the run summary.
 
-### Measuring on .NET 9
+### Measuring on another runtime
 
 The project targets `net10.0` alone, so that `dotnet run -c Release` needs no `-f`. Measuring the
-library on `net9.0` as well is a BenchmarkDotNet job, not a second target framework — add
-`[SimpleJob(RuntimeMoniker.Net90)]` alongside `[SimpleJob(RuntimeMoniker.Net10_0)]` on the class
-you care about and one run reports both runtimes side by side.
+library on another runtime as well is a BenchmarkDotNet job, not a second target framework — add a
+`[SimpleJob]` for that runtime alongside `[SimpleJob(RuntimeMoniker.Net10_0)]` on the class you
+care about and one run reports both runtimes side by side.
 
 ## What is measured, and why
 

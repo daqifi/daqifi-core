@@ -87,7 +87,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **SD card operations** | List, download, and delete files over USB / serial, or over WiFi / TCP on firmware ≥ 3.7.0; format the card; start (USB / serial only) and stop SD logging |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
 | **Firmware updates** | PIC32 and WiFi-module flashing with progress, cancellation, and automatic recovery to a clean re-flashable bootloader state on mid-flash failure |
-| **Cross-platform** | .NET 9.0 and 10.0 on Windows, macOS, Linux |
+| **Cross-platform** | .NET 10.0 on Windows, macOS, Linux |
 
 ## Quick recipes
 
@@ -385,7 +385,7 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 ## Requirements
 
-- .NET 9.0 or .NET 10.0 on Windows, macOS, or Linux
+- .NET 10.0 on Windows, macOS, or Linux
 - WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast (224.0.0.251)
   if you use `MDnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
