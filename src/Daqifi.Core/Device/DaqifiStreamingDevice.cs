@@ -15,6 +15,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using static Daqifi.Core.Internal.DiagnosticGuard;
@@ -412,6 +413,15 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         if (!alreadyStreaming)
         {
             await ConfirmStreamStartedAsync(cancellationToken).ConfigureAwait(false);
+
+            // A start parked behind a raw capture on another flow is dropped, not sent, when the
+            // capture cannot restart the reader. The wait above then sees the session end and the
+            // error-queue read fails on the same stuck reader; neither is a refusal, so without
+            // this the call would report a start that never reached the device (issue #975).
+            if (_session.TakeParkedStartFailure() is { } notSent)
+            {
+                ExceptionDispatchInfo.Capture(notSent).Throw();
+            }
         }
     }
 
@@ -1726,7 +1736,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
-    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action onNotSent) =>
+    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
         SendRequiringReader(message, nameof(StartStreaming), onNotSent);
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;

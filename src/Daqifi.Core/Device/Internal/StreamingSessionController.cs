@@ -95,14 +95,27 @@ internal sealed class StreamingSessionController
     /// <remarks>
     /// Only a live session is ended: by the time the parked start is replayed, a stop on another
     /// flow may already have ended it, or an SD log may have begun, and neither is this start's.
+    /// The refusal is kept for <see cref="TakeParkedStartFailure"/>, so a
+    /// <c>StartStreamingAsync</c> that is still confirming this start throws it instead of
+    /// reporting success.
     /// </remarks>
-    private void MarkParkedStartNotSent()
+    private void MarkParkedStartNotSent(Exception refusal)
     {
         if (_kind == StreamingSessionKind.LiveStream)
         {
             _kind = StreamingSessionKind.None;
+            Volatile.Write(ref _parkedStartFailure, refusal);
         }
     }
+
+    /// <summary>
+    /// The refusal of the last live start that was parked behind a raw capture and then dropped
+    /// because the reader could not start, or <c>null</c>. Taking it clears it.
+    /// </summary>
+    internal Exception? TakeParkedStartFailure() => Interlocked.Exchange(ref _parkedStartFailure, null);
+
+    /// <summary>Written on the replaying thread, read on the starting one.</summary>
+    private Exception? _parkedStartFailure;
 
     /// <summary>
     /// Ends the session because the connection ended. Sends nothing: there is no link to send a
@@ -371,6 +384,7 @@ internal sealed class StreamingSessionController
         BeginStreamingSession();
 
         _kind = StreamingSessionKind.LiveStream;
+        Volatile.Write(ref _parkedStartFailure, null);
 
         // The check above cannot answer for a start that is parked behind a raw capture on another
         // flow: that capture stopped the reader on purpose. The parked start checks again when it

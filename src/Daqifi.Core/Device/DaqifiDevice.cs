@@ -133,8 +133,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     /// <param name="message">The message whose answer only the reader can deliver.</param>
     /// <param name="operation">The name of the operation, for the refusal's message.</param>
-    /// <param name="onNotSent">Undoes what the caller recorded when it sent the message. Runs on the replaying thread.</param>
-    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action onNotSent)
+    /// <param name="onNotSent">Undoes what the caller recorded when it sent the message, and receives the refusal. Runs on the replaying thread.</param>
+    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action<Exception> onNotSent)
     {
         var previous = t_parkedSendReaderCheck;
         t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, onNotSent);
@@ -157,7 +157,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     [ThreadStatic]
     private static ParkedSendReaderCheck? t_parkedSendReaderCheck;
 
-    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action OnNotSent);
+    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action<Exception> OnNotSent);
 
     /// <summary>
     /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. True
@@ -175,7 +175,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         catch (ConsumerThreadNotExitedException ex)
         {
-            check.OnNotSent();
+            check.OnNotSent(ex);
             SafeLog(() => _logger.LogWarning(
                 ex,
                 "{Operation} was parked behind a raw capture and was not sent: the reader could not start again.",

@@ -350,6 +350,45 @@ public class DaqifiDeviceConsumerRestartTests
         device.Disconnect();
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_DuringARawCaptureWhoseRestartFails_ThrowsTheReaderRefusal()
+    {
+        // Issue #975, review of #976: the async start awaits its confirmation while the start is
+        // parked. When the capture then cannot restart the reader, the parked start is dropped and
+        // the session ends; the awaiting call must say so rather than complete as a success.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new StreamingConsumerRestartTestableDevice("Stuck Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+
+        using var inCapture = new ManualResetEventSlim(false);
+        using var endCapture = new ManualResetEventSlim(false);
+        var capture = Task.Run(() => device.CallRawCaptureAsync((_, _) =>
+        {
+            inCapture.Set();
+            endCapture.Wait(TimeSpan.FromSeconds(10));
+            return Task.CompletedTask;
+        }));
+
+        Assert.True(inCapture.Wait(TimeSpan.FromSeconds(10)));
+        var start = Task.Run(() => device.StartStreamingAsync());
+        Assert.True(
+            SpinWait.SpinUntil(() => device.IsStreaming, TimeSpan.FromSeconds(5)),
+            "The start must be parked behind the capture, with the session recorded as live.");
+
+        endCapture.Set();
+        await capture;
+
+        var refusal = await Assert.ThrowsAsync<ConsumerThreadNotExitedException>(() => start);
+        Assert.Contains(nameof(DaqifiStreamingDevice.StartStreaming), refusal.Message);
+        Assert.False(device.IsStreaming);
+        Assert.DoesNotContain("StartStreamData", transport.Written, StringComparison.OrdinalIgnoreCase);
+
+        transport.ReleaseReaders();
+        device.Disconnect();
+    }
+
     private static int InboundSubscriberCount(DaqifiDevice device)
     {
         var consumer = GetMessageConsumer(device)!;
