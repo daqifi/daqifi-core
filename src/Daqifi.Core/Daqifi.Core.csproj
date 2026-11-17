@@ -56,7 +56,7 @@
          frameworks); HidPlatformFactory selects the backend at runtime. The
          IOKit DllImports compile on every target and only execute on macOS. -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0" />
     <PackageReference Include="System.IO.Ports" Version="10.0.15" />
     <!-- Public API surface tracking (issue #636). ADR 0002 makes source
          compatibility a promise; RS0016/RS0017 turn a change to the public
