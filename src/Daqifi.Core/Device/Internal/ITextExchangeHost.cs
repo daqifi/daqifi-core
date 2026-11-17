@@ -57,6 +57,17 @@ internal interface ITextExchangeHost
     IMessageConsumer<WireMessage>? MessageConsumer { get; }
 
     /// <summary>
+    /// Reports on the device's <c>ErrorOccurred</c> surface, as
+    /// <see cref="DeviceErrorSource.MessageConsumer"/>, that a raw capture could not restart the
+    /// reader (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// The log line alone did not reach a caller that gives Core no logger. Never throws.
+    /// </remarks>
+    /// <param name="error">The refusal, with a message that names the consequence.</param>
+    void ReportReaderRestartFailure(Exception error);
+
+    /// <summary>
     /// Subscribes the device's inbound-message handler to <paramref name="consumer"/>. Idempotent:
     /// attaching twice leaves one subscription.
     /// </summary>

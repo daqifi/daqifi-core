@@ -165,6 +165,7 @@ public class ConnectionGuardTests
         public bool IsShuttingDown => throw new NotSupportedException();
         public IStreamTransport? Transport => throw new NotSupportedException();
         public IMessageConsumer<WireMessage>? MessageConsumer => throw new NotSupportedException();
+        public void ReportReaderRestartFailure(Exception error) => throw new NotSupportedException();
         public bool HoldsOperationLock => throw new NotSupportedException();
         public bool IsInsideTextExchange { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public ILogger Logger => throw new NotSupportedException();

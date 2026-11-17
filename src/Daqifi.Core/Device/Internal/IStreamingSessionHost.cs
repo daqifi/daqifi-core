@@ -32,11 +32,29 @@ internal interface IStreamingSessionHost
     /// <inheritdoc cref="DaqifiDevice.EnsureConnected()"/>
     void EnsureConnected();
 
+    /// <summary>
+    /// Starts the device's reader again when a raw capture left it stopped (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="DaqifiDevice.EnsureMessageReaderRunning"/>.
+    /// </remarks>
+    /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">The reader is stopped and cannot start.</exception>
+    /// <exception cref="DeviceNotConnectedException">A teardown disposed the reader.</exception>
+    void EnsureMessageReaderRunning();
+
     /// <inheritdoc cref="DaqifiDevice.PreserveActiveStream"/>
     bool PreserveActiveStream { get; }
 
     /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
     void Send<T>(IOutboundMessage<T> message);
+
+    /// <summary>
+    /// Sends the stream start. If it is parked behind a raw capture, the reader is checked again
+    /// before it goes out, and <paramref name="onNotSent"/> runs instead of the send when the
+    /// reader cannot start (issue #975). <paramref name="onNotSent"/> receives the refusal.
+    /// </summary>
+    /// <remarks>See <see cref="DaqifiDevice.SendRequiringReader{T}"/>.</remarks>
+    void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent);
 
     /// <summary>
     /// The device's advertised maximum sampling rate

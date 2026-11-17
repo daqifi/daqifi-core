@@ -82,6 +82,144 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         => ConnectionGuard.EnsureConnected(IsConnected, cancellationToken);
 
     /// <summary>
+    /// Starts the device's reader again when a raw capture left it stopped, so that a command
+    /// whose answer arrives as stream frames is not sent to a device that nothing reads
+    /// (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A no-op on a running reader, which is every reader except one that a raw capture could
+    /// not restart because its stream was stuck. It is also a no-op on a device without a reader,
+    /// and while a raw capture is running: that capture stopped the reader on purpose, and its
+    /// own restart runs before the send this guards is replayed.
+    /// </para>
+    /// <para>
+    /// A text exchange asks the same question of the reader before it relies on it
+    /// (<see cref="ITextExchangeHost.BeginTextCaptureAsync"/>). A stream start is not a text
+    /// exchange, so before this it sent the start command to a stopped reader and reported a
+    /// running session that never delivered a frame.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">The name of the operation that needs the reader, for the exception message.</param>
+    /// <exception cref="ConsumerThreadNotExitedException">The reader is stopped, and it cannot start because its previous thread has not exited.</exception>
+    /// <exception cref="DeviceNotConnectedException">A teardown disposed the reader.</exception>
+    internal void EnsureMessageReaderRunning(string operation)
+    {
+        if (_isInsideTextExchange.Value || _operations.IsOperationInFlightElsewhere)
+        {
+            return;
+        }
+
+        StartStoppedReader(operation);
+    }
+
+    /// <summary>
+    /// Sends <paramref name="message"/> through <see cref="Send{T}"/>, but if the send is parked
+    /// behind an operation on another flow, checks the reader again before the parked message
+    /// goes out (issue #975).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="EnsureMessageReaderRunning"/> cannot answer for a send that is parked: a raw
+    /// capture on another flow has stopped the reader on purpose, and whether its restart works is
+    /// known only when the capture ends. The parked message is replayed right after that restart,
+    /// so the check runs there. If the reader still cannot start, the message is not sent,
+    /// <paramref name="onNotSent"/> runs, and the refusal is raised on <c>ErrorOccurred</c>.
+    /// </para>
+    /// <para>
+    /// The message still goes through the virtual <see cref="Send{T}"/>, so an override sees it
+    /// exactly as before. The check rides along on this thread for the length of that one call.
+    /// </para>
+    /// </remarks>
+    /// <param name="message">The message whose answer only the reader can deliver.</param>
+    /// <param name="operation">The name of the operation, for the refusal's message.</param>
+    /// <param name="onNotSent">Undoes what the caller recorded when it sent the message, and receives the refusal. Runs on the replaying thread.</param>
+    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action<Exception> onNotSent)
+    {
+        var previous = t_parkedSendReaderCheck;
+        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, onNotSent);
+        try
+        {
+            Send(message);
+        }
+        finally
+        {
+            t_parkedSendReaderCheck = previous;
+        }
+    }
+
+    /// <summary>
+    /// The reader check that <see cref="SendRequiringReader{T}"/> hands to the <see cref="Send{T}"/>
+    /// it calls. Thread-static, because <see cref="Send{T}"/> is synchronous and the check must
+    /// reach only that one call. It names its device, so a send to another device from inside an
+    /// override does not take it.
+    /// </summary>
+    [ThreadStatic]
+    private static ParkedSendReaderCheck? t_parkedSendReaderCheck;
+
+    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action<Exception> OnNotSent);
+
+    /// <summary>
+    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. True
+    /// when the reader runs (started now if it has to be). False when it cannot start, after
+    /// <see cref="ParkedSendReaderCheck.OnNotSent"/> has run and the refusal has been logged and
+    /// raised. Usually the throttle on <c>ErrorOccurred</c> folds that raise into the capture's own
+    /// report of the same stuck reader, a moment earlier.
+    /// </summary>
+    private bool ReaderRunsForParkedSend(ParkedSendReaderCheck check)
+    {
+        try
+        {
+            StartStoppedReader(check.Operation);
+            return true;
+        }
+        catch (ConsumerThreadNotExitedException ex)
+        {
+            check.OnNotSent(ex);
+            SafeLog(() => _logger.LogWarning(
+                ex,
+                "{Operation} was parked behind a raw capture and was not sent: the reader could not start again.",
+                check.Operation));
+            RaiseDeviceError(DeviceErrorSource.MessageConsumer, ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Starts the reader when it is stopped. A no-op on a running reader and on a device without
+    /// one. The shared body of <see cref="EnsureMessageReaderRunning"/> and the parked-send check.
+    /// </summary>
+    private void StartStoppedReader(string operation)
+    {
+        // Snapshotted once: a teardown nulls the field.
+        var consumer = _messageConsumer;
+        if (consumer == null || consumer.IsRunning)
+        {
+            return;
+        }
+
+        try
+        {
+            consumer.Start();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new DeviceNotConnectedException(
+                $"{operation} cannot run because the device's connection was torn down.",
+                ex,
+                isShuttingDown: true);
+        }
+        catch (ConsumerThreadNotExitedException ex)
+        {
+            throw new ConsumerThreadNotExitedException(
+                $"{operation} cannot run because the device's message reader is stopped and its "
+                + "previous thread has not exited. The device stream appears stuck. Nothing would "
+                + "read the device's answer, so the command was not sent. Reconnect the device.",
+                ex);
+        }
+    }
+
+    /// <summary>
     /// Gets the device metadata containing part number, firmware version, etc.
     /// </summary>
     public DeviceMetadata Metadata { get; } = new DeviceMetadata();
@@ -2053,7 +2191,15 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _lastExchangeTextCommand = textCommand.Data;
         }
 
-        if (_operations.TryDeferSend(message))
+        // Taken by this call only (issue #975): a send an override makes from inside it is not
+        // the message SendRequiringReader asked about.
+        var readerCheck = t_parkedSendReaderCheck is { } check && ReferenceEquals(check.Device, this) ? check : null;
+        t_parkedSendReaderCheck = null;
+
+        var parked = readerCheck == null
+            ? _operations.TryDeferSend(message)
+            : _operations.TryDeferSend(message, beforeReplay: () => ReaderRunsForParkedSend(readerCheck));
+        if (parked)
         {
             return;
         }
@@ -2397,6 +2543,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     /// <inheritdoc />
     IMessageConsumer<WireMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
+
+    /// <inheritdoc />
+    void ITextExchangeHost.ReportReaderRestartFailure(Exception error)
+        => RaiseDeviceError(DeviceErrorSource.MessageConsumer, error);
 
     /// <inheritdoc />
     /// <remarks>Detaches first, so attaching twice still leaves exactly one subscription.</remarks>
