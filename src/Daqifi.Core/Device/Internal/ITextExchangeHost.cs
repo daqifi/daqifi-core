@@ -115,13 +115,17 @@ internal interface ITextExchangeHost
     /// </para>
     /// </remarks>
     /// <param name="onLine">Receives each line, trimmed, blank lines included.</param>
+    /// <param name="onLineProgress">
+    /// Called on the reader thread, inside its buffer lock, when a read leaves part of a line
+    /// unframed — the device is still sending a line. Must be cheap and must not block (issue #977).
+    /// </param>
     /// <param name="cancellationToken">Observed while waiting for the reader to be free; the capture is ended before the cancellation propagates.</param>
     /// <returns>The scope that ends the capture.</returns>
     /// <exception cref="InvalidOperationException">Thrown when the device has no reader to switch.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when a teardown has already taken the reader away.</exception>
     /// <exception cref="ConsumerThreadNotExitedException">Thrown when the reader is stopped and cannot be restarted because its stream is stuck.</exception>
     /// <exception cref="OperationCanceledException">Thrown when cancelled while waiting for the reader.</exception>
-    Task<IDisposable> BeginTextCaptureAsync(Action<string> onLine, CancellationToken cancellationToken);
+    Task<IDisposable> BeginTextCaptureAsync(Action<string> onLine, Action onLineProgress, CancellationToken cancellationToken);
 
     /// <summary>
     /// True when the current logical flow already holds the device's operation lock — in any

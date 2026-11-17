@@ -121,6 +121,36 @@ public class DeviceWireParserTests
         Assert.Equal("0,\"No error\"\r\n".Length, consumed);
     }
 
+    [Theory]
+    [InlineData("0,\"No error\"\r\nDAQiFi,Nq1", 1)]
+    [InlineData("{\"schema_version\":2,", 1)]
+    [InlineData("0,\"No error\"\r\n", 0)]
+    [InlineData("", 0)]
+    public void WithACapture_ReportsProgressOnlyWhenALineIsUnfinished(string wire, int expectedReports)
+    {
+        // Issue #977: the exchange counts whole lines, so the parser is what tells it that the
+        // device is still sending one. A read that ends exactly on a line end reports nothing.
+        var reports = 0;
+        var parser = new DeviceWireParser { Capture = new TextReplyCapture(_ => { }, () => reports++) };
+
+        _ = parser.ParseMessages(Ascii(wire), out _).ToList();
+
+        Assert.Equal(expectedReports, reports);
+    }
+
+    [Fact]
+    public void Capture_ReportsProgressUntilClosed()
+    {
+        var reports = 0;
+        var capture = new TextReplyCapture(_ => { }, () => reports++);
+
+        capture.ReportLineProgress();
+        capture.Close();
+        capture.ReportLineProgress();
+
+        Assert.Equal(1, reports);
+    }
+
     [Fact]
     public void ThreeSwitches_FrameEachBufferTheWayTheCaptureInForceSays()
     {

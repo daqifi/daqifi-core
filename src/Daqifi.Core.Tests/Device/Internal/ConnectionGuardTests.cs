@@ -170,7 +170,7 @@ public class ConnectionGuardTests
         public bool IsInsideTextExchange { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public ILogger Logger => throw new NotSupportedException();
         public TimeProvider TimeProvider => TimeProvider.System;
-        public Task<IDisposable> BeginTextCaptureAsync(Action<string> onLine, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IDisposable> BeginTextCaptureAsync(Action<string> onLine, Action onLineProgress, CancellationToken cancellationToken) => throw new NotSupportedException();
         public void AttachInboundHandler(IMessageConsumer<WireMessage> consumer) => throw new NotSupportedException();
         public void DetachInboundHandler(IMessageConsumer<WireMessage> consumer) => throw new NotSupportedException();
         public Task WaitForOperationLockAsync(CancellationToken cancellationToken) => throw new NotSupportedException();

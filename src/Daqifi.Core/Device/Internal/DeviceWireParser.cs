@@ -121,6 +121,17 @@ internal sealed class DeviceWireParser : IMessageParser<WireMessage>
             messages.Add(WireMessage.ForLine(line.Data, capture));
         }
 
+        // Bytes left over are the start of a line whose end has not arrived. The reader parses
+        // only after a read, so a leftover here means the device is still sending — the one fact
+        // an exchange that counts whole lines cannot see. A capability document is one line of
+        // ~8.5 KB, and over WiFi it can take longer than the exchange's quiet window to arrive;
+        // without this, the exchange ends in the middle of it and releases the device while the
+        // rest is still on its way (issue #977).
+        if (consumedBytes < data.Length)
+        {
+            capture.ReportLineProgress();
+        }
+
         return messages;
     }
 }
