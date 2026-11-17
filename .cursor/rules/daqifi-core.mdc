@@ -9,7 +9,7 @@ alwaysApply: true
 
 ## TFMs
 
-- Library, MCP tool, tests (`Daqifi.Core`, `Daqifi.Mcp`, `Daqifi.Core.Tests`, `Daqifi.Mcp.Tests`): `net9.0;net10.0`
+- Library, MCP tool, tests (`Daqifi.Core`, `Daqifi.Mcp`, `Daqifi.Core.Tests`, `Daqifi.Mcp.Tests`): `net10.0`
 - Benchmarks (`Daqifi.Core.Benchmarks`): `net10.0` only
 - Not .NET 8. Do not multi-target the benchmark host.
 

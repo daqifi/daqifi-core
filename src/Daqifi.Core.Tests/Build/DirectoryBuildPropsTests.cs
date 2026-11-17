@@ -340,7 +340,6 @@ public class DirectoryBuildPropsTests
             .Select(found => found.Value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        Assert.Contains("net9.0", monikers);
         Assert.Contains("net10.0", monikers);
     }
 

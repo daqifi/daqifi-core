@@ -18,12 +18,12 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 /// </para>
 /// <code>
 /// DAQIFI_UNPLUG_PORT=/dev/cu.usbmodem1101 \
-///   dotnet test src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj -f net9.0 \
+///   dotnet test src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj -f net10.0 \
 ///   --filter "FullyQualifiedName~UnpluggedSerialDevice_ReportsConnectionLost" \
 ///   --logger "console;verbosity=detailed"
 ///
 /// DAQIFI_UNPLUG_PORT=/dev/cu.usbmodem1101 \
-///   dotnet test src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj -f net9.0 \
+///   dotnet test src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj -f net10.0 \
 ///   --filter "FullyQualifiedName~UnpluggedSerialDevice_IsPrunedFromTheRegistry" \
 ///   --logger "console;verbosity=detailed"
 /// </code>

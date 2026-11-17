@@ -5,8 +5,8 @@
          Directory.Build.props. Nothing centralized may be restated here; see
          Daqifi.Core.Tests/Build/DirectoryBuildPropsTests.cs. -->
 
-    <!-- net10.0 only, so `dotnet run -c Release` needs no -f. For net9.0 numbers add
-         [SimpleJob(RuntimeMoniker.Net90)] to a class, not a second TFM; see the README. -->
+    <!-- net10.0 only, so `dotnet run -c Release` needs no -f. For another runtime's
+         numbers add a [SimpleJob] for it to a class, not a second TFM; see the README. -->
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
 
