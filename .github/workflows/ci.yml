@@ -25,11 +25,52 @@ permissions:
   contents: read
 
 jobs:
+  # Push runs only. A PR that lands through the merge queue is fast-forwarded onto main
+  # at the exact commit its merge_group run tested, so the push run that follows would
+  # test the same SHA - the same tree, this same workflow file - a second time. That was
+  # 46 of the 50 pushes measured in Nov 2026 (~16% of CI's runner minutes), and the only
+  # push failures in that window were flakes on SHAs the queue had already passed.
+  #
+  # The backstop still does its job: a push the queue did not test (a ruleset bypass, an
+  # admin push) has no green merge_group run for its SHA and gets the full matrix. Any
+  # failure to answer the question - an API error, an unexpected response - also runs
+  # the full matrix; only a positive match skips it.
+  queue-verified:
+    name: queue-verified
+    if: github.event_name == 'push'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      verified: ${{ steps.check.outputs.verified }}
+    steps:
+    - name: Look for a green merge_group run of this exact commit
+      id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SHA: ${{ github.sha }}
+      run: |
+        count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=merge_group&status=success&head_sha=${SHA}" \
+          --jq '[.workflow_runs[] | select(.head_sha == env.SHA)] | length' || echo 0)
+        echo "green merge_group runs for ${SHA}: ${count}"
+        if [ "${count}" -ge 1 ] 2>/dev/null; then
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          echo "The merge queue already passed ${SHA}; skipping the duplicate test matrix." >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "verified=false" >> "$GITHUB_OUTPUT"
+        fi
+
   # One leg per supported OS. The library branches on the host OS (macOS IOKit HID,
   # Windows PnP/WMI discovery). fail-fast is off so one platform's failure still
   # leaves the other two's results readable.
   test:
     name: test
+    needs: queue-verified
+    # queue-verified is skipped on pull_request and merge_group, which would skip this
+    # job too under the default success() condition; !cancelled() lets it run. A failed
+    # queue-verified leaves `verified` empty, which also runs the matrix.
+    if: ${{ !cancelled() && needs.queue-verified.outputs.verified != 'true' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -171,7 +212,7 @@ jobs:
   # check keeps reporting and automatically covers any OS added to the matrix later.
   build:
     name: build
-    needs: test
+    needs: [queue-verified, test]
     if: always()
     timeout-minutes: 5
     runs-on: ubuntu-latest
@@ -179,8 +220,13 @@ jobs:
     - name: Check matrix result
       env:
         RESULT: ${{ needs.test.result }}
+        VERIFIED: ${{ needs.queue-verified.outputs.verified }}
       run: |
-        echo "Matrix result: $RESULT"
-        # Anything other than success — a failed leg, a cancelled leg, or a leg
-        # skipped by a bad `if` — must not report green.
+        echo "Matrix result: $RESULT (queue-verified: ${VERIFIED:-n/a})"
+        # The one sanctioned skip: a push whose exact commit the merge queue already
+        # passed. Anything else other than success — a failed leg, a cancelled leg, or a
+        # leg skipped by a bad `if` — must not report green.
+        if [ "$RESULT" = "skipped" ] && [ "$VERIFIED" = "true" ]; then
+          exit 0
+        fi
         [ "$RESULT" = "success" ]
