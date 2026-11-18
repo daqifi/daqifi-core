@@ -28,7 +28,7 @@ jobs:
   # Push runs only. A PR that lands through the merge queue is fast-forwarded onto main
   # at the exact commit its merge_group run tested, so the push run that follows would
   # test the same SHA - the same tree, this same workflow file - a second time. That was
-  # 46 of the 50 pushes measured in Nov 2026 (~16% of CI's runner minutes), and the only
+  # 46 of the 50 pushes measured in Nov 2026 (~15% of CI's runner minutes), and the only
   # push failures in that window were flakes on SHAs the queue had already passed.
   #
   # The backstop still does its job: a push the queue did not test (a ruleset bypass, an
