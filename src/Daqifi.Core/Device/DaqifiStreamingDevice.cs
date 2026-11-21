@@ -1311,40 +1311,70 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
+    /// the error-queue drain and the command with its <c>SYSTem:ERRor?</c> are separate exchanges,
+    /// and the entry read afterwards is only this command's own if no other caller can add to the
+    /// queue in between.
+    /// </remarks>
     public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => _administration.SaveAdcCalibrationAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.SaveAdcCalibrationAsync(ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => _administration.LoadAdcCalibrationAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.LoadAdcCalibrationAsync(ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
+        => RunExclusiveAsync(ct => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
+        => RunExclusiveAsync(ct => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => _administration.SaveFactoryAdcCalibrationAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.SaveFactoryAdcCalibrationAsync(ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => _administration.LoadFactoryAdcCalibrationAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.LoadFactoryAdcCalibrationAsync(ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
-        => _administration.UseAdcCalibrationAsync(bank, cancellationToken);
+        => RunExclusiveAsync(ct => _administration.UseAdcCalibrationAsync(bank, ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
-        => _administration.SaveVoltagePrecisionAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.SaveVoltagePrecisionAsync(ct), cancellationToken);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
+    /// </remarks>
     public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)
-        => _administration.LoadVoltagePrecisionAsync(cancellationToken);
+        => RunExclusiveAsync(ct => _administration.LoadVoltagePrecisionAsync(ct), cancellationToken);
 
 
     // -----------------------------------------------------------------
@@ -1394,8 +1424,25 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public NetworkConfiguration NetworkConfiguration => _networkOperations.NetworkConfiguration;
 
     /// <inheritdoc />
-    public Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
-        => _networkOperations.UpdateNetworkConfigurationAsync(configuration, cancellationToken);
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
+    /// the reconfiguration is a dozen sends that only make sense as one sequence — another
+    /// caller's commands must not land between the staged settings, the save and the apply, nor
+    /// restart the stream it stopped — followed by the WiFi module's restart window, which other
+    /// callers' queries would otherwise run into. Their sends are deferred and their text queries
+    /// wait until it finishes, about two seconds.
+    /// </remarks>
+    public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        // Checked before the lock wait so they surface exactly as they did before it: a
+        // pre-cancelled token as OperationCanceledException rather than the lock wait's
+        // TaskCanceledException, and a null configuration ahead of either.
+        ArgumentNullException.ThrowIfNull(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await RunExclusiveAsync(ct => _networkOperations.UpdateNetworkConfigurationAsync(configuration, ct), cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)

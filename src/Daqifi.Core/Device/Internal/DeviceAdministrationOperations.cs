@@ -309,9 +309,11 @@ internal sealed class DeviceAdministrationOperations
     /// <para>
     /// The command and its <c>SYSTem:ERRor?</c> query go out in one text exchange, so no other
     /// exchange can interleave between them. The drain necessarily runs in exchanges of its own
-    /// beforehand, so a caller driving the same device from another thread can still slip a
-    /// command into that gap; these are administration operations that already assume one caller
-    /// at a time.
+    /// beforehand, and that gap is closed one level up: <see cref="DaqifiStreamingDevice"/> runs
+    /// each confirming method under
+    /// <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>,
+    /// so another thread's command — a rejected fire-and-forget send whose error would otherwise be
+    /// popped here and reported against this one — waits until the verdict has been read.
     /// </para>
     /// <para>
     /// Side effect worth knowing about: the drain discards whatever the queue held. A caller who
