@@ -105,6 +105,24 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
+    public void SerialStreamTransport_Disconnect_WithAPortThatClosedUnderneathIt_ReleasesThePort()
+    {
+        // A port that closed on its own (unplug, a DTR reset re-enumerating the COM port) still
+        // sits in the transport with IsOpen == false. Disconnect used to return early on
+        // !IsConnected, leaving it held with the watchdog already disarmed.
+        using var transport = new SerialStreamTransport("COM1");
+        var port = new DisposalTrackingSerialPort();
+        transport.SetSerialPortForTesting(port);
+        var reported = new List<bool>();
+        transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+
+        transport.Disconnect();
+
+        Assert.True(port.IsDisposed);
+        Assert.Equal(new[] { false }, reported);
+    }
+
+    [Fact]
     public void SerialStreamTransport_Stream_WhenPortClosedMidOperation_ThrowsTypedException_NotRawBaseStreamMessage()
     {
         // Arrange - simulate the issue #238 scenario: the port is non-null but closed

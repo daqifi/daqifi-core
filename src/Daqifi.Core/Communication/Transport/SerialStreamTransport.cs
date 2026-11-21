@@ -390,6 +390,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             connectAttempt: (options, attemptToken) =>
             {
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
+
                 _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
                 {
                     ReadTimeout = timeout,
@@ -460,7 +461,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // report an intentional disconnect as a lost connection.
         _watchdog.Disarm();
 
-        if (!IsConnected)
+        // Gated on holding a port, not on IsConnected: a port that closed underneath us (unplug,
+        // DTR reset re-enumeration) reads IsOpen == false while still held, and returning early
+        // on it would leave it held with the watchdog already disarmed.
+        if (_serialPort is null)
             return;
 
         try
