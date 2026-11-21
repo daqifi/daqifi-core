@@ -43,6 +43,23 @@ public class StreamingSessionFrequencySourceTests
         Assert.Equal(100, session.StreamingFrequency);
     }
 
+    [Fact]
+    public void AStart_UsesOneRateForTheDecoderAndTheWire()
+    {
+        // A caller choosing a rate while the start is configuring the decoder must not leave the
+        // decoder at one rate and the device started at another (or at a rate the cap never saw).
+        var host = new FakeHost { MaximumStreamingFrequencyHz = 500 };
+        var session = new StreamingSessionController(host);
+        session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
+        session.StreamingFrequency = 200;
+        host.OnBeginDecoderSession = () => session.StreamingFrequency = 900;
+
+        session.StartStreaming();
+
+        Assert.Equal(200, host.DecoderRateHz);
+        Assert.Equal("SYSTem:StartStreamData 200", host.StartCommand);
+    }
+
     private sealed class FakeHost : IStreamingSessionHost
     {
         private Action? _onMaxSamplingRateRead;
@@ -99,12 +116,19 @@ public class StreamingSessionFrequencySourceTests
         {
         }
 
-        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent)
-        {
-        }
+        public string? StartCommand { get; private set; }
+
+        public int? DecoderRateHz { get; private set; }
+
+        public Action? OnBeginDecoderSession { get; set; }
+
+        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
+            StartCommand = message.Data as string;
 
         public void BeginDecoderSession(int streamingFrequencyHz)
         {
+            DecoderRateHz = streamingFrequencyHz;
+            OnBeginDecoderSession?.Invoke();
         }
 
         public void EndSdCardLogSession()

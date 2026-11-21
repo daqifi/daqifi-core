@@ -400,16 +400,12 @@ internal sealed class StreamingSessionController
         // with no error anywhere (issue #975). A reader that cannot start throws here instead.
         _host.EnsureMessageReaderRunning();
 
-        ApplyRateCap();
+        // One value for the decoder and the wire: re-reading the rate for each would let a
+        // caller's change in between configure the decoder for one rate and start the device
+        // at another, or send a rate the cap never saw.
+        var rateHz = ClampRateAndChooseItForThisStart();
 
-        // The rate a stream ran at is the one a reconnect resumes it at, whatever the device
-        // reports afterwards.
-        lock (_frequencyLock)
-        {
-            _frequencySource = FrequencySource.Chosen;
-        }
-
-        BeginStreamingSession();
+        BeginStreamingSession(rateHz);
 
         _kind = StreamingSessionKind.LiveStream;
         Volatile.Write(ref _parkedStartFailure, null);
@@ -418,7 +414,7 @@ internal sealed class StreamingSessionController
         // flow: that capture stopped the reader on purpose. The parked start checks again when it
         // is replayed, after the capture's restart, and is dropped with the session ended if the
         // reader still cannot start (issue #975).
-        _host.SendStreamStart(ScpiMessageProducer.StartStreaming(StreamingFrequency), MarkParkedStartNotSent);
+        _host.SendStreamStart(ScpiMessageProducer.StartStreaming(rateHz), MarkParkedStartNotSent);
     }
 
     /// <summary>
@@ -454,11 +450,14 @@ internal sealed class StreamingSessionController
     /// leaves the rate alone; see <see cref="SampleRateCap.Enforce"/>.
     /// </para>
     /// </remarks>
-    private void ApplyRateCap()
+    /// <returns>The rate this start runs at, as committed.</returns>
+    private int ClampRateAndChooseItForThisStart()
     {
         // The ceiling is read first, outside the lock (it calls into the host); the rate it is
         // applied to is read inside, so a caller's change landing during the ceiling read is the
-        // rate that gets clamped rather than being overwritten by a clamp of the old one.
+        // rate that gets clamped rather than being overwritten by a clamp of the old one. The
+        // clamped rate is marked chosen in the same step: the rate a stream ran at is the one a
+        // reconnect resumes it at, whatever the device reports afterwards.
         var ceilingHz = _host.MaximumStreamingFrequencyHz;
 
         int newRateHz;
@@ -466,18 +465,20 @@ internal sealed class StreamingSessionController
         lock (_frequencyLock)
         {
             (newRateHz, adjustedFromHz) = SampleRateCap.Enforce(_streamingFrequency, ceilingHz);
-            if (!adjustedFromHz.HasValue)
-            {
-                return;
-            }
-
             _streamingFrequency = newRateHz;
+            _frequencySource = FrequencySource.Chosen;
+        }
+
+        if (!adjustedFromHz.HasValue)
+        {
+            return newRateHz;
         }
 
         SafeTrace(
             $"[{nameof(StartStreaming)}] Lowered the streaming frequency from {adjustedFromHz.Value} Hz "
             + $"to {newRateHz} Hz, the most the enabled channel set can sustain. The device would have "
             + "refused the higher rate and streamed nothing.");
+        return newRateHz;
     }
 
     /// <summary>
@@ -491,8 +492,8 @@ internal sealed class StreamingSessionController
     /// previous session's anchor and re-use its gap detector, producing samples stamped with
     /// times that never happened — silently.
     /// </remarks>
-    private void BeginStreamingSession() =>
-        _host.BeginDecoderSession(StreamingFrequency);
+    private void BeginStreamingSession(int rateHz) =>
+        _host.BeginDecoderSession(rateHz);
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StopStreaming"/>
     internal void StopStreaming()
@@ -604,7 +605,7 @@ internal sealed class StreamingSessionController
                     // A session is beginning, so it gets exactly the preparation StartStreaming
                     // would have given it. Ordering matches too: the state is ready before the
                     // flag flips.
-                    BeginStreamingSession();
+                    BeginStreamingSession(effect.StreamingFrequency);
                     _kind = StreamingSessionKind.LiveStream;
                 }
 
