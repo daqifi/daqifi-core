@@ -364,8 +364,13 @@ public sealed class SdCardFileReceiver
         // with nothing outstanding there is nothing to stall on, and the 20-second wait plus a
         // message telling the user to power-cycle healthy hardware was the whole of issue #888.
         // Anything else is a short reply that has now ended (#539), or a stall.
+        //
+        // A null reason means the exit was a zero-length read, whose reason depends on the
+        // transport and is only worked out once a stall is actually being reported: probing the
+        // stream for a download that has already completed could fail it after the fact, since a
+        // disconnected stream's CanRead may throw.
         long EndWithoutTerminator(
-            SdCardTransferStallReason reason, TimeSpan? window = null, Exception? cause = null)
+            SdCardTransferStallReason? reason, TimeSpan? window = null, Exception? cause = null)
         {
             if (heldContent is { HasReleasedContent: false })
             {
@@ -376,7 +381,18 @@ public sealed class SdCardFileReceiver
 
             ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
-            throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason, window, cause);
+            // A zero-byte read is NOT proof the stream closed on every transport. Over USB serial
+            // Core sets a per-read SerialPort.ReadTimeout and .NET's SerialStream.ReadAsync returns
+            // 0 on that timeout instead of throwing, so zero bytes is the ORDINARY stall signal
+            // there (#398 gap 1). On a socket it is the opposite: zero bytes is the peer's FIN and
+            // nothing else, and the stream will not admit it — NetworkStream.CanRead stays true
+            // until the stream is disposed, so the CanRead probe alone would report a closed
+            // connection as merely quiet. The caller, which knows its transport, settles it (#327).
+            reason ??= _zeroLengthReadMeansClosed || !_sourceStream.CanRead
+                ? SdCardTransferStallReason.TransportClosed
+                : SdCardTransferStallReason.NoDataReceived;
+
+            throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason.Value, window, cause);
         }
 
         try
@@ -412,14 +428,20 @@ public sealed class SdCardFileReceiver
                     bytesRead = await _sourceStream.ReadAsync(buffer, 0, buffer.Length, idleCts?.Token ?? token)
                         .ConfigureAwait(false);
                 }
-                catch (OperationCanceledException ex) when (idleCts is { IsCancellationRequested: true } && !token.IsCancellationRequested)
+                catch (OperationCanceledException ex) when (
+                    idleCts is { IsCancellationRequested: true }
+                    && !token.IsCancellationRequested
+                    && !timeoutCts.IsCancellationRequested)
                 {
                     // Nothing arrived for the whole window while neither the caller nor the overall
                     // deadline had anything to say — the device stopped feeding the transfer. This
                     // is the only stall signal a socket gives (see DefaultIdleTimeout); on serial
-                    // the zero-length-read path below gets there first and this never fires. The
-                    // overall deadline expiring mid-read cancels `token` too, so it fails this
-                    // filter and is handled by the catch around the whole loop.
+                    // the zero-length-read path below gets there first and this never fires. An
+                    // expired overall deadline is left to the catch around the whole loop, which
+                    // reports it as the timeout it is. The deadline check is not redundant with
+                    // `token`: the deadline's own source is marked cancelled a moment before its
+                    // cancellation reaches the linked token, and an idle window expiring in that
+                    // moment must still be reported as the deadline.
                     return EndWithoutTerminator(SdCardTransferStallReason.NoDataReceived, idleWindow, ex);
                 }
 
@@ -433,18 +455,9 @@ public sealed class SdCardFileReceiver
 
                 if (bytesRead == 0)
                 {
-                    // A zero-byte read is NOT proof the stream closed on every transport. Over USB
-                    // serial Core sets a per-read SerialPort.ReadTimeout and .NET's
-                    // SerialStream.ReadAsync returns 0 on that timeout instead of throwing, so zero
-                    // bytes is the ORDINARY stall signal there (#398 gap 1). On a socket it is the
-                    // opposite: zero bytes is the peer's FIN and nothing else, and the stream will
-                    // not admit it — NetworkStream.CanRead stays true until the stream is disposed,
-                    // so the CanRead probe alone would report a closed connection as merely quiet.
-                    // The caller, which knows its transport, settles it (#327).
-                    return EndWithoutTerminator(
-                        _zeroLengthReadMeansClosed || !_sourceStream.CanRead
-                            ? SdCardTransferStallReason.TransportClosed
-                            : SdCardTransferStallReason.NoDataReceived);
+                    // No reason given: whether zero bytes means quiet or closed is settled inside
+                    // the helper, and only if a stall is actually being reported.
+                    return EndWithoutTerminator(reason: null);
                 }
 
                 replyStarted = true;
