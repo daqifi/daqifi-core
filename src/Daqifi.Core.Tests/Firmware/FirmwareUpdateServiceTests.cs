@@ -1602,6 +1602,67 @@ public class FirmwareUpdateServiceTests
         Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
     }
 
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenCanceledMidFlashAndFirstSubscriberThrowsOnFailed_LaterSubscriberStillGetsFlashCondition()
+    {
+        // A cancel throws no FirmwareUpdateException, so the terminal event's flash condition is
+        // the only typed signal that the board may be half-flashed. A subscriber that throws on
+        // it must not keep the event from the subscribers added after it.
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, InvalidAck })
+        {
+            hidTransport.EnqueueRead(read); // version, erase, cleanup re-erase rejected
+        }
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            options);
+
+        using var cts = new CancellationTokenSource();
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.Programming)
+            {
+                cts.Cancel();
+            }
+
+            if (args.CurrentState == FirmwareUpdateState.Failed)
+            {
+                throw new InvalidOperationException(FailedObserverMessage);
+            }
+        };
+        var laterEvents = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => laterEvents.Add(args);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateFirmwareAsync(
+                    new FakeStreamingDevice("COM3"), hexPath, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Contains(laterEvents, e => e.CurrentState == FirmwareUpdateState.CleaningUp);
+        var failed = Assert.Single(laterEvents, e => e.CurrentState == FirmwareUpdateState.Failed);
+        Assert.Equal(Pic32FlashCondition.PossiblyHalfFlashed, failed.FlashCondition);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
