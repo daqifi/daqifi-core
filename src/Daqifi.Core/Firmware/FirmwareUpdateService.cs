@@ -35,7 +35,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
     private readonly Pic32FirmwareUpdater _pic32Updater;
     private readonly WifiModuleUpdater _wifiUpdater;
 
-    private bool _disposed;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Initializes a new firmware update service. The optional <paramref name="logger"/> defaults to
@@ -348,12 +348,10 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _operationLock.Dispose();
+        // The operation lock is deliberately not disposed: an update running when the service
+        // is disposed still releases it in its finally, and disposing it underneath would turn
+        // that update's outcome, success included, into an ObjectDisposedException. Only
+        // WaitAsync and Release are used on it, so there is no wait handle to free.
         _disposed = true;
     }
 }

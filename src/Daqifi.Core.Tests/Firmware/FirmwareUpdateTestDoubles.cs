@@ -389,9 +389,13 @@ internal sealed class FakeHidTransport : IHidTransport
         DevicePath = null;
     }
 
+    /// <summary>Runs on every connect attempt, either overload, before it is answered.</summary>
+    public Action? OnConnect { get; set; }
+
     public Task ConnectAsync(int vendorId, int productId, string? serialNumber = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        OnConnect?.Invoke();
         ConnectAttempts++;
         if (ConnectFailures.Count > 0)
         {
@@ -418,6 +422,7 @@ internal sealed class FakeHidTransport : IHidTransport
     public Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        OnConnect?.Invoke();
         ConnectByPathAttempts++;
         LastConnectByPath = devicePath;
         if (ConnectFailures.Count > 0)

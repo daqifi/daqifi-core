@@ -16,12 +16,18 @@ namespace Daqifi.Core.Device.Discovery;
 /// </summary>
 public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
 {
+    /// <remarks>
+    /// Deliberately never disposed. A pass that is running when the finder is disposed still
+    /// holds it and releases it in its <c>finally</c>, and a second pass may already be waiting
+    /// on it; disposing it underneath them made the first pass's release throw (replacing its
+    /// results) and left the second waiting forever. Only <c>WaitAsync</c> and <c>Release</c> are
+    /// used on it here, so there is no wait handle to free.
+    /// </remarks>
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
 
-    // 0 = live, 1 = disposed. Written via Interlocked.Exchange so concurrent
-    // Dispose() calls resolve to exactly one winner, and published before the
-    // semaphore is disposed so ThrowIfDisposed() starts throwing the moment
-    // disposal begins (see Dispose(bool)).
+    // 0 = live, 1 = disposed. Written via Interlocked.Exchange so concurrent Dispose() calls
+    // resolve to exactly one winner, and ThrowIfDisposed() starts throwing the moment disposal
+    // begins (see Dispose(bool)).
     private int _disposed;
 
     /// <summary>
@@ -142,19 +148,9 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     /// </param>
     protected virtual void Dispose(bool disposing)
     {
-        // Publish the disposed state atomically and *before* releasing managed
-        // resources: the first caller to flip the flag wins (so concurrent
-        // Dispose() calls can't both dispose the semaphore), and a concurrent
-        // DiscoverAsync now reliably fails ThrowIfDisposed() with the finder-named
-        // ObjectDisposedException instead of racing onto a disposed semaphore.
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        if (disposing)
-        {
-            _discoverySemaphore.Dispose();
-        }
+        // The first caller to flip the flag wins, and a later DiscoverAsync fails
+        // ThrowIfDisposed() with the finder-named ObjectDisposedException. The discovery
+        // semaphore is left alone; see _discoverySemaphore.
+        Interlocked.Exchange(ref _disposed, 1);
     }
 }
