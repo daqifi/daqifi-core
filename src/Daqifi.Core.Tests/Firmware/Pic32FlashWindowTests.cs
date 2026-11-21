@@ -32,6 +32,8 @@ public class Pic32FlashWindowTests
 
     private const byte EraseFlashOpcode = 0x02;
     private const byte ProgramFlashOpcode = 0x03;
+    private const byte ReadCrcOpcode = 0x04;
+    private const byte JumpToApplicationOpcode = 0x05;
     private const byte DleEscape = 0x10;
 
     /// <summary>The message fragment every out-of-window refusal carries.</summary>
@@ -317,6 +319,273 @@ public class Pic32FlashWindowTests
 
         // The refusal happens before the flow opens the bootloader at all, so the device never
         // even left the application.
+        Assert.Equal(0, hidTransport.ConnectAttempts);
+        Assert.Empty(device.SentCommands);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Records the bootloader places somewhere other than where the host checks them
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>The message fragment every refusal of a record the bootloader would move carries.</summary>
+    internal const string PlacementRefusalFragment = "places data where the bootloader would write it somewhere else";
+
+    /// <summary>
+    /// Records the bootloader accepts after which it stops adding the type-04 base this library
+    /// still adds: <c>APP_ProgramHexRecord</c> clears the linear address on a type-02 record, and
+    /// clears both addresses on an end-of-file record.
+    /// </summary>
+    public static TheoryData<string, string> RecordsTheBootloaderRebasesOn => new()
+    {
+        { "an end-of-file record in the middle of the file", EndOfFileLine },
+        { "an extended segment address (type-02) record", ExtendedSegmentAddressLine }
+    };
+
+    [Theory]
+    [MemberData(nameof(RecordsTheBootloaderRebasesOn))]
+    public void ParseHexFile_WithDataAfterARecordTheBootloaderRebasesOn_RefusesTheImage(string what, string rebasingLine)
+    {
+        var lines = ImageWithDataAfter(rebasingLine);
+
+        var error = Assert.Throws<InvalidDataException>(() => _protocol.ParseHexFile(lines));
+
+        // The refusal names both records, so whoever reads it can find them in the file.
+        Assert.Contains(PlacementRefusalFragment, error.Message, StringComparison.Ordinal);
+        Assert.True(
+            error.Message.Contains(rebasingLine, StringComparison.Ordinal)
+            && error.Message.Contains(lines[3], StringComparison.Ordinal),
+            $"The refusal for data after {what} should name both {rebasingLine} and {lines[3]}, " +
+            $"and reads: {error.Message}");
+    }
+
+    [Theory]
+    [MemberData(nameof(RecordsTheBootloaderRebasesOn))]
+    public void ComputeCrcRegions_WithDataAfterARecordTheBootloaderRebasesOn_RefusesTheImage(string what, string rebasingLine)
+    {
+        Assert.NotEmpty(what);
+
+        // Before this was refused, the second record was counted into a region at 0x9D000010,
+        // where the bootloader never writes it, so verify failed after the erase.
+        var error = Assert.Throws<InvalidDataException>(
+            () => _protocol.ComputeCrcRegions(ImageWithDataAfter(rebasingLine)));
+
+        Assert.Contains(PlacementRefusalFragment, error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(RecordsTheBootloaderRebasesOn))]
+    public async Task UpdateFirmwareAsync_WithDataAfterARecordTheBootloaderRebasesOn_SendsNoEraseAtAll(
+        string what,
+        string rebasingLine)
+    {
+        var hidTransport = new FakeHidTransport();
+
+        await AssertTheUpdateIsRefusedBeforeAnyCommand(
+            ImageWithDataAfter(rebasingLine),
+            PlacementRefusalFragment,
+            $"data after {what}");
+    }
+
+    [Fact]
+    public void ParseHexFile_WithARecordTheBootloaderRebasesOnThatNoDataFollows_IsAccepted()
+    {
+        // A type-02 record just before the end-of-file record moves nothing: there is no data
+        // after it for the bootloader to place anywhere, and the bootloader acknowledges it.
+        var lines = new[]
+        {
+            ExtendedAddressLine(0x1D00),
+            DataLine(0x0000, Bytes(16)),
+            ExtendedSegmentAddressLine,
+            EndOfFileLine
+        };
+
+        Assert.Equal(4, _protocol.ParseHexFile(lines).Count);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithDataAfterATypeFourRecordThatRebasesAgain_FlashesTheImage()
+    {
+        // A type-04 record after the rebasing record sets both the bootloader's and the host's
+        // base to the same address again, so the data after it lands where it is verified. Every
+        // record here is one APP_ProgramHexRecord returns HEX_REC_NORMAL for, which is the only
+        // result datastream.c acknowledges, so every scripted acknowledgment is one the
+        // bootloader really sends.
+        string[] lines =
+        [
+            ExtendedAddressLine(0x1D00),
+            DataLine(0x0000, Bytes(16)),
+            ExtendedSegmentAddressLine,
+            ExtendedAddressLine(0x1D00),
+            DataLine(0x0010, Bytes(16)),
+            EndOfFileLine
+        ];
+
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1]));
+        hidTransport.EnqueueRead(FrameReply([EraseFlashOpcode]));
+        for (var i = 0; i < lines.Length; i++)
+        {
+            hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode]));
+        }
+
+        // One contiguous 32-byte region at 0x9D000000, which is what the device reads back.
+        var flashCrc = new Crc16([.. Bytes(16), .. Bytes(16)]).Crc;
+        hidTransport.EnqueueRead(FrameReply([ReadCrcOpcode, (byte)flashCrc, (byte)(flashCrc >> 8)]));
+
+        var service = CreateService(hidTransport);
+        var hexPath = WriteTempHexFile(lines);
+
+        try
+        {
+            await service.UpdateFirmwareAsync(new FakeStreamingDevice("COM3"), hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal<byte[]>(
+            [
+                ReadVersionOpcode,
+                EraseFlashOpcode,
+                .. Enumerable.Repeat(ProgramFlashOpcode, lines.Length),
+                ReadCrcOpcode,
+                JumpToApplicationOpcode
+            ],
+            hidTransport.Writes.Select(OpcodeOf).ToArray());
+    }
+
+    /// <summary>
+    /// A valid 16-byte record at <c>0x1D000000</c>, then <paramref name="rebasingLine"/>, then a
+    /// second 16-byte record at offset <c>0x0010</c>. The host reads the second record as
+    /// <c>0x1D000010</c>, inside the window, while the bootloader puts it at <c>0x00000010</c> and
+    /// drops it. The first record is there so the image is not refused for having nothing to
+    /// program (#838), which is the guard that used to stop the image only when it had no other data.
+    /// </summary>
+    private static string[] ImageWithDataAfter(string rebasingLine) =>
+    [
+        ExtendedAddressLine(0x1D00),
+        DataLine(0x0000, Bytes(16)),
+        rebasingLine,
+        DataLine(0x0010, Bytes(16)),
+        EndOfFileLine
+    ];
+
+    /// <summary>A type-02 extended segment address record of zero, which the bootloader accepts.</summary>
+    private static string ExtendedSegmentAddressLine => HexLine(0x02, 0x0000, [0x00, 0x00]);
+
+    // ---------------------------------------------------------------------------------------
+    // Records the bootloader never acknowledges
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>The message fragment every refusal of a record type the bootloader rejects carries.</summary>
+    internal const string UnsupportedRecordRefusalFragment = "record type the bootloader does not accept";
+
+    /// <summary>A type-05 start linear address record.</summary>
+    private static string StartLinearAddressLine => HexLine(0x05, 0x0000, [0x9D, 0x00, 0x00, 0x00]);
+
+    /// <summary>
+    /// Images carrying a record type <c>APP_ProgramHexRecord</c> answers with
+    /// <c>HEX_REC_UNKNOW_TYPE</c>. <c>datastream.c</c> acknowledges PROGRAM_FLASH only on
+    /// <c>HEX_REC_NORMAL</c>, and Core sends one record per request, so each of these used to erase
+    /// the board and then time out waiting for an acknowledgment that never comes.
+    /// </summary>
+    public static TheoryData<string, string[]> ImagesWithARecordTheBootloaderRejects => new()
+    {
+        {
+            "a trailing start linear address (type-05) record",
+            [ExtendedAddressLine(0x1D00), DataLine(0x0000, Bytes(16)), StartLinearAddressLine, EndOfFileLine]
+        },
+        {
+            "a type-05 record followed by a fresh type-04 record",
+            [
+                ExtendedAddressLine(0x1D00),
+                DataLine(0x0000, Bytes(16)),
+                StartLinearAddressLine,
+                ExtendedAddressLine(0x1D00),
+                DataLine(0x0010, Bytes(16)),
+                EndOfFileLine
+            ]
+        },
+        {
+            "a start segment address (type-03) record",
+            [ExtendedAddressLine(0x1D00), DataLine(0x0000, Bytes(16)), HexLine(0x03, 0x0000, [0x00, 0x00, 0x00, 0x00]), EndOfFileLine]
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(ImagesWithARecordTheBootloaderRejects))]
+    public void ParseHexFile_WithARecordTheBootloaderRejects_RefusesTheImage(string what, string[] lines)
+    {
+        var error = Assert.Throws<InvalidDataException>(() => _protocol.ParseHexFile(lines));
+
+        Assert.True(
+            error.Message.Contains(UnsupportedRecordRefusalFragment, StringComparison.Ordinal),
+            $"The refusal for an image with {what} reads: {error.Message}");
+    }
+
+    [Theory]
+    [MemberData(nameof(ImagesWithARecordTheBootloaderRejects))]
+    public void ComputeCrcRegions_WithARecordTheBootloaderRejects_RefusesTheImage(string what, string[] lines)
+    {
+        var error = Assert.Throws<InvalidDataException>(() => _protocol.ComputeCrcRegions(lines));
+
+        Assert.True(
+            error.Message.Contains(UnsupportedRecordRefusalFragment, StringComparison.Ordinal),
+            $"The refusal for an image with {what} reads: {error.Message}");
+    }
+
+    [Theory]
+    [MemberData(nameof(ImagesWithARecordTheBootloaderRejects))]
+    public async Task UpdateFirmwareAsync_WithARecordTheBootloaderRejects_SendsNoEraseAtAll(string what, string[] lines)
+    {
+        await AssertTheUpdateIsRefusedBeforeAnyCommand(lines, UnsupportedRecordRefusalFragment, what);
+    }
+
+    /// <summary>
+    /// Runs the whole update for <paramref name="lines"/> and asserts that it is refused with
+    /// <paramref name="refusalFragment"/> before the device sees a single command.
+    /// </summary>
+    private static async Task AssertTheUpdateIsRefusedBeforeAnyCommand(
+        string[] lines,
+        string refusalFragment,
+        string what)
+    {
+        var hidTransport = new FakeHidTransport();
+
+        // Queued so that the old code could run as far as it went: version, erase ack and a
+        // program ack for every record. The fix makes all of them unused.
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1]));
+        hidTransport.EnqueueRead(FrameReply([EraseFlashOpcode]));
+        for (var i = 0; i < lines.Length; i++)
+        {
+            hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode]));
+        }
+
+        var service = CreateService(hidTransport);
+        var device = new FakeStreamingDevice("COM3");
+        var hexPath = WriteTempHexFile(lines);
+
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+
+            Assert.Contains(refusalFragment, error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        var opcodes = hidTransport.Writes.Select(OpcodeOf).ToArray();
+        Assert.True(
+            opcodes.Length == 0,
+            $"The device saw {opcodes.Length} command(s) for an image with {what}: " +
+            $"[{string.Join(", ", opcodes.Select(opcode => $"0x{opcode:X2}"))}]. " +
+            $"{(opcodes.Contains(EraseFlashOpcode) ? "One of them is the erase." : string.Empty)}");
         Assert.Equal(0, hidTransport.ConnectAttempts);
         Assert.Empty(device.SentCommands);
         Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
