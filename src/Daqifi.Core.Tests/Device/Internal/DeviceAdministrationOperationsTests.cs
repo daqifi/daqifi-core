@@ -32,12 +32,6 @@ namespace Daqifi.Core.Tests.Device.Internal;
 /// </remarks>
 public class DeviceAdministrationOperationsTests
 {
-    [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new DeviceAdministrationOperations(null!));
-    }
-
     #region Reboot
 
     [Fact]

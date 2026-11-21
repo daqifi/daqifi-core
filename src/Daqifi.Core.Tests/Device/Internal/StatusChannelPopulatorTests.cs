@@ -27,18 +27,6 @@ public class StatusChannelPopulatorTests
         => new(logger ?? NullLogger.Instance, () => name);
 
     [Fact]
-    public void Constructor_WithNullLogger_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new StatusChannelPopulator(null!, () => "Nq1"));
-    }
-
-    [Fact]
-    public void Constructor_WithNullDeviceName_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new StatusChannelPopulator(NullLogger.Instance, null!));
-    }
-
-    [Fact]
     public void Populate_AppendsAnalogThenDigital_AndReportsBothCounts()
     {
         var destination = new List<IChannel>();

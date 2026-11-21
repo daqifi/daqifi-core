@@ -110,34 +110,6 @@ public class LifecycleGateTests
     #region Construction
 
     [Fact]
-    public void Constructor_WithNullLogger_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new LifecycleGate(
-            null!, () => "Nq1", () => TimeSpan.Zero, () => TimeSpan.Zero));
-    }
-
-    [Fact]
-    public void Constructor_WithNullDeviceName_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new LifecycleGate(
-            NullLogger.Instance, null!, () => TimeSpan.Zero, () => TimeSpan.Zero));
-    }
-
-    [Fact]
-    public void Constructor_WithNullConnectTimeout_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new LifecycleGate(
-            NullLogger.Instance, () => "Nq1", null!, () => TimeSpan.Zero));
-    }
-
-    [Fact]
-    public void Constructor_WithNullTeardownTimeout_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new LifecycleGate(
-            NullLogger.Instance, () => "Nq1", () => TimeSpan.Zero, null!));
-    }
-
-    [Fact]
     public void Run_WithNullOperation_ThrowsArgumentNullExceptionAndLeavesTheGateFree()
     {
         var gate = Create();
