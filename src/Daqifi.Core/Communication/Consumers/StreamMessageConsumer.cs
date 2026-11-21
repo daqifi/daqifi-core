@@ -51,6 +51,18 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     private readonly Lock _startLock = new();
 
     private volatile bool _isRunning;
+
+    /// <summary>
+    /// The most recently started reader thread, alive or not. Written only by <see cref="Start"/>,
+    /// under <see cref="_startLock"/>, and only once the previous reader has exited.
+    /// </summary>
+    /// <remarks>
+    /// Every reader of this field checks <see cref="Thread.IsAlive"/>, so a dead thread left here
+    /// means "no reader". A stop never clears it: stops do not take <see cref="_startLock"/>, so a
+    /// stop clearing it after its join could wipe out a reader a concurrent <see cref="Start"/>
+    /// had just published, and the next <see cref="Start"/> would then spawn a second reader on
+    /// the same stream with nothing left to join.
+    /// </remarks>
     private Thread? _consumerThread;
 
     /// <summary>
@@ -224,18 +236,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </summary>
     public void Stop()
     {
+        // The exiting reader clears its own buffer (see ProcessMessages), and the thread field is
+        // left alone (see _consumerThread): a stop touching either after its join could act on a
+        // reader that a concurrent Start has published since.
         _isRunning = false;
-        var stopped = _consumerThread?.Join(1000) ?? true;
-        if (stopped)
-        {
-            // Only tear down once the reader has actually exited: clearing the buffer (and later
-            // letting Start() reuse the slot) while the thread is still alive would race it.
-            _consumerThread = null;
-            lock (_bufferLock)
-            {
-                _messageBuffer.Clear();
-            }
-        }
+        _consumerThread?.Join(1000);
     }
 
     /// <summary>
@@ -248,21 +253,9 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         if (!_isRunning)
             return true;
 
+        // As in Stop: the exiting reader clears its own buffer and the thread field is left alone.
         _isRunning = false;
-        var stopped = _consumerThread?.Join(timeoutMs) ?? true;
-        if (stopped)
-        {
-            // Only clear once the reader has exited. Doing so unconditionally would (a) let a
-            // later Start() spawn a second reader over a still-alive one, and (b) block past the
-            // advertised timeout here if the reader is holding _bufferLock in a slow parse.
-            _consumerThread = null;
-            lock (_bufferLock)
-            {
-                _messageBuffer.Clear();
-            }
-        }
-
-        return stopped;
+        return _consumerThread?.Join(timeoutMs) ?? true;
     }
 
     /// <summary>
@@ -393,102 +386,32 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </summary>
     private void ProcessMessages()
     {
-        while (_isRunning)
+        try
         {
-            try
+            while (_isRunning)
             {
-                // Honor a pending ClearBuffer() request on this thread, so the buffer reset and the
-                // stream drain never race the reader below.
-                if (_clearRequested)
-                {
-                    _clearRequested = false;
-                    PerformClear();
-                }
-
-                // Probing readability is itself I/O against a handle that may be coming apart, and
-                // a CanRead getter is under no obligation not to throw on one. A throwing probe is
-                // a stream fault and is handled exactly like a failing read; letting it reach the
-                // outer catch instead would neither tell the transport nor back off.
-                bool canRead;
                 try
                 {
-                    canRead = _stream.CanRead;
-                }
-                catch (Exception ex)
-                {
-                    if (!ReportStreamFault(ex))
+                    // Honor a pending ClearBuffer() request on this thread, so the buffer reset and the
+                    // stream drain never race the reader below.
+                    if (_clearRequested)
                     {
-                        break;
+                        _clearRequested = false;
+                        PerformClear();
                     }
 
-                    continue;
-                }
-
-                // A stream that reports itself unreadable never becomes readable again — that is a
-                // closed or disposed stream, not a momentary lull. Report it instead of spinning
-                // here forever producing no data, no error and no status change, which is the
-                // failure mode issue #377 was filed for. Backed off at the same cadence as a
-                // failing read so the escalation timing matches.
-                if (!canRead)
-                {
-                    var unreadable = new IOException(
-                        "The stream is no longer readable; the underlying connection has been closed.");
-                    if (!ReportStreamFault(unreadable))
+                    // Probing readability is itself I/O against a handle that may be coming apart, and
+                    // a CanRead getter is under no obligation not to throw on one. A throwing probe is
+                    // a stream fault and is handled exactly like a failing read; letting it reach the
+                    // outer catch instead would neither tell the transport nor back off.
+                    bool canRead;
+                    try
                     {
-                        break;
+                        canRead = _stream.CanRead;
                     }
-
-                    continue;
-                }
-
-                // Try to read data from stream
-                int bytesRead = 0;
-                try
-                {
-                    bytesRead = _stream.Read(_buffer, 0, _buffer.Length);
-                }
-                catch (TimeoutException)
-                {
-                    // Expected when no data is available within ReadTimeout; just loop
-                    continue;
-                }
-                catch (IOException ex) when (IsReadTimeout(ex))
-                {
-                    // A socket read that hits SO_RCVTIMEO surfaces as IOException wrapping a
-                    // SocketException rather than TimeoutException, so it needs the same benign
-                    // "no data yet" treatment — otherwise every idle interval on a TCP transport
-                    // would raise ErrorOccurred (issue #383).
-                    continue;
-                }
-                catch (Exception ex)
-                {
-                    // Tell the transport before raising the error event: a read that keeps
-                    // throwing is how a physically disconnected device announces itself, and the
-                    // transport is the only thing that can turn a run of them into a lost
-                    // connection (issue #382). One failure escalates nothing.
-                    if (!ReportStreamFault(ex))
+                    catch (Exception ex)
                     {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                if (bytesRead == 0)
-                {
-                    // A NetworkStream returns 0 only after the peer has performed an orderly
-                    // shutdown — the connection is over, and every subsequent read will also
-                    // return 0. Report it so the transport can escalate; other stream types
-                    // legitimately return 0 for "nothing right now" and must not be escalated.
-                    if (_stream is NetworkStream)
-                    {
-                        // Same teardown rule as every other fault path, and the short back-off this
-                        // path has always used — an orderly peer shutdown is detected in tens of
-                        // milliseconds rather than half a second (issue #382).
-                        if (!ReportStreamFault(
-                                new EndOfStreamException(
-                                    "The remote endpoint closed the connection (a socket read returned 0 bytes)."),
-                                backoffMs: NoDataBackoffMs))
+                        if (!ReportStreamFault(ex))
                         {
                             break;
                         }
@@ -496,49 +419,133 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                         continue;
                     }
 
-                    Thread.Sleep(NoDataBackoffMs); // No data available, wait briefly
-                    continue;
+                    // A stream that reports itself unreadable never becomes readable again — that is a
+                    // closed or disposed stream, not a momentary lull. Report it instead of spinning
+                    // here forever producing no data, no error and no status change, which is the
+                    // failure mode issue #377 was filed for. Backed off at the same cadence as a
+                    // failing read so the escalation timing matches.
+                    if (!canRead)
+                    {
+                        var unreadable = new IOException(
+                            "The stream is no longer readable; the underlying connection has been closed.");
+                        if (!ReportStreamFault(unreadable))
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    // Try to read data from stream
+                    int bytesRead = 0;
+                    try
+                    {
+                        bytesRead = _stream.Read(_buffer, 0, _buffer.Length);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Expected when no data is available within ReadTimeout; just loop
+                        continue;
+                    }
+                    catch (IOException ex) when (IsReadTimeout(ex))
+                    {
+                        // A socket read that hits SO_RCVTIMEO surfaces as IOException wrapping a
+                        // SocketException rather than TimeoutException, so it needs the same benign
+                        // "no data yet" treatment — otherwise every idle interval on a TCP transport
+                        // would raise ErrorOccurred (issue #383).
+                        continue;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Tell the transport before raising the error event: a read that keeps
+                        // throwing is how a physically disconnected device announces itself, and the
+                        // transport is the only thing that can turn a run of them into a lost
+                        // connection (issue #382). One failure escalates nothing.
+                        if (!ReportStreamFault(ex))
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    if (bytesRead == 0)
+                    {
+                        // A NetworkStream returns 0 only after the peer has performed an orderly
+                        // shutdown — the connection is over, and every subsequent read will also
+                        // return 0. Report it so the transport can escalate; other stream types
+                        // legitimately return 0 for "nothing right now" and must not be escalated.
+                        if (_stream is NetworkStream)
+                        {
+                            // Same teardown rule as every other fault path, and the short back-off this
+                            // path has always used — an orderly peer shutdown is detected in tens of
+                            // milliseconds rather than half a second (issue #382).
+                            if (!ReportStreamFault(
+                                    new EndOfStreamException(
+                                        "The remote endpoint closed the connection (a socket read returned 0 bytes)."),
+                                    backoffMs: NoDataBackoffMs))
+                            {
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        Thread.Sleep(NoDataBackoffMs); // No data available, wait briefly
+                        continue;
+                    }
+
+                    // A successful read clears any run of failures the transport has accumulated, so
+                    // a stream that glitches and recovers is never mistaken for a disconnected device.
+                    SafeReportIoSuccess();
+
+                    // Append what was read and parse complete messages out of the buffer.
+                    ProcessMessageBuffer(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
                 }
-
-                // A successful read clears any run of failures the transport has accumulated, so
-                // a stream that glitches and recovers is never mistaken for a disconnected device.
-                SafeReportIoSuccess();
-
-                // Append what was read and parse complete messages out of the buffer.
-                ProcessMessageBuffer(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
-            }
-            catch (Exception ex)
-            {
-                // Caught unconditionally, on purpose. This is the top of a background thread, so an
-                // exception that escapes here does not merely end the loop — it terminates the
-                // whole process. The previous `when (_isRunning)` filter left exactly that hole: a
-                // concurrent Stop() clears the flag while the try body is mid-flight, the filter
-                // then declines to match, and a parse failure that would have been a logged
-                // diagnostic during normal running takes the host down instead. Only *reporting*
-                // was ever meant to be conditional.
-                if (!_isRunning)
+                catch (Exception ex)
                 {
-                    // Teardown noise: a failure seen while stopping says nothing about the device,
-                    // and the loop is about to exit anyway.
-                    break;
+                    // Caught unconditionally, on purpose. This is the top of a background thread, so an
+                    // exception that escapes here does not merely end the loop — it terminates the
+                    // whole process. The previous `when (_isRunning)` filter left exactly that hole: a
+                    // concurrent Stop() clears the flag while the try body is mid-flight, the filter
+                    // then declines to match, and a parse failure that would have been a logged
+                    // diagnostic during normal running takes the host down instead. Only *reporting*
+                    // was ever meant to be conditional.
+                    if (!_isRunning)
+                    {
+                        // Teardown noise: a failure seen while stopping says nothing about the device,
+                        // and the loop is about to exit anyway.
+                        break;
+                    }
+
+                    // Isolated: this is the last catch above a background thread's entry point, so a
+                    // throwing subscriber here has nothing left to stop it (see SafeRaiseError).
+                    SafeRaiseError(ex);
+
+                    // Back off before the next iteration. What reaches here is a failure in the
+                    // parse/dispatch half of the loop, and that half is deterministic with respect to
+                    // the current buffer: a parser that throws on the bytes it holds will throw on
+                    // exactly the same bytes next time round. Retrying at full speed is a hot spin that
+                    // burns a core and raises errors as fast as the thread can go, which is the same
+                    // no-progress-and-no-signal shape this class is being fixed for.
+                    //
+                    // Deliberately NOT reported to the health sink: a parse or dispatch failure is not
+                    // evidence that the link is gone, and escalating it would disconnect a perfectly
+                    // healthy device over malformed data. Only I/O against the stream does that — which
+                    // is why this path does not go through ReportStreamFault.
+                    Thread.Sleep(ErrorBackoffMs);
                 }
-
-                // Isolated: this is the last catch above a background thread's entry point, so a
-                // throwing subscriber here has nothing left to stop it (see SafeRaiseError).
-                SafeRaiseError(ex);
-
-                // Back off before the next iteration. What reaches here is a failure in the
-                // parse/dispatch half of the loop, and that half is deterministic with respect to
-                // the current buffer: a parser that throws on the bytes it holds will throw on
-                // exactly the same bytes next time round. Retrying at full speed is a hot spin that
-                // burns a core and raises errors as fast as the thread can go, which is the same
-                // no-progress-and-no-signal shape this class is being fixed for.
-                //
-                // Deliberately NOT reported to the health sink: a parse or dispatch failure is not
-                // evidence that the link is gone, and escalating it would disconnect a perfectly
-                // healthy device over malformed data. Only I/O against the stream does that — which
-                // is why this path does not go through ReportStreamFault.
-                Thread.Sleep(ErrorBackoffMs);
+            }
+        }
+        finally
+        {
+            // The reader clears its own buffer on the way out, before its thread ends. Start only
+            // publishes a new reader once this thread has exited, so the bytes cleared here can
+            // only ever be this reader's — a stop clearing them after its join could instead wipe
+            // the first bytes a replacement reader had already buffered.
+            lock (_bufferLock)
+            {
+                _messageBuffer.Clear();
             }
         }
     }
