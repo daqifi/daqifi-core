@@ -1278,19 +1278,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="ipAddress">The IP address of the device, if known.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, Stream stream, IPAddress? ipAddress = null, ILogger? logger = null)
+        : this(name, ipAddress, logger)
     {
-        Name = name;
-        IpAddress = ipAddress;
-        _logger = logger ?? NullLogger.Instance;
-        _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
-        _lifecycleGate = new LifecycleGate(
-            _logger,
-            () => Name,
-            () => LifecycleLockTimeout,
-            () => TeardownLockTimeout);
-        _textExchange = new TextExchangeEngine(this);
-        _operations = new OperationSerializer(this);
-        _reconnect = new ReconnectSupervisor(this);
         _messageProducer = new MessageProducer<string>(stream);
         _messageProducer.SendFailed += OnMessageSendFailed;
         _directStream = stream;
@@ -1303,18 +1292,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="transport">The transport for device communication.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
+        : this(name, ipAddress: null, logger)
     {
-        Name = name;
-        _logger = logger ?? NullLogger.Instance;
-        _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
-        _lifecycleGate = new LifecycleGate(
-            _logger,
-            () => Name,
-            () => LifecycleLockTimeout,
-            () => TeardownLockTimeout);
-        _textExchange = new TextExchangeEngine(this);
-        _operations = new OperationSerializer(this);
-        _reconnect = new ReconnectSupervisor(this);
         _transport = transport;
 
         // Subscribe to transport status changes
