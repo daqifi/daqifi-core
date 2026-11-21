@@ -303,12 +303,16 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
 
                 EnableKeepAlive(_tcpClient);
+
+                // Armed for this exact stream before the executor announces the connection: a
+                // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
+                // (which arms its own session) synchronously, and arming afterwards would act on
+                // whatever the fields hold by then.
+                _watchdog.Arm(_networkStream);
             },
             onAttemptFailed: ReleaseSocket,
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        _watchdog.Arm(_networkStream!);
     }
 
     /// <summary>

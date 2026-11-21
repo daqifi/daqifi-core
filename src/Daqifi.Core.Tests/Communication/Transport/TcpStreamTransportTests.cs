@@ -254,6 +254,33 @@ public class TcpStreamTransportTests
         }
     }
 
+    [Fact]
+    public async Task TcpStreamTransport_ConnectedSubscriberThatDisconnectsAtOnce_LeavesConnectAsyncSucceeding()
+    {
+        // A StatusChanged(true) subscriber is free to disconnect synchronously. Arming drop
+        // detection after that notification found the stream already gone and threw out of the
+        // ConnectAsync that had succeeded.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            transport.StatusChanged += (_, e) =>
+            {
+                if (e.IsConnected) transport.Disconnect();
+            };
+
+            await transport.ConnectAsync();
+
+            Assert.False(transport.IsConnected);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     /// <summary>
     /// Has the peer close the connection, then writes until the stack reports the reset, which
     /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than

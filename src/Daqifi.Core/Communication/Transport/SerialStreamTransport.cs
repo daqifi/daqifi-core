@@ -431,6 +431,12 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 // operational ones — both directions, not just reads (#399).
                 ApplyOperationalTimeouts(_serialPort);
 
+                // Armed for this exact port before the executor announces the connection: a
+                // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
+                // (which arms its own session) synchronously, and arming afterwards would act on
+                // whatever the field holds by then.
+                StartDropDetection();
+
                 return Task.CompletedTask;
             },
             onAttemptFailed: () =>
@@ -440,8 +446,6 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             },
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        StartDropDetection();
     }
 
     /// <summary>

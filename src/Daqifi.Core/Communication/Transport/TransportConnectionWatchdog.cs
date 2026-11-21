@@ -122,7 +122,10 @@ internal sealed class TransportConnectionWatchdog : IDisposable
         ArgumentNullException.ThrowIfNull(session);
         Volatile.Write(ref _consecutiveFaults, 0);
         Volatile.Write(ref _presenceMisses, 0);
-        Volatile.Write(ref _armedSession, session);
+        lock (_timerLock)
+        {
+            Volatile.Write(ref _armedSession, session);
+        }
     }
 
     /// <summary>
@@ -132,8 +135,15 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// </summary>
     public void Disarm()
     {
-        Volatile.Write(ref _armedSession, null);
-        StopPresencePolling();
+        Timer? timer;
+        lock (_timerLock)
+        {
+            Volatile.Write(ref _armedSession, null);
+            timer = _presenceTimer;
+            _presenceTimer = null;
+        }
+
+        timer?.Dispose();
         Volatile.Write(ref _consecutiveFaults, 0);
         Volatile.Write(ref _presenceMisses, 0);
     }
@@ -292,13 +302,24 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     {
         // Disarm and signal in one step, and only for the session the detector observed.
         // Whichever detector gets here first owns the notification; the other, or one that
-        // observed a session since replaced, finds nothing to take and returns.
-        if (!ReferenceEquals(Interlocked.CompareExchange(ref _armedSession, null, session), session))
+        // observed a session since replaced, finds nothing to take and returns. The session's
+        // presence timer is detached in the same locked step: Arm and StartPresencePolling take
+        // this lock too, so the timer taken here can only be the lost session's, never one a
+        // reconnect has started since.
+        Timer? timer;
+        lock (_timerLock)
         {
-            return;
+            if (!ReferenceEquals(Volatile.Read(ref _armedSession), session))
+            {
+                return;
+            }
+
+            Volatile.Write(ref _armedSession, null);
+            timer = _presenceTimer;
+            _presenceTimer = null;
         }
 
-        StopPresencePolling();
+        timer?.Dispose();
         _onConnectionLost(error, session);
     }
 
