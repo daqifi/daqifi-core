@@ -38,6 +38,13 @@ internal sealed class ReconnectSupervisor
     // own teardown can produce.
     private CancellationTokenSource? _runningLoop;
 
+    // The epoch of a drop the single-flight guard turned away while a loop was running, or
+    // NoTurnedAwayDrop. The finishing loop replays exactly that drop, on that drop's own epoch, so
+    // a caller who superseded it in the meantime is never handed a reconnect they did not want.
+    private int _turnedAwayDropEpoch = NoTurnedAwayDrop;
+
+    private const int NoTurnedAwayDrop = -1;
+
     // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
     // when it starts and re-checks before each step that touches device state; a change means
     // the caller has moved on and the loop must unwind. This is what keeps the loop from
@@ -162,6 +169,7 @@ internal sealed class ReconnectSupervisor
         if (Interlocked.CompareExchange(ref _runningLoop, cts, null) is not null)
         {
             cts.Dispose();
+            Volatile.Write(ref _turnedAwayDropEpoch, expectedEpoch);
             return;
         }
 
@@ -194,13 +202,16 @@ internal sealed class ReconnectSupervisor
             }
 
             // A drop that landed in the moments between this loop finishing its work and
-            // releasing the running flag would have been skipped by the single-flight guard,
-            // stranding the device on Lost with nothing trying to bring it back. Pick it up.
-            // Exhausting the attempts settles on Failed, and cancellation is excluded here, so
-            // neither can retrigger.
-            if (!wasCanceled)
+            // releasing the running flag was turned away by the single-flight guard, stranding the
+            // device on Lost with nothing trying to bring it back. Pick it up, on its own epoch:
+            // replaying on the current one would let a loop that merely went stale (a Disconnect
+            // that superseded it before it could cancel anything) restart itself on the caller's
+            // epoch. Exhausting the attempts settles on Failed, and cancellation is excluded here,
+            // so neither can retrigger.
+            var turnedAwayDrop = Interlocked.Exchange(ref _turnedAwayDropEpoch, NoTurnedAwayDrop);
+            if (!wasCanceled && turnedAwayDrop != NoTurnedAwayDrop)
             {
-                BeginIfEnabled(Volatile.Read(ref _sessionEpoch));
+                BeginIfEnabled(turnedAwayDrop);
             }
         });
     }
