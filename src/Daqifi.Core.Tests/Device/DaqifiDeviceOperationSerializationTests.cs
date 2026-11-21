@@ -212,7 +212,15 @@ public class DaqifiDeviceOperationSerializationTests
 
         await entered.Task.WaitAsync(DeadlockBudget);
 
+        // Deferred, not blocked: Send has always been fire-and-forget and must keep returning
+        // immediately even when the device is owned by someone else.
+        var sw = Stopwatch.StartNew();
         await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        sw.Stop();
+
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromSeconds(2),
+            $"Send blocked for {sw.Elapsed.TotalSeconds:0.##}s while another flow owned the device.");
 
         // Long enough that the producer thread would have written it had it been queued.
         await Task.Delay(250);
@@ -222,38 +230,6 @@ public class DaqifiDeviceOperationSerializationTests
         await operation.WaitAsync(DeadlockBudget);
 
         await WaitForWriteAsync(transport, "DIO:PORt:STATe");
-    }
-
-    [Fact]
-    public async Task Send_FromAnotherFlow_DoesNotBlockWhileAnOperationIsInFlight()
-    {
-        // Deferred, not blocked: Send has always been fire-and-forget and must keep returning
-        // immediately even when the device is owned by someone else.
-        using var transport = new RecordingTransport();
-        using var device = new DaqifiDevice("Non-blocking Device", transport);
-        device.Connect();
-
-        var entered = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
-
-        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
-        {
-            entered.SetResult();
-            await release.Task;
-        }));
-
-        await entered.Task.WaitAsync(DeadlockBudget);
-
-        var sw = Stopwatch.StartNew();
-        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
-        sw.Stop();
-
-        Assert.True(
-            sw.Elapsed < TimeSpan.FromSeconds(2),
-            $"Send blocked for {sw.Elapsed.TotalSeconds:0.##}s while another flow owned the device.");
-
-        release.SetResult();
-        await operation.WaitAsync(DeadlockBudget);
     }
 
     [Fact]
