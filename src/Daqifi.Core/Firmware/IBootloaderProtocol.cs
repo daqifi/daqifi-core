@@ -88,8 +88,9 @@ public interface IBootloaderProtocol
     /// </returns>
     /// <exception cref="System.IO.InvalidDataException">
     /// Thrown when a line is malformed or has an invalid checksum, when a data record places a
-    /// byte outside the flash the bootloader erases and programs, or when the bootloader would
-    /// place a data record at another address - see <see cref="ParseHexFile" />.
+    /// byte outside the flash the bootloader erases and programs, when the bootloader would
+    /// place a data record at another address, or when a record has a type the bootloader does
+    /// not accept - see <see cref="ParseHexFile" />.
     /// </exception>
     IReadOnlyList<FlashCrcRegion> ComputeCrcRegions(string[] hexFileLines);
 
@@ -106,9 +107,10 @@ public interface IBootloaderProtocol
     /// PIC32 bootloader erases and programs only the lower program-flash panel, so a record
     /// above it, or in boot flash, would be dropped or refused by the device and the image left
     /// incomplete on a board whose application flash had already been erased. Also thrown when a
-    /// data record follows a type-02 extended segment address, end-of-file or other non-data
-    /// record with no type-04 record in between: the bootloader stops applying the type-04 base
-    /// there, so it would write that record somewhere other than where it is checked and verified.
+    /// data record follows a type-02 extended segment address or end-of-file record with no
+    /// type-04 record in between: the bootloader stops applying the type-04 base there, so it
+    /// would write that record somewhere other than where it is checked and verified. Also thrown
+    /// for any record type other than 00, 01, 02 and 04, which the bootloader never acknowledges.
     /// The refusal happens before any device command is sent.
     /// </exception>
     List<byte[]> ParseHexFile(string[] hexFileLines);

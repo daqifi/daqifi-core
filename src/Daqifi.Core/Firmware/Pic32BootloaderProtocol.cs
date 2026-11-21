@@ -158,10 +158,12 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
         // Protected-range records are dropped by the parser first, then what is left has to lie
         // inside the flash the bootloader erases and programs. That order is the point: the
         // default protected range sits above the window, so an image carrying records there keeps
-        // having them dropped, as this library already shipped, instead of being refused. The
-        // placement check runs before the window check because the window check reads the host's
-        // addresses, which are only the device's addresses once the placement check has passed.
+        // having them dropped, as this library already shipped, instead of being refused. A record
+        // the bootloader never acknowledges is refused first. The placement check runs before the
+        // window check because the window check reads the host's addresses, which are only the
+        // device's addresses once the placement check has passed.
         var records = _hexParser.ParseRecords(hexFileLines);
+        Pic32ApplicationFlash.EnsureTheBootloaderAcceptsEveryRecordType(records);
         Pic32ApplicationFlash.EnsureTheBootloaderPlacesEveryRecordWhereTheHostDoes(records);
         Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
         return records;

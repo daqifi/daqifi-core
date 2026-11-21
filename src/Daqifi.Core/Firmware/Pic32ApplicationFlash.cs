@@ -166,6 +166,43 @@ internal static class Pic32ApplicationFlash
     }
 
     /// <summary>
+    /// Refuses an image carrying a record type the bootloader does not program: anything but data
+    /// (00), end-of-file (01), extended segment address (02) and extended linear address (04).
+    /// </summary>
+    /// <remarks>
+    /// <c>APP_ProgramHexRecord</c> (<c>nvm.c</c>) returns <c>HEX_REC_UNKNOW_TYPE</c> for any other
+    /// type, a type-03 or type-05 start address included, and <c>datastream.c</c> sends the
+    /// PROGRAM_FLASH acknowledgment only for <c>HEX_REC_NORMAL</c>. This library sends one record
+    /// per request, so such a record gets no answer: the update erases the board and then times out
+    /// on it. Real XC32 output carries only types 00, 01 and 04, so a release image never gets here.
+    /// </remarks>
+    /// <param name="records">The records the HEX image parsed to, after protected-range filtering.</param>
+    /// <exception cref="InvalidDataException">
+    /// Thrown for the first record of an unsupported type, naming it. The caller runs this before
+    /// any device I/O, so the board still holds its application when this throws.
+    /// </exception>
+    internal static void EnsureTheBootloaderAcceptsEveryRecordType(IReadOnlyList<HexFileRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+
+        foreach (var record in records)
+        {
+            if (record.RecordType is IntelHexDataRecordType or 0x01 or 0x02 or IntelHexExtendedLinearAddressRecordType)
+            {
+                continue;
+            }
+
+            throw new InvalidDataException(
+                $"Firmware HEX file carries a record type the bootloader does not accept. The type-" +
+                $"{record.RecordType:X2} record {HexLine(record)} is answered by the bootloader with no " +
+                $"acknowledgment, which the bootloader gives only for data, end-of-file, extended " +
+                $"segment address and extended linear address records (types 00, 01, 02 and 04), so " +
+                $"the update would stall on it after the application flash had already been erased. " +
+                $"The image is refused and the device flash is untouched.");
+        }
+    }
+
+    /// <summary>
     /// Refuses an image with a data record that the bootloader would place at a different address
     /// from the one this library checks against the window and CRC-verifies.
     /// </summary>
@@ -174,8 +211,9 @@ internal static class Pic32ApplicationFlash
     /// The two read addresses differently. <see cref="IntelHexParser"/> adds the last type-04
     /// extended linear address to every record that follows it, and nothing else changes that base.
     /// <c>APP_ProgramHexRecord</c> (<c>nvm.c</c>) also takes a type-02 extended segment address,
-    /// which clears the linear address, and clears both on an end-of-file record or any record
-    /// type it does not know. So a data record that comes after one of those, with no type-04
+    /// which clears the linear address, and clears both on an end-of-file record (and on a record
+    /// type it does not know, which <see cref="EnsureTheBootloaderAcceptsEveryRecordType"/> has
+    /// refused already). So a data record that comes after one of those, with no type-04
     /// record in between, is written somewhere the window check never saw. That is usually
     /// outside application flash, where the device drops it, and the verify pass then reads back
     /// flash that was erased and never written. The update fails after the erase, and the board
