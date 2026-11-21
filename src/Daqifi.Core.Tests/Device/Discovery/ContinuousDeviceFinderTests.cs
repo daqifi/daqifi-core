@@ -1296,6 +1296,137 @@ public class ContinuousDeviceFinderTests
         Assert.True(inner.Disposed); // inner finder disposed only after the loop stopped
     }
 
+    // The next three tests stop the loop while its pass is stuck inside the wrapped finder (one
+    // that does not honour cancellation), so StopAsync is left waiting. Before the Stopping state
+    // existed, the finder already read "not running" in that window and had forgotten the loop.
+
+    // How long the tests below watch for something that must not happen. The failure they guard
+    // against shows within milliseconds: a second loop calls the finder as soon as it is scheduled.
+    private static readonly TimeSpan NoOverlapWindow = TimeSpan.FromMilliseconds(300);
+
+    private static ContinuousDeviceFinder NewStuckPassFinder(GatedDeviceFinder inner)
+        => new(inner, new ContinuousDiscoveryOptions
+        {
+            // Long enough that only the gate, never the pass deadline, ends the stuck pass.
+            PassTimeout = TimeSpan.FromSeconds(30),
+            Interval = TimeSpan.FromMilliseconds(10)
+        });
+
+    [Fact]
+    public async Task Start_WhileAStopIsWaitingForThePass_DoesNotRunASecondPassBesideIt()
+    {
+        var inner = new GatedDeviceFinder();
+        using var finder = NewStuckPassFinder(inner);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        var stop = finder.StopAsync();
+        Assert.False(stop.IsCompleted, "the stuck pass should keep StopAsync waiting");
+
+        // Not refused, and not blocking: the restart is queued behind the loop being stopped.
+        finder.Start();
+        Assert.True(finder.IsRunning);
+
+        WaitUntil.HoldsFor(
+            () => inner.PassesStarted == 1,
+            "a second loop called the finder while the stopped loop's pass was still inside it",
+            NoOverlapWindow);
+
+        inner.ReleaseFirstPass();
+        await stop.WaitAsync(WaitTimeout);
+
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted > 1,
+            "the restarted loop never ran a pass once the old loop had exited",
+            WaitTimeout);
+        Assert.Equal(1, inner.MaxConcurrentPasses);
+        Assert.True(finder.IsRunning, "the stop that finished late must not stop the loop started after it");
+
+        await finder.StopAsync();
+        Assert.False(finder.IsRunning);
+    }
+
+    [Fact]
+    public async Task StopAsync_CalledAgainWhileTheFirstIsWaiting_WaitsForTheSameLoop()
+    {
+        var inner = new GatedDeviceFinder();
+        using var finder = NewStuckPassFinder(inner);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        var firstStop = finder.StopAsync();
+        var secondStop = finder.StopAsync();
+
+        // The loop has not stopped, so neither call may claim it has.
+        Assert.False(firstStop.IsCompleted);
+        Assert.False(secondStop.IsCompleted, "the second StopAsync returned while the loop was still in its pass");
+
+        inner.ReleaseFirstPass();
+        await Task.WhenAll(firstStop, secondStop).WaitAsync(WaitTimeout);
+        Assert.False(finder.IsRunning);
+    }
+
+    [Fact]
+    public async Task Dispose_WhileAStopIsWaitingForThePass_DoesNotDisposeTheInnerFinderUnderIt()
+    {
+        var inner = new GatedDeviceFinder();
+        var finder = NewStuckPassFinder(inner);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        var stop = finder.StopAsync();
+        var dispose = Task.Run(finder.Dispose);
+
+        WaitUntil.HoldsFor(
+            () => !inner.Disposed,
+            "Dispose disposed the inner finder while the stopped loop's pass was still inside it",
+            NoOverlapWindow);
+
+        inner.ReleaseFirstPass();
+        await Task.WhenAll(stop, dispose).WaitAsync(WaitTimeout);
+
+        Assert.True(inner.Disposed);
+        Assert.False(inner.DisposedDuringPass);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_WhenThePassOutlastsItsWait_DisposesTheInnerFinderOnlyAfterThePassReturns(bool stopFirst)
+    {
+        var inner = new GatedDeviceFinder();
+
+        // A short PassTimeout bounds how long Dispose waits; the gated pass ignores it and stays.
+        var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromMilliseconds(100),
+            Interval = TimeSpan.FromMilliseconds(10)
+        });
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        var stop = stopFirst ? finder.StopAsync() : Task.CompletedTask;
+
+        // Returns once its bounded wait runs out, with the pass still inside the finder.
+        finder.Dispose();
+
+        Assert.False(inner.Disposed, "Dispose disposed the inner finder while the pass was still inside it");
+
+        inner.ReleaseFirstPass();
+        await stop.WaitAsync(WaitTimeout);
+
+        await WaitUntil.ThatAsync(
+            () => inner.Disposed,
+            "the inner finder was never disposed after the pass returned",
+            WaitTimeout);
+        Assert.Equal(1, inner.DisposeCount);
+        Assert.False(inner.DisposedDuringPass);
+    }
+
     #endregion
 
     #region Pass reports
@@ -2154,6 +2285,73 @@ public class ContinuousDeviceFinderTests
             => DiscoverAsync(CancellationToken.None);
 
         public void Dispose() => Disposed = true;
+    }
+
+    /// <summary>
+    /// Finder whose first pass ignores cancellation and stays inside <c>DiscoverAsync</c> until the
+    /// test calls <see cref="ReleaseFirstPass"/>, the way a finder stuck in a slow probe does; every
+    /// later pass answers at once with nothing. It records how many passes were ever in flight
+    /// together and whether it was disposed under one.
+    /// </summary>
+    private sealed class GatedDeviceFinder : IDeviceFinder, IDisposable
+    {
+        private readonly TaskCompletionSource _firstPassGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _passesStarted;
+        private int _passesInFlight;
+        private int _maxConcurrentPasses;
+        private int _disposeCount;
+        private volatile bool _disposedDuringPass;
+
+        public int PassesStarted => Volatile.Read(ref _passesStarted);
+        public int MaxConcurrentPasses => Volatile.Read(ref _maxConcurrentPasses);
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+        public bool Disposed => DisposeCount > 0;
+        public bool DisposedDuringPass => _disposedDuringPass;
+
+#pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
+        public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+        public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+        public void ReleaseFirstPass() => _firstPassGate.TrySetResult();
+
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            var inFlight = Interlocked.Increment(ref _passesInFlight);
+            int seen;
+            while (inFlight > (seen = Volatile.Read(ref _maxConcurrentPasses)) &&
+                   Interlocked.CompareExchange(ref _maxConcurrentPasses, inFlight, seen) != seen)
+            {
+            }
+
+            try
+            {
+                if (Interlocked.Increment(ref _passesStarted) == 1)
+                {
+                    // Deliberately not observing cancellationToken.
+                    await _firstPassGate.Task.ConfigureAwait(false);
+                }
+
+                return Array.Empty<IDeviceInfo>();
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _passesInFlight);
+            }
+        }
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+            => DiscoverAsync(CancellationToken.None);
+
+        public void Dispose()
+        {
+            if (Volatile.Read(ref _passesInFlight) > 0)
+            {
+                _disposedDuringPass = true;
+            }
+
+            Interlocked.Increment(ref _disposeCount);
+        }
     }
 
     #endregion
