@@ -297,7 +297,7 @@ public sealed class ProcessExternalProcessRunner : IExternalProcessRunner
     private sealed class LineSink
     {
         private readonly List<string> _lines = [];
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
 
         internal void Add(string line)
         {

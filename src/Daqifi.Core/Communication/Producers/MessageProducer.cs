@@ -69,7 +69,7 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Makes <see cref="Send"/>'s reset-and-enqueue one step as far as the background loop's
     /// idle signal is concerned. See <see cref="SignalIdleIfQuiet"/>.
     /// </summary>
-    private readonly object _idleSync = new();
+    private readonly Lock _idleSync = new();
 
     /// <summary>
     /// Guards every change to <see cref="_state"/>, <see cref="_producerThread"/> and
@@ -81,7 +81,7 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// <see cref="SendFailed"/> subscribers can call back into <see cref="Stop"/> or
     /// <see cref="Start"/>, so a wait on the writer with this held could only time out.
     /// </remarks>
-    private readonly object _lifecycleSync = new();
+    private readonly Lock _lifecycleSync = new();
 
     /// <summary>
     /// The lifecycle state. <see cref="_draining"/> is deliberately not part of it: that flag says

@@ -21,7 +21,7 @@ internal sealed class MacOsUsbPortDescriptorProvider : IUsbPortDescriptorProvide
     // while avoiding N redundant ioreg invocations per pass.
     private const int CacheTtlMs = 2000;
 
-    private static readonly object CacheLock = new();
+    private static readonly Lock CacheLock = new();
     private static Dictionary<string, UsbPortDescriptor> _cachedMap = new();
     private static long _cacheExpiresAtMs;
 

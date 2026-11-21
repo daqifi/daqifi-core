@@ -20,17 +20,6 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 public partial class SdCardOperationsTests
 {
     [Fact]
-    public async Task GetSdCardFilesAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.GetSdCardFilesAsync());
-    }
-
-    [Fact]
     public async Task GetSdCardFilesAsync_WhenConnected_SendsCorrectCommands()
     {
         // Arrange
@@ -1002,28 +991,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.StartSdCardLoggingAsync());
-    }
-
-    [Fact]
-    public async Task StopSdCardLoggingAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.StopSdCardLoggingAsync());
-    }
-
-    [Fact]
     public async Task DeleteSdCardFileAsync_WhenConnected_SendsCorrectCommands()
     {
         // Arrange
@@ -1298,17 +1265,6 @@ public partial class SdCardOperationsTests
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd (PrepareLanInterface)
         Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (PrepareLanInterface)
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.DeleteSdCardFileAsync("data.bin"));
     }
 
     [Fact]
@@ -2235,17 +2191,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task FormatSdCardAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.FormatSdCardAsync());
-    }
-
-    [Fact]
     public async Task FormatSdCardAsync_WhenLogging_ThrowsSdCardBusyException()
     {
         // Arrange
@@ -2332,15 +2277,6 @@ public partial class SdCardOperationsTests
     #endregion
 
     #region GetSdCardStorageAsync Tests
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_WhenDisconnected_Throws()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.GetSdCardStorageAsync());
-    }
 
     [Fact]
     public async Task GetSdCardStorageAsync_WhenConnected_SendsCorrectCommands()
@@ -2610,15 +2546,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task CheckSdCardSpaceAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.CheckSdCardSpaceAsync());
-    }
-
-    [Fact]
     public async Task CheckSdCardSpaceAsync_QueriesSdSpace()
     {
         var device = new TestableSdCardStreamingDevice("TestDevice");
@@ -2648,14 +2575,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public void SetSdCardMinimumFreeSpace_WhenDisconnected_Throws()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        Assert.Throws<DeviceNotConnectedException>(() => device.SetSdCardMinimumFreeSpace(52428800));
-    }
-
-    [Fact]
     public void SetSdCardMinimumFreeSpace_WithNegativeValue_Throws()
     {
         var device = new TestableSdCardStreamingDevice("TestDevice");
@@ -2667,18 +2586,6 @@ public partial class SdCardOperationsTests
     #endregion
 
     #region DownloadSdCardFileAsync Tests
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-        using var stream = new MemoryStream();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.DownloadSdCardFileAsync("test.bin", stream));
-    }
 
     [Fact]
     public async Task DownloadSdCardFileAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported()

@@ -1,5 +1,6 @@
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
 
 namespace Daqifi.Core.Firmware;
 
@@ -218,18 +219,12 @@ public class IntelHexParser
     {
         var hexLine = new byte[(line.Length - 1) / 2];
 
-        for (var i = 1; i < line.Length; i += 2)
+        if (Convert.FromHexString(line.AsSpan(1), hexLine, out var charsConsumed, out _) != OperationStatus.Done)
         {
-            var hex = line.Substring(i, 2);
-            try
-            {
-                hexLine[(i - 1) / 2] = byte.Parse(hex, NumberStyles.HexNumber);
-            }
-            catch (FormatException ex)
-            {
-                throw new InvalidDataException(
-                    $"The hex record \"{line}\" contains invalid hex characters \"{hex}\"", ex);
-            }
+            // charsConsumed stops inside the offending pair; round down to its first character.
+            var hex = line.Substring(1 + (charsConsumed & ~1), 2);
+            throw new InvalidDataException(
+                $"The hex record \"{line}\" contains invalid hex characters \"{hex}\"");
         }
 
         return hexLine;
@@ -282,9 +277,7 @@ public class IntelHexParser
     /// </summary>
     private static ushort ReadBigEndianUInt16(byte[] record, int offset)
     {
-        var bytes = record.Skip(offset).Take(2).ToArray();
-        if (BitConverter.IsLittleEndian) Array.Reverse(bytes);
-        return BitConverter.ToUInt16(bytes, 0);
+        return BinaryPrimitives.ReadUInt16BigEndian(record.AsSpan(offset, 2));
     }
 
     /// <summary>

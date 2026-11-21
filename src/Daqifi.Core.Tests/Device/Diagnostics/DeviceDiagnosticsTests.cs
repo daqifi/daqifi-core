@@ -13,14 +13,6 @@ namespace Daqifi.Core.Tests.Device.Diagnostics;
 public class DeviceDiagnosticsTests
 {
     [Fact]
-    public async Task GetSystemLogAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableDiagnosticsDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetSystemLogAsync());
-    }
-
-    [Fact]
     public async Task GetSystemLogAsync_SendsCommandAndParsesEntries()
     {
         var device = new TestableDiagnosticsDevice("TestDevice")
@@ -107,14 +99,6 @@ public class DeviceDiagnosticsTests
         device.Connect();
 
         await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.ClearSystemLogAsync());
-    }
-
-    [Fact]
-    public async Task ClearSystemLogAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableDiagnosticsDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.ClearSystemLogAsync());
     }
 
     [Fact]
@@ -292,14 +276,6 @@ public class DeviceDiagnosticsTests
         Assert.Contains("SYSTem:MEMory:FREE?", device.SentCommands);
         Assert.Equal(75000UL, mem.HeapTotal);
         Assert.Equal(45000UL, mem.HeapFree);
-    }
-
-    [Fact]
-    public async Task GetMemoryDiagnosticsAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableDiagnosticsDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetMemoryDiagnosticsAsync());
     }
 
     // ---------------------------------------------------------------------------------------

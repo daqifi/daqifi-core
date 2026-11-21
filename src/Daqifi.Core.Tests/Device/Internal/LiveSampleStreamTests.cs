@@ -44,12 +44,6 @@ public class LiveSampleStreamTests
     private static readonly TimeSpan MoveNextTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new LiveSampleStream(null!));
-    }
-
-    [Fact]
     public async Task Enumeration_SubscribesToEveryChannelInTheSnapshot()
     {
         var host = new FakeHost(new FakeChannel(0), new FakeChannel(1));

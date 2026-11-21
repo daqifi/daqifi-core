@@ -6,7 +6,7 @@
          package carries one asset folder per target framework, and `dotnet tool
          install` picks the highest one the machine can run, so a framework Core
          supports and the tool lacks makes users install an older runtime. -->
-    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Daqifi.Mcp</RootNamespace>
     <AssemblyName>daqifi-mcp</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>

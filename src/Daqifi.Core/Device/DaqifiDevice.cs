@@ -598,7 +598,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private volatile DeviceLifecycle _lifecycle = DeviceLifecycle.Disconnected;
 
     /// <summary>Makes checking a lifecycle change against the table and writing it one step.</summary>
-    private readonly object _lifecycleTransitionLock = new();
+    private readonly Lock _lifecycleTransitionLock = new();
 
     /// <summary>
     /// Counts the lifecycle changes this device has made. Written with <see cref="_lifecycle"/>,
@@ -670,7 +670,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     // Guards structural access to _channels: the consumer thread repopulates it
     // (Clear/Add in PopulateChannelsFromStatus) while caller threads fold over a
     // snapshot via SnapshotChannels for the device-level channel-management API.
-    private readonly object _channelsLock = new();
+    private readonly Lock _channelsLock = new();
 
     // Backing counter for ChannelStateVersion. Interlocked because it is bumped from whichever
     // thread changed a channel and read from the message-consumer thread.
@@ -1278,19 +1278,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="ipAddress">The IP address of the device, if known.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, Stream stream, IPAddress? ipAddress = null, ILogger? logger = null)
+        : this(name, ipAddress, logger)
     {
-        Name = name;
-        IpAddress = ipAddress;
-        _logger = logger ?? NullLogger.Instance;
-        _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
-        _lifecycleGate = new LifecycleGate(
-            _logger,
-            () => Name,
-            () => LifecycleLockTimeout,
-            () => TeardownLockTimeout);
-        _textExchange = new TextExchangeEngine(this);
-        _operations = new OperationSerializer(this);
-        _reconnect = new ReconnectSupervisor(this);
         _messageProducer = new MessageProducer<string>(stream);
         _messageProducer.SendFailed += OnMessageSendFailed;
         _directStream = stream;
@@ -1303,18 +1292,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="transport">The transport for device communication.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
+        : this(name, ipAddress: null, logger)
     {
-        Name = name;
-        _logger = logger ?? NullLogger.Instance;
-        _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
-        _lifecycleGate = new LifecycleGate(
-            _logger,
-            () => Name,
-            () => LifecycleLockTimeout,
-            () => TeardownLockTimeout);
-        _textExchange = new TextExchangeEngine(this);
-        _operations = new OperationSerializer(this);
-        _reconnect = new ReconnectSupervisor(this);
         _transport = transport;
 
         // Subscribe to transport status changes
@@ -2226,7 +2205,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// place SCPI bytes really can interleave mid-command; the queued path is already safe
     /// because a single producer thread does every write.
     /// </summary>
-    private readonly object _directWriteGate = new();
+    private readonly Lock _directWriteGate = new();
 
     /// <summary>
     /// Puts a message on its way to the device immediately — the body <see cref="Send{T}"/> runs

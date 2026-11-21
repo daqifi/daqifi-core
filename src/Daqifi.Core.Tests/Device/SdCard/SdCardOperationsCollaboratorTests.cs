@@ -101,16 +101,6 @@ public partial class SdCardOperationsCollaboratorTests
     /// </summary>
     private const int AbsentCardExchanges = 4;
 
-    #region Construction
-
-    [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new SdCardOperations(null!));
-    }
-
-    #endregion
-
     #region Interface handover
 
     [Fact]

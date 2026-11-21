@@ -223,7 +223,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
     /// </summary>
     private sealed class DeviceTimestampState
     {
-        public readonly object SyncLock = new();
+        public readonly Lock SyncLock = new();
         public DateTime PreviousSystemTimestamp;
         public uint PreviousDeviceTimestamp;
         public bool HasPreviousTimestamp;

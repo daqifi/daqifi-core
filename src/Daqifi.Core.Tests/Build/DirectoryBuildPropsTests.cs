@@ -140,12 +140,34 @@ public class DirectoryBuildPropsTests
     [Fact]
     public void DirectoryBuildProps_DoesNotCentralizeTargetFramework()
     {
-        // The projects legitimately differ here (issue #643), and a shared default would hide
-        // that rather than settle it. Issue #638 calls this out explicitly.
+        // Each project decides its own frameworks (issue #643); a shared default would silently
+        // apply to any project added later. Issue #638 calls this out explicitly.
         var centralized = CentralizedPropertyNames();
 
         Assert.DoesNotContain("TargetFramework", centralized);
         Assert.DoesNotContain("TargetFrameworks", centralized);
+    }
+
+    [Fact]
+    public void FrameworksCoreShips_AreShippedByTheToolAndRunByTheTests()
+    {
+        // Issue #643: Daqifi.Mcp once shipped only tools/net9.0/any while Daqifi.Core supported
+        // net10.0 too, so a .NET 10-only machine could not run the tool. Each project declares its
+        // own frameworks (see above), so adding one to Core alone still builds green; this is
+        // what catches it. The tool must ship every framework Core does, and each test project
+        // must run every framework its shipped project targets.
+        HashSet<string> FrameworksOf(string project) =>
+            TargetFrameworkMonikersIn(XDocument.Load(
+                    Path.Combine(RepositoryRoot.FullPath, "src", project, $"{project}.csproj")))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var core = FrameworksOf("Daqifi.Core");
+        var mcp = FrameworksOf("Daqifi.Mcp");
+
+        Assert.NotEmpty(core);
+        Assert.Empty(core.Except(mcp, StringComparer.OrdinalIgnoreCase));
+        Assert.Empty(core.Except(FrameworksOf("Daqifi.Core.Tests"), StringComparer.OrdinalIgnoreCase));
+        Assert.Empty(mcp.Except(FrameworksOf("Daqifi.Mcp.Tests"), StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]

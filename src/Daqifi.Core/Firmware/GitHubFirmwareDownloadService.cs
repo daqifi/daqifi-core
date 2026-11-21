@@ -294,7 +294,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     /// </remarks>
     private sealed class ReleaseCache
     {
-        private readonly object _sync = new();
+        private readonly Lock _sync = new();
         private Entry? _entry;
         private int _generation;
 

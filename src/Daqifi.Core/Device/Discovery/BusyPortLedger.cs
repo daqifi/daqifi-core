@@ -32,7 +32,7 @@ internal sealed class BusyPortLedger
     // could receive the next pass's half-filled data while the next taker received nothing at all.
     // Record stays outside this lock -- it is a ConcurrentDictionary write and must not serialise
     // against the concurrent probes that call it.
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
 
     // 1 while this pass's observation has not yet been taken. A busy-port set describes ONE pass;
     // it is not a standing fact about the world, and handing the same one out twice is how a

@@ -42,7 +42,7 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     /// </summary>
     public const double MaxRangeMagnitudeVolts = 50.0;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private IDataSample? _activeSample;
     private string _name;
     private bool _isEnabled;

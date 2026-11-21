@@ -25,7 +25,7 @@ internal static class ChannelEnablementNotification
     /// <param name="syncLock">The lock guarding the channel's state.</param>
     /// <param name="handlers">The channel's subscriber-list backing field.</param>
     /// <param name="handler">The handler being subscribed.</param>
-    public static void AddHandler(object syncLock, ref Action? handlers, Action? handler)
+    public static void AddHandler(Lock syncLock, ref Action? handlers, Action? handler)
     {
         lock (syncLock)
         {
@@ -40,7 +40,7 @@ internal static class ChannelEnablementNotification
     /// <param name="syncLock">The lock guarding the channel's state.</param>
     /// <param name="handlers">The channel's subscriber-list backing field.</param>
     /// <param name="handler">The handler being unsubscribed.</param>
-    public static void RemoveHandler(object syncLock, ref Action? handlers, Action? handler)
+    public static void RemoveHandler(Lock syncLock, ref Action? handlers, Action? handler)
     {
         lock (syncLock)
         {
@@ -66,7 +66,7 @@ internal static class ChannelEnablementNotification
     /// happen. The subscriber list is captured inside, so a concurrent unsubscribe cannot tear it.
     /// </para>
     /// </remarks>
-    public static void SetAndNotify(object syncLock, bool value, ref bool isEnabled, ref Action? handlers)
+    public static void SetAndNotify(Lock syncLock, bool value, ref bool isEnabled, ref Action? handlers)
     {
         Action? subscribers;
         lock (syncLock)

@@ -114,12 +114,12 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly IProgress<DiscoveryPassReport>? _progress;
 
     private readonly Dictionary<string, TrackedDevice> _devices = new(StringComparer.Ordinal);
-    private readonly object _devicesLock = new();
+    private readonly Lock _devicesLock = new();
     /// <summary>
     /// Guards <see cref="_lifecycle"/>, <see cref="_cts"/> and <see cref="_loopTask"/>. Only ever
     /// held for those assignments, never across a wait on the loop.
     /// </summary>
-    private readonly object _lifecycleLock = new();
+    private readonly Lock _lifecycleLock = new();
 
     private ScanLifecycle _lifecycle = ScanLifecycle.Idle;
 

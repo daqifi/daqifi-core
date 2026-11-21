@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
@@ -10,119 +11,206 @@ namespace Daqifi.Core.Tests.Communication.Producers;
 
 public class ScpiMessageProducerTests
 {
-    [Fact]
-    public void RebootDevice_ReturnsCorrectCommand()
-    {
-        // Act
-        var message = ScpiMessageProducer.RebootDevice;
+    // ---------------------------------------------------------------------
+    // Wire strings. Every row pins one producer call to the exact SCPI text it
+    // must put on the wire (and, via AssertMessageFormat, to that text plus
+    // CRLF as ASCII bytes). Rows are named by the producer call itself, captured
+    // with CallerArgumentExpression, so a failing row reads e.g.
+    // "SetDioPortDirection(0, 0)" in the test output. Adding a command is one
+    // row, not a new method.
+    // ---------------------------------------------------------------------
 
-        // Assert
-        Assert.Equal("SYSTem:REboot", message.Data);
+    /// <summary>
+    /// Theory rows of (producer call as written, the call itself, expected wire string). The call
+    /// is deferred so it runs inside its own row: a producer that starts throwing fails that row
+    /// alone instead of failing the whole table while it is being built.
+    /// </summary>
+    public sealed class ScpiCommandCases : TheoryData<string, Func<IOutboundMessage<string>>, string>
+    {
+        public void Add(
+            Func<IOutboundMessage<string>> produce,
+            string expected,
+            [CallerArgumentExpression(nameof(produce))] string call = "")
+        {
+            Add(call.Replace("() => ", string.Empty, StringComparison.Ordinal)
+                    .Replace("ScpiMessageProducer.", string.Empty, StringComparison.Ordinal),
+                produce,
+                expected);
+        }
+    }
+
+    // Commands that take no arguments: the string is the whole contract.
+    public static ScpiCommandCases FixedCommands => new()
+    {
+        // Device & system
+        { () => ScpiMessageProducer.RebootDevice, "SYSTem:REboot" },
+        { () => ScpiMessageProducer.GetDeviceInfo, "SYSTem:SYSInfoPB?" },
+        { () => ScpiMessageProducer.GetCapabilitiesApiVersion, "CONFigure:CAPabilities:APIVersion?" },
+        { () => ScpiMessageProducer.GetCapabilitiesJson, "CONFigure:CAPabilities:JSON?" },
+        { () => ScpiMessageProducer.DisableDeviceEcho, "SYSTem:ECHO -1" },
+        { () => ScpiMessageProducer.EnableDeviceEcho, "SYSTem:ECHO 1" },
+        { () => ScpiMessageProducer.TurnDeviceOn, "SYSTem:POWer:STATe 1" },
+        { () => ScpiMessageProducer.ForceBootloader, "SYSTem:FORceBoot" },
+        { () => ScpiMessageProducer.SaveDeviceName, "SYSTem:DEVice:NAME:SAVE" },
+        { () => ScpiMessageProducer.GetIdentify, "SYSTem:IDENtify?" },
+
+        // SD card
+        { () => ScpiMessageProducer.EnableStorageSd, "SYSTem:STORage:SD:ENAble 1" },
+        { () => ScpiMessageProducer.DisableStorageSd, "SYSTem:STORage:SD:ENAble 0" },
+        { () => ScpiMessageProducer.GetSdFileList, "SYSTem:STORage:SD:LIST?" },
+        { () => ScpiMessageProducer.FormatSdCard, "SYSTem:STORage:SD:FORmat" },
+        { () => ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
+        { () => ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
+        { () => ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
+
+        // Streaming
+        { () => ScpiMessageProducer.StopStreaming, "SYSTem:StopStreamData" },
+        { () => ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
+        { () => ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
+        { () => ScpiMessageProducer.GetStreamFormat, "SYSTem:STReam:FORmat?" },
+        { () => ScpiMessageProducer.GetStreamInterface, "SYSTem:STReam:INTerface?" },
+
+        // Digital I/O
+        { () => ScpiMessageProducer.EnableDioPorts(), "DIO:PORt:ENAble 1" },
+        { () => ScpiMessageProducer.DisableDioPorts(), "DIO:PORt:ENAble 0" },
+
+        // Network
+        { () => ScpiMessageProducer.SetNetworkWifiModeSelfHosted, "SYSTem:COMMunicate:LAN:NETType 4" },
+        { () => ScpiMessageProducer.SetNetworkWifiModeExisting, "SYSTem:COMMunicate:LAN:NETType 1" },
+        { () => ScpiMessageProducer.SetNetworkWifiSecurityOpen, "SYSTem:COMMunicate:LAN:SECurity 0" },
+        { () => ScpiMessageProducer.SetNetworkWifiSecurityWpa, "SYSTem:COMMunicate:LAN:SECurity 3" },
+        { () => ScpiMessageProducer.GetLanAddress, "SYSTem:COMMunicate:LAN:ADDRess?" },
+        { () => ScpiMessageProducer.GetLanMask, "SYSTem:COMMunicate:LAN:MASK?" },
+        { () => ScpiMessageProducer.GetLanGateway, "SYSTem:COMMunicate:LAN:GATEway?" },
+        { () => ScpiMessageProducer.GetLanConfiguredAddress, "SYSTem:COMMunicate:LAN:CONFigure:ADDRess?" },
+        { () => ScpiMessageProducer.GetLanConfiguredMask, "SYSTem:COMMunicate:LAN:CONFigure:MASK?" },
+        { () => ScpiMessageProducer.GetLanConfiguredGateway, "SYSTem:COMMunicate:LAN:CONFigure:GATEway?" },
+        { () => ScpiMessageProducer.DisableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 0" },
+        { () => ScpiMessageProducer.EnableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 1" },
+        { () => ScpiMessageProducer.ApplyNetworkLan, "SYSTem:COMMunicate:LAN:APPLY" },
+        { () => ScpiMessageProducer.SaveNetworkLan, "SYSTem:COMMunicate:LAN:SAVE" },
+        { () => ScpiMessageProducer.LoadNetworkLan, "SYSTem:COMMunicate:LAN:LOAD" },
+        { () => ScpiMessageProducer.FactoryResetNetworkLan, "SYSTem:COMMunicate:LAN:FACRESET" },
+        { () => ScpiMessageProducer.SetLanFirmwareUpdateMode, "SYSTem:COMMUnicate:LAN:FWUpdate" },
+
+        // ADC calibration & voltage precision
+        { () => ScpiMessageProducer.SaveAdcCalibration, "CONFigure:ADC:SAVEcal" },
+        { () => ScpiMessageProducer.LoadAdcCalibration, "CONFigure:ADC:LOADcal" },
+        { () => ScpiMessageProducer.SaveFactoryAdcCalibration, "CONFigure:ADC:SAVEFcal" },
+        { () => ScpiMessageProducer.LoadFactoryAdcCalibration, "CONFigure:ADC:LOADFcal" },
+        { () => ScpiMessageProducer.GetAdcCalibrationBank, "CONFigure:ADC:USECal?" },
+        { () => ScpiMessageProducer.SaveVoltagePrecision, "CONFigure:VOLTage:SAVE" },
+        { () => ScpiMessageProducer.LoadVoltagePrecision, "CONFigure:VOLTage:LOAD" },
+
+        // Analog output
+        { () => ScpiMessageProducer.UpdateDacOutputs, "CONFigure:DAC:UPDATE" },
+
+        // Logging & diagnostics
+        { () => ScpiMessageProducer.GetSystemLog, "SYSTem:LOG?" },
+        { () => ScpiMessageProducer.ClearSystemLog, "SYSTem:LOG:CLEar" },
+        { () => ScpiMessageProducer.GetCommandHistory, "SYSTem:LOG:CMDHistory?" },
+        { () => ScpiMessageProducer.TestSystemLog, "SYSTem:LOG:TEST" },
+        { () => ScpiMessageProducer.GetSystemErrorCount, "SYSTem:ERRor:COUNt?" },
+        { () => ScpiMessageProducer.GetStreamStats, "SYSTem:STReam:STATS?" },
+        { () => ScpiMessageProducer.GetMemoryDiagnostics, "SYSTem:MEMory:FREE?" },
+    };
+
+    // Commands that format arguments into the string. Boundary rows (channel 0, a zero size,
+    // a negative value) are here because each one is still a single fixed expectation; tests
+    // that check behaviour beyond one string (culture, validation) live below.
+    public static ScpiCommandCases ParameterisedCommands => new()
+    {
+        // Device & system
+        { () => ScpiMessageProducer.SetDeviceName("My Device"), "SYSTem:DEVice:NAME \"My Device\"" },
+        // Firmware v3.9.0 SCPI_SetIdentify accepts only the integers 0 and 1 (anything else is
+        // -224), so the bool must map to exactly those, not ON/OFF or True/False.
+        { () => ScpiMessageProducer.SetIdentify(true), "SYSTem:IDENtify 1" },
+        { () => ScpiMessageProducer.SetIdentify(false), "SYSTem:IDENtify 0" },
+        { () => ScpiMessageProducer.SetUsbTransparencyMode(1), "SYSTem:USB:SetTransparentMode 1" },
+
+        // SD card
+        { () => ScpiMessageProducer.GetSdFile("test.bin"), "SYSTem:STORage:SD:GET \"test.bin\"" },
+        { () => ScpiMessageProducer.SetSdLoggingFileName("log.bin"), "SYSTem:STORage:SD:FILE \"log.bin\"" },
+        { () => ScpiMessageProducer.DeleteSdFile("data.bin"), "SYSTem:STORage:SD:DELete \"data.bin\"" },
+        { () => ScpiMessageProducer.SetSdMaxFileSize(1073741824), "SYSTem:STORage:SD:MAXSize 1073741824" },
+        // Zero asks the firmware for its default maximum, so it must not be rejected.
+        { () => ScpiMessageProducer.SetSdMaxFileSize(0), "SYSTem:STORage:SD:MAXSize 0" },
+        { () => ScpiMessageProducer.RunSdBenchmark(1048576), "SYSTem:STORage:SD:BENCHmark 1048576" },
+        { () => ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
+        // Zero disables the free-space gate, so it must not be rejected.
+        { () => ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
+
+        // Streaming
+        { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb), "SYSTem:STReam:INTerface 0" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.WiFi), "SYSTem:STReam:INTerface 1" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard), "SYSTem:STReam:INTerface 2" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.All), "SYSTem:STReam:INTerface 3" },
+        { () => ScpiMessageProducer.EnableAdcChannels("84"), "ENAble:VOLTage:DC 84" },
+
+        // Digital I/O. Channel 0 is a real channel on every DAQiFi board, so the guard that
+        // rejects negative channels must leave the lowest valid channel untouched, and both
+        // documented directions (0 = input, 1 = output) must survive the direction guard.
+        { () => ScpiMessageProducer.SetDioPortDirection(1, 1), "DIO:PORt:DIRection 1,1" },
+        { () => ScpiMessageProducer.SetDioPortDirection(0, 0), "DIO:PORt:DIRection 0,0" },
+        { () => ScpiMessageProducer.SetDioPortDirection(3, 0), "DIO:PORt:DIRection 3,0" },
+        { () => ScpiMessageProducer.SetDioPortDirection(3, 1), "DIO:PORt:DIRection 3,1" },
+        { () => ScpiMessageProducer.SetDioPortState(1, 1), "DIO:PORt:STATe 1,1" },
+        { () => ScpiMessageProducer.SetDioPortState(0, 1), "DIO:PORt:STATe 0,1" },
+
+        // PWM
+        { () => ScpiMessageProducer.SetPwmChannelEnabled(4, true), "PWM:CHannel:ENable 4,1" },
+        { () => ScpiMessageProducer.SetPwmChannelEnabled(4, false), "PWM:CHannel:ENable 4,0" },
+        { () => ScpiMessageProducer.SetPwmChannelFrequency(0, 1000), "PWM:CHannel:FREQuency 0,1000" },
+        { () => ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50), "PWM:CHannel:DUTY 4,50" },
+
+        // Network
+        { () => ScpiMessageProducer.SetNetworkWifiSsid("MyNetwork"), "SYSTem:COMMunicate:LAN:SSID \"MyNetwork\"" },
+        { () => ScpiMessageProducer.SetNetworkWifiPassword("password123"), "SYSTem:COMMunicate:LAN:PASs \"password123\"" },
+        { () => ScpiMessageProducer.SetLanAddress(IPAddress.Parse("192.168.1.42")), "SYSTem:COMMunicate:LAN:ADDRess \"192.168.1.42\"" },
+        { () => ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0")), "SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"" },
+        { () => ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1")), "SYSTem:COMMunicate:LAN:GATEway \"192.168.1.1\"" },
+
+        // Per-channel ADC calibration constants (daqifi-core#386)
+        { () => ScpiMessageProducer.SetAdcCalibrationSlope(2, 1.0025), "CONFigure:ADC:chanCALM 2,1.0025" },
+        { () => ScpiMessageProducer.SetAdcCalibrationSlope(1, -0.5), "CONFigure:ADC:chanCALM 1,-0.5" },
+        { () => ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031), "CONFigure:ADC:chanCALB 3,-0.0031" },
+        { () => ScpiMessageProducer.GetAdcCalibrationSlope(0), "CONFigure:ADC:chanCALM? 0" },
+        { () => ScpiMessageProducer.GetAdcCalibrationOffset(5), "CONFigure:ADC:chanCALB? 5" },
+        { () => ScpiMessageProducer.UseAdcCalibration(0), "CONFigure:ADC:USECal 0" },
+        { () => ScpiMessageProducer.UseAdcCalibration(1), "CONFigure:ADC:USECal 1" },
+
+        // Analog output. A negative channel is rejected, but a negative voltage is valid and
+        // must render with a leading minus.
+        { () => ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0), "SOURce:VOLTage:LEVel 0,5" },
+        { () => ScpiMessageProducer.SetAnalogOutputVoltage(0, -3.3), "SOURce:VOLTage:LEVel 0,-3.3" },
+        { () => ScpiMessageProducer.GetAnalogOutputVoltage(2), "SOURce:VOLTage:LEVel? 2" },
+
+        // Logging & diagnostics
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", 2), "SYSTem:LOG:LEVel STREAM,2" },
+    };
+
+    [Theory]
+    [MemberData(nameof(FixedCommands))]
+    public void FixedCommand_ProducesExpectedWireString(string call, Func<IOutboundMessage<string>> produce, string expected)
+    {
+        var message = produce();
+        Assert.Equal((call, expected), (call, message.Data));
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void GetDeviceInfo_ReturnsCorrectCommand()
+    [Theory]
+    [MemberData(nameof(ParameterisedCommands))]
+    public void ParameterisedCommand_ProducesExpectedWireString(string call, Func<IOutboundMessage<string>> produce, string expected)
     {
-        // Act
-        var message = ScpiMessageProducer.GetDeviceInfo;
-
-        // Assert
-        Assert.Equal("SYSTem:SYSInfoPB?", message.Data);
+        var message = produce();
+        Assert.Equal((call, expected), (call, message.Data));
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void GetCapabilitiesApiVersion_ReturnsCorrectCommand()
-    {
-        // Act
-        var message = ScpiMessageProducer.GetCapabilitiesApiVersion;
-
-        // Assert
-        Assert.Equal("CONFigure:CAPabilities:APIVersion?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetCapabilitiesJson_ReturnsCorrectCommand()
-    {
-        // Act
-        var message = ScpiMessageProducer.GetCapabilitiesJson;
-
-        // Assert
-        Assert.Equal("CONFigure:CAPabilities:JSON?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void DisableDeviceEcho_ReturnsCorrectCommand()
-    {
-        // Act
-        var message = ScpiMessageProducer.DisableDeviceEcho;
-
-        // Assert
-        Assert.Equal("SYSTem:ECHO -1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void EnableDeviceEcho_ReturnsCorrectCommand()
-    {
-        // Act
-        var message = ScpiMessageProducer.EnableDeviceEcho;
-
-        // Assert
-        Assert.Equal("SYSTem:ECHO 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void TurnDeviceOn_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.TurnDeviceOn;
-        Assert.Equal("SYSTem:POWer:STATe 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void EnableStorageSd_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.EnableStorageSd;
-        Assert.Equal("SYSTem:STORage:SD:ENAble 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void DisableStorageSd_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.DisableStorageSd;
-        Assert.Equal("SYSTem:STORage:SD:ENAble 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetSdFileList_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdFileList;
-        Assert.Equal("SYSTem:STORage:SD:LIST?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetSdFile_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdFile("test.bin");
-        Assert.Equal("SYSTem:STORage:SD:GET \"test.bin\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetSdLoggingFileName_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetSdLoggingFileName("log.bin");
-        Assert.Equal("SYSTem:STORage:SD:FILE \"log.bin\"", message.Data);
-        AssertMessageFormat(message);
-    }
+    // ---------------------------------------------------------------------
+    // SD filenames
+    // ---------------------------------------------------------------------
 
     [Theory]
     [InlineData(null)]
@@ -171,6 +259,17 @@ public class ScpiMessageProducerTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void DeleteSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ScpiMessageProducer.DeleteSdFile(fileName!));
+        Assert.Equal("fileName", ex.ParamName);
+    }
+
+    [Theory]
     [InlineData("a\"b")]
     [InlineData("a;b")]
     [InlineData("log.bin\nSYSTem:REboot")]
@@ -208,140 +307,9 @@ public class ScpiMessageProducerTests
         Assert.Equal($"SYSTem:STORage:SD:DELete \"{fileName}\"", ScpiMessageProducer.DeleteSdFile(fileName).Data);
     }
 
-    [Fact]
-    public void StartStreaming_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.StartStreaming(100);
-        Assert.Equal("SYSTem:StartStreamData 100", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void StopStreaming_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.StopStreaming;
-        Assert.Equal("SYSTem:StopStreamData", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetProtobufStreamFormat_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetProtobufStreamFormat;
-        Assert.Equal("SYSTem:STReam:FORmat 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetJsonStreamFormat_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetJsonStreamFormat;
-        Assert.Equal("SYSTem:STReam:FORmat 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetStreamFormat_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetStreamFormat;
-        Assert.Equal("SYSTem:STReam:FORmat?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void EnableAdcChannels_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.EnableAdcChannels("84");
-        Assert.Equal("ENAble:VOLTage:DC 84", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetDioPortDirection_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetDioPortDirection(1, 1);
-        Assert.Equal("DIO:PORt:DIRection 1,1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    // Channel 0 is a real channel on every DAQiFi board, so the guard's boundary matters:
-    // rejecting only negatives must leave the lowest valid channel untouched.
-    [Fact]
-    public void SetDioPortDirection_WithChannelZero_StillReturnsCommand()
-    {
-        var message = ScpiMessageProducer.SetDioPortDirection(0, 0);
-        Assert.Equal("DIO:PORt:DIRection 0,0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    // `direction` is documented as a two-value enumeration (0 = input, 1 = output) and the
-    // firmware understands nothing else, so anything outside that is caller error rather
-    // than a frame to put on the wire.
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(2)]
-    [InlineData(7)]
-    [InlineData(int.MaxValue)]
-    public void SetDioPortDirection_WithOutOfRangeDirection_Throws(int direction)
-    {
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetDioPortDirection(0, direction));
-
-        Assert.Equal("direction", ex.ParamName);
-        Assert.Equal(direction, ex.ActualValue);
-        Assert.StartsWith("Direction must be 0 (input) or 1 (output).", ex.Message, StringComparison.Ordinal);
-    }
-
-    // Both documented values must survive the guard unchanged, byte for byte.
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public void SetDioPortDirection_WithDocumentedDirection_StillReturnsCommand(int direction)
-    {
-        var message = ScpiMessageProducer.SetDioPortDirection(3, direction);
-        Assert.Equal($"DIO:PORt:DIRection 3,{direction}", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetDioPortDirection_WithNegativeChannel_ThrowsBeforeCheckingTheDirection()
-    {
-        // Both arguments are invalid here. The channel guard runs first, so the caller is
-        // told about `channel` rather than about `direction`, matching SetDioPortState and
-        // the PWM setters, which all validate the channel before the value.
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetDioPortDirection(-1, 7));
-
-        Assert.Equal("channel", ex.ParamName);
-    }
-
-    [Fact]
-    public void SetDioPortState_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetDioPortState(1, 1);
-        Assert.Equal("DIO:PORt:STATe 1,1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetDioPortState_WithChannelZero_StillReturnsCommand()
-    {
-        var message = ScpiMessageProducer.SetDioPortState(0, 1);
-        Assert.Equal("DIO:PORt:STATe 0,1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetDioPortState_WithNegativeChannel_ThrowsBeforeCheckingTheValue()
-    {
-        // Both arguments are invalid here. The channel guard runs first, so the caller is
-        // told about `channel` rather than about `value`, matching the sibling setters that
-        // validate the channel before the value.
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetDioPortState(-1, double.NaN));
-
-        Assert.Equal("channel", ex.ParamName);
-    }
+    // ---------------------------------------------------------------------
+    // Digital I/O state formatting
+    // ---------------------------------------------------------------------
 
     [Theory]
     [InlineData(0)]
@@ -397,295 +365,35 @@ public class ScpiMessageProducerTests
         Assert.Contains("State value must be a finite number.", ex.Message);
     }
 
-    [Fact]
-    public void EnableDioPorts_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.EnableDioPorts();
-        Assert.Equal("DIO:PORt:ENAble 1", message.Data);
-        AssertMessageFormat(message);
-    }
+    // ---------------------------------------------------------------------
+    // Network address validation
+    // ---------------------------------------------------------------------
 
-    [Fact]
-    public void DisableDioPorts_ReturnsCorrectCommand()
+    public static TheoryData<string, Type, Func<IOutboundMessage<string>>> InvalidLanAddresses => new()
     {
-        var message = ScpiMessageProducer.DisableDioPorts();
-        Assert.Equal("DIO:PORt:ENAble 0", message.Data);
-        AssertMessageFormat(message);
-    }
+        { "SetLanAddress(null)", typeof(ArgumentNullException), () => ScpiMessageProducer.SetLanAddress(null!) },
+        { "SetLanAddress(IPv6)", typeof(ArgumentException), () => ScpiMessageProducer.SetLanAddress(IPAddress.IPv6Loopback) },
+        { "SetLanMask(null)", typeof(ArgumentNullException), () => ScpiMessageProducer.SetLanMask(null!) },
+        { "SetLanMask(IPv6)", typeof(ArgumentException), () => ScpiMessageProducer.SetLanMask(IPAddress.IPv6Loopback) },
+        { "SetLanGateway(null)", typeof(ArgumentNullException), () => ScpiMessageProducer.SetLanGateway(null!) },
+        { "SetLanGateway(IPv6)", typeof(ArgumentException), () => ScpiMessageProducer.SetLanGateway(IPAddress.IPv6Loopback) },
+    };
 
+    // The firmware only takes dotted-quad IPv4 here, so a null or IPv6 address is caller error.
+    // The exact exception type is pinned (ArgumentNullException is not just any ArgumentException).
     [Theory]
-    [InlineData(true, "PWM:CHannel:ENable 4,1")]
-    [InlineData(false, "PWM:CHannel:ENable 4,0")]
-    public void SetPwmChannelEnabled_ReturnsCorrectCommand(bool enabled, string expected)
+    [MemberData(nameof(InvalidLanAddresses))]
+    public void SetLanAddressFamily_WithNullOrIPv6_Throws(string call, Type expectedException, Func<IOutboundMessage<string>> act)
     {
-        var message = ScpiMessageProducer.SetPwmChannelEnabled(4, enabled);
-        Assert.Equal(expected, message.Data);
-        AssertMessageFormat(message);
-    }
+        var ex = Record.Exception(() => act());
 
-    [Fact]
-    public void SetPwmChannelFrequency_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetPwmChannelFrequency(0, 1000);
-        Assert.Equal("PWM:CHannel:FREQuency 0,1000", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetPwmChannelDutyCycle_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50);
-        Assert.Equal("PWM:CHannel:DUTY 4,50", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiModeSelfHosted_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiModeSelfHosted;
-        Assert.Equal("SYSTem:COMMunicate:LAN:NETType 4", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiModeExisting_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiModeExisting;
-        Assert.Equal("SYSTem:COMMunicate:LAN:NETType 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiSsid_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiSsid("MyNetwork");
-        Assert.Equal("SYSTem:COMMunicate:LAN:SSID \"MyNetwork\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiSecurityOpen_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiSecurityOpen;
-        Assert.Equal("SYSTem:COMMunicate:LAN:SECurity 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiSecurityWpa_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiSecurityWpa;
-        Assert.Equal("SYSTem:COMMunicate:LAN:SECurity 3", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetNetworkWifiPassword_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetNetworkWifiPassword("password123");
-        Assert.Equal("SYSTem:COMMunicate:LAN:PASs \"password123\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLanAddress_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetLanAddress(IPAddress.Parse("192.168.1.42"));
-        Assert.Equal("SYSTem:COMMunicate:LAN:ADDRess \"192.168.1.42\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLanAddress_NullAddress_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanAddress(null!));
-    }
-
-    [Fact]
-    public void SetLanAddress_IPv6_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanAddress(IPAddress.IPv6Loopback));
-    }
-
-    [Fact]
-    public void SetLanMask_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0"));
-        Assert.Equal("SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLanMask_NullMask_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanMask(null!));
-    }
-
-    [Fact]
-    public void SetLanMask_IPv6_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanMask(IPAddress.IPv6Loopback));
-    }
-
-    [Fact]
-    public void SetLanGateway_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1"));
-        Assert.Equal("SYSTem:COMMunicate:LAN:GATEway \"192.168.1.1\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLanGateway_NullGateway_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanGateway(null!));
-    }
-
-    [Fact]
-    public void SetLanGateway_IPv6_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanGateway(IPAddress.IPv6Loopback));
-    }
-
-    [Fact]
-    public void GetLanAddress_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanAddress;
-        Assert.Equal("SYSTem:COMMunicate:LAN:ADDRess?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetLanMask_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanMask;
-        Assert.Equal("SYSTem:COMMunicate:LAN:MASK?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetLanGateway_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanGateway;
-        Assert.Equal("SYSTem:COMMunicate:LAN:GATEway?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetLanConfiguredAddress_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanConfiguredAddress;
-        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:ADDRess?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetLanConfiguredMask_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanConfiguredMask;
-        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:MASK?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetLanConfiguredGateway_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetLanConfiguredGateway;
-        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:GATEway?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void DisableNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.DisableNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void EnableNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.EnableNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void ApplyNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.ApplyNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:APPLY", message.Data);
-        AssertMessageFormat(message);
-    }
-    
-    [Fact]
-    public void SaveNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SaveNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:SAVE", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void LoadNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.LoadNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:LOAD", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void FactoryResetNetworkLan_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.FactoryResetNetworkLan;
-        Assert.Equal("SYSTem:COMMunicate:LAN:FACRESET", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SaveAdcCalibration_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SaveAdcCalibration;
-        Assert.Equal("CONFigure:ADC:SAVEcal", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void LoadAdcCalibration_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.LoadAdcCalibration;
-        Assert.Equal("CONFigure:ADC:LOADcal", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SaveVoltagePrecision_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SaveVoltagePrecision;
-        Assert.Equal("CONFigure:VOLTage:SAVE", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void LoadVoltagePrecision_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.LoadVoltagePrecision;
-        Assert.Equal("CONFigure:VOLTage:LOAD", message.Data);
-        AssertMessageFormat(message);
+        // Compared as one tuple so a failure names the row; the type is matched exactly.
+        Assert.Equal((call, expectedException), (call, ex?.GetType()));
     }
 
     // ---------------------------------------------------------------------
-    // Per-channel ADC calibration-constant write path (daqifi-core#386)
+    // Per-channel ADC calibration-constant formatting (daqifi-core#386)
     // ---------------------------------------------------------------------
-
-    [Fact]
-    public void SetAdcCalibrationSlope_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetAdcCalibrationSlope(2, 1.0025);
-        Assert.Equal("CONFigure:ADC:chanCALM 2,1.0025", message.Data);
-        AssertMessageFormat(message);
-    }
 
     [Fact]
     public void SetAdcCalibrationSlope_FormatsFractionalValueWithInvariantDecimalPoint()
@@ -704,14 +412,6 @@ public class ScpiMessageProducerTests
         }
     }
 
-    [Fact]
-    public void SetAdcCalibrationSlope_WithNegativeValue_FormatsLeadingMinus()
-    {
-        var message = ScpiMessageProducer.SetAdcCalibrationSlope(1, -0.5);
-        Assert.Equal("CONFigure:ADC:chanCALM 1,-0.5", message.Data);
-        AssertMessageFormat(message);
-    }
-
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
@@ -724,14 +424,6 @@ public class ScpiMessageProducerTests
         // parameter name and wording this call site is responsible for supplying.
         Assert.Equal("calM", ex.ParamName);
         Assert.Contains("Calibration slope must be a finite number.", ex.Message);
-    }
-
-    [Fact]
-    public void SetAdcCalibrationOffset_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031);
-        Assert.Equal("CONFigure:ADC:chanCALB 3,-0.0031", message.Data);
-        AssertMessageFormat(message);
     }
 
     [Fact]
@@ -764,214 +456,9 @@ public class ScpiMessageProducerTests
         Assert.Contains("Calibration offset must be a finite number.", ex.Message);
     }
 
-    [Fact]
-    public void GetAdcCalibrationSlope_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetAdcCalibrationSlope(0);
-        Assert.Equal("CONFigure:ADC:chanCALM? 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetAdcCalibrationOffset_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetAdcCalibrationOffset(5);
-        Assert.Equal("CONFigure:ADC:chanCALB? 5", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SaveFactoryAdcCalibration_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SaveFactoryAdcCalibration;
-        Assert.Equal("CONFigure:ADC:SAVEFcal", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void LoadFactoryAdcCalibration_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.LoadFactoryAdcCalibration;
-        Assert.Equal("CONFigure:ADC:LOADFcal", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public void UseAdcCalibration_ReturnsCorrectCommand(int bank)
-    {
-        var message = ScpiMessageProducer.UseAdcCalibration(bank);
-        Assert.Equal($"CONFigure:ADC:USECal {bank}", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(2)]
-    public void UseAdcCalibration_WithInvalidBank_Throws(int bank)
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.UseAdcCalibration(bank));
-    }
-
-    [Fact]
-    public void GetAdcCalibrationBank_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetAdcCalibrationBank;
-        Assert.Equal("CONFigure:ADC:USECal?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLanFirmwareUpdateMode_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetLanFirmwareUpdateMode;
-        Assert.Equal("SYSTem:COMMUnicate:LAN:FWUpdate", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetUsbTransparencyMode_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetUsbTransparencyMode(1);
-        Assert.Equal("SYSTem:USB:SetTransparentMode 1", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void DeleteSdFile_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.DeleteSdFile("data.bin");
-        Assert.Equal("SYSTem:STORage:SD:DELete \"data.bin\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void DeleteSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
-    {
-        var ex = Assert.Throws<ArgumentException>(
-            () => ScpiMessageProducer.DeleteSdFile(fileName!));
-        Assert.Equal("fileName", ex.ParamName);
-    }
-
-    [Fact]
-    public void FormatSdCard_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.FormatSdCard;
-        Assert.Equal("SYSTem:STORage:SD:FORmat", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetSdMaxFileSize_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetSdMaxFileSize(1073741824);
-        Assert.Equal("SYSTem:STORage:SD:MAXSize 1073741824", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetSdMaxFileSize_WithZero_ReturnsDefaultCommand()
-    {
-        var message = ScpiMessageProducer.SetSdMaxFileSize(0);
-        Assert.Equal("SYSTem:STORage:SD:MAXSize 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetSdMaxFileSize_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdMaxFileSize;
-        Assert.Equal("SYSTem:STORage:SD:MAXSize?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void RunSdBenchmark_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.RunSdBenchmark(1048576);
-        Assert.Equal("SYSTem:STORage:SD:BENCHmark 1048576", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void RunSdBenchmark_WithZeroOrNegative_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.RunSdBenchmark(0));
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.RunSdBenchmark(-1));
-    }
-
-    [Fact]
-    public void GetSdBenchmarkResults_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdBenchmarkResults;
-        Assert.Equal("SYSTem:STORage:SD:BENCHmark?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetSdSpace_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdSpace;
-        Assert.Equal("SYSTem:STORage:SD:SPACe?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetSdMinFreeSpace_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetSdMinFreeSpace(52428800);
-        Assert.Equal("SYSTem:STORage:SD:MINFree 52428800", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetSdMinFreeSpace_WithZero_DisablesGate()
-    {
-        var message = ScpiMessageProducer.SetSdMinFreeSpace(0);
-        Assert.Equal("SYSTem:STORage:SD:MINFree 0", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Theory]
-    [InlineData(StreamInterface.Usb, 0)]
-    [InlineData(StreamInterface.WiFi, 1)]
-    [InlineData(StreamInterface.SdCard, 2)]
-    [InlineData(StreamInterface.All, 3)]
-    public void SetStreamInterface_ReturnsCorrectCommand(StreamInterface iface, int expectedValue)
-    {
-        var message = ScpiMessageProducer.SetStreamInterface(iface);
-        Assert.Equal($"SYSTem:STReam:INTerface {expectedValue}", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetStreamInterface_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetStreamInterface;
-        Assert.Equal("SYSTem:STReam:INTerface?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void ForceBootloader_ReturnsCorrectMessage()
-    {
-        var message = ScpiMessageProducer.ForceBootloader;
-        Assert.Equal("SYSTem:FORceBoot", message.Data);
-    }
-
-    [Fact]
-    public void SetAnalogOutputVoltage_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0);
-        Assert.Equal("SOURce:VOLTage:LEVel 0,5", message.Data);
-        AssertMessageFormat(message);
-    }
+    // ---------------------------------------------------------------------
+    // Analog output formatting
+    // ---------------------------------------------------------------------
 
     [Fact]
     public void SetAnalogOutputVoltage_FormatsFractionalVoltageWithInvariantDecimalPoint()
@@ -990,15 +477,6 @@ public class ScpiMessageProducerTests
         }
     }
 
-    [Fact]
-    public void SetAnalogOutputVoltage_WithNegativeVoltage_FormatsLeadingMinus()
-    {
-        // Negative channel is rejected, but negative voltage is valid and must render correctly.
-        var message = ScpiMessageProducer.SetAnalogOutputVoltage(0, -3.3);
-        Assert.Equal("SOURce:VOLTage:LEVel 0,-3.3", message.Data);
-        AssertMessageFormat(message);
-    }
-
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
@@ -1013,87 +491,9 @@ public class ScpiMessageProducerTests
         Assert.Contains("Voltage must be a finite number.", ex.Message);
     }
 
-    [Fact]
-    public void UpdateDacOutputs_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.UpdateDacOutputs;
-        Assert.Equal("CONFigure:DAC:UPDATE", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetAnalogOutputVoltage_ReturnsCorrectQuery()
-    {
-        var message = ScpiMessageProducer.GetAnalogOutputVoltage(2);
-        Assert.Equal("SOURce:VOLTage:LEVel? 2", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    // --- Logging & diagnostics ---
-
-    [Fact]
-    public void GetSystemLog_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSystemLog;
-        Assert.Equal("SYSTem:LOG?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void ClearSystemLog_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.ClearSystemLog;
-        Assert.Equal("SYSTem:LOG:CLEar", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetCommandHistory_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetCommandHistory;
-        Assert.Equal("SYSTem:LOG:CMDHistory?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void TestSystemLog_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.TestSystemLog;
-        Assert.Equal("SYSTem:LOG:TEST", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetSystemErrorCount_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSystemErrorCount;
-        Assert.Equal("SYSTem:ERRor:COUNt?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetStreamStats_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetStreamStats;
-        Assert.Equal("SYSTem:STReam:STATS?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetMemoryDiagnostics_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetMemoryDiagnostics;
-        Assert.Equal("SYSTem:MEMory:FREE?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetLogLevel_FormatsModuleAndLevel()
-    {
-        var message = ScpiMessageProducer.SetLogLevel("STREAM", 2);
-        Assert.Equal("SYSTem:LOG:LEVel STREAM,2", message.Data);
-        AssertMessageFormat(message);
-    }
+    // ---------------------------------------------------------------------
+    // Logging module validation
+    // ---------------------------------------------------------------------
 
     [Theory]
     [InlineData(null)]
@@ -1115,49 +515,9 @@ public class ScpiMessageProducerTests
         Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module, 1));
     }
 
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(4)]
-    public void SetLogLevel_WithLevelOutOfRange_Throws(int level)
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetLogLevel("STREAM", level));
-    }
-
-    [Fact]
-    public void SetDeviceName_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SetDeviceName("My Device");
-        Assert.Equal("SYSTem:DEVice:NAME \"My Device\"", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SaveDeviceName_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.SaveDeviceName;
-        Assert.Equal("SYSTem:DEVice:NAME:SAVE", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Theory]
-    [InlineData(true, "SYSTem:IDENtify 1")]
-    [InlineData(false, "SYSTem:IDENtify 0")]
-    public void SetIdentify_ReturnsCorrectCommand(bool enabled, string expected)
-    {
-        // Firmware v3.9.0 SCPI_SetIdentify accepts only the integers 0 and 1 (anything else is
-        // -224), so the bool must map to exactly those, not ON/OFF or True/False.
-        var message = ScpiMessageProducer.SetIdentify(enabled);
-        Assert.Equal(expected, message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetIdentify_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetIdentify;
-        Assert.Equal("SYSTem:IDENtify?", message.Data);
-        AssertMessageFormat(message);
-    }
+    // ---------------------------------------------------------------------
+    // Device friendly name
+    // ---------------------------------------------------------------------
 
     [Theory]
     [InlineData(null)]
@@ -1211,14 +571,21 @@ public class ScpiMessageProducerTests
         Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
     }
 
-    // Each channel-addressed producer already has its own test proving it throws on a
-    // negative channel. None of them pinned what callers can actually observe about that
-    // throw, so nothing stopped the copies of the rule from drifting apart. They now
-    // share one ValidateChannel helper; this pins the contract it is there to hold.
+    // ---------------------------------------------------------------------
+    // Argument-guard censuses
+    // ---------------------------------------------------------------------
+
+    // The one place negative-channel rejection is pinned for every channel-addressed
+    // producer: what callers can observe about the throw (parameter name, actual value,
+    // message) must be identical, because they all share one ValidateChannel helper.
     //
     // The list is the whole of ScpiMessageProducer's channel-addressed surface: the two
     // DIO producers were the odd ones out until they were brought in, so a producer added
     // here without the guard fails this test rather than quietly shipping an unguarded one.
+    //
+    // The DIO rows also pass an invalid value (direction 7, state NaN). The channel guard
+    // runs first, so the caller is told about `channel` rather than about the value,
+    // matching the PWM and analog setters, which all validate the channel before the value.
     [Fact]
     public void EveryChannelAddressedProducer_RejectsNegativeChannelIdentically()
     {
@@ -1233,8 +600,8 @@ public class ScpiMessageProducerTests
             (nameof(ScpiMessageProducer.SetAdcCalibrationOffset), () => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationSlope), () => ScpiMessageProducer.GetAdcCalibrationSlope(-1)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationOffset), () => ScpiMessageProducer.GetAdcCalibrationOffset(-1)),
-            (nameof(ScpiMessageProducer.SetDioPortDirection), () => ScpiMessageProducer.SetDioPortDirection(-1, 1)),
-            (nameof(ScpiMessageProducer.SetDioPortState), () => ScpiMessageProducer.SetDioPortState(-1, 1)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), () => ScpiMessageProducer.SetDioPortDirection(-1, 7)),
+            (nameof(ScpiMessageProducer.SetDioPortState), () => ScpiMessageProducer.SetDioPortState(-1, double.NaN)),
         };
 
         var observed = new List<(string Producer, string? ParamName, object? ActualValue, string Message)>();
@@ -1265,9 +632,11 @@ public class ScpiMessageProducerTests
     // a sample: it is the whole population of `throw new ArgumentOutOfRangeException` sites
     // outside the shared ValidateChannel/RequireFinite helpers — verified by grepping that
     // throw against this table. A producer that gains a ranged value argument must be added
-    // here. The count assertion below is a deliberate tripwire, not a proof of completeness:
-    // it fails the moment someone edits the table without reading this note, which is the
-    // same mechanism EveryChannelAddressedProducer_RejectsNegativeChannelIdentically uses.
+    // here. Where a range is bounded on both sides, both edges have a row (and
+    // SetDioPortDirection also int.MaxValue). The distinct-producer count below is a
+    // deliberate tripwire, not a proof of completeness: it fails the moment someone edits
+    // the table without reading this note, which is the same mechanism
+    // EveryChannelAddressedProducer_RejectsNegativeChannelIdentically uses.
     [Fact]
     public void EveryValueRangedProducer_RejectsOutOfRangeArgumentIdentically()
     {
@@ -1277,10 +646,18 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetPwmChannelFrequency(0, 0)),
             (nameof(ScpiMessageProducer.SetPwmChannelDutyCycle), "dutyCyclePercent", 101, "Duty cycle must be 0-100 percent.",
                 () => ScpiMessageProducer.SetPwmChannelDutyCycle(0, 101)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", -1, "Direction must be 0 (input) or 1 (output).",
+                () => ScpiMessageProducer.SetDioPortDirection(0, -1)),
             (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", 2, "Direction must be 0 (input) or 1 (output).",
                 () => ScpiMessageProducer.SetDioPortDirection(0, 2)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", int.MaxValue, "Direction must be 0 (input) or 1 (output).",
+                () => ScpiMessageProducer.SetDioPortDirection(0, int.MaxValue)),
+            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", -1, "Calibration bank must be 0 (factory) or 1 (user).",
+                () => ScpiMessageProducer.UseAdcCalibration(-1)),
             (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", 2, "Calibration bank must be 0 (factory) or 1 (user).",
                 () => ScpiMessageProducer.UseAdcCalibration(2)),
+            (nameof(ScpiMessageProducer.SetLogLevel), "level", -1, "Log level must be between 0 (None) and 3 (Debug).",
+                () => ScpiMessageProducer.SetLogLevel("STREAM", -1)),
             (nameof(ScpiMessageProducer.SetLogLevel), "level", 4, "Log level must be between 0 (None) and 3 (Debug).",
                 () => ScpiMessageProducer.SetLogLevel("ADC", 4)),
             (nameof(ScpiMessageProducer.SetSdMaxFileSize), "bytes", -1L, "Max file size cannot be negative.",
@@ -1289,18 +666,20 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetSdMinFreeSpace(-1)),
             (nameof(ScpiMessageProducer.RunSdBenchmark), "size", 0L, "Benchmark size must be positive.",
                 () => ScpiMessageProducer.RunSdBenchmark(0)),
+            (nameof(ScpiMessageProducer.RunSdBenchmark), "size", -1L, "Benchmark size must be positive.",
+                () => ScpiMessageProducer.RunSdBenchmark(-1)),
             // An undefined enum value is the same rule expressed over an enum's range, and it
             // throws the same exception in the same shape, so it belongs in the census too.
             (nameof(ScpiMessageProducer.SetStreamInterface), "streamInterface", (StreamInterface)999, "Unknown stream interface.",
                 () => ScpiMessageProducer.SetStreamInterface((StreamInterface)999)),
         };
 
-        Assert.Equal(9, producers.Length);
+        Assert.Equal(9, producers.Select(p => p.Name).Distinct().Count());
         foreach (var (name, paramName, actualValue, messagePrefix, act) in producers)
         {
             var ex = Assert.Throws<ArgumentOutOfRangeException>(act);
 
-            // Compared as one tuple so a failure names the producer that drifted.
+            // Compared as one tuple so a failure names the producer (and value) that drifted.
             Assert.Equal((name, paramName, (object?)actualValue), (name, ex.ParamName, ex.ActualValue));
             Assert.StartsWith(messagePrefix, ex.Message, StringComparison.Ordinal);
         }
@@ -1310,7 +689,7 @@ public class ScpiMessageProducerTests
     {
         var bytes = message.GetBytes();
         var expectedBytes = Encoding.ASCII.GetBytes($"{message.Data}\r\n");
-        
+
         Assert.Equal(expectedBytes, bytes);
     }
-} 
+}

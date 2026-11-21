@@ -188,6 +188,67 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
+    public async Task TcpStreamTransport_Disconnect_AfterThePeerResetTheSocket_ReleasesIt()
+    {
+        // An I/O failure on a reset connection leaves the socket open but reporting
+        // Connected == false, and the watchdog needs several faults before it tears it down
+        // itself. Disconnect used to return early on !IsConnected in that window: no
+        // StatusChanged, the watchdog disarmed, and the socket held until the next connect
+        // overwrote it.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            await transport.ConnectAsync();
+            await BreakTheConnectionFromThePeerAsync(listener, transport);
+            var reported = new List<bool>();
+            transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+
+            await transport.DisconnectAsync();
+
+            Assert.Equal(new[] { false }, reported);
+            Assert.Throws<TransportNotConnectedException>(() => transport.Stream);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Has the peer close the connection, then writes until the stack reports the reset, which
+    /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than
+    /// reading makes the failure arrive the same way on every platform.
+    /// </summary>
+    private static async Task BreakTheConnectionFromThePeerAsync(TcpListener listener, TcpStreamTransport transport)
+    {
+        using (await listener.AcceptTcpClientAsync())
+        {
+        }
+
+        var stream = transport.Stream;
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            try
+            {
+                stream.Write(new byte[] { 0x0A }, 0, 1);
+            }
+            catch (IOException)
+            {
+                Assert.False(transport.IsConnected);
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        throw new TimeoutException("The peer's close never surfaced as a failed write.");
+    }
+
+    [Fact]
     public async Task TcpStreamTransport_ConnectAsync_LowersReceiveTimeoutToOperationalValue()
     {
         // Regression for issue #383: leaving the socket at the (multi-second) connection timeout

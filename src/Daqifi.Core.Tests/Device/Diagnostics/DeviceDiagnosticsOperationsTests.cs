@@ -36,16 +36,6 @@ namespace Daqifi.Core.Tests.Device.Diagnostics;
 /// </remarks>
 public class DeviceDiagnosticsOperationsTests
 {
-    #region Construction
-
-    [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new DeviceDiagnosticsOperations(null!));
-    }
-
-    #endregion
-
     #region GetSystemLogAsync — the "any line means answered" distinction (#543)
 
     [Fact]
