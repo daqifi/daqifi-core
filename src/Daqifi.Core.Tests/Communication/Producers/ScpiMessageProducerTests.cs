@@ -21,16 +21,21 @@ public class ScpiMessageProducerTests
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Theory rows of (producer call as written, message it produced, expected wire string).
+    /// Theory rows of (producer call as written, the call itself, expected wire string). The call
+    /// is deferred so it runs inside its own row: a producer that starts throwing fails that row
+    /// alone instead of failing the whole table while it is being built.
     /// </summary>
-    public sealed class ScpiCommandCases : TheoryData<string, IOutboundMessage<string>, string>
+    public sealed class ScpiCommandCases : TheoryData<string, Func<IOutboundMessage<string>>, string>
     {
         public void Add(
-            IOutboundMessage<string> message,
+            Func<IOutboundMessage<string>> produce,
             string expected,
-            [CallerArgumentExpression(nameof(message))] string call = "")
+            [CallerArgumentExpression(nameof(produce))] string call = "")
         {
-            Add(call.Replace("ScpiMessageProducer.", string.Empty, StringComparison.Ordinal), message, expected);
+            Add(call.Replace("() => ", string.Empty, StringComparison.Ordinal)
+                    .Replace("ScpiMessageProducer.", string.Empty, StringComparison.Ordinal),
+                produce,
+                expected);
         }
     }
 
@@ -38,76 +43,76 @@ public class ScpiMessageProducerTests
     public static ScpiCommandCases FixedCommands => new()
     {
         // Device & system
-        { ScpiMessageProducer.RebootDevice, "SYSTem:REboot" },
-        { ScpiMessageProducer.GetDeviceInfo, "SYSTem:SYSInfoPB?" },
-        { ScpiMessageProducer.GetCapabilitiesApiVersion, "CONFigure:CAPabilities:APIVersion?" },
-        { ScpiMessageProducer.GetCapabilitiesJson, "CONFigure:CAPabilities:JSON?" },
-        { ScpiMessageProducer.DisableDeviceEcho, "SYSTem:ECHO -1" },
-        { ScpiMessageProducer.EnableDeviceEcho, "SYSTem:ECHO 1" },
-        { ScpiMessageProducer.TurnDeviceOn, "SYSTem:POWer:STATe 1" },
-        { ScpiMessageProducer.ForceBootloader, "SYSTem:FORceBoot" },
-        { ScpiMessageProducer.SaveDeviceName, "SYSTem:DEVice:NAME:SAVE" },
-        { ScpiMessageProducer.GetIdentify, "SYSTem:IDENtify?" },
+        { () => ScpiMessageProducer.RebootDevice, "SYSTem:REboot" },
+        { () => ScpiMessageProducer.GetDeviceInfo, "SYSTem:SYSInfoPB?" },
+        { () => ScpiMessageProducer.GetCapabilitiesApiVersion, "CONFigure:CAPabilities:APIVersion?" },
+        { () => ScpiMessageProducer.GetCapabilitiesJson, "CONFigure:CAPabilities:JSON?" },
+        { () => ScpiMessageProducer.DisableDeviceEcho, "SYSTem:ECHO -1" },
+        { () => ScpiMessageProducer.EnableDeviceEcho, "SYSTem:ECHO 1" },
+        { () => ScpiMessageProducer.TurnDeviceOn, "SYSTem:POWer:STATe 1" },
+        { () => ScpiMessageProducer.ForceBootloader, "SYSTem:FORceBoot" },
+        { () => ScpiMessageProducer.SaveDeviceName, "SYSTem:DEVice:NAME:SAVE" },
+        { () => ScpiMessageProducer.GetIdentify, "SYSTem:IDENtify?" },
 
         // SD card
-        { ScpiMessageProducer.EnableStorageSd, "SYSTem:STORage:SD:ENAble 1" },
-        { ScpiMessageProducer.DisableStorageSd, "SYSTem:STORage:SD:ENAble 0" },
-        { ScpiMessageProducer.GetSdFileList, "SYSTem:STORage:SD:LIST?" },
-        { ScpiMessageProducer.FormatSdCard, "SYSTem:STORage:SD:FORmat" },
-        { ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
-        { ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
-        { ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
+        { () => ScpiMessageProducer.EnableStorageSd, "SYSTem:STORage:SD:ENAble 1" },
+        { () => ScpiMessageProducer.DisableStorageSd, "SYSTem:STORage:SD:ENAble 0" },
+        { () => ScpiMessageProducer.GetSdFileList, "SYSTem:STORage:SD:LIST?" },
+        { () => ScpiMessageProducer.FormatSdCard, "SYSTem:STORage:SD:FORmat" },
+        { () => ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
+        { () => ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
+        { () => ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
 
         // Streaming
-        { ScpiMessageProducer.StopStreaming, "SYSTem:StopStreamData" },
-        { ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
-        { ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
-        { ScpiMessageProducer.GetStreamFormat, "SYSTem:STReam:FORmat?" },
-        { ScpiMessageProducer.GetStreamInterface, "SYSTem:STReam:INTerface?" },
+        { () => ScpiMessageProducer.StopStreaming, "SYSTem:StopStreamData" },
+        { () => ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
+        { () => ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
+        { () => ScpiMessageProducer.GetStreamFormat, "SYSTem:STReam:FORmat?" },
+        { () => ScpiMessageProducer.GetStreamInterface, "SYSTem:STReam:INTerface?" },
 
         // Digital I/O
-        { ScpiMessageProducer.EnableDioPorts(), "DIO:PORt:ENAble 1" },
-        { ScpiMessageProducer.DisableDioPorts(), "DIO:PORt:ENAble 0" },
+        { () => ScpiMessageProducer.EnableDioPorts(), "DIO:PORt:ENAble 1" },
+        { () => ScpiMessageProducer.DisableDioPorts(), "DIO:PORt:ENAble 0" },
 
         // Network
-        { ScpiMessageProducer.SetNetworkWifiModeSelfHosted, "SYSTem:COMMunicate:LAN:NETType 4" },
-        { ScpiMessageProducer.SetNetworkWifiModeExisting, "SYSTem:COMMunicate:LAN:NETType 1" },
-        { ScpiMessageProducer.SetNetworkWifiSecurityOpen, "SYSTem:COMMunicate:LAN:SECurity 0" },
-        { ScpiMessageProducer.SetNetworkWifiSecurityWpa, "SYSTem:COMMunicate:LAN:SECurity 3" },
-        { ScpiMessageProducer.GetLanAddress, "SYSTem:COMMunicate:LAN:ADDRess?" },
-        { ScpiMessageProducer.GetLanMask, "SYSTem:COMMunicate:LAN:MASK?" },
-        { ScpiMessageProducer.GetLanGateway, "SYSTem:COMMunicate:LAN:GATEway?" },
-        { ScpiMessageProducer.GetLanConfiguredAddress, "SYSTem:COMMunicate:LAN:CONFigure:ADDRess?" },
-        { ScpiMessageProducer.GetLanConfiguredMask, "SYSTem:COMMunicate:LAN:CONFigure:MASK?" },
-        { ScpiMessageProducer.GetLanConfiguredGateway, "SYSTem:COMMunicate:LAN:CONFigure:GATEway?" },
-        { ScpiMessageProducer.DisableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 0" },
-        { ScpiMessageProducer.EnableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 1" },
-        { ScpiMessageProducer.ApplyNetworkLan, "SYSTem:COMMunicate:LAN:APPLY" },
-        { ScpiMessageProducer.SaveNetworkLan, "SYSTem:COMMunicate:LAN:SAVE" },
-        { ScpiMessageProducer.LoadNetworkLan, "SYSTem:COMMunicate:LAN:LOAD" },
-        { ScpiMessageProducer.FactoryResetNetworkLan, "SYSTem:COMMunicate:LAN:FACRESET" },
-        { ScpiMessageProducer.SetLanFirmwareUpdateMode, "SYSTem:COMMUnicate:LAN:FWUpdate" },
+        { () => ScpiMessageProducer.SetNetworkWifiModeSelfHosted, "SYSTem:COMMunicate:LAN:NETType 4" },
+        { () => ScpiMessageProducer.SetNetworkWifiModeExisting, "SYSTem:COMMunicate:LAN:NETType 1" },
+        { () => ScpiMessageProducer.SetNetworkWifiSecurityOpen, "SYSTem:COMMunicate:LAN:SECurity 0" },
+        { () => ScpiMessageProducer.SetNetworkWifiSecurityWpa, "SYSTem:COMMunicate:LAN:SECurity 3" },
+        { () => ScpiMessageProducer.GetLanAddress, "SYSTem:COMMunicate:LAN:ADDRess?" },
+        { () => ScpiMessageProducer.GetLanMask, "SYSTem:COMMunicate:LAN:MASK?" },
+        { () => ScpiMessageProducer.GetLanGateway, "SYSTem:COMMunicate:LAN:GATEway?" },
+        { () => ScpiMessageProducer.GetLanConfiguredAddress, "SYSTem:COMMunicate:LAN:CONFigure:ADDRess?" },
+        { () => ScpiMessageProducer.GetLanConfiguredMask, "SYSTem:COMMunicate:LAN:CONFigure:MASK?" },
+        { () => ScpiMessageProducer.GetLanConfiguredGateway, "SYSTem:COMMunicate:LAN:CONFigure:GATEway?" },
+        { () => ScpiMessageProducer.DisableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 0" },
+        { () => ScpiMessageProducer.EnableNetworkLan, "SYSTem:COMMunicate:LAN:ENAbled 1" },
+        { () => ScpiMessageProducer.ApplyNetworkLan, "SYSTem:COMMunicate:LAN:APPLY" },
+        { () => ScpiMessageProducer.SaveNetworkLan, "SYSTem:COMMunicate:LAN:SAVE" },
+        { () => ScpiMessageProducer.LoadNetworkLan, "SYSTem:COMMunicate:LAN:LOAD" },
+        { () => ScpiMessageProducer.FactoryResetNetworkLan, "SYSTem:COMMunicate:LAN:FACRESET" },
+        { () => ScpiMessageProducer.SetLanFirmwareUpdateMode, "SYSTem:COMMUnicate:LAN:FWUpdate" },
 
         // ADC calibration & voltage precision
-        { ScpiMessageProducer.SaveAdcCalibration, "CONFigure:ADC:SAVEcal" },
-        { ScpiMessageProducer.LoadAdcCalibration, "CONFigure:ADC:LOADcal" },
-        { ScpiMessageProducer.SaveFactoryAdcCalibration, "CONFigure:ADC:SAVEFcal" },
-        { ScpiMessageProducer.LoadFactoryAdcCalibration, "CONFigure:ADC:LOADFcal" },
-        { ScpiMessageProducer.GetAdcCalibrationBank, "CONFigure:ADC:USECal?" },
-        { ScpiMessageProducer.SaveVoltagePrecision, "CONFigure:VOLTage:SAVE" },
-        { ScpiMessageProducer.LoadVoltagePrecision, "CONFigure:VOLTage:LOAD" },
+        { () => ScpiMessageProducer.SaveAdcCalibration, "CONFigure:ADC:SAVEcal" },
+        { () => ScpiMessageProducer.LoadAdcCalibration, "CONFigure:ADC:LOADcal" },
+        { () => ScpiMessageProducer.SaveFactoryAdcCalibration, "CONFigure:ADC:SAVEFcal" },
+        { () => ScpiMessageProducer.LoadFactoryAdcCalibration, "CONFigure:ADC:LOADFcal" },
+        { () => ScpiMessageProducer.GetAdcCalibrationBank, "CONFigure:ADC:USECal?" },
+        { () => ScpiMessageProducer.SaveVoltagePrecision, "CONFigure:VOLTage:SAVE" },
+        { () => ScpiMessageProducer.LoadVoltagePrecision, "CONFigure:VOLTage:LOAD" },
 
         // Analog output
-        { ScpiMessageProducer.UpdateDacOutputs, "CONFigure:DAC:UPDATE" },
+        { () => ScpiMessageProducer.UpdateDacOutputs, "CONFigure:DAC:UPDATE" },
 
         // Logging & diagnostics
-        { ScpiMessageProducer.GetSystemLog, "SYSTem:LOG?" },
-        { ScpiMessageProducer.ClearSystemLog, "SYSTem:LOG:CLEar" },
-        { ScpiMessageProducer.GetCommandHistory, "SYSTem:LOG:CMDHistory?" },
-        { ScpiMessageProducer.TestSystemLog, "SYSTem:LOG:TEST" },
-        { ScpiMessageProducer.GetSystemErrorCount, "SYSTem:ERRor:COUNt?" },
-        { ScpiMessageProducer.GetStreamStats, "SYSTem:STReam:STATS?" },
-        { ScpiMessageProducer.GetMemoryDiagnostics, "SYSTem:MEMory:FREE?" },
+        { () => ScpiMessageProducer.GetSystemLog, "SYSTem:LOG?" },
+        { () => ScpiMessageProducer.ClearSystemLog, "SYSTem:LOG:CLEar" },
+        { () => ScpiMessageProducer.GetCommandHistory, "SYSTem:LOG:CMDHistory?" },
+        { () => ScpiMessageProducer.TestSystemLog, "SYSTem:LOG:TEST" },
+        { () => ScpiMessageProducer.GetSystemErrorCount, "SYSTem:ERRor:COUNt?" },
+        { () => ScpiMessageProducer.GetStreamStats, "SYSTem:STReam:STATS?" },
+        { () => ScpiMessageProducer.GetMemoryDiagnostics, "SYSTem:MEMory:FREE?" },
     };
 
     // Commands that format arguments into the string. Boundary rows (channel 0, a zero size,
@@ -116,87 +121,89 @@ public class ScpiMessageProducerTests
     public static ScpiCommandCases ParameterisedCommands => new()
     {
         // Device & system
-        { ScpiMessageProducer.SetDeviceName("My Device"), "SYSTem:DEVice:NAME \"My Device\"" },
+        { () => ScpiMessageProducer.SetDeviceName("My Device"), "SYSTem:DEVice:NAME \"My Device\"" },
         // Firmware v3.9.0 SCPI_SetIdentify accepts only the integers 0 and 1 (anything else is
         // -224), so the bool must map to exactly those, not ON/OFF or True/False.
-        { ScpiMessageProducer.SetIdentify(true), "SYSTem:IDENtify 1" },
-        { ScpiMessageProducer.SetIdentify(false), "SYSTem:IDENtify 0" },
-        { ScpiMessageProducer.SetUsbTransparencyMode(1), "SYSTem:USB:SetTransparentMode 1" },
+        { () => ScpiMessageProducer.SetIdentify(true), "SYSTem:IDENtify 1" },
+        { () => ScpiMessageProducer.SetIdentify(false), "SYSTem:IDENtify 0" },
+        { () => ScpiMessageProducer.SetUsbTransparencyMode(1), "SYSTem:USB:SetTransparentMode 1" },
 
         // SD card
-        { ScpiMessageProducer.GetSdFile("test.bin"), "SYSTem:STORage:SD:GET \"test.bin\"" },
-        { ScpiMessageProducer.SetSdLoggingFileName("log.bin"), "SYSTem:STORage:SD:FILE \"log.bin\"" },
-        { ScpiMessageProducer.DeleteSdFile("data.bin"), "SYSTem:STORage:SD:DELete \"data.bin\"" },
-        { ScpiMessageProducer.SetSdMaxFileSize(1073741824), "SYSTem:STORage:SD:MAXSize 1073741824" },
+        { () => ScpiMessageProducer.GetSdFile("test.bin"), "SYSTem:STORage:SD:GET \"test.bin\"" },
+        { () => ScpiMessageProducer.SetSdLoggingFileName("log.bin"), "SYSTem:STORage:SD:FILE \"log.bin\"" },
+        { () => ScpiMessageProducer.DeleteSdFile("data.bin"), "SYSTem:STORage:SD:DELete \"data.bin\"" },
+        { () => ScpiMessageProducer.SetSdMaxFileSize(1073741824), "SYSTem:STORage:SD:MAXSize 1073741824" },
         // Zero asks the firmware for its default maximum, so it must not be rejected.
-        { ScpiMessageProducer.SetSdMaxFileSize(0), "SYSTem:STORage:SD:MAXSize 0" },
-        { ScpiMessageProducer.RunSdBenchmark(1048576), "SYSTem:STORage:SD:BENCHmark 1048576" },
-        { ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
+        { () => ScpiMessageProducer.SetSdMaxFileSize(0), "SYSTem:STORage:SD:MAXSize 0" },
+        { () => ScpiMessageProducer.RunSdBenchmark(1048576), "SYSTem:STORage:SD:BENCHmark 1048576" },
+        { () => ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
         // Zero disables the free-space gate, so it must not be rejected.
-        { ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
+        { () => ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
 
         // Streaming
-        { ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
-        { ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb), "SYSTem:STReam:INTerface 0" },
-        { ScpiMessageProducer.SetStreamInterface(StreamInterface.WiFi), "SYSTem:STReam:INTerface 1" },
-        { ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard), "SYSTem:STReam:INTerface 2" },
-        { ScpiMessageProducer.SetStreamInterface(StreamInterface.All), "SYSTem:STReam:INTerface 3" },
-        { ScpiMessageProducer.EnableAdcChannels("84"), "ENAble:VOLTage:DC 84" },
+        { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb), "SYSTem:STReam:INTerface 0" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.WiFi), "SYSTem:STReam:INTerface 1" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard), "SYSTem:STReam:INTerface 2" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.All), "SYSTem:STReam:INTerface 3" },
+        { () => ScpiMessageProducer.EnableAdcChannels("84"), "ENAble:VOLTage:DC 84" },
 
         // Digital I/O. Channel 0 is a real channel on every DAQiFi board, so the guard that
         // rejects negative channels must leave the lowest valid channel untouched, and both
         // documented directions (0 = input, 1 = output) must survive the direction guard.
-        { ScpiMessageProducer.SetDioPortDirection(1, 1), "DIO:PORt:DIRection 1,1" },
-        { ScpiMessageProducer.SetDioPortDirection(0, 0), "DIO:PORt:DIRection 0,0" },
-        { ScpiMessageProducer.SetDioPortDirection(3, 0), "DIO:PORt:DIRection 3,0" },
-        { ScpiMessageProducer.SetDioPortDirection(3, 1), "DIO:PORt:DIRection 3,1" },
-        { ScpiMessageProducer.SetDioPortState(1, 1), "DIO:PORt:STATe 1,1" },
-        { ScpiMessageProducer.SetDioPortState(0, 1), "DIO:PORt:STATe 0,1" },
+        { () => ScpiMessageProducer.SetDioPortDirection(1, 1), "DIO:PORt:DIRection 1,1" },
+        { () => ScpiMessageProducer.SetDioPortDirection(0, 0), "DIO:PORt:DIRection 0,0" },
+        { () => ScpiMessageProducer.SetDioPortDirection(3, 0), "DIO:PORt:DIRection 3,0" },
+        { () => ScpiMessageProducer.SetDioPortDirection(3, 1), "DIO:PORt:DIRection 3,1" },
+        { () => ScpiMessageProducer.SetDioPortState(1, 1), "DIO:PORt:STATe 1,1" },
+        { () => ScpiMessageProducer.SetDioPortState(0, 1), "DIO:PORt:STATe 0,1" },
 
         // PWM
-        { ScpiMessageProducer.SetPwmChannelEnabled(4, true), "PWM:CHannel:ENable 4,1" },
-        { ScpiMessageProducer.SetPwmChannelEnabled(4, false), "PWM:CHannel:ENable 4,0" },
-        { ScpiMessageProducer.SetPwmChannelFrequency(0, 1000), "PWM:CHannel:FREQuency 0,1000" },
-        { ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50), "PWM:CHannel:DUTY 4,50" },
+        { () => ScpiMessageProducer.SetPwmChannelEnabled(4, true), "PWM:CHannel:ENable 4,1" },
+        { () => ScpiMessageProducer.SetPwmChannelEnabled(4, false), "PWM:CHannel:ENable 4,0" },
+        { () => ScpiMessageProducer.SetPwmChannelFrequency(0, 1000), "PWM:CHannel:FREQuency 0,1000" },
+        { () => ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50), "PWM:CHannel:DUTY 4,50" },
 
         // Network
-        { ScpiMessageProducer.SetNetworkWifiSsid("MyNetwork"), "SYSTem:COMMunicate:LAN:SSID \"MyNetwork\"" },
-        { ScpiMessageProducer.SetNetworkWifiPassword("password123"), "SYSTem:COMMunicate:LAN:PASs \"password123\"" },
-        { ScpiMessageProducer.SetLanAddress(IPAddress.Parse("192.168.1.42")), "SYSTem:COMMunicate:LAN:ADDRess \"192.168.1.42\"" },
-        { ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0")), "SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"" },
-        { ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1")), "SYSTem:COMMunicate:LAN:GATEway \"192.168.1.1\"" },
+        { () => ScpiMessageProducer.SetNetworkWifiSsid("MyNetwork"), "SYSTem:COMMunicate:LAN:SSID \"MyNetwork\"" },
+        { () => ScpiMessageProducer.SetNetworkWifiPassword("password123"), "SYSTem:COMMunicate:LAN:PASs \"password123\"" },
+        { () => ScpiMessageProducer.SetLanAddress(IPAddress.Parse("192.168.1.42")), "SYSTem:COMMunicate:LAN:ADDRess \"192.168.1.42\"" },
+        { () => ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0")), "SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"" },
+        { () => ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1")), "SYSTem:COMMunicate:LAN:GATEway \"192.168.1.1\"" },
 
         // Per-channel ADC calibration constants (daqifi-core#386)
-        { ScpiMessageProducer.SetAdcCalibrationSlope(2, 1.0025), "CONFigure:ADC:chanCALM 2,1.0025" },
-        { ScpiMessageProducer.SetAdcCalibrationSlope(1, -0.5), "CONFigure:ADC:chanCALM 1,-0.5" },
-        { ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031), "CONFigure:ADC:chanCALB 3,-0.0031" },
-        { ScpiMessageProducer.GetAdcCalibrationSlope(0), "CONFigure:ADC:chanCALM? 0" },
-        { ScpiMessageProducer.GetAdcCalibrationOffset(5), "CONFigure:ADC:chanCALB? 5" },
-        { ScpiMessageProducer.UseAdcCalibration(0), "CONFigure:ADC:USECal 0" },
-        { ScpiMessageProducer.UseAdcCalibration(1), "CONFigure:ADC:USECal 1" },
+        { () => ScpiMessageProducer.SetAdcCalibrationSlope(2, 1.0025), "CONFigure:ADC:chanCALM 2,1.0025" },
+        { () => ScpiMessageProducer.SetAdcCalibrationSlope(1, -0.5), "CONFigure:ADC:chanCALM 1,-0.5" },
+        { () => ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031), "CONFigure:ADC:chanCALB 3,-0.0031" },
+        { () => ScpiMessageProducer.GetAdcCalibrationSlope(0), "CONFigure:ADC:chanCALM? 0" },
+        { () => ScpiMessageProducer.GetAdcCalibrationOffset(5), "CONFigure:ADC:chanCALB? 5" },
+        { () => ScpiMessageProducer.UseAdcCalibration(0), "CONFigure:ADC:USECal 0" },
+        { () => ScpiMessageProducer.UseAdcCalibration(1), "CONFigure:ADC:USECal 1" },
 
         // Analog output. A negative channel is rejected, but a negative voltage is valid and
         // must render with a leading minus.
-        { ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0), "SOURce:VOLTage:LEVel 0,5" },
-        { ScpiMessageProducer.SetAnalogOutputVoltage(0, -3.3), "SOURce:VOLTage:LEVel 0,-3.3" },
-        { ScpiMessageProducer.GetAnalogOutputVoltage(2), "SOURce:VOLTage:LEVel? 2" },
+        { () => ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0), "SOURce:VOLTage:LEVel 0,5" },
+        { () => ScpiMessageProducer.SetAnalogOutputVoltage(0, -3.3), "SOURce:VOLTage:LEVel 0,-3.3" },
+        { () => ScpiMessageProducer.GetAnalogOutputVoltage(2), "SOURce:VOLTage:LEVel? 2" },
 
         // Logging & diagnostics
-        { ScpiMessageProducer.SetLogLevel("STREAM", 2), "SYSTem:LOG:LEVel STREAM,2" },
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", 2), "SYSTem:LOG:LEVel STREAM,2" },
     };
 
     [Theory]
     [MemberData(nameof(FixedCommands))]
-    public void FixedCommand_ProducesExpectedWireString(string call, IOutboundMessage<string> message, string expected)
+    public void FixedCommand_ProducesExpectedWireString(string call, Func<IOutboundMessage<string>> produce, string expected)
     {
+        var message = produce();
         Assert.Equal((call, expected), (call, message.Data));
         AssertMessageFormat(message);
     }
 
     [Theory]
     [MemberData(nameof(ParameterisedCommands))]
-    public void ParameterisedCommand_ProducesExpectedWireString(string call, IOutboundMessage<string> message, string expected)
+    public void ParameterisedCommand_ProducesExpectedWireString(string call, Func<IOutboundMessage<string>> produce, string expected)
     {
+        var message = produce();
         Assert.Equal((call, expected), (call, message.Data));
         AssertMessageFormat(message);
     }
