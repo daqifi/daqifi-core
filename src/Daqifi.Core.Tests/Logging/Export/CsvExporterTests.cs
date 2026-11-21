@@ -63,6 +63,28 @@ public class CsvExporterTests
         Assert.Equal("options", ex.ParamName);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(2)]
+    public async Task ExportAsync_SourceWithDuplicateChannelKeys_ThrowsBeforeWritingAnything(int? averageWindow)
+    {
+        // Values are joined to columns by key, so two columns sharing one would silently show the
+        // same value — whichever channel arrived last. Refusing up front makes that loud, on both
+        // the per-sample and the averaged path.
+        var twin = new ChannelDescriptor("DevA", "SN001", "Channel1", ChannelType.Digital);
+        var source = new InMemorySampleSource(
+            [Ch1, Ch2, twin],
+            [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T0, Ch2.Key, 2.0)]);
+        var writer = new StringWriter();
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => new CsvExporter().ExportAsync(
+            source, writer, new CsvExportOptions { AverageWindow = averageWindow }));
+
+        Assert.Equal("source", ex.ParamName);
+        Assert.Contains(Ch1.Key, ex.Message, StringComparison.Ordinal);
+        Assert.Empty(writer.ToString());
+    }
+
     // ── Header ──────────────────────────────────────────────────────────────
 
     [Fact]

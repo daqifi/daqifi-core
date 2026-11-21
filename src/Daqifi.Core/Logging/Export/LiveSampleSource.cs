@@ -63,7 +63,10 @@ public sealed class LiveSampleSource : ISampleSource
     /// The channels to give columns to, in the order the columns should appear. Normally the
     /// enabled subset of <see cref="IStreamingDevice.GetChannelsSnapshot"/>. Duplicates — entries
     /// sharing a <see cref="IChannel.Type"/> and <see cref="IChannel.ChannelNumber"/> — are ignored
-    /// after the first, since two identical columns cannot be told apart in the output.
+    /// after the first, since two identical columns cannot be told apart in the output. Distinct
+    /// channels that share a <see cref="IChannel.Name"/> each keep their own column: the shared
+    /// name gets the channel's canonical label appended, e.g. <c>Temp (AI0)</c> and
+    /// <c>Temp (AI3)</c>. A name no other channel uses is left exactly as it is.
     /// </param>
     /// <param name="deviceName">The device name to build channel keys from.</param>
     /// <param name="deviceSerialNumber">
@@ -89,8 +92,10 @@ public sealed class LiveSampleSource : ISampleSource
         var name = string.IsNullOrWhiteSpace(deviceName) ? Unknown : deviceName;
         var serial = string.IsNullOrWhiteSpace(deviceSerialNumber) ? Unknown : deviceSerialNumber;
 
-        _channels = [];
-        _keysByChannel = [];
+        // Read each name once: IChannel.Name is settable from another thread, and the
+        // disambiguation below has to see the same name it later writes into the descriptor.
+        var distinct = new List<(ChannelType Type, int Number, string Name)>();
+        var seen = new HashSet<(ChannelType Type, int Number)>();
 
         foreach (var channel in channels)
         {
@@ -99,17 +104,100 @@ public sealed class LiveSampleSource : ISampleSource
                 throw new ArgumentException("The channel collection contains a null entry.", nameof(channels));
             }
 
-            var identity = (channel.Type, channel.ChannelNumber);
-            if (_keysByChannel.ContainsKey(identity))
+            if (seen.Add((channel.Type, channel.ChannelNumber)))
             {
+                distinct.Add((channel.Type, channel.ChannelNumber, channel.Name));
+            }
+        }
+
+        var columnNames = UniqueColumnNames(distinct);
+
+        _channels = new List<ChannelDescriptor>(distinct.Count);
+        _keysByChannel = new Dictionary<(ChannelType Type, int Number), string>(distinct.Count);
+
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            var (type, number, _) = distinct[i];
+            var descriptor = new ChannelDescriptor(name, serial, columnNames[i], type);
+            _channels.Add(descriptor);
+            _keysByChannel[(type, number)] = descriptor.Key;
+        }
+    }
+
+    /// <summary>
+    /// Picks the column name for each channel so that no two columns share one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A channel's <see cref="IChannel.Name"/> is a display name the user can set to anything,
+    /// including the name of another channel. The column key is built from it, and
+    /// <see cref="CsvExporter"/> joins each <see cref="SampleRow"/> to its column by that key — so two
+    /// channels sharing a name used to share a key, get two identical headers, and have their
+    /// values merged into one slot, each column showing whichever channel arrived last. Nothing
+    /// reported it.
+    /// </para>
+    /// <para>
+    /// A name no other channel uses is kept exactly as it is, so a recording whose names are
+    /// already unique is unchanged. A shared name gets the channel's canonical label appended —
+    /// <c>Temp (AI0)</c>, <c>Temp (AI3)</c> — which is unique by construction, because the channels
+    /// here are already distinct by type and number. In the unlikely case that result still
+    /// matches another column (a channel the user had already named <c>Temp (AI3)</c>), a counter
+    /// is appended until it does not. Every step depends only on the names and the order given, so
+    /// the same channels always produce the same headers.
+    /// </para>
+    /// </remarks>
+    private static string[] UniqueColumnNames(List<(ChannelType Type, int Number, string Name)> channels)
+    {
+        var uses = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var channel in channels)
+        {
+            uses[channel.Name] = uses.GetValueOrDefault(channel.Name) + 1;
+        }
+
+        // Names nobody else uses are claimed first, so a disambiguated name can never take one.
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (key, count) in uses)
+        {
+            if (count == 1)
+            {
+                taken.Add(key);
+            }
+        }
+
+        var result = new string[channels.Count];
+        for (var i = 0; i < channels.Count; i++)
+        {
+            var (type, number, channelName) = channels[i];
+            if (uses[channelName] == 1)
+            {
+                result[i] = channelName;
                 continue;
             }
 
-            var descriptor = new ChannelDescriptor(name, serial, channel.Name, channel.Type);
-            _channels.Add(descriptor);
-            _keysByChannel[identity] = descriptor.Key;
+            var candidate = $"{channelName} ({CanonicalLabel(type, number)})";
+            var unique = candidate;
+            for (var suffix = 2; !taken.Add(unique); suffix++)
+            {
+                unique = $"{candidate} {suffix}";
+            }
+
+            result[i] = unique;
         }
+
+        return result;
     }
+
+    /// <summary>
+    /// The name a device gives a channel before anyone renames it — <c>AI3</c>, <c>DIO5</c> — which
+    /// is what the device's own status message populates a channel's name with.
+    /// </summary>
+    private static string CanonicalLabel(ChannelType type, int number) => type switch
+    {
+        ChannelType.Analog => $"AI{number}",
+        ChannelType.Digital => $"DIO{number}",
+        ChannelType.AnalogOutput => $"AO{number}",
+        _ => $"{type}{number}",
+    };
 
     /// <summary>
     /// Gets the number of live samples read off the stream, including any counted in

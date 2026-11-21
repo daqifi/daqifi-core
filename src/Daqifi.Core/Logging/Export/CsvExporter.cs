@@ -29,6 +29,12 @@ public class CsvExporter
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <see cref="CsvExportOptions.AverageWindow"/> is set to a value less than or equal to zero.
     /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <see cref="CsvExportOptions.Delimiter"/> is not a single character other than a
+    /// newline or double-quote, or when two channels returned by
+    /// <see cref="ISampleSource.GetChannels"/> share a <see cref="ChannelDescriptor.Key"/>. Both are
+    /// detected before anything is written to <paramref name="writer"/>.
+    /// </exception>
     public async Task ExportAsync(
         ISampleSource source,
         TextWriter writer,
@@ -94,6 +100,7 @@ public class CsvExporter
         }
 
         var channelKeys = channels.Select(c => c.Key).ToList();
+        EnsureUniqueKeys(channelKeys);
 
         await WriteHeaderAsync(writer, HeaderLabels(channels, source.ValueUnit), options).ConfigureAwait(false);
 
@@ -105,6 +112,30 @@ public class CsvExporter
             await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
         else
             await ExportAllSamplesAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Refuses a source whose columns cannot be told apart.
+    /// </summary>
+    /// <remarks>
+    /// Every <see cref="SampleRow"/> is joined to its column by <see cref="SampleRow.ChannelKey"/>,
+    /// so two columns sharing a key would both show whichever value arrived last — a silent merge
+    /// that loses one channel's data. Checked before the header so a bad source writes nothing,
+    /// whichever export path the options select.
+    /// </remarks>
+    private static void EnsureUniqueKeys(List<string> channelKeys)
+    {
+        var seen = new HashSet<string>(channelKeys.Count, StringComparer.Ordinal);
+        foreach (var key in channelKeys)
+        {
+            if (!seen.Add(key))
+            {
+                throw new ArgumentException(
+                    $"The source reports more than one channel with the key '{key}'. Each channel " +
+                    "needs a unique key, or their values would be merged into one column.",
+                    "source");
+            }
+        }
     }
 
     /// <summary>
