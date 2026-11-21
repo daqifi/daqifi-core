@@ -222,12 +222,30 @@ public class DeviceFinderBaseTests
     }
 
     [Fact]
-    public void Dispose_ConcurrentCalls_DisposeSemaphoreExactlyOnce()
+    public async Task Dispose_WhileAPassRunsAndAnotherWaits_LetsBothFinish()
+    {
+        // Disposing used to dispose the discovery semaphore under them: the running pass's
+        // finally Release threw ObjectDisposedException in place of its results, and the
+        // waiting pass was never woken.
+        var finder = new BlockingFinder();
+        var running = finder.DiscoverAsync();
+        await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var waiting = finder.DiscoverAsync();
+
+        finder.Dispose();
+        finder.ReleaseGate();
+
+        await running.WaitAsync(TimeSpan.FromSeconds(5));
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Dispose_ConcurrentCalls_AllSucceed()
     {
         var finder = new TestFinder();
 
-        // Concurrent Dispose() calls must resolve to a single winner (Interlocked flag)
-        // so the shared semaphore is disposed exactly once and no call faults.
+        // Concurrent Dispose() calls must resolve to a single winner (Interlocked flag) and
+        // none of them may fault.
         var tasks = Enumerable.Range(0, 16).Select(_ => Task.Run(() => finder.Dispose())).ToArray();
         var ex = Record.Exception(() => Task.WaitAll(tasks));
 

@@ -5019,6 +5019,23 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenTheServiceIsDisposedMidOperation_KeepsItsOutcome()
+    {
+        // Disposing the service used to dispose the operation lock under the running
+        // operation, so its finally's Release threw ObjectDisposedException and replaced the
+        // result it had already obtained.
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+        hidTransport.OnConnect = service.Dispose;
+
+        var version = await service.CheckBootloaderHealthAsync();
+
+        Assert.Equal("1.0", version);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => service.CheckBootloaderHealthAsync());
+    }
+
+    [Fact]
     public async Task CheckBootloaderHealthAsync_WhenTargetPathProvided_ConnectsByPath()
     {
         var hidTransport = new FakeHidTransport();
