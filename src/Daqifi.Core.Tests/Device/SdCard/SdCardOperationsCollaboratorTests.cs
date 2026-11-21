@@ -697,12 +697,13 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         Task query = storage ? ops.GetSdCardStorageAsync() : ops.GetSdCardFilesAsync();
-        for (var second = 0; second < 10 && !query.IsCompleted; second++)
-        {
-            clock.Advance(TimeSpan.FromSeconds(1));
-        }
 
-        await query.WaitAsync(TimeSpan.FromSeconds(10));
+        // Pumped rather than advanced in a tight loop: each recheck schedules its next delay on a
+        // continuation, and an Advance that runs before that continuation has registered the
+        // delay moves the clock past nothing, leaving the query waiting on time that never comes.
+        await FakeClockPump.UntilAsync(clock, query, TimeSpan.FromSeconds(1), "the rechecks never outlasted the stale answer");
+
+        await query;
         Assert.True(clock.GetUtcNow() - start >= TimeSpan.FromSeconds(5));
     }
 
