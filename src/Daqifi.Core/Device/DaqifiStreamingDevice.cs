@@ -481,13 +481,18 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         try
         {
-            await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            var document = await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
 
-            // Recorded whether or not the device answered. A device that supplied no document
-            // has still been asked with this channel set, and asking it again with the same set
-            // would cost the same second and learn the same nothing. Not recorded when the read
-            // threw, so a transient failure is retried on the next start.
-            _lastCapabilityRead = new CapabilityRead(Metadata.CapabilityDocument, EnabledAnalogInputCount());
+            // Recorded when the read produced the cap now in force: a fresh document, or no
+            // document on a device that has none at all, which asking again with the same set
+            // would only fail to produce again. Not recorded when the read returned nothing but
+            // an older document is still in the metadata (a malformed or incomplete reply), since
+            // that cap describes an earlier channel set and must not be vouched for under this
+            // one. Not recorded when the read threw either; both are retried on the next start.
+            if (document is not null || Metadata.CapabilityDocument is null)
+            {
+                _lastCapabilityRead = new CapabilityRead(document, EnabledAnalogInputCount());
+            }
         }
         catch (OperationCanceledException)
         {

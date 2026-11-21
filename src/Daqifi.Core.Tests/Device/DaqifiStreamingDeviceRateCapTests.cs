@@ -288,6 +288,32 @@ public class DaqifiStreamingDeviceRateCapTests
         Assert.Equal(3518, device.StreamingFrequency);
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_AfterAReadThatReturnedNothing_ReadsAgainOnTheNextStart()
+    {
+        // A malformed or incomplete reply leaves the previous document, computed for a smaller
+        // channel set, in the metadata. That read must not vouch for it under the larger set, or
+        // every later start skips the query even once the device can answer again.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+
+        EnableAnalog(device, 2);
+        device.CapabilityDocumentOnRead = null; // the reply did not parse
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        device.StreamingFrequency = 10000;
+        await device.StartStreamingAsync();
+
+        Assert.Equal(3, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
     #endregion
 
     #region Helpers
