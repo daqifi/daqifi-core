@@ -281,7 +281,10 @@ internal sealed class SdCardOperations
     /// </remarks>
     private bool IsBusHeldByLog()
     {
-        if (!_host.IsLoggingToSdCard)
+        // The mode is read before the session flag. Read the other way round, a flag read while a
+        // start was still in LogStarting (session not begun yet) could be followed by that start
+        // reaching Logging, and the release below would then free the bus under a live recording.
+        if (BusMode == SdBusMode.Logging && !_host.IsLoggingToSdCard)
         {
             MoveBusMode(SdBusMode.Logging, SdBusMode.LanActive);
         }
@@ -1682,7 +1685,7 @@ internal sealed class SdCardOperations
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="SdCardBusyException">Thrown when an SD log start is still going out.</exception>
+    /// <exception cref="SdCardBusyException">Thrown when an SD log start, or another stop, is still going out.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     internal Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
     {
@@ -1714,19 +1717,22 @@ internal sealed class SdCardOperations
     /// <see cref="TryEndLoggingSessionFrom"/> directly.
     /// </para>
     /// </remarks>
-    /// <exception cref="SdCardBusyException">An SD log start is still going out.</exception>
+    /// <exception cref="SdCardBusyException">An SD log start, or another stop, is still going out.</exception>
     internal void EndLoggingSession()
     {
         while (true)
         {
+            // LogEnding too: a second stop that ran alongside the first released the bus when it
+            // finished, admitting a new start while the first was still sending the commands
+            // that disable storage and route the stream back to USB.
             var current = BusMode;
-            if (current == SdBusMode.LogStarting)
+            if (current is SdBusMode.LogStarting or SdBusMode.LogEnding)
             {
                 throw new SdCardBusyException(Array.Empty<string>());
             }
 
-            // Re-read and retry if the mode moved since: a start that claimed the bus in between
-            // must be refused, not overwritten.
+            // Re-read and retry if the mode moved since: a start or a stop that claimed the bus
+            // in between must be refused, not overwritten.
             if (TryEndLoggingSessionFrom(current))
             {
                 return;
@@ -1743,7 +1749,9 @@ internal sealed class SdCardOperations
     /// </summary>
     private bool TryEndLoggingSessionFrom(SdBusMode from)
     {
-        if (!MoveBusMode(from, SdBusMode.LogEnding))
+        // Never LogEnding -> LogEnding: the claim must be exclusive, or two stops each run the
+        // sequence and the first to finish releases the bus under the other.
+        if (from == SdBusMode.LogEnding || !MoveBusMode(from, SdBusMode.LogEnding))
         {
             return false;
         }
@@ -1755,7 +1763,7 @@ internal sealed class SdCardOperations
         finally
         {
             // A stop that could not be sent leaves the session, and so the bus, with the log.
-            // From LogEnding only: a second stop that overlapped this one may have released it.
+            // This stop owns LogEnding, so nothing else has moved it.
             MoveBusMode(
                 SdBusMode.LogEnding,
                 _host.IsLoggingToSdCard ? SdBusMode.Logging : SdBusMode.LanActive);

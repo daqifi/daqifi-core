@@ -307,8 +307,8 @@ public interface ISdCardOperations
     /// <returns>A task that represents the asynchronous operation.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="SdCardBusyException">
-    /// Thrown when an SD log start is still sending its commands. Cancel that start instead: its
-    /// own cleanup sends the stop sequence.
+    /// Thrown when an SD log start is still sending its commands (cancel that start instead: its
+    /// own cleanup sends the stop sequence), or when another stop is still sending its own.
     /// </exception>
     Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default);
 
