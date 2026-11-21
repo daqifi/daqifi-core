@@ -216,7 +216,7 @@ internal sealed class SdCardOperations
     /// <remarks>
     /// Written only by the transition methods: <see cref="PrepareSdInterface"/>,
     /// <see cref="PrepareLanInterface"/>, <see cref="ClaimBusForLogStart"/>,
-    /// <see cref="StartSdCardLoggingSessionAsync"/>, <see cref="EndLoggingSession"/>,
+    /// <see cref="StartSdCardLoggingSessionAsync"/>, <see cref="TryEndLoggingSessionFrom"/>,
     /// <see cref="FormatSdCardAsync"/> and <see cref="IsBusHeldByLog"/>.
     /// <para>
     /// Remaining limit: the file operations check this at their guard and only record
@@ -232,11 +232,10 @@ internal sealed class SdCardOperations
 
     private SdBusMode BusMode => (SdBusMode)Volatile.Read(ref _busMode);
 
-    private void EnterBusMode(SdBusMode mode) => Volatile.Write(ref _busMode, (int)mode);
-
     /// <summary>
     /// Moves the bus mode to <paramref name="to"/> only if it is <paramref name="from"/>, so a
-    /// borrow or a restore never overwrites the record of a log that owns the bus.
+    /// borrow or a restore never overwrites the record of a log that owns the bus. The only way
+    /// the mode changes: every transition names the mode it expects to leave.
     /// </summary>
     private bool MoveBusMode(SdBusMode from, SdBusMode to) =>
         Interlocked.CompareExchange(ref _busMode, (int)to, (int)from) == (int)from;
@@ -282,7 +281,10 @@ internal sealed class SdCardOperations
     /// </remarks>
     private bool IsBusHeldByLog()
     {
-        if (!_host.IsLoggingToSdCard)
+        // The mode is read before the session flag. Read the other way round, a flag read while a
+        // start was still in LogStarting (session not begun yet) could be followed by that start
+        // reaching Logging, and the release below would then free the bus under a live recording.
+        if (BusMode == SdBusMode.Logging && !_host.IsLoggingToSdCard)
         {
             MoveBusMode(SdBusMode.Logging, SdBusMode.LanActive);
         }
@@ -1644,7 +1646,9 @@ internal sealed class SdCardOperations
 
             _host.BeginSdCardLogSession();
 
-            EnterBusMode(SdBusMode.Logging);
+            // From the mode this start claimed. Nothing else leaves LogStarting — a stop is refused
+            // on it and the cleanup below is this start's own — so this cannot miss.
+            MoveBusMode(SdBusMode.LogStarting, SdBusMode.Logging);
         }
         catch
         {
@@ -1657,7 +1661,7 @@ internal sealed class SdCardOperations
             // caller must be the start's own.
             try
             {
-                EndLoggingSession();
+                TryEndLoggingSessionFrom(SdBusMode.LogStarting);
             }
             catch
             {
@@ -1681,6 +1685,7 @@ internal sealed class SdCardOperations
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="SdCardBusyException">Thrown when an SD log start, or another stop, is still going out.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     internal Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
     {
@@ -1704,10 +1709,52 @@ internal sealed class SdCardOperations
     /// fails, the connection has failed with it. <see cref="StopSdCardLoggingAsync"/> sends the
     /// whole sequence again however often it is called, and the next initialization repairs the
     /// format and the routing. A stop that fails leaves the session as it was.
+    /// <para>
+    /// A stop is refused while a start sequence is going out. The start has not yet set
+    /// <see cref="ISdCardOperationHost.IsLoggingToSdCard"/>, so the stop used to hand the bus back
+    /// as <see cref="SdBusMode.LanActive"/> and re-admit the file operations under a start that
+    /// kept sending commands. A start that fails cleans up through
+    /// <see cref="TryEndLoggingSessionFrom"/> directly.
+    /// </para>
     /// </remarks>
+    /// <exception cref="SdCardBusyException">An SD log start, or another stop, is still going out.</exception>
     internal void EndLoggingSession()
     {
-        EnterBusMode(SdBusMode.LogEnding);
+        while (true)
+        {
+            // LogEnding too: a second stop that ran alongside the first released the bus when it
+            // finished, admitting a new start while the first was still sending the commands
+            // that disable storage and route the stream back to USB.
+            var current = BusMode;
+            if (current is SdBusMode.LogStarting or SdBusMode.LogEnding)
+            {
+                throw new SdCardBusyException(Array.Empty<string>());
+            }
+
+            // Re-read and retry if the mode moved since: a start or a stop that claimed the bus
+            // in between must be refused, not overwritten.
+            if (TryEndLoggingSessionFrom(current))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Moves the bus from <paramref name="from"/> to <see cref="SdBusMode.LogEnding"/> and sends
+    /// the stop sequence, or returns <c>false</c> without sending anything when the bus was no
+    /// longer in <paramref name="from"/>. Called directly, from
+    /// <see cref="SdBusMode.LogStarting"/>, only by the failure cleanup of
+    /// <see cref="StartSdCardLoggingSessionAsync"/>, which owns that mode.
+    /// </summary>
+    private bool TryEndLoggingSessionFrom(SdBusMode from)
+    {
+        // Never LogEnding -> LogEnding: the claim must be exclusive, or two stops each run the
+        // sequence and the first to finish releases the bus under the other.
+        if (from == SdBusMode.LogEnding || !MoveBusMode(from, SdBusMode.LogEnding))
+        {
+            return false;
+        }
 
         try
         {
@@ -1716,8 +1763,13 @@ internal sealed class SdCardOperations
         finally
         {
             // A stop that could not be sent leaves the session, and so the bus, with the log.
-            EnterBusMode(_host.IsLoggingToSdCard ? SdBusMode.Logging : SdBusMode.LanActive);
+            // This stop owns LogEnding, so nothing else has moved it.
+            MoveBusMode(
+                SdBusMode.LogEnding,
+                _host.IsLoggingToSdCard ? SdBusMode.Logging : SdBusMode.LanActive);
         }
+
+        return true;
     }
 
     private void SendLogStopSequence()
