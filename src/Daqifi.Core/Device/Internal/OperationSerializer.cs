@@ -86,7 +86,7 @@ internal sealed class OperationSerializer : IDisposable
     /// message in two steps lets an operation finish in between, leaving a message in a list
     /// nobody will ever flush.
     /// </remarks>
-    private readonly object _deferralGate = new();
+    private readonly Lock _deferralGate = new();
 
     /// <summary>True while some flow owns the operation lock.</summary>
     private bool _operationInFlight;

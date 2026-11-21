@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Net;
 using System.Text;
@@ -508,15 +509,13 @@ internal static class MDnsMessage
 
     private static int WriteUInt16(byte[] buffer, int offset, ushort value)
     {
-        buffer[offset] = (byte)(value >> 8);
-        buffer[offset + 1] = (byte)value;
+        BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(offset, 2), value);
         return offset + 2;
     }
 
     private static ushort ReadUInt16(byte[] buffer, int offset)
-        => (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
+        => BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(offset, 2));
 
     private static uint ReadUInt32(byte[] buffer, int offset)
-        => ((uint)buffer[offset] << 24) | ((uint)buffer[offset + 1] << 16) |
-           ((uint)buffer[offset + 2] << 8) | buffer[offset + 3];
+        => BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(offset, 4));
 }

@@ -69,7 +69,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     #region Private Fields
 
     private readonly Dictionary<string, DeviceRegistration> _devices = new(StringComparer.Ordinal);
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly DeviceConnector _connector;
 
     private int _mintedKeyCounter;

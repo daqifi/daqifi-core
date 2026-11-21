@@ -45,7 +45,7 @@ internal sealed class LiveSampleStream
     /// buffer can schedule the consumer's continuation, and the consumer's exit path takes this
     /// same lock to deregister itself.
     /// </summary>
-    private readonly object _enumerationsLock = new object();
+    private readonly Lock _enumerationsLock = new();
 
     /// <summary>
     /// The enumerations currently parked on this device, in start order. A live consumer is

@@ -55,7 +55,7 @@ internal sealed class TransportConnectionWatchdog : IDisposable
 
     private readonly Action<Exception> _onConnectionLost;
     private readonly string _description;
-    private readonly object _timerLock = new();
+    private readonly Lock _timerLock = new();
 
     /// <summary>
     /// 1 while a connection is established and a loss may still be signalled, 0 otherwise. The

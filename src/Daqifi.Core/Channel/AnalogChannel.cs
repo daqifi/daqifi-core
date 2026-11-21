@@ -37,7 +37,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// </summary>
     public const double MaxCalibrationMagnitude = 1_000_000.0;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private IDataSample? _activeSample;
     private string _name;
     private bool _isEnabled;

@@ -82,7 +82,7 @@ public sealed class AcquisitionStatistics : IDisposable
     /// comparisons on already-extracted values — no channel property is read and no event is
     /// raised while it is held.
     /// </summary>
-    private readonly object _lock = new object();
+    private readonly Lock _lock = new();
 
     /// <summary>
     /// Per-channel accumulators, keyed by channel type and number rather than by channel

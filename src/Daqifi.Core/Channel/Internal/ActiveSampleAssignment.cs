@@ -25,7 +25,7 @@ internal static class ActiveSampleAssignment
     /// <param name="sample">The sample to store; must not be <see langword="null"/>.</param>
     /// <param name="activeSample">The channel's backing field.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
-    public static void StoreUnderLock(object syncLock, IDataSample sample, ref IDataSample? activeSample)
+    public static void StoreUnderLock(Lock syncLock, IDataSample sample, ref IDataSample? activeSample)
     {
         ArgumentNullException.ThrowIfNull(sample);
 

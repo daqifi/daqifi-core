@@ -74,7 +74,7 @@ internal sealed class WindowsPnpPortMap
     private static readonly ReadOnlyCollection<string> NoDeviceIds = ReadOnlyCollection<string>.Empty;
 
     private readonly Func<IEnumerable<PnpPortEntity>> _query;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private Dictionary<string, ReadOnlyCollection<string>> _map = new(StringComparer.OrdinalIgnoreCase);
     private long _builtAtMs;
     private bool _hasMap;

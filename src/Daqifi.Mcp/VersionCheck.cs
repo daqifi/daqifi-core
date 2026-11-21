@@ -74,7 +74,7 @@ public sealed class VersionStatus
     private readonly ServerOptions _options;
     private readonly ILatestVersionSource _source;
     private readonly ILogger<VersionStatus>? _logger;
-    private readonly object _checkGate = new();
+    private readonly Lock _checkGate = new();
     private Task<ServerVersionInfo>? _check;
 
     public VersionStatus(ServerOptions options, ILatestVersionSource source, ILogger<VersionStatus>? logger = null)

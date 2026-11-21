@@ -24,7 +24,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// drains the buffer while callers can query <see cref="QueuedMessageCount"/> or request a
     /// clear on their own thread; <see cref="List{T}"/> is not safe for concurrent mutation.
     /// </summary>
-    private readonly object _bufferLock = new();
+    private readonly Lock _bufferLock = new();
 
     /// <summary>
     /// Set by <see cref="ClearBuffer"/> when the consumer thread is running, so the clear (buffer
@@ -48,7 +48,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// then refuse. Bounded, and only in an already re-entrant scenario.
     /// </para>
     /// </remarks>
-    private readonly object _startLock = new();
+    private readonly Lock _startLock = new();
 
     private volatile bool _isRunning;
     private Thread? _consumerThread;
