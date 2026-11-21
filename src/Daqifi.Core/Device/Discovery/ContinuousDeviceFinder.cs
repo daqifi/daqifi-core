@@ -67,6 +67,33 @@ public class ContinuousDeviceFinder : IDisposable
         int MetadataUpdates,
         int LostDevices);
 
+    /// <summary>
+    /// Where the scan loop is in its life. <see cref="_lifecycle"/> is the one place this lives,
+    /// and <see cref="TransitionTo"/> is the only thing that changes it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Stopping"/> is the state the old <c>_running</c> flag could not express: a stop
+    /// has cancelled the loop but the loop has not exited yet, because its pass is still inside
+    /// the wrapped finder. A flag that read "not running" from the moment the stop began let a
+    /// <see cref="Start"/> in that window launch a second loop beside the first, let a second
+    /// <see cref="StopAsync"/> return before the loop had stopped, and let <see cref="Dispose"/>
+    /// dispose the wrapped finder under the pass it never waited for.
+    /// </remarks>
+    private enum ScanLifecycle
+    {
+        /// <summary>No loop exists.</summary>
+        Idle,
+
+        /// <summary>The loop is scanning, or is about to once the loop before it has exited.</summary>
+        Running,
+
+        /// <summary>A stop has cancelled the loop and the loop has not exited yet.</summary>
+        Stopping,
+
+        /// <summary>The finder has released its resources. Terminal.</summary>
+        Disposed,
+    }
+
     #endregion
 
     #region Private Fields
@@ -88,12 +115,27 @@ public class ContinuousDeviceFinder : IDisposable
 
     private readonly Dictionary<string, TrackedDevice> _devices = new(StringComparer.Ordinal);
     private readonly object _devicesLock = new();
+    /// <summary>
+    /// Guards <see cref="_lifecycle"/>, <see cref="_cts"/> and <see cref="_loopTask"/>. Only ever
+    /// held for those assignments, never across a wait on the loop.
+    /// </summary>
     private readonly object _lifecycleLock = new();
 
+    private ScanLifecycle _lifecycle = ScanLifecycle.Idle;
+
+    /// <summary>
+    /// The running loop's token source: set only while <see cref="_lifecycle"/> is
+    /// <see cref="ScanLifecycle.Running"/>. The stop that moves the loop to
+    /// <see cref="ScanLifecycle.Stopping"/> takes it, and cancels and disposes it.
+    /// </summary>
     private CancellationTokenSource? _cts;
+
+    /// <summary>
+    /// The current loop: set while <see cref="_lifecycle"/> is <see cref="ScanLifecycle.Running"/>
+    /// or <see cref="ScanLifecycle.Stopping"/>, so whoever arrives during a stop can still wait for
+    /// the loop that stop is waiting for.
+    /// </summary>
     private Task? _loopTask;
-    private bool _running;
-    private volatile bool _disposed;
 
     #endregion
 
@@ -188,13 +230,17 @@ public class ContinuousDeviceFinder : IDisposable
     /// <summary>
     /// Gets a value indicating whether the continuous scan loop is running.
     /// </summary>
+    /// <remarks>
+    /// False from the moment <see cref="StopAsync"/> is called, even while it is still waiting for
+    /// an in-flight pass to finish.
+    /// </remarks>
     public bool IsRunning
     {
         get
         {
             lock (_lifecycleLock)
             {
-                return _running;
+                return _lifecycle == ScanLifecycle.Running;
             }
         }
     }
@@ -223,25 +269,35 @@ public class ContinuousDeviceFinder : IDisposable
     /// <summary>
     /// Starts the continuous scan loop on a background task.
     /// </summary>
+    /// <remarks>
+    /// Start never blocks. Called while a <see cref="StopAsync"/> is still waiting for the
+    /// previous loop to exit (its pass is still inside the wrapped finder), it does not throw and
+    /// does not run a second loop beside the first: <see cref="IsRunning"/> is true as soon as it
+    /// returns, and the new loop begins its first pass once the previous loop has exited. The
+    /// wrapped finder therefore never sees two passes from this instance at once.
+    /// </remarks>
     /// <exception cref="ObjectDisposedException">The finder has been disposed.</exception>
     /// <exception cref="InvalidOperationException">The loop is already running.</exception>
     public void Start()
     {
-        // Check disposed inside the lock so a concurrent Dispose (which sets _disposed under
-        // the same lock) cannot slip in between the check and launching the loop.
+        // Check disposed inside the lock so a concurrent Dispose (which changes the lifecycle
+        // under the same lock) cannot slip in between the check and launching the loop.
         lock (_lifecycleLock)
         {
             ThrowIfDisposed();
 
-            if (_running)
+            if (_lifecycle == ScanLifecycle.Running)
             {
                 throw new InvalidOperationException("Continuous discovery is already running.");
             }
 
+            // Idle has no previous loop. Stopping does, and it may still be inside a pass.
+            var previousLoop = _loopTask;
+
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
-            _running = true;
-            _loopTask = Task.Run(() => ScanLoopAsync(token));
+            _loopTask = Task.Run(() => ScanLoopAfterAsync(previousLoop, token));
+            TransitionTo(ScanLifecycle.Running);
         }
     }
 
@@ -249,41 +305,91 @@ public class ContinuousDeviceFinder : IDisposable
     /// Stops the continuous scan loop and waits for it to stop, cancelling any in-flight pass.
     /// Safe to call when not running. Does not clear the live set.
     /// </summary>
+    /// <remarks>
+    /// A call made while an earlier stop is still waiting waits for the same loop, so every
+    /// returned task completes only once the loop has actually exited.
+    /// </remarks>
     /// <returns>A task that completes once the loop has stopped.</returns>
     public async Task StopAsync()
     {
-        CancellationTokenSource? cts;
-        Task? loopTask;
+        CancellationTokenSource? cts = null;
+        Task loopTask;
 
         lock (_lifecycleLock)
         {
-            if (!_running)
+            switch (_lifecycle)
             {
-                return;
-            }
+                case ScanLifecycle.Running:
+                    cts = _cts;
+                    _cts = null;
+                    loopTask = _loopTask!;
+                    TransitionTo(ScanLifecycle.Stopping);
+                    break;
 
-            _running = false;
-            cts = _cts;
-            loopTask = _loopTask;
-            _cts = null;
-            _loopTask = null;
+                case ScanLifecycle.Stopping:
+                    // An earlier stop has already cancelled this loop and owns its token source.
+                    loopTask = _loopTask!;
+                    break;
+
+                default:
+                    return;
+            }
         }
 
         cts?.Cancel();
 
-        if (loopTask != null)
+        try
         {
-            try
+            await loopTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the loop observes cancellation.
+        }
+        finally
+        {
+            cts?.Dispose();
+
+            lock (_lifecycleLock)
             {
-                await loopTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when the loop observes cancellation.
+                // A Start during the wait has already moved on to a newer loop, and a Dispose has
+                // ended the lifecycle; either way this stop has nothing left to settle.
+                if (_lifecycle == ScanLifecycle.Stopping && ReferenceEquals(_loopTask, loopTask))
+                {
+                    _loopTask = null;
+                    TransitionTo(ScanLifecycle.Idle);
+                }
             }
         }
+    }
 
-        cts?.Dispose();
+    /// <summary>
+    /// Makes the one lifecycle change, refusing any the table below does not list. Callers hold
+    /// <see cref="_lifecycleLock"/> and have already checked the state they are leaving, so a
+    /// refusal is a defect in this class rather than a race a caller can lose.
+    /// </summary>
+    private void TransitionTo(ScanLifecycle next)
+    {
+        var allowed = (_lifecycle, next) switch
+        {
+            (ScanLifecycle.Idle, ScanLifecycle.Running) => true,
+            (ScanLifecycle.Running, ScanLifecycle.Stopping) => true,
+            (ScanLifecycle.Stopping, ScanLifecycle.Idle) => true,
+
+            // A Start during a stop: the new loop waits for the old one to exit first.
+            (ScanLifecycle.Stopping, ScanLifecycle.Running) => true,
+
+            (ScanLifecycle.Idle or ScanLifecycle.Running or ScanLifecycle.Stopping, ScanLifecycle.Disposed) => true,
+            _ => false,
+        };
+
+        if (!allowed)
+        {
+            throw new InvalidOperationException(
+                $"Continuous discovery cannot move from {_lifecycle} to {next}.");
+        }
+
+        _lifecycle = next;
     }
 
     #endregion
@@ -606,6 +712,22 @@ public class ContinuousDeviceFinder : IDisposable
     #endregion
 
     #region Scan Loop
+
+    /// <summary>
+    /// Runs <see cref="ScanLoopAsync"/> once <paramref name="previousLoop"/>, a loop a stop has
+    /// cancelled but that has not exited yet, is gone. That is what keeps a <see cref="Start"/>
+    /// issued during a stop from putting a second pass on the wrapped finder beside the first.
+    /// </summary>
+    private async Task ScanLoopAfterAsync(Task? previousLoop, CancellationToken cancellationToken)
+    {
+        if (previousLoop != null)
+        {
+            // How the previous loop ended is the business of the stop that was waiting for it.
+            await previousLoop.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
+        await ScanLoopAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Runs discovery passes until cancellation, reconciling the live set after each pass.
@@ -971,7 +1093,7 @@ public class ContinuousDeviceFinder : IDisposable
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (_lifecycle == ScanLifecycle.Disposed)
         {
             throw new ObjectDisposedException(nameof(ContinuousDeviceFinder));
         }
@@ -987,21 +1109,24 @@ public class ContinuousDeviceFinder : IDisposable
         CancellationTokenSource? cts;
         Task? loopTask;
 
-        // Set _disposed under the lock so it cannot race with Start (which checks it under
+        // Change the lifecycle under the lock so it cannot race with Start (which checks it under
         // the same lock); also makes Dispose idempotent under concurrent calls.
+        //
+        // During a stop the token source belongs to that stop (it has already cancelled it and
+        // disposes it), so _cts is null here; the loop it is waiting for is still in _loopTask,
+        // and Dispose waits for it below like any other.
         lock (_lifecycleLock)
         {
-            if (_disposed)
+            if (_lifecycle == ScanLifecycle.Disposed)
             {
                 return;
             }
 
-            _disposed = true;
             cts = _cts;
             loopTask = _loopTask;
             _cts = null;
             _loopTask = null;
-            _running = false;
+            TransitionTo(ScanLifecycle.Disposed);
         }
 
         cts?.Cancel();
