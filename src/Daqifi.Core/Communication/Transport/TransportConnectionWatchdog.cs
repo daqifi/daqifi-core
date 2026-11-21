@@ -1,3 +1,5 @@
+using Daqifi.Core.Internal;
+
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
@@ -160,7 +162,7 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             Volatile.Write(ref _presenceMisses, 0);
 
             _presenceTimer?.Dispose();
-            _presenceTimer = new Timer(_ => PollPresence(), null, interval, interval);
+            _presenceTimer = CallerContextFree.CreateTimer(_ => PollPresence(), interval, interval);
         }
     }
 

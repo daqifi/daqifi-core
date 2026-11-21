@@ -227,7 +227,9 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 IsBackground = true,
                 Name = $"MessageConsumer-{typeof(T).Name}"
             };
-            _consumerThread.Start();
+            // UnsafeStart: the reader must not inherit the starter's AsyncLocal state; see
+            // CallerContextFree for why that matters.
+            _consumerThread.UnsafeStart();
         }
     }
 
