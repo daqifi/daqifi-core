@@ -456,16 +456,21 @@ internal sealed class StreamingSessionController
     /// </remarks>
     private void ApplyRateCap()
     {
-        var (newRateHz, adjustedFromHz) =
-            SampleRateCap.Enforce(_streamingFrequency, _host.MaximumStreamingFrequencyHz);
+        // The ceiling is read first, outside the lock (it calls into the host); the rate it is
+        // applied to is read inside, so a caller's change landing during the ceiling read is the
+        // rate that gets clamped rather than being overwritten by a clamp of the old one.
+        var ceilingHz = _host.MaximumStreamingFrequencyHz;
 
-        if (!adjustedFromHz.HasValue)
-        {
-            return;
-        }
-
+        int newRateHz;
+        int? adjustedFromHz;
         lock (_frequencyLock)
         {
+            (newRateHz, adjustedFromHz) = SampleRateCap.Enforce(_streamingFrequency, ceilingHz);
+            if (!adjustedFromHz.HasValue)
+            {
+                return;
+            }
+
             _streamingFrequency = newRateHz;
         }
 

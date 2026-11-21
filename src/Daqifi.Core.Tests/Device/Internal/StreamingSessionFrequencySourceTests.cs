@@ -27,6 +27,22 @@ public class StreamingSessionFrequencySourceTests
         Assert.False(session.IsFrequencyInherited);
     }
 
+    [Fact]
+    public void AStartsRateCap_ThatACallersLowerChoiceInterrupts_LeavesTheLowerChoice()
+    {
+        // The caller lowers the rate to 100 Hz while the start reads the 500 Hz ceiling. Clamping
+        // the rate as it stood before the read (1000 Hz) would overwrite the choice with 500 Hz.
+        var host = new FakeHost { MaximumStreamingFrequencyHz = 500 };
+        var session = new StreamingSessionController(host);
+        session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
+        session.StreamingFrequency = 1000;
+        host.OnMaximumStreamingFrequencyRead = () => session.StreamingFrequency = 100;
+
+        session.StartStreaming();
+
+        Assert.Equal(100, session.StreamingFrequency);
+    }
+
     private sealed class FakeHost : IStreamingSessionHost
     {
         private Action? _onMaxSamplingRateRead;
@@ -48,7 +64,26 @@ public class StreamingSessionFrequencySourceTests
             }
         }
 
-        public int MaximumStreamingFrequencyHz => 1000;
+        private Action? _onMaximumStreamingFrequencyRead;
+        private int _maximumStreamingFrequencyHz = 1000;
+
+        /// <summary>Runs once, on the next read of <see cref="MaximumStreamingFrequencyHz"/>.</summary>
+        public Action? OnMaximumStreamingFrequencyRead
+        {
+            set => _onMaximumStreamingFrequencyRead = value;
+        }
+
+        public int MaximumStreamingFrequencyHz
+        {
+            get
+            {
+                var action = _onMaximumStreamingFrequencyRead;
+                _onMaximumStreamingFrequencyRead = null;
+                action?.Invoke();
+                return _maximumStreamingFrequencyHz;
+            }
+            init => _maximumStreamingFrequencyHz = value;
+        }
 
         public bool PreserveActiveStream => false;
 
