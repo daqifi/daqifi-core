@@ -31,19 +31,21 @@ internal sealed class ReconnectSupervisor
 
     private ReconnectOptions _options = new();
 
+    // Makes "claim the loop, or record the drop it turns away" and "release the loop and take the
+    // drop it turned away" each one step, so a drop can never be recorded after the loop that
+    // would replay it has already looked. Held only for those few assignments.
+    private readonly Lock _loopGate = new();
+
     // The running loop's cancellation source, or null while idle. One field rather than a
     // "running" flag beside a nullable source, so "running with nothing to cancel" cannot be
-    // represented: the loop is claimed by swapping its source in, and released by swapping it
-    // back out. Guards against a second loop being started by the Lost that a failing attempt's
-    // own teardown can produce.
+    // represented. Guards against a second loop being started by the Lost that a failing
+    // attempt's own teardown can produce. Written under _loopGate; read without it by Cancel.
     private CancellationTokenSource? _runningLoop;
 
-    // The epoch of a drop the single-flight guard turned away while a loop was running, or
-    // NoTurnedAwayDrop. The finishing loop replays exactly that drop, on that drop's own epoch, so
-    // a caller who superseded it in the meantime is never handed a reconnect they did not want.
-    private int _turnedAwayDropEpoch = NoTurnedAwayDrop;
-
-    private const int NoTurnedAwayDrop = -1;
+    // The epoch of a drop the single-flight guard turned away while a loop was running, or null.
+    // The finishing loop replays exactly that drop, on that drop's own epoch, so a caller who
+    // superseded it in the meantime is never handed a reconnect they did not want. Under _loopGate.
+    private int? _turnedAwayDropEpoch;
 
     // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
     // when it starts and re-checks before each step that touches device state; a change means
@@ -166,11 +168,16 @@ internal sealed class ReconnectSupervisor
         // One loop at a time. A failing attempt tears the transport down again, which can
         // produce another Lost; without this that would fork a second loop racing the first.
         var cts = new CancellationTokenSource();
-        if (Interlocked.CompareExchange(ref _runningLoop, cts, null) is not null)
+        lock (_loopGate)
         {
-            cts.Dispose();
-            Volatile.Write(ref _turnedAwayDropEpoch, expectedEpoch);
-            return;
+            if (_runningLoop is not null)
+            {
+                _turnedAwayDropEpoch = expectedEpoch;
+                cts.Dispose();
+                return;
+            }
+
+            Volatile.Write(ref _runningLoop, cts);
         }
 
         // The loop runs on the epoch the drop was detected on, never a fresh read: a Supersede
@@ -182,6 +189,7 @@ internal sealed class ReconnectSupervisor
         _ = Task.Run(async () =>
         {
             var wasCanceled = false;
+            int? turnedAwayDrop = null;
 
             try
             {
@@ -197,7 +205,13 @@ internal sealed class ReconnectSupervisor
             {
                 wasCanceled = cts.IsCancellationRequested;
 
-                Interlocked.Exchange(ref _runningLoop, null);
+                lock (_loopGate)
+                {
+                    Volatile.Write(ref _runningLoop, null);
+                    turnedAwayDrop = _turnedAwayDropEpoch;
+                    _turnedAwayDropEpoch = null;
+                }
+
                 cts.Dispose();
             }
 
@@ -208,10 +222,9 @@ internal sealed class ReconnectSupervisor
             // that superseded it before it could cancel anything) restart itself on the caller's
             // epoch. Exhausting the attempts settles on Failed, and cancellation is excluded here,
             // so neither can retrigger.
-            var turnedAwayDrop = Interlocked.Exchange(ref _turnedAwayDropEpoch, NoTurnedAwayDrop);
-            if (!wasCanceled && turnedAwayDrop != NoTurnedAwayDrop)
+            if (!wasCanceled && turnedAwayDrop is { } drop)
             {
-                BeginIfEnabled(turnedAwayDrop);
+                BeginIfEnabled(drop);
             }
         });
     }
