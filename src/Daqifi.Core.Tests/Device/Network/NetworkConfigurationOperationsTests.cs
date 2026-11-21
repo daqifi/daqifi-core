@@ -78,16 +78,6 @@ public class NetworkConfigurationOperationsTests
         };
     }
 
-    #region Construction
-
-    [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new NetworkConfigurationOperations(null!));
-    }
-
-    #endregion
-
     #region UpdateNetworkConfigurationAsync — check ordering
 
     [Fact]

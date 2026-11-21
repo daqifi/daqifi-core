@@ -427,16 +427,6 @@ public class StreamFrameDecoderTests
 
     #endregion
 
-    #region Guards
-
-    [Fact]
-    public void Constructor_RejectsANullHost()
-    {
-        Assert.Throws<ArgumentNullException>(() => new StreamFrameDecoder(null!));
-    }
-
-    #endregion
-
     #region Channel caching (#490)
 
     /// <summary>

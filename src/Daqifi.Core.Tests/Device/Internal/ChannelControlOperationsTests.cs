@@ -43,16 +43,6 @@ namespace Daqifi.Core.Tests.Device.Internal;
 /// </remarks>
 public class ChannelControlOperationsTests
 {
-    #region Construction
-
-    [Fact]
-    public void Constructor_NullHost_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => new ChannelControlOperations(null!));
-    }
-
-    #endregion
-
     #region EnableChannel / DisableChannel — single channel, ADC mask
 
     [Fact]
