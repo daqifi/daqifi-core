@@ -133,23 +133,25 @@ internal sealed class StreamingSessionController
 
     private int _streamingFrequency;
 
-    /// <summary>
-    /// Whether <see cref="_streamingFrequency"/> is a rate somebody chose — a caller set it, or a
-    /// stream was started at it — rather than the default this device object was built with.
-    /// </summary>
-    /// <remarks>
-    /// Only an unchosen rate gives way to the one the device reports it has stored
-    /// (<see cref="TryAdoptStoredFrequency"/>). A chosen one is the caller's intent, and a
-    /// reconnect has to restore it: a device that was power-cycled while it was away reports its
-    /// 1 Hz boot default, and adopting that would resume the stream at 1 Hz.
-    /// </remarks>
-    private bool _frequencyChosen;
+    /// <summary>Where <see cref="_streamingFrequency"/> came from.</summary>
+    private enum FrequencySource
+    {
+        /// <summary>The default this device object was built with: Core's assumption.</summary>
+        CoreDefault,
 
-    /// <summary>
-    /// Whether <see cref="_streamingFrequency"/> was taken from the device
-    /// (<see cref="TryAdoptStoredFrequency"/>) rather than being Core's default.
-    /// </summary>
-    private bool _frequencyAdopted;
+        /// <summary>Taken from the rate the device reports it has stored (<see cref="TryAdoptStoredFrequency"/>).</summary>
+        Adopted,
+
+        /// <summary>
+        /// A rate somebody chose: a caller set it, or a stream was started at it. Only a rate that
+        /// is not chosen gives way to the device's stored one. A chosen one is the caller's intent,
+        /// and a reconnect has to restore it: a device that was power-cycled while it was away
+        /// reports its 1 Hz boot default, and adopting that would resume the stream at 1 Hz.
+        /// </summary>
+        Chosen,
+    }
+
+    private FrequencySource _frequencySource = FrequencySource.CoreDefault;
 
     /// <summary>
     /// Whether the rate is one this device object inherited from the device and nobody has
@@ -157,7 +159,7 @@ internal sealed class StreamingSessionController
     /// about the interface and format the next start uses; see
     /// <see cref="LowerInheritedFrequency"/>.
     /// </summary>
-    internal bool IsFrequencyInherited => _frequencyAdopted && !_frequencyChosen;
+    internal bool IsFrequencyInherited => _frequencySource == FrequencySource.Adopted;
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
     internal int StreamingFrequency
@@ -178,7 +180,7 @@ internal sealed class StreamingSessionController
             }
 
             _streamingFrequency = value;
-            _frequencyChosen = true;
+            _frequencySource = FrequencySource.Chosen;
         }
     }
 
@@ -190,8 +192,7 @@ internal sealed class StreamingSessionController
     internal void SetDefaultFrequency(int frequencyHz)
     {
         StreamingFrequency = frequencyHz;
-        _frequencyChosen = false;
-        _frequencyAdopted = false;
+        _frequencySource = FrequencySource.CoreDefault;
     }
 
     /// <summary>
@@ -246,7 +247,7 @@ internal sealed class StreamingSessionController
     /// <returns><c>true</c> when the rate was adopted.</returns>
     internal bool TryAdoptStoredFrequency(int frequencyHz, bool? rateConfigured)
     {
-        if (_frequencyChosen)
+        if (_frequencySource == FrequencySource.Chosen)
         {
             return false;
         }
@@ -271,7 +272,7 @@ internal sealed class StreamingSessionController
         }
 
         _streamingFrequency = frequencyHz;
-        _frequencyAdopted = true;
+        _frequencySource = FrequencySource.Adopted;
         return true;
     }
 
@@ -379,7 +380,7 @@ internal sealed class StreamingSessionController
 
         // The rate a stream ran at is the one a reconnect resumes it at, whatever the device
         // reports afterwards.
-        _frequencyChosen = true;
+        _frequencySource = FrequencySource.Chosen;
 
         BeginStreamingSession();
 
@@ -555,7 +556,7 @@ internal sealed class StreamingSessionController
                 // Frequency first: anything observing IsStreaming must never catch it true next
                 // to a rate belonging to a previous session.
                 _streamingFrequency = effect.StreamingFrequency;
-                _frequencyChosen = true;
+                _frequencySource = FrequencySource.Chosen;
 
                 // A restart while already streaming is not a session boundary — the typed API
                 // cannot even express it (StartStreaming returns early) — so there is nothing to
