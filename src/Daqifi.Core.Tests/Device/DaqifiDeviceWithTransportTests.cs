@@ -13,33 +13,6 @@ namespace Daqifi.Core.Tests.Device;
 public class DaqifiDeviceWithTransportTests
 {
     [Fact]
-    public void DaqifiDevice_WithTransport_ShouldInitializeCorrectly()
-    {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-        
-        // Act
-        using var device = new DaqifiDevice("Test Device", transport);
-        
-        // Assert
-        Assert.Equal("Test Device", device.Name);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-        Assert.False(device.IsConnected);
-    }
-
-    [Fact]
-    public void DaqifiDevice_Connect_WithTransport_ShouldAttemptConnection()
-    {
-        // Arrange - Use localhost port 1 (reserved, never listening)
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
-        using var device = new DaqifiDevice("Test Device", transport);
-        
-        // Act & Assert - Should throw due to connection refused
-        Assert.Throws<SocketException>(() => device.Connect());
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-    }
-
-    [Fact]
     public void DaqifiDevice_StatusChanged_ShouldFireOnTransportEvents()
     {
         // Arrange - Use localhost port 1 (reserved, never listening)

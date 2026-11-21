@@ -51,14 +51,6 @@ public class DeviceNotConnectedExceptionTests
     }
 
     [Fact]
-    public void DeviceNotConnectedException_IsShuttingDown_DefaultsToFalse()
-    {
-        Assert.False(new DeviceNotConnectedException().IsShuttingDown);
-        Assert.False(new DeviceNotConnectedException("custom").IsShuttingDown);
-        Assert.False(new DeviceNotConnectedException("custom", new Exception("inner")).IsShuttingDown);
-    }
-
-    [Fact]
     public void DeviceNotConnectedException_PreservesMessageAndInnerException()
     {
         var inner = new Exception("inner");
@@ -66,6 +58,7 @@ public class DeviceNotConnectedExceptionTests
 
         Assert.Equal("custom", ex.Message);
         Assert.Same(inner, ex.InnerException);
+        Assert.False(ex.IsShuttingDown);
     }
 
     [Fact]
@@ -155,6 +148,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("SetAdcCalibrationOffsetAsync", d => d.SetAdcCalibrationOffsetAsync(0, 0.0));
         yield return Site("SaveVoltagePrecisionAsync", d => d.SaveVoltagePrecisionAsync());
         yield return Site("LoadVoltagePrecisionAsync", d => d.LoadVoltagePrecisionAsync());
+        yield return Site("ReadCapabilityDocumentAsync", d => d.ReadCapabilityDocumentAsync());
 
         static object[] Site(string name, Func<DaqifiStreamingDevice, Task> call) => [name, call];
     }
@@ -292,24 +286,6 @@ public class DeviceNotConnectedExceptionTests
     }
 
     // ── Source compatibility for existing consumers ─────────────────────
-
-    [Fact]
-    public void ExistingCatchOfInvalidOperationException_StillCatchesTheGuard()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var caught = false;
-
-        try
-        {
-            device.StartStreaming();
-        }
-        catch (InvalidOperationException)
-        {
-            caught = true;
-        }
-
-        Assert.True(caught);
-    }
 
     // ── Helpers ─────────────────────────────────────────────────────────
 

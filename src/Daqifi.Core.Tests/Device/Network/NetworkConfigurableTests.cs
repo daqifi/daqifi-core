@@ -40,23 +40,6 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var config = new NetworkConfiguration(
-            WifiMode.ExistingNetwork,
-            WifiSecurityType.WpaPskPhrase,
-            "TestNetwork",
-            "TestPassword");
-
-        // Act & Assert
-        var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.UpdateNetworkConfigurationAsync(config));
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithNullConfiguration_ThrowsArgumentNullException()
     {
         // Arrange
@@ -537,17 +520,6 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public void PrepareSdInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareSdInterface());
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
     public void PrepareSdInterface_WhenConnected_SendsCorrectCommands()
     {
         // Arrange
@@ -563,17 +535,6 @@ public class NetworkConfigurableTests
         Assert.Equal(2, sentCommands.Count);
         Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]); // Disable LAN
         Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]); // Enable SD
-    }
-
-    [Fact]
-    public void PrepareLanInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareLanInterface());
-        Assert.Equal("Device is not connected.", exception.Message);
     }
 
     [Fact]
@@ -701,16 +662,6 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.LoadNetworkConfigurationAsync());
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
     public async Task LoadNetworkConfigurationAsync_WhenConnected_SendsLoadCommand()
     {
         var device = new TestableDaqifiStreamingDevice("TestDevice");
@@ -733,16 +684,6 @@ public class NetworkConfigurableTests
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => device.LoadNetworkConfigurationAsync(cts.Token));
         Assert.Empty(device.SentMessages);
-    }
-
-    [Fact]
-    public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.FactoryResetNetworkAsync());
-        Assert.Equal("Device is not connected.", exception.Message);
     }
 
     [Fact]

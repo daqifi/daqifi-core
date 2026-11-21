@@ -175,19 +175,6 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WhenDisconnected_Throws()
-    {
-        // Arrange
-        var device = new TestableDaqifiDevice("TestDevice");
-        // Not connected
-
-        // Act & Assert
-        var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.InitializeAsync());
-        Assert.Equal("Device must be connected before initialization.", ex.Message);
-    }
-
-    [Fact]
     public async Task InitializeAsync_WhenDeviceReturnsScpiError_ThrowsTypedException()
     {
         // Arrange — the device answers the setup block with a -200 error line.

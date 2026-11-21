@@ -32,17 +32,6 @@ public class DaqifiDeviceCapabilityDocumentTests
     }
 
     [Fact]
-    public async Task ReadCapabilityDocumentAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableCapabilityDevice("BenchNq1");
-
-        // Typed since #395; still an InvalidOperationException by inheritance, so a consumer's
-        // existing catch keeps working. ThrowsAsync matches exactly, hence the derived type here.
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.ReadCapabilityDocumentAsync());
-    }
-
-    [Fact]
     public async Task ReadCapabilityDocumentAsync_OnSupportedDevice_AppliesTheDocument()
     {
         var device = CreateSupportedDevice();
