@@ -105,7 +105,54 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     // only bounds how quickly a missed CFRunLoopStop is observed on teardown.
     private const double RunLoopSliceSeconds = 0.2;
 
-    private readonly IntPtr _deviceRef;            // CFRetain'd in TryCreate; CFRelease'd in Dispose() (finalizer is the backstop).
+    /// <summary>
+    /// Where this device is in its open/close life. Every native resource the session holds
+    /// follows from it, so the one value answers whether a reopen or a release is safe.
+    /// </summary>
+    private enum HidSessionState
+    {
+        /// <summary>
+        /// The device is not open and no input thread exists; only the retained device ref is
+        /// held. The only state <see cref="Open"/> may start a session from.
+        /// </summary>
+        Closed,
+
+        /// <summary>
+        /// <see cref="Open"/> has opened the device and is waiting for the input thread to schedule
+        /// its callback. Only ever seen under the lifecycle lock.
+        /// </summary>
+        Opening,
+
+        /// <summary>The device is open and the input thread is servicing its run loop.</summary>
+        Open,
+
+        /// <summary>
+        /// A close timed out waiting for the input thread to stop. The device, input buffer,
+        /// callback and run loop stay allocated because the live thread may still use them, and
+        /// that thread finishes the teardown itself when it exits (see
+        /// <see cref="FinishAbandonedClose"/>). <see cref="Close"/> has nothing left to do and
+        /// <see cref="Open"/> refuses.
+        /// </summary>
+        CloseLeaked,
+
+        /// <summary>
+        /// <see cref="Dispose"/> ran while the close was leaked. The exiting input thread
+        /// finishes the teardown and also releases the device ref.
+        /// </summary>
+        ReleasePending,
+
+        /// <summary>The device ref has been released. Terminal.</summary>
+        Released,
+    }
+
+    // Who finishes the teardown when a close gives up waiting on the input thread. Exactly one
+    // of the closer and the exiting thread wins the CompareExchange from None: if the thread
+    // exits first the closer tears down as usual; if the closer abandons first the thread does.
+    private const int ReaderHandoffNone = 0;
+    private const int ReaderHandoffAbandoned = 1;
+    private const int ReaderHandoffExited = 2;
+
+    private readonly IntPtr _deviceRef;            // CFRetain'd in TryCreate; CFRelease'd on the move to Released (finalizer is the backstop).
     private readonly int _maxInputReportLength;
     private readonly int _maxOutputReportLength;
     private readonly Lock _lifecycleLock = new();
@@ -116,10 +163,9 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     private NativeMethods.IOHIDReportCallback? _inputCallback; // field keeps the delegate alive for native calls.
     private IntPtr _inputBuffer;
     private volatile IntPtr _runLoop;
-    private volatile bool _stopRequested;
-    private bool _deviceOpened;
-    private volatile bool _open;
-    private int _released;
+    private volatile bool _stopRequested;          // The signal to the input thread, not lifecycle state.
+    private volatile HidSessionState _state = HidSessionState.Closed; // Written only by TransitionTo.
+    private int _readerHandoff;                    // ReaderHandoff*; reset by Open, claimed by Interlocked.
 
     private MacOsHidTransportDevice(
         IntPtr deviceRef,
@@ -143,9 +189,10 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
 
     ~MacOsHidTransportDevice()
     {
-        // Backstop for the retained device ref when Dispose() was not called (the
-        // enumerator and transport now dispose devices deterministically).
-        if (Interlocked.Exchange(ref _released, 1) == 0 && _deviceRef != IntPtr.Zero)
+        // Backstop for the retained device ref when Dispose() was not called. The input
+        // thread's frame keeps this object reachable while it runs, so by the time the
+        // finalizer runs that thread has exited and nothing native still uses the ref.
+        if (_state != HidSessionState.Released && _deviceRef != IntPtr.Zero)
         {
             NativeMethods.CFRelease(_deviceRef);
         }
@@ -156,14 +203,26 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     /// at finalization. Callers (the enumerator and transport) dispose every
     /// enumerated device they do not keep; the bootloader-wait poll loop enumerates
     /// frequently, so prompt release avoids piling up finalizable objects and
-    /// native handles. Closes the device first if it is still open.
+    /// native handles. Closes the device first if it is still open. If that close is
+    /// leaked (the input thread would not stop) the device ref is kept, because that
+    /// thread still passes it to IOKit; the thread releases it when it exits.
     /// </summary>
     public void Dispose()
     {
-        Close();
-        if (Interlocked.Exchange(ref _released, 1) == 0 && _deviceRef != IntPtr.Zero)
+        lock (_lifecycleLock)
         {
-            NativeMethods.CFRelease(_deviceRef);
+            CloseInternal();
+            switch (_state)
+            {
+                case HidSessionState.CloseLeaked:
+                    TransitionTo(HidSessionState.ReleasePending);
+                    return;
+                case HidSessionState.ReleasePending:
+                    return;
+                case HidSessionState.Closed:
+                    ReleaseDeviceRef();
+                    break;
+            }
         }
 
         GC.SuppressFinalize(this);
@@ -179,7 +238,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     // false on its own when the device is unplugged mid-flow; removal surfaces
     // as a failed Write/Read (IOException/TimeoutException) which the firmware
     // retry layer already handles.
-    public bool IsConnected => _open;
+    public bool IsConnected => _state == HidSessionState.Open;
 
     /// <summary>
     /// Reads the addressing metadata for a device returned by enumeration and
@@ -236,9 +295,20 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     {
         lock (_lifecycleLock)
         {
-            if (_open)
+            switch (_state)
             {
-                return;
+                case HidSessionState.Open:
+                    return;
+                case HidSessionState.Released:
+                case HidSessionState.ReleasePending:
+                    throw new ObjectDisposedException(nameof(MacOsHidTransportDevice));
+                case HidSessionState.CloseLeaked:
+                    // Reopening would reset the stop signal the old thread still polls and
+                    // overwrite the run loop it unschedules from, so refuse until that thread
+                    // has exited and finished the close.
+                    throw new IOException(
+                        "Cannot reopen the HID device: its previous input thread did not stop when it was closed. " +
+                        "Retry after that thread exits, or reconnect to re-enumerate the device.");
             }
 
             // A2 (stray-write guard): when exclusive, seize the device so no other user-mode opener
@@ -269,8 +339,9 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
                         : $"IOHIDDeviceOpen failed (IOReturn=0x{result:X8}).");
             }
 
-            _deviceOpened = true;
+            TransitionTo(HidSessionState.Opening);
             _stopRequested = false;
+            _readerHandoff = ReaderHandoffNone;
             _inbox = new BlockingCollection<byte[]>();
             _inputBuffer = Marshal.AllocHGlobal(_maxInputReportLength);
             _inputCallback = OnInputReport;
@@ -291,7 +362,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
                 throw new IOException("Timed out starting the macOS HID input run loop.");
             }
 
-            _open = true;
+            TransitionTo(HidSessionState.Open);
         }
     }
 
@@ -307,7 +378,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        if (!_open)
+        if (_state != HidSessionState.Open)
         {
             throw new InvalidOperationException("HID device is not open.");
         }
@@ -360,7 +431,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
 
     public HidTransportReadResult Read(int timeoutMs)
     {
-        if (!_open)
+        if (_state != HidSessionState.Open)
         {
             throw new InvalidOperationException("HID device is not open.");
         }
@@ -458,6 +529,43 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
             }
 
             _readyEvent?.Set();
+
+            // Last thing the thread does: claim the hand-off. If a close already gave up
+            // waiting on this thread, nobody else will free what it left allocated.
+            if (Interlocked.CompareExchange(ref _readerHandoff, ReaderHandoffExited, ReaderHandoffNone)
+                == ReaderHandoffAbandoned)
+            {
+                FinishAbandonedClose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs on the exiting input thread after a close gave up waiting on it. IOKit has
+    /// already dropped the callback and buffer (the caller's finally revoked them), so
+    /// the session's resources can be freed now. Never blocks for long: the closer that
+    /// abandoned the thread only holds the lock until it records <see cref="HidSessionState.CloseLeaked"/>,
+    /// and Close/Dispose/Open in that state return without waiting.
+    /// </summary>
+    private void FinishAbandonedClose()
+    {
+        try
+        {
+            lock (_lifecycleLock)
+            {
+                var disposeRequested = _state == HidSessionState.ReleasePending;
+                ReleaseSessionResources();
+                TransitionTo(HidSessionState.Closed);
+                if (disposeRequested)
+                {
+                    ReleaseDeviceRef();
+                    GC.SuppressFinalize(this);
+                }
+            }
+        }
+        catch
+        {
+            // Never let an exception escape the dedicated thread.
         }
     }
 
@@ -496,6 +604,12 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
 
     private void CloseInternal()
     {
+        // In CloseLeaked/ReleasePending the input thread owns the rest of the teardown.
+        if (_state is not (HidSessionState.Opening or HidSessionState.Open))
+        {
+            return;
+        }
+
         _stopRequested = true;
 
         if (_runLoop != IntPtr.Zero)
@@ -507,41 +621,94 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
         // device in its finally before exiting, so once it has actually stopped no
         // callback can touch the native buffer. Verify it stopped before freeing
         // anything — if a wedged native run loop fails to stop in time, leave the
-        // device/buffer/callback allocated (a bounded leak) rather than free memory
-        // IOKit might still write into, which would crash the process.
+        // device/buffer/callback allocated rather than free memory IOKit might still
+        // write into, which would crash the process. The thread frees them itself when
+        // it exits (FinishAbandonedClose).
         var thread = _ioThread;
         var threadStopped = thread is null || !thread.IsAlive || thread.Join(TimeSpan.FromSeconds(5));
 
         _inbox?.CompleteAdding();
 
-        if (threadStopped)
+        // A thread that finished its finally between the join timing out and here has
+        // already claimed Exited, so the CompareExchange fails and we tear down as usual.
+        if (!threadStopped &&
+            Interlocked.CompareExchange(ref _readerHandoff, ReaderHandoffAbandoned, ReaderHandoffNone)
+                == ReaderHandoffNone)
         {
-            _ioThread = null;
-            _runLoop = IntPtr.Zero;
-
-            if (_deviceOpened)
-            {
-                NativeMethods.IOHIDDeviceClose(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
-                _deviceOpened = false;
-            }
-
-            if (_inputBuffer != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(_inputBuffer);
-                _inputBuffer = IntPtr.Zero;
-            }
-
-            _inputCallback = null;
-
-            var inbox = _inbox;
-            _inbox = null;
-            inbox?.Dispose();
-
-            _readyEvent?.Dispose();
-            _readyEvent = null;
+            TransitionTo(HidSessionState.CloseLeaked);
+            return;
         }
 
-        _open = false;
+        ReleaseSessionResources();
+        TransitionTo(HidSessionState.Closed);
+    }
+
+    /// <summary>
+    /// Frees what an open session holds. Called exactly once per session, under the
+    /// lifecycle lock, by whichever of the closer and the exiting input thread owns the
+    /// teardown, and only once that thread can no longer touch any of it.
+    /// </summary>
+    private void ReleaseSessionResources()
+    {
+        _ioThread = null;
+        _runLoop = IntPtr.Zero;
+
+        NativeMethods.IOHIDDeviceClose(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+
+        if (_inputBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_inputBuffer);
+            _inputBuffer = IntPtr.Zero;
+        }
+
+        _inputCallback = null;
+
+        var inbox = _inbox;
+        _inbox = null;
+        inbox?.Dispose();
+
+        _readyEvent?.Dispose();
+        _readyEvent = null;
+    }
+
+    /// <summary>Releases the retained device ref. Only valid from <see cref="HidSessionState.Closed"/>.</summary>
+    private void ReleaseDeviceRef()
+    {
+        TransitionTo(HidSessionState.Released);
+        if (_deviceRef != IntPtr.Zero)
+        {
+            NativeMethods.CFRelease(_deviceRef);
+        }
+    }
+
+    /// <summary>
+    /// The only writer of <see cref="_state"/>. Callers hold the lifecycle lock. A move not
+    /// listed here is a bug in this class, so it throws rather than being ignored.
+    /// </summary>
+    private void TransitionTo(HidSessionState next)
+    {
+        var allowed = (_state, next) switch
+        {
+            (HidSessionState.Closed, HidSessionState.Opening) => true,
+            (HidSessionState.Closed, HidSessionState.Released) => true,
+            (HidSessionState.Opening, HidSessionState.Open) => true,
+            (HidSessionState.Opening, HidSessionState.Closed) => true,
+            (HidSessionState.Opening, HidSessionState.CloseLeaked) => true,
+            (HidSessionState.Open, HidSessionState.Closed) => true,
+            (HidSessionState.Open, HidSessionState.CloseLeaked) => true,
+            (HidSessionState.CloseLeaked, HidSessionState.ReleasePending) => true,
+            // Only FinishAbandonedClose makes these two, on the exiting input thread.
+            (HidSessionState.CloseLeaked, HidSessionState.Closed) => true,
+            (HidSessionState.ReleasePending, HidSessionState.Closed) => true,
+            _ => false,
+        };
+
+        if (!allowed)
+        {
+            throw new InvalidOperationException($"Invalid HID session transition {_state} -> {next}.");
+        }
+
+        _state = next;
     }
 
     private static string? BuildDevicePath(IntPtr deviceRef, int vendorId, int productId)
