@@ -18,9 +18,16 @@ namespace Daqifi.Core.Device.Internal;
 /// Owns the PWM frequency bookkeeping that goes with those commands.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Everything here reaches the device through <see cref="IDeviceOperationHost"/>, so each
 /// command still passes through the device's own virtual <c>Send</c> and the same channels
 /// lock the status-frame resync uses (#409).
+/// </para>
+/// <para>
+/// Each command also runs as one step under <see cref="_commandGate"/>: what it reads or
+/// records in channel state and the command it sends happen with no other channel command in
+/// between. See that field for the interleavings it closes.
+/// </para>
 /// </remarks>
 internal sealed class ChannelControlOperations
 {
@@ -38,6 +45,34 @@ internal sealed class ChannelControlOperations
     private const int AnalogOutputResponseTimeoutMs = 2000;
 
     private readonly IDeviceOperationHost _host;
+
+    /// <summary>
+    /// Held by every channel command from the state it computes or checks, through its send, to
+    /// the state it records — so the last command sent is always the one whose state Core holds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without it, two calls on different threads could each be right on their own and wrong
+    /// together. An enable computes its ADC mask from every channel, so one call enabling
+    /// channel 1 computes {1}, a second enabling channel 2 computes {1,2}, and if the first send
+    /// lands last the device ends on {1} while Core says channel 2 is on. A send-then-record
+    /// command (direction, level, PWM, analog output) could send first, have a second call send
+    /// and record, and then record its own value over the one the device took last. And a digital
+    /// write could pass the PWM guard just before a PWM enable recorded, then go out to a pin the
+    /// firmware ignores it on (#449).
+    /// </para>
+    /// <para>
+    /// A separate lock rather than the channels lock, because <see cref="IDeviceOperationHost.Send{T}"/>
+    /// must not run under that one (#409): the status-frame resync takes it on the consumer
+    /// thread. This one is taken only by the commands here — from a caller's thread, or the
+    /// reconnect's session restore — never by the consumer thread, and always before the
+    /// channels lock, never inside it. <c>Send</c> queues rather than waits, so nothing held
+    /// under it blocks on another thread. The disconnect resets
+    /// (<see cref="ResetPwmEnabled"/>, <see cref="ResetSentPwmFrequency"/>) stay off it: they
+    /// run from the status handler, which must not wait behind a caller's send.
+    /// </para>
+    /// </remarks>
+    private readonly Lock _commandGate = new();
 
     internal ChannelControlOperations(IDeviceOperationHost host)
     {
@@ -60,7 +95,13 @@ internal sealed class ChannelControlOperations
     /// sends even if the value is unchanged. Called on any transition away from Connected —
     /// after one the device's runtime PWM state is no longer trustworthy. See #345.
     /// </summary>
-    internal void ResetSentPwmFrequency() => _lastSentPwmFrequencyHz = null;
+    /// <remarks>
+    /// Under the channels lock, the lock <see cref="SetPwmFrequency"/> records under, for the
+    /// reason <see cref="ResetPwmEnabled"/> gives: a frequency whose send returned just as the
+    /// link dropped either records before this reset, which then clears it, or after it, where
+    /// it sees the device is no longer connected and records nothing.
+    /// </remarks>
+    internal void ResetSentPwmFrequency() => _host.WithChannelsLock(() => _lastSentPwmFrequencyHz = null);
 
     /// <summary>
     /// Records PWM as off on every digital channel. Called on any transition away from
@@ -120,30 +161,35 @@ internal sealed class ChannelControlOperations
         (bool HasChannels, uint Mask) adcMask = default;
         (bool HasChannels, bool AnyEnabled) dioState = default;
 
-        // Mutate and derive the outbound masks in one critical section — see the matching
-        // comment in SetChannelsEnabled (#409) for why the gap matters.
-        _host.WithChannelsLock(() =>
+        // Compute and send as one step, so a concurrent enable cannot send its newer mask
+        // before this one goes out (see _commandGate).
+        lock (_commandGate)
         {
-            foreach (var channel in _host.SnapshotChannels())
+            // Mutate and derive the outbound masks in one critical section — see the matching
+            // comment in SetChannelsEnabled (#409) for why the gap matters.
+            _host.WithChannelsLock(() =>
             {
-                channel.IsEnabled = false;
+                foreach (var channel in _host.SnapshotChannels())
+                {
+                    channel.IsEnabled = false;
+                }
+
+                adcMask = ComputeAdcEnableMask();
+                dioState = ComputeDioEnableState();
+            });
+
+            // Push the cleared state for whichever channel types this device actually has.
+            if (adcMask.HasChannels)
+            {
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
             }
 
-            adcMask = ComputeAdcEnableMask();
-            dioState = ComputeDioEnableState();
-        });
-
-        // Push the cleared state for whichever channel types this device actually has.
-        if (adcMask.HasChannels)
-        {
-            _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
-        }
-
-        if (dioState.HasChannels)
-        {
-            _host.Send(dioState.AnyEnabled
-                ? ScpiMessageProducer.EnableDioPorts()
-                : ScpiMessageProducer.DisableDioPorts());
+            if (dioState.HasChannels)
+            {
+                _host.Send(dioState.AnyEnabled
+                    ? ScpiMessageProducer.EnableDioPorts()
+                    : ScpiMessageProducer.DisableDioPorts());
+            }
         }
     }
 
@@ -167,8 +213,18 @@ internal sealed class ChannelControlOperations
         _host.EnsureConnected();
 
         EnsureChannelBelongs(channel);
-        EnsurePwmNotEnabled(channel);
 
+        // The PWM check, the send and the record as one step, so neither a concurrent PWM
+        // enable nor a concurrent direction write can land between them (see _commandGate).
+        lock (_commandGate)
+        {
+            EnsurePwmNotEnabled(channel);
+            SendAndRecordDioDirection(channel, direction);
+        }
+    }
+
+    private void SendAndRecordDioDirection(IChannel channel, ChannelDirection direction)
+    {
         // Send first, then record the new direction — the reverse of the mirror-then-send
         // order used elsewhere, and deliberately so now that a status frame can write this
         // same property (#685).
@@ -222,27 +278,32 @@ internal sealed class ChannelControlOperations
         _host.EnsureConnected();
 
         EnsureChannelBelongs(channel);
-        EnsurePwmNotEnabled(channel);
 
-        // Send first, then record — the rule SetDioDirection sets out above. A send that
-        // throws leaves Core's view of the channel as it was (#945).
-        _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
-
-        // OutputValue is obsolete, but it stays correct while it is still part of the
-        // public surface: a caller who reads it must not see a stale level (#901).
-        _host.WithChannelsLock(() =>
+        // The PWM check, the send and the record as one step (see _commandGate).
+        lock (_commandGate)
         {
-            if (channel is DigitalChannel digitalChannel)
+            EnsurePwmNotEnabled(channel);
+
+            // Send first, then record — the rule SetDioDirection sets out above. A send that
+            // throws leaves Core's view of the channel as it was (#945).
+            _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
+
+            // OutputValue is obsolete, but it stays correct while it is still part of the
+            // public surface: a caller who reads it must not see a stale level (#901).
+            _host.WithChannelsLock(() =>
             {
-                digitalChannel.ApplyOutputValue(value);
-            }
-            else if (channel is IDigitalChannel foreignChannel)
-            {
+                if (channel is DigitalChannel digitalChannel)
+                {
+                    digitalChannel.ApplyOutputValue(value);
+                }
+                else if (channel is IDigitalChannel foreignChannel)
+                {
 #pragma warning disable CS0618
-                foreignChannel.OutputValue = value;
+                    foreignChannel.OutputValue = value;
 #pragma warning restore CS0618
-            }
-        });
+                }
+            });
+        }
     }
 
     /// <summary>
@@ -288,6 +349,17 @@ internal sealed class ChannelControlOperations
 
         EnsureChannelBelongs(channel);
 
+        // The send and the record as one step, so a concurrent PWM enable or disable cannot send
+        // and record between them, and a digital write cannot pass its PWM check in the gap
+        // (see _commandGate).
+        lock (_commandGate)
+        {
+            SendAndRecordPwmEnabled(channel, enabled);
+        }
+    }
+
+    private void SendAndRecordPwmEnabled(IChannel channel, bool enabled)
+    {
         // Send first, then record — the rule SetDioDirection sets out above. A send that
         // throws must not leave the channel marked PWM when the pin never went there: Core
         // would then refuse every digital command for it (#945).
@@ -362,12 +434,15 @@ internal sealed class ChannelControlOperations
 
         EnsureChannelBelongs(channel);
 
-        // Send first, then record — the rule SetDioDirection sets out above (#945).
-        _host.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
-
-        if (channel is IDigitalChannel digitalChannel)
+        lock (_commandGate)
         {
-            digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
+            // Send first, then record — the rule SetDioDirection sets out above (#945).
+            _host.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
+
+            if (channel is IDigitalChannel digitalChannel)
+            {
+                digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
+            }
         }
     }
 
@@ -420,20 +495,39 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureConnected();
 
-        // Skip the redundant round-trip when the device already has this frequency (from a
-        // send earlier this connection). The cache is cleared on disconnect so a fresh
-        // connection always sends. PwmFrequencyHz still reflects the commanded value. See #345.
-        if (frequencyHz == _lastSentPwmFrequencyHz)
+        // The skip check, the send and the record as one step: a concurrent call recording its
+        // frequency between this send and this record would leave the cache naming a frequency
+        // the device did not take last, and the skip below would then drop a real change.
+        lock (_commandGate)
         {
-            return;
-        }
+            // Skip the redundant round-trip when the device already has this frequency (from a
+            // send earlier this connection). The cache is cleared on disconnect so a fresh
+            // connection always sends. PwmFrequencyHz still reflects the commanded value. See #345.
+            int? lastSentHz = null;
+            _host.WithChannelsLock(() => lastSentHz = _lastSentPwmFrequencyHz);
+            if (frequencyHz == lastSentHz)
+            {
+                return;
+            }
 
-        // The SCPI command is addressed to a channel, but the firmware drives all PWM from
-        // one shared timer and applies the frequency to every channel. Channel 0 is used as
-        // the address because it is PWM-capable on all supported hardware.
-        _host.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
-        _lastSentPwmFrequencyHz = frequencyHz;
-        PwmFrequencyHz = frequencyHz;
+            // The SCPI command is addressed to a channel, but the firmware drives all PWM from
+            // one shared timer and applies the frequency to every channel. Channel 0 is used as
+            // the address because it is PWM-capable on all supported hardware.
+            _host.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
+            PwmFrequencyHz = frequencyHz;
+
+            // The link can drop between the send and this record, and the status handler then
+            // clears the cache (ResetSentPwmFrequency, under this same lock). Recording after
+            // that would make the first call after the reconnect skip a frequency the device
+            // may no longer have — the same reasoning as the PWM enable record (#945).
+            _host.WithChannelsLock(() =>
+            {
+                if (_host.IsConnected)
+                {
+                    _lastSentPwmFrequencyHz = frequencyHz;
+                }
+            });
+        }
     }
 
     /// <summary>
@@ -492,8 +586,11 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureSupported(DeviceFeature.AnalogOutput);
 
-        _host.Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
-        channel?.Stage(voltage);
+        lock (_commandGate)
+        {
+            _host.Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
+            channel?.Stage(voltage);
+        }
     }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.LatchAnalogOutputs" />
@@ -503,14 +600,19 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureSupported(DeviceFeature.AnalogOutput);
 
-        _host.Send(ScpiMessageProducer.UpdateDacOutputs);
-
-        // The device latches every staged channel at once, so every modelled channel with a
-        // pending value now reflects what the hardware is driving.
-        var latchedAt = DateTime.Now;
-        foreach (var channel in _host.SnapshotChannels())
+        // One step with the latch bookkeeping, so a value staged by a concurrent call after this
+        // latch went out is not marked as latched by it (see _commandGate).
+        lock (_commandGate)
         {
-            (channel as AnalogOutputChannel)?.Latch(latchedAt);
+            _host.Send(ScpiMessageProducer.UpdateDacOutputs);
+
+            // The device latches every staged channel at once, so every modelled channel with a
+            // pending value now reflects what the hardware is driving.
+            var latchedAt = DateTime.Now;
+            foreach (var channel in _host.SnapshotChannels())
+            {
+                (channel as AnalogOutputChannel)?.Latch(latchedAt);
+            }
         }
     }
 
@@ -606,48 +708,55 @@ internal sealed class ChannelControlOperations
         var adcMask = (HasChannels: false, Mask: 0u);
         var dioState = (HasChannels: false, AnyEnabled: false);
 
-        // Mutate IsEnabled and derive the outbound masks from it in one critical section, so
-        // a status frame resyncing analog IsEnabled from the device (#409) on the consumer
-        // thread cannot interleave between the mutation and the read that computes the mask —
-        // which would otherwise send a mask reflecting a value the status frame is about to
-        // overwrite, silently failing to apply the requested enable/disable on the device.
-        _host.WithChannelsLock(() =>
+        // The mask is computed from every channel, not just the ones this call touches, so the
+        // computation and its send have to be one step: otherwise a concurrent call can compute
+        // a newer mask and send it first, and this call's older mask then lands last
+        // (see _commandGate).
+        lock (_commandGate)
         {
-            foreach (var channel in channels)
+            // Mutate IsEnabled and derive the outbound masks from it in one critical section, so
+            // a status frame resyncing analog IsEnabled from the device (#409) on the consumer
+            // thread cannot interleave between the mutation and the read that computes the mask —
+            // which would otherwise send a mask reflecting a value the status frame is about to
+            // overwrite, silently failing to apply the requested enable/disable on the device.
+            _host.WithChannelsLock(() =>
             {
-                channel.IsEnabled = enabled;
-
-                if (channel.Type == ChannelType.Analog)
+                foreach (var channel in channels)
                 {
-                    touchedAnalog = true;
+                    channel.IsEnabled = enabled;
+
+                    if (channel.Type == ChannelType.Analog)
+                    {
+                        touchedAnalog = true;
+                    }
+                    else if (channel.Type == ChannelType.Digital)
+                    {
+                        touchedDigital = true;
+                    }
                 }
-                else if (channel.Type == ChannelType.Digital)
+
+                if (touchedAnalog)
                 {
-                    touchedDigital = true;
+                    adcMask = ComputeAdcEnableMask();
                 }
-            }
 
-            if (touchedAnalog)
+                if (touchedDigital)
+                {
+                    dioState = ComputeDioEnableState();
+                }
+            });
+
+            if (touchedAnalog && adcMask.HasChannels)
             {
-                adcMask = ComputeAdcEnableMask();
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
             }
 
-            if (touchedDigital)
+            if (touchedDigital && dioState.HasChannels)
             {
-                dioState = ComputeDioEnableState();
+                _host.Send(dioState.AnyEnabled
+                    ? ScpiMessageProducer.EnableDioPorts()
+                    : ScpiMessageProducer.DisableDioPorts());
             }
-        });
-
-        if (touchedAnalog && adcMask.HasChannels)
-        {
-            _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
-        }
-
-        if (touchedDigital && dioState.HasChannels)
-        {
-            _host.Send(dioState.AnyEnabled
-                ? ScpiMessageProducer.EnableDioPorts()
-                : ScpiMessageProducer.DisableDioPorts());
         }
     }
 
