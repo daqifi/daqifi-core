@@ -71,11 +71,28 @@ internal sealed class StreamFrameGate
     /// </remarks>
     internal const int MaxDiscardedFrames = 5;
 
-    private uint _lastSeenDeviceTimestamp;
-    private bool _hasDeviceTimestampReference;
+    /// <summary>The last frame counter value seen, or null before the first frame.</summary>
+    private uint? _lastSeenDeviceTimestamp;
 
     private uint _sessionStartReference;
-    private bool _checkForLeftoverFrames;
+
+    /// <summary>What the gate still has to decide for the current session.</summary>
+    private enum GateMode
+    {
+        /// <summary>Nothing: every frame goes straight through.</summary>
+        Satisfied,
+
+        /// <summary>Frames are judged against the counter value the session inherited.</summary>
+        ValidatingAgainstReference,
+
+        /// <summary>
+        /// The session has no counter reference; its first frame is held until its successor can
+        /// vouch for it (<see cref="AdmitFirstFrameOfSession"/>).
+        /// </summary>
+        AwaitingFirstFramePair,
+    }
+
+    private GateMode _mode = GateMode.Satisfied;
     private int _discardedFrameCount;
     private double _leftoverWindowTicks;
 
@@ -86,11 +103,6 @@ internal sealed class StreamFrameGate
     private DaqifiOutMessage? _heldFirstFrame;
 
     /// <summary>
-    /// Backing field for <see cref="IsAwaitingFirstFramePair"/>.
-    /// </summary>
-    private bool _awaitingFirstFramePair;
-
-    /// <summary>
     /// Gets a value indicating whether the gate still has something to decide. False for the
     /// overwhelming majority of frames, which lets the caller skip evaluation entirely.
     /// </summary>
@@ -98,14 +110,14 @@ internal sealed class StreamFrameGate
     /// This is the reference-based path only, and it is mutually exclusive with
     /// <see cref="IsAwaitingFirstFramePair"/>: a session has a counter reference or it has not.
     /// </remarks>
-    public bool IsValidating => _checkForLeftoverFrames;
+    public bool IsValidating => _mode == GateMode.ValidatingAgainstReference;
 
     /// <summary>
     /// Gets a value indicating whether frames must go to
     /// <see cref="AdmitFirstFrameOfSession"/> rather than be evaluated one at a time, because
     /// this session began with no counter reference to judge its first frame against.
     /// </summary>
-    public bool IsAwaitingFirstFramePair => _awaitingFirstFramePair;
+    public bool IsAwaitingFirstFramePair => _mode == GateMode.AwaitingFirstFramePair;
 
     /// <summary>
     /// Gets the number of frames discarded since the current session began.
@@ -142,12 +154,15 @@ internal sealed class StreamFrameGate
         _leftoverWindowTicks = LeftoverWindowSamplePeriods * (ticksPerSecond / (double)rate);
 
         _discardedFrameCount = 0;
-        _sessionStartReference = _lastSeenDeviceTimestamp;
-        _checkForLeftoverFrames = _hasDeviceTimestampReference;
+        _sessionStartReference = _lastSeenDeviceTimestamp ?? 0;
 
         // A frame still held when a session ends belongs to that session and is dropped with it.
         _heldFirstFrame = null;
-        _awaitingFirstFramePair = validateFirstFramesWithoutReference && !_hasDeviceTimestampReference;
+        _mode = _lastSeenDeviceTimestamp is not null
+            ? GateMode.ValidatingAgainstReference
+            : validateFirstFramesWithoutReference
+                ? GateMode.AwaitingFirstFramePair
+                : GateMode.Satisfied;
     }
 
     /// <summary>
@@ -164,7 +179,6 @@ internal sealed class StreamFrameGate
     public void TrackFrame(uint deviceTimestamp)
     {
         _lastSeenDeviceTimestamp = deviceTimestamp;
-        _hasDeviceTimestampReference = true;
     }
 
     /// <summary>
@@ -188,7 +202,7 @@ internal sealed class StreamFrameGate
             return true;
         }
 
-        _checkForLeftoverFrames = false;
+        _mode = GateMode.Satisfied;
         TrackFrame(deviceTimestamp);
         return false;
     }
@@ -247,7 +261,7 @@ internal sealed class StreamFrameGate
         }
 
         _heldFirstFrame = null;
-        _awaitingFirstFramePair = false;
+        _mode = GateMode.Satisfied;
         return StreamFrameAdmission.ReleaseHeldFrameThenThisOne;
     }
 
