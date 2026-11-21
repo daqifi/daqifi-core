@@ -303,9 +303,12 @@ internal sealed class WifiModuleUpdater
 
             // A WiFi module update never writes the PIC32 application flash, so every failed end
             // state here reports it as unchanged.
-            _context.TransitionToState(
-                FirmwareUpdateState.Failed, "WiFi module update canceled.", Pic32FlashCondition.NotChanged);
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, _context.CurrentOperation, 0, totalBytes);
+            _context.FailOperation(
+                progress,
+                "WiFi module update canceled.",
+                Pic32FlashCondition.NotChanged,
+                _context.LastReportedPercent,
+                totalBytes);
             Logger.LogWarning("WiFi module update canceled.");
             throw;
         }
@@ -318,8 +321,12 @@ internal sealed class WifiModuleUpdater
             // rather than the recovery attempt that follows it.
             await TryLeaveLanUpdateModeAfterFailureAsync(device, lanUpdateProgress).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation, Pic32FlashCondition.NotChanged);
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, failedOperation, 0, totalBytes);
+            _context.FailOperation(
+                progress,
+                failedOperation,
+                Pic32FlashCondition.NotChanged,
+                _context.LastReportedPercent,
+                totalBytes);
             Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState);
 
             throw _context.CreateFirmwareUpdateException(

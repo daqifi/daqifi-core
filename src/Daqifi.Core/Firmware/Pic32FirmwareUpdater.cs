@@ -417,11 +417,12 @@ internal sealed class Pic32FirmwareUpdater
                 failedOperation = canceled ? "PIC32 firmware update canceled." : _context.CurrentOperation;
             }
 
-            _context.TransitionToState(
-                FirmwareUpdateState.Failed,
+            _context.FailOperation(
+                progress,
                 failedOperation,
-                GetFlashCondition(failedState, outcome, flashProgress));
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, failedOperation, 0, totalBytes);
+                GetFlashCondition(failedState, outcome, flashProgress),
+                frozenPercent,
+                totalBytes);
             return outcome;
         }
 
@@ -477,11 +478,12 @@ internal sealed class Pic32FirmwareUpdater
 
             const string cleanupFailedOperation =
                 "Cleanup re-erase failed; device may be in a half-flashed state.";
-            _context.TransitionToState(
-                FirmwareUpdateState.Failed,
+            _context.FailOperation(
+                progress,
                 cleanupFailedOperation,
-                GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed, flashProgress));
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, cleanupFailedOperation, 0, totalBytes);
+                GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed, flashProgress),
+                frozenPercent,
+                totalBytes);
             Logger.LogError(
                 cleanupEx,
                 "Firmware re-erase cleanup failed after failure in {State}; device may be half-flashed.",

@@ -201,7 +201,7 @@ internal sealed class FirmwareUpdateContext
     /// here is logged and swallowed — the work on the device already succeeded, and letting a
     /// consumer callback escape would send the caller into the failure path, which reports a
     /// failure that did not happen and then cannot even reach Failed (Complete → Failed is not a
-    /// legal transition). Same rule the Recovered transition follows.
+    /// legal transition). Same rule the Recovered transition and <see cref="FailOperation"/> follow.
     /// </summary>
     internal void CompleteOperation(
         IProgress<FirmwareUpdateProgress>? progress,
@@ -231,6 +231,51 @@ internal sealed class FirmwareUpdateContext
             Logger.LogWarning(
                 ex,
                 "A progress sink threw on the Complete report; the operation itself succeeded.");
+        }
+    }
+
+    /// <summary>
+    /// Ends an operation that did not complete: moves to <see cref="FirmwareUpdateState.Failed"/>
+    /// and reports the final progress. A <see cref="StateChanged"/> subscriber or progress sink that
+    /// throws here is logged and swallowed — the caller is about to surface the real outcome (a
+    /// <see cref="FirmwareUpdateException"/> carrying the flash condition and recovery guidance, or
+    /// the caller's own <see cref="OperationCanceledException"/>), and a consumer callback must not
+    /// replace it with its own exception. Same rule <see cref="CompleteOperation"/> follows.
+    /// </summary>
+    /// <param name="progress">The caller's progress sink, if any.</param>
+    /// <param name="operation">Why the operation ended; reported on both the event and the progress.</param>
+    /// <param name="flashCondition">The condition of the PIC32 application flash at the end.</param>
+    /// <param name="percentComplete">The percentage to freeze the final progress report at.</param>
+    /// <param name="totalBytes">The total size of the image the operation was writing.</param>
+    internal void FailOperation(
+        IProgress<FirmwareUpdateProgress>? progress,
+        string operation,
+        Pic32FlashCondition flashCondition,
+        double percentComplete,
+        long totalBytes)
+    {
+        try
+        {
+            TransitionToState(FirmwareUpdateState.Failed, operation, flashCondition);
+        }
+        catch (Exception ex) when (CurrentState == FirmwareUpdateState.Failed)
+        {
+            // The transition committed before the subscriber threw; an illegal transition
+            // leaves CurrentState untouched, fails this filter and still propagates.
+            Logger.LogWarning(
+                ex,
+                "A StateChanged subscriber threw after the Failed transition; the original failure still surfaces.");
+        }
+
+        try
+        {
+            ReportProgress(progress, FirmwareUpdateState.Failed, percentComplete, operation, 0, totalBytes);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "A progress sink threw on the Failed report; the original failure still surfaces.");
         }
     }
 
