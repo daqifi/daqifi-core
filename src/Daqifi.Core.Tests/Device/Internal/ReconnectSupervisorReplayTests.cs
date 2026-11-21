@@ -47,6 +47,48 @@ public class ReconnectSupervisorReplayTests
         await WaitUntilIdleAsync(supervisor);
     }
 
+    [Fact]
+    public async Task ADropFromANewerSession_IsReplayedEvenThoughTheOldLoopWasCancelled()
+    {
+        // A caller's Connect supersedes (and cancels) the running loop, then the new connection
+        // drops while the old loop is still unwinding. That drop belongs to a session whose
+        // reconnect policy nobody cancelled.
+        var host = new LostHost();
+        var supervisor = NewSupervisor(host);
+        host.OnFirstConnect = () =>
+        {
+            supervisor.Supersede();
+            supervisor.BeginIfEnabled(supervisor.PrepareForDrop());
+        };
+
+        supervisor.BeginIfEnabled(supervisor.PrepareForDrop());
+
+        Assert.True(await host.SecondConnectAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await WaitUntilIdleAsync(supervisor);
+    }
+
+    [Fact]
+    public async Task ADropFromTheSameSession_IsNotReplayedAfterACancel()
+    {
+        // CancelReconnect is about this session: a drop it turned away is not a reason to start
+        // again.
+        var host = new LostHost();
+        var supervisor = NewSupervisor(host);
+        host.OnFirstConnect = () =>
+        {
+            supervisor.BeginIfEnabled(supervisor.PrepareForDrop());
+            supervisor.Cancel();
+        };
+
+        supervisor.BeginIfEnabled(supervisor.PrepareForDrop());
+
+        Assert.True(await host.FirstConnectAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await WaitUntilIdleAsync(supervisor);
+        await Task.Delay(Settle);
+
+        Assert.Equal(1, host.ConnectAttempts);
+    }
+
     private static ReconnectSupervisor NewSupervisor(LostHost host) => new(host)
     {
         Options = new ReconnectOptions

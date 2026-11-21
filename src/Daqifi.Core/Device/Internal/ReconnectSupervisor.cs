@@ -215,14 +215,16 @@ internal sealed class ReconnectSupervisor
                 cts.Dispose();
             }
 
-            // A drop that landed in the moments between this loop finishing its work and
-            // releasing the running flag was turned away by the single-flight guard, stranding the
-            // device on Lost with nothing trying to bring it back. Pick it up, on its own epoch:
-            // replaying on the current one would let a loop that merely went stale (a Disconnect
-            // that superseded it before it could cancel anything) restart itself on the caller's
-            // epoch. Exhausting the attempts settles on Failed, and cancellation is excluded here,
-            // so neither can retrigger.
-            if (!wasCanceled && turnedAwayDrop is { } drop)
+            // A drop that arrived while this loop ran was turned away by the single-flight guard,
+            // stranding the device on Lost with nothing trying to bring it back. Pick it up, on
+            // its own epoch: replaying on the current one would let a loop that merely went stale
+            // (a Disconnect that superseded it before it could cancel anything) restart itself on
+            // the caller's epoch, and BeginIfEnabled re-checks that the drop's session is still
+            // current and still Lost. A cancelled loop suppresses only a drop from its own
+            // session, which the cancellation was about; a drop from a newer session (a caller's
+            // Connect cancelled this loop, then that connection dropped) has a policy nobody
+            // cancelled. Exhausting the attempts settles on Failed, so it cannot retrigger.
+            if (turnedAwayDrop is { } drop && !(wasCanceled && drop == epoch))
             {
                 BeginIfEnabled(drop);
             }
