@@ -1427,6 +1427,49 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task StopSdCardLoggingAsync_DuringTheStartSequence_IsRefusedAndLeavesTheStartAlone()
+    {
+        // The stop wrote its bus mode without checking it: mid-start, IsLoggingToSdCard was still
+        // false, so the stop ended in LanActive and list/delete/download/format were admitted
+        // again under a start that kept sending commands (a hole in #941's guarantee).
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { IsUsbConnection = true, TimeProvider = clock };
+        var ops = new SdCardOperations(host);
+
+        // The clock has not moved, so the start parks in the spacing delay after its first command.
+        var start = ops.StartSdCardLoggingSessionAsync("data.bin");
+        Assert.False(start.IsCompleted);
+        var sentByStart = host.Calls;
+
+        await Assert.ThrowsAsync<SdCardBusyException>(
+            () => ops.StopSdCardLoggingAsync().WaitAsync(ParkedTestBudget));
+
+        // Refused before anything went out, and the bus is still the start's.
+        Assert.Equal(sentByStart, host.Calls);
+        await Assert.ThrowsAsync<SdCardBusyException>(
+            () => ops.GetSdCardFilesAsync().WaitAsync(ParkedTestBudget));
+
+        // The start runs on to a recording that still holds the bus.
+        for (var i = 0; i < 1000 && !start.IsCompleted; i++)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await Task.Delay(5);
+        }
+
+        var session = await start.WaitAsync(ParkedTestBudget);
+        Assert.Equal("data.bin", session.FileName);
+        Assert.True(host.IsLoggingToSdCard);
+        Assert.DoesNotContain("send:" + StopStreaming, host.Calls);
+        await Assert.ThrowsAsync<SdCardBusyException>(
+            () => ops.GetSdCardFilesAsync().WaitAsync(ParkedTestBudget));
+
+        // Once it is recording, a stop is admitted and ends it.
+        await ops.StopSdCardLoggingAsync();
+        Assert.False(host.IsLoggingToSdCard);
+        Assert.Contains("send:" + StopStreaming, host.Calls);
+    }
+
+    [Fact]
     public async Task StartSdCardLoggingSessionAsync_DuringAnotherStart_IsRefusedAndLeavesTheFirstAlone()
     {
         // The start did not go through its own gate: a second start was admitted mid-sequence,
