@@ -188,6 +188,67 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
+    public async Task TcpStreamTransport_Disconnect_AfterThePeerResetTheSocket_ReleasesIt()
+    {
+        // A read that hits a reset leaves the socket open but reporting Connected == false, and
+        // the watchdog needs several faults before it tears it down itself. Disconnect used to
+        // return early on !IsConnected in that window: no StatusChanged, the watchdog disarmed,
+        // and the socket held until the next connect overwrote it.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            await transport.ConnectAsync();
+            using (var server = await listener.AcceptTcpClientAsync())
+            {
+                server.LingerState = new LingerOption(true, 0); // close with RST
+            }
+
+            ReadUntilTheResetLands(transport.Stream);
+            Assert.False(transport.IsConnected);
+            var reported = new List<bool>();
+            transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+
+            await transport.DisconnectAsync();
+
+            Assert.Equal(new[] { false }, reported);
+            Assert.Throws<TransportNotConnectedException>(() => transport.Stream);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>Reads until a read fails for a reason other than the operational read timeout.</summary>
+    private static void ReadUntilTheResetLands(Stream stream)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            try
+            {
+                if (stream.Read(new byte[16], 0, 16) == 0)
+                {
+                    continue;
+                }
+            }
+            catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.TimedOut })
+            {
+                continue;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+        }
+
+        throw new TimeoutException("The peer's reset never reached a read.");
+    }
+
+    [Fact]
     public async Task TcpStreamTransport_ConnectAsync_LowersReceiveTimeoutToOperationalValue()
     {
         // Regression for issue #383: leaving the socket at the (multi-second) connection timeout

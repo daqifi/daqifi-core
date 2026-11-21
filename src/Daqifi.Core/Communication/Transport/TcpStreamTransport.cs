@@ -247,6 +247,8 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
             {
+                // A dead socket still held from the previous session is released, not overwritten.
+                ReleaseSocket();
                 _tcpClient = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
                     : new TcpClient();
@@ -297,16 +299,22 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 
                 EnableKeepAlive(_tcpClient);
             },
-            onAttemptFailed: () =>
-            {
-                _tcpClient?.Dispose();
-                _tcpClient = null;
-                _networkStream = null;
-            },
+            onAttemptFailed: ReleaseSocket,
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         _watchdog.Arm();
+    }
+
+    /// <summary>
+    /// Disposes whatever socket is held and clears both references.
+    /// </summary>
+    private void ReleaseSocket()
+    {
+        _networkStream?.Dispose();
+        _tcpClient?.Dispose();
+        _networkStream = null;
+        _tcpClient = null;
     }
 
     /// <summary>
@@ -345,7 +353,10 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         // still-armed watchdog would report an intentional disconnect as a lost connection.
         _watchdog.Disarm();
 
-        if (!IsConnected)
+        // Gated on holding a socket, not on IsConnected: a socket whose last read was reset reports
+        // Connected == false while it is still open, and returning early on it would leave the
+        // socket held with the watchdog already disarmed, so nothing would ever close it.
+        if (_tcpClient is null && _networkStream is null)
             return;
 
         try
@@ -360,10 +371,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         }
         finally
         {
-            _networkStream?.Dispose();
-            _tcpClient?.Dispose();
-            _networkStream = null;
-            _tcpClient = null;
+            ReleaseSocket();
             OnStatusChanged(false, null);
         }
 
@@ -479,8 +487,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             }
 
             _watchdog.Dispose();
-            _networkStream?.Dispose();
-            _tcpClient?.Dispose();
+            ReleaseSocket();
             _disposed = true;
         }
     }
