@@ -170,6 +170,17 @@ internal sealed class ReconnectSupervisor
         var cts = new CancellationTokenSource();
         lock (_loopGate)
         {
+            // Checked again inside the gate. A drop that passed the check above and was delayed
+            // getting here may since have been superseded, and a newer session's drop may have
+            // been recorded meanwhile; a stale drop must neither displace that record nor start
+            // a loop. A newer drop can only be recorded after the epoch moved, so once this check
+            // passes under the gate, nothing newer is waiting to be overwritten.
+            if (Volatile.Read(ref _sessionEpoch) != expectedEpoch)
+            {
+                cts.Dispose();
+                return;
+            }
+
             if (_runningLoop is not null)
             {
                 _turnedAwayDropEpoch = expectedEpoch;
