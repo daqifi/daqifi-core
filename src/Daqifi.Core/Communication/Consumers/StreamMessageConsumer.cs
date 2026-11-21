@@ -51,6 +51,18 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     private readonly object _startLock = new();
 
     private volatile bool _isRunning;
+
+    /// <summary>
+    /// The most recently started reader thread, alive or not. Written only by <see cref="Start"/>,
+    /// under <see cref="_startLock"/>, and only once the previous reader has exited.
+    /// </summary>
+    /// <remarks>
+    /// Every reader of this field checks <see cref="Thread.IsAlive"/>, so a dead thread left here
+    /// means "no reader". A stop never clears it: stops do not take <see cref="_startLock"/>, so a
+    /// stop clearing it after its join could wipe out a reader a concurrent <see cref="Start"/>
+    /// had just published, and the next <see cref="Start"/> would then spawn a second reader on
+    /// the same stream with nothing left to join.
+    /// </remarks>
     private Thread? _consumerThread;
 
     /// <summary>
@@ -228,9 +240,8 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         var stopped = _consumerThread?.Join(1000) ?? true;
         if (stopped)
         {
-            // Only tear down once the reader has actually exited: clearing the buffer (and later
-            // letting Start() reuse the slot) while the thread is still alive would race it.
-            _consumerThread = null;
+            // Only clear once the reader has actually exited. The thread field is left alone: see
+            // _consumerThread for why a stop never clears it.
             lock (_bufferLock)
             {
                 _messageBuffer.Clear();
@@ -252,10 +263,9 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         var stopped = _consumerThread?.Join(timeoutMs) ?? true;
         if (stopped)
         {
-            // Only clear once the reader has exited. Doing so unconditionally would (a) let a
-            // later Start() spawn a second reader over a still-alive one, and (b) block past the
-            // advertised timeout here if the reader is holding _bufferLock in a slow parse.
-            _consumerThread = null;
+            // Only clear once the reader has exited: doing so while it is alive would block past
+            // the advertised timeout if the reader is holding _bufferLock in a slow parse. The
+            // thread field is left alone: see _consumerThread for why a stop never clears it.
             lock (_bufferLock)
             {
                 _messageBuffer.Clear();
