@@ -192,8 +192,9 @@ HID bootloaders (same VID/PID, no serial number) plugged into different ports:
 
 ```csharp
 using var serialFinder = new SerialDeviceFinder();
-var device = (await serialFinder.DiscoverAsync()).First();
-var targetLocation = device.LocationKey; // resolved while still in serial/app mode
+var deviceInfo = (await serialFinder.DiscoverAsync()).First();
+var targetLocation = deviceInfo.LocationKey; // resolved while still in serial/app mode
+await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo);
 
 // ...device reboots into bootloader mode via ForceBootloader...
 
@@ -225,6 +226,7 @@ The README's [Device discovery](../README.md#device-discovery) recipe constructs
 `AllTransportsDeviceFinder` from the individual finders. Two helpers live only here:
 
 ```csharp
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 
 // One-shot across the default WiFi + serial set (no mDNS):
@@ -496,6 +498,7 @@ For cases where you need more control over the connection process:
 
 ```csharp
 using Daqifi.Core.Device;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 
 // Create and connect transport manually. Every step takes a CancellationToken, so a user who
@@ -562,6 +565,10 @@ catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "port")
 catch (SocketException ex)
 {
     Console.WriteLine($"Connection failed: {ex.Message}");
+}
+catch (TimeoutException ex)
+{
+    Console.WriteLine($"Connection timed out: {ex.Message}");
 }
 catch (OperationCanceledException)
 {
@@ -1035,7 +1042,7 @@ await streamingDevice.RebootAsync(cancellationToken);
 
 Some surfaces are board- or firmware-gated. Branch on `device.Supports(DeviceFeature)` —
 do not compare firmware strings yourself. `Supports` answers for the device, not for the
-link it is on, and not every gated call enforces its own gate:
+link it is on, and not every gated call enforces its own gate in every case:
 
 - **SD list / download / delete and the storage-space query** enforce theirs, and only on a
   WiFi/TCP link: there they throw `FeatureNotSupportedException` (feature, required version,
@@ -1047,9 +1054,10 @@ link it is on, and not every gated call enforces its own gate:
   costs about two thirds of the SD write speed, makes WiFi commands stall during an SD log, and
   is forgotten every time the device boots: Core does not re-apply it, so set it after each
   connect.
-- **`SetAnalogOutput`** does not: it sends the command whatever the board, and a board other
-  than Nyquist 3 rejects it on the device without an exception reaching you. The check is
-  yours to make.
+- **`SetAnalogOutput`** enforces its gate only once the board is identified: on a known board
+  other than Nyquist 3 it throws `FeatureNotSupportedException` for `AnalogOutput` before
+  sending anything, but while the board is still unidentified it sends the command anyway,
+  and a board without a DAC rejects it on the device without an exception reaching you.
 
 One more subtlety: board and hardware requirements are only evaluated once the board is
 identified. While `device.Metadata.DeviceType` is still `Unknown` (no part number reported
@@ -1060,8 +1068,8 @@ downstream will refuse the call, require an identified board too.
 ```csharp
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Ask before you offer it: analog output is Nyquist 3 hardware only, and nothing after this
-// check will stop the command, so don't accept an unidentified board.
+// Ask before you offer it: analog output is Nyquist 3 hardware only, and SetAnalogOutput
+// refuses only a board it has identified, so don't accept an unidentified one.
 if (device.Metadata.DeviceType != DeviceType.Unknown
     && device.Supports(DeviceFeature.AnalogOutput))
 {
@@ -1132,6 +1140,7 @@ device**; this is not a client-side instrumentation framework.
 `IDeviceDiagnostics` — no cast needed to reach these members.
 
 ```csharp
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.Diagnostics;
 
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
@@ -1323,6 +1332,7 @@ device.ErrorOccurred += (_, e) =>
 | `MessageConsumer` | A read from the transport stream failed, a frame could not be parsed, or a `MessageReceived` subscriber threw |
 | `StreamDecode` | A streaming frame could not be decoded into channel samples. That frame is dropped; the stream continues |
 | `StatusNotification` | A `StatusChanged` subscriber threw. The status transition itself still completed |
+| `Reconnect` | Automatic reconnection ran out of attempts (see [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop)) |
 
 ### Observational, never escalating
 
