@@ -83,6 +83,9 @@ internal static class Pic32ApplicationFlash
     /// <summary>Intel HEX record type for a data record.</summary>
     private const byte IntelHexDataRecordType = 0x00;
 
+    /// <summary>Intel HEX record type for an extended linear address record.</summary>
+    private const byte IntelHexExtendedLinearAddressRecordType = 0x04;
+
     /// <summary>Intel HEX record bytes that are not data: byte count, 2 address bytes, record type, checksum.</summary>
     private const int IntelHexRecordOverhead = 5;
 
@@ -161,4 +164,78 @@ internal static class Pic32ApplicationFlash
                 $"erased. The image is refused and the device flash is untouched.");
         }
     }
+
+    /// <summary>
+    /// Refuses an image with a data record that the bootloader would place at a different address
+    /// from the one this library checks against the window and CRC-verifies.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two read addresses differently. <see cref="IntelHexParser"/> adds the last type-04
+    /// extended linear address to every record that follows it, and nothing else changes that base.
+    /// <c>APP_ProgramHexRecord</c> (<c>nvm.c</c>) also takes a type-02 extended segment address,
+    /// which clears the linear address, and clears both on an end-of-file record or any record
+    /// type it does not know. So a data record that comes after one of those, with no type-04
+    /// record in between, is written somewhere the window check never saw. That is usually
+    /// outside application flash, where the device drops it, and the verify pass then reads back
+    /// flash that was erased and never written. The update fails after the erase, and the board
+    /// is left with no application on it.
+    /// </para>
+    /// <para>
+    /// Real XC32 output carries only type-04, data and one closing end-of-file record, so a
+    /// release image never gets here. A non-data record that no data record follows is harmless
+    /// and still accepted, as is data after a type-04 record that sets the base again, because
+    /// after it the two agree again.
+    /// </para>
+    /// </remarks>
+    /// <param name="records">The records the HEX image parsed to, after protected-range filtering.</param>
+    /// <exception cref="InvalidDataException">
+    /// Thrown when a data record that places at least one byte follows a type-02, end-of-file or
+    /// other non-data record with no type-04 record in between, naming both records. The caller
+    /// runs this before any device I/O, so the board still holds its application when this throws.
+    /// </exception>
+    internal static void EnsureTheBootloaderPlacesEveryRecordWhereTheHostDoes(IReadOnlyList<HexFileRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+
+        // The most recent record since the last type-04 that makes the bootloader's base differ
+        // from the parser's, or null while the two agree.
+        HexFileRecord? divergingRecord = null;
+
+        foreach (var record in records)
+        {
+            if (record.RecordType == IntelHexExtendedLinearAddressRecordType)
+            {
+                divergingRecord = null;
+            }
+            else if (record.RecordType != IntelHexDataRecordType)
+            {
+                divergingRecord = record;
+            }
+            else if (divergingRecord is not null && record.Data.Length > IntelHexRecordOverhead)
+            {
+                // A data record with a byte count of zero places nothing, so it is not refused,
+                // which is the same call the window check makes for it.
+                throw new InvalidDataException(
+                    $"Firmware HEX file places data where the bootloader would write it somewhere else. " +
+                    $"The data record {HexLine(record)} follows {DescribeRecordType(divergingRecord.RecordType)} " +
+                    $"{HexLine(divergingRecord)} with no type-04 extended linear address record in between. " +
+                    $"After that record the bootloader no longer adds the type-04 address this library " +
+                    $"checks and verifies the image against, so those bytes would land at another address, " +
+                    $"usually outside application flash where the device drops them, and verification " +
+                    $"would fail on a board whose application flash had already been erased. The image " +
+                    $"is refused and the device flash is untouched.");
+            }
+        }
+    }
+
+    private static string DescribeRecordType(byte recordType) => recordType switch
+    {
+        0x01 => "the end-of-file (type-01) record",
+        0x02 => "the extended segment address (type-02) record",
+        _ => $"the type-{recordType:X2} record"
+    };
+
+    /// <summary>The record as it appears in the HEX file, so the message can be searched for.</summary>
+    private static string HexLine(HexFileRecord record) => ":" + Convert.ToHexString(record.Data);
 }

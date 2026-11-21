@@ -86,17 +86,10 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
     /// <inheritdoc />
     public List<byte[]> ParseHexFile(string[] hexFileLines)
     {
-        // Protected-range records are dropped by the parser first, then what is left has to lie
-        // inside the flash the bootloader erases and programs. That order is the point: the
-        // default protected range sits above the window, so an image carrying records there keeps
-        // having them dropped, as this library already shipped, instead of being refused.
-        var records = _hexParser.ParseRecords(hexFileLines);
-        Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
-
         // HexFileRecord.Data is the raw record the parser decoded, which is exactly what
         // ParseHexRecords returns, so this projection changes nothing about the records
-        // themselves — it only lets the window check above see their addresses.
-        return records.ConvertAll(record => record.Data);
+        // themselves — it only lets the checks in ParseWritableRecords see their addresses.
+        return ParseWritableRecords(hexFileLines).ConvertAll(record => record.Data);
     }
 
     /// <inheritdoc />
@@ -105,17 +98,12 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
         // Order data records by physical address so adjacent records coalesce
         // regardless of file order. The device computes its flash CRC over the
         // address-ordered bytes in a region, so this matches what READ_CRC will
-        // return. Protected-range records are already excluded by ParseRecords,
-        // exactly as they are excluded from programming, and the window check
-        // below runs on what is left.
-        var records = _hexParser.ParseRecords(hexFileLines);
-
-        // Out-of-window data is refused, not quietly left out of the regions. Dropping it here
-        // would hand back a CRC over a subset of the image and let the flow erase the board and
-        // program an incomplete one. See Pic32ApplicationFlash.
-        Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
-
-        var dataRecords = records
+        // return. Protected-range records are already excluded, exactly as they
+        // are excluded from programming. Data the bootloader would place elsewhere
+        // or out of the window is refused, not quietly left out of the regions:
+        // dropping it here would hand back a CRC over a subset of the image and
+        // let the flow erase the board and program an incomplete one.
+        var dataRecords = ParseWritableRecords(hexFileLines)
             .Where(r => r.RecordType == DataRecordType
                         && r.Data.Length > 0
                         && r.Data[0] > 0
@@ -159,6 +147,24 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
         }
 
         return regions;
+    }
+
+    /// <summary>
+    /// Parses the image and refuses one whose records the bootloader would not program where this
+    /// library checks and verifies them. See <see cref="Pic32ApplicationFlash"/>.
+    /// </summary>
+    private List<HexFileRecord> ParseWritableRecords(string[] hexFileLines)
+    {
+        // Protected-range records are dropped by the parser first, then what is left has to lie
+        // inside the flash the bootloader erases and programs. That order is the point: the
+        // default protected range sits above the window, so an image carrying records there keeps
+        // having them dropped, as this library already shipped, instead of being refused. The
+        // placement check runs before the window check because the window check reads the host's
+        // addresses, which are only the device's addresses once the placement check has passed.
+        var records = _hexParser.ParseRecords(hexFileLines);
+        Pic32ApplicationFlash.EnsureTheBootloaderPlacesEveryRecordWhereTheHostDoes(records);
+        Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
+        return records;
     }
 
     private static FlashCrcRegion BuildRegion(uint physicalStart, List<byte> data)
