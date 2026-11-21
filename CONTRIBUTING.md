@@ -106,7 +106,7 @@ compiles clean - the deliberate act above looks identical to an accidental one. 
 `Daqifi.Core` also sets `EnablePackageValidation` with `PackageValidationBaselineVersion`
 pinned to the last version on nuget.org. CI packs the project (`Validate packaged API against
 the last published release` in `ci.yml`) and ApiCompat compares the packaged assemblies, for
-both target frameworks, against that published package - which no PR can edit. A member the
+every target framework, against that published package - which no PR can edit. A member the
 baseline shipped and this build does not is `CP0002`.
 
 Two things to know:
