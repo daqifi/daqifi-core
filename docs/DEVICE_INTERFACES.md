@@ -191,15 +191,15 @@ same physical unit across a firmware update's mode switch, or to disambiguate mu
 HID bootloaders (same VID/PID, no serial number) plugged into different ports:
 
 ```csharp
+// Pick the board the operator chose (e.g. by port), not whichever enumerated first.
 using var serialFinder = new SerialDeviceFinder();
-var deviceInfo = (await serialFinder.DiscoverAsync()).First();
+var deviceInfo = (await serialFinder.DiscoverAsync()).Single(d => d.PortName == selectedPort);
 var targetLocation = deviceInfo.LocationKey; // resolved while still in serial/app mode
 await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo);
 
-// ...device reboots into bootloader mode via ForceBootloader...
-
-// Target the bootloader that came from the SAME physical port, even though its
-// HID device path didn't exist until after the reboot.
+// Hand over the device while it is still in application mode: UpdateFirmwareAsync sends
+// ForceBootloader itself, then targets the bootloader that came from the SAME physical
+// port, even though its HID device path didn't exist until after the reboot.
 await firmwareUpdateService.UpdateFirmwareAsync(
     device, hexFilePath, progress: null, targetDevicePath: null, targetLocationKey: targetLocation);
 ```
