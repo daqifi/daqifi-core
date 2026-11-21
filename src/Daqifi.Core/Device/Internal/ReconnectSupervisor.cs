@@ -31,15 +31,12 @@ internal sealed class ReconnectSupervisor
 
     private ReconnectOptions _options = new();
 
-    // 0 = idle, 1 = a reconnect loop is running. Guards against a second loop being started by
-    // the Lost that a failing attempt's own teardown can produce.
-    private int _reconnectRunning;
-
-    // Volatile: written by the thread that starts a loop and by the loop's own cleanup, read by
-    // Cancel from any thread. A stale read only ever delays a cancellation, never corrupts one —
-    // the epoch check is what actually stops the loop — but there is no reason to leave even that
-    // on the table.
-    private volatile CancellationTokenSource? _reconnectCts;
+    // The running loop's cancellation source, or null while idle. One field rather than a
+    // "running" flag beside a nullable source, so "running with nothing to cancel" cannot be
+    // represented: the loop is claimed by swapping its source in, and released by swapping it
+    // back out. Guards against a second loop being started by the Lost that a failing attempt's
+    // own teardown can produce.
+    private CancellationTokenSource? _runningLoop;
 
     // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
     // when it starts and re-checks before each step that touches device state; a change means
@@ -61,7 +58,7 @@ internal sealed class ReconnectSupervisor
     }
 
     /// <summary>Whether a reconnect loop is running right now.</summary>
-    internal bool IsRunning => Volatile.Read(ref _reconnectRunning) != 0;
+    internal bool IsRunning => Volatile.Read(ref _runningLoop) is not null;
 
     /// <summary>
     /// Stops any reconnect in progress. Safe to call at any time, including when nothing is
@@ -72,7 +69,7 @@ internal sealed class ReconnectSupervisor
     {
         try
         {
-            _reconnectCts?.Cancel();
+            Volatile.Read(ref _runningLoop)?.Cancel();
         }
         catch (ObjectDisposedException)
         {
@@ -161,15 +158,17 @@ internal sealed class ReconnectSupervisor
 
         // One loop at a time. A failing attempt tears the transport down again, which can
         // produce another Lost; without this that would fork a second loop racing the first.
-        if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
+        var cts = new CancellationTokenSource();
+        if (Interlocked.CompareExchange(ref _runningLoop, cts, null) is not null)
         {
+            cts.Dispose();
             return;
         }
 
-        var cts = new CancellationTokenSource();
-        _reconnectCts = cts;
-
-        var epoch = Volatile.Read(ref _sessionEpoch);
+        // The loop runs on the epoch the drop was detected on, never a fresh read: a Supersede
+        // landing after the check above must leave this loop stale, and re-reading here would
+        // adopt the caller's new epoch as the loop's own and rebuild a session they just closed.
+        var epoch = expectedEpoch;
         var options = Options;
 
         _ = Task.Run(async () =>
@@ -190,11 +189,8 @@ internal sealed class ReconnectSupervisor
             {
                 wasCanceled = cts.IsCancellationRequested;
 
-                // Clear the token source before releasing the running flag, so a loop started
-                // by the next drop cannot have its own source nulled out from under it.
-                _reconnectCts = null;
+                Interlocked.Exchange(ref _runningLoop, null);
                 cts.Dispose();
-                Interlocked.Exchange(ref _reconnectRunning, 0);
             }
 
             // A drop that landed in the moments between this loop finishing its work and
