@@ -314,6 +314,29 @@ public class DaqifiStreamingDeviceRateCapTests
         Assert.Equal(3518, device.StreamingFrequency);
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_ChannelEnabledWhileTheReadWasOut_ReadsAgainOnTheNextStart()
+    {
+        // The device computes its cap for the set enabled when it is asked. A channel enabled
+        // while the read is outstanding is not in that set, so the cap must not be recorded as
+        // covering it.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        device.DuringCapabilityRead = () => EnableAnalog(device, 2);
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+        device.DuringCapabilityRead = null;
+
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        device.StreamingFrequency = 10000;
+        await device.StartStreamingAsync();
+
+        Assert.Equal(2, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
     #endregion
 
     #region Helpers
@@ -442,6 +465,9 @@ public class DaqifiStreamingDeviceRateCapTests
 
         public int CapabilityDocumentReads { get; private set; }
 
+        /// <summary>Runs inside the scripted capability read, before it returns.</summary>
+        public Action? DuringCapabilityRead { get; set; }
+
         /// <summary>The document the scripted capability read applies, if any.</summary>
         public CapabilityDocument? CapabilityDocumentOnRead { get; set; }
 
@@ -477,6 +503,7 @@ public class DaqifiStreamingDeviceRateCapTests
             CancellationToken cancellationToken = default)
         {
             CapabilityDocumentReads++;
+            DuringCapabilityRead?.Invoke();
 
             if (CapabilityDocumentOnRead != null)
             {
