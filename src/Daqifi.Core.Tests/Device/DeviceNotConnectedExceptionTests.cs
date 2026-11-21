@@ -58,6 +58,7 @@ public class DeviceNotConnectedExceptionTests
 
         Assert.Equal("custom", ex.Message);
         Assert.Same(inner, ex.InnerException);
+        Assert.False(ex.IsShuttingDown);
     }
 
     [Fact]
