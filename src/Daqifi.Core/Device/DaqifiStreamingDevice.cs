@@ -83,6 +83,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </remarks>
     private CapabilityRead? _lastCapabilityRead;
 
+    /// <summary>
+    /// How many capability reads one start makes while the channel set keeps changing under them.
+    /// </summary>
+    private const int MaxCapabilityReadsPerStart = 3;
+
     private sealed record CapabilityRead(CapabilityDocument? Document, int AnalogInputCount);
 
     /// <summary>
@@ -483,22 +488,32 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         {
             // The device computes the cap for whatever set is enabled at the moment it answers,
             // which is unknowable if the set changed while the read was out, in either direction.
-            // So a read during which any channel changed vouches for nothing, and the next start
-            // asks again.
-            var channelStateBefore = ChannelStateVersion;
-            var analogInputsQueried = EnabledAnalogInputCount();
-            var document = await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
-            var channelSetHeldStill = ChannelStateVersion == channelStateBefore;
-
-            // Recorded when the read produced the cap now in force: a fresh document, or no
-            // document on a device that has none at all, which asking again with the same set
-            // would only fail to produce again. Not recorded when the read returned nothing but
-            // an older document is still in the metadata (a malformed or incomplete reply), since
-            // that cap describes an earlier channel set and must not be vouched for under this
-            // one. Not recorded when the read threw either; both are retried on the next start.
-            if (channelSetHeldStill && (document is not null || Metadata.CapabilityDocument is null))
+            // Such a read vouches for nothing, and since this start is about to rely on the cap
+            // it is asked again for the set as it is now — a few times, then the start goes ahead
+            // on the last answer rather than never starting while a caller keeps reconfiguring.
+            for (var read = 1; read <= MaxCapabilityReadsPerStart; read++)
             {
-                _lastCapabilityRead = new CapabilityRead(document, analogInputsQueried);
+                var channelStateBefore = ChannelStateVersion;
+                var analogInputsQueried = EnabledAnalogInputCount();
+                var document = await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+                if (ChannelStateVersion != channelStateBefore)
+                {
+                    continue;
+                }
+
+                // Recorded when the read produced the cap now in force: a fresh document, or no
+                // document on a device that has none at all, which asking again with the same set
+                // would only fail to produce again. Not recorded when the read returned nothing
+                // but an older document is still in the metadata (a malformed or incomplete
+                // reply), since that cap describes an earlier channel set and must not be vouched
+                // for under this one. Not recorded when the read threw either; both are retried
+                // on the next start.
+                if (document is not null || Metadata.CapabilityDocument is null)
+                {
+                    _lastCapabilityRead = new CapabilityRead(document, analogInputsQueried);
+                }
+
+                break;
             }
         }
         catch (OperationCanceledException)

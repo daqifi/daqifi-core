@@ -315,29 +315,6 @@ public class DaqifiStreamingDeviceRateCapTests
     }
 
     [Fact]
-    public async Task StartStreamingAsync_ChannelEnabledWhileTheReadWasOut_ReadsAgainOnTheNextStart()
-    {
-        // The device computes its cap for the set enabled when it is asked. A channel enabled
-        // while the read is outstanding is not in that set, so the cap must not be recorded as
-        // covering it.
-        var device = CreateTransportDevice(currentMaximumRateHz: null);
-        device.SendFrameOnStart = true;
-        EnableAnalog(device, 0, 1);
-        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
-        device.DuringCapabilityRead = () => EnableAnalog(device, 2);
-        await device.StartStreamingAsync();
-        await device.StopStreamingAsync();
-        device.DuringCapabilityRead = null;
-
-        device.CapabilityDocumentOnRead = BenchDocument(3518);
-        device.StreamingFrequency = 10000;
-        await device.StartStreamingAsync();
-
-        Assert.Equal(2, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
-    }
-
-    [Fact]
     public async Task StartStreamingAsync_ChannelDisabledAndReenabledAroundTheRead_ReadsAgainOnTheNextStart()
     {
         // Three inputs, one disabled while the read is out (the device answers with the higher
@@ -349,14 +326,48 @@ public class DaqifiStreamingDeviceRateCapTests
         EnableAnalog(device, 0, 1, 2);
         var third = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
         device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
-        device.DuringCapabilityRead = () => device.DisableChannel(third);
+        device.DuringCapabilityRead = () =>
+        {
+            device.DuringCapabilityRead = null;
+            device.DisableChannel(third);
+        };
         await device.StartStreamingAsync();
         await device.StopStreamingAsync();
-        device.DuringCapabilityRead = null;
         device.EnableChannel(third);
 
         device.CapabilityDocumentOnRead = BenchDocument(3518);
         device.StreamingFrequency = 10000;
+        await device.StartStreamingAsync();
+
+        // The first start reads twice (the set moved under its first read), the second once
+        // (the set grew back past what the first start's settled read covered).
+        Assert.Equal(3, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_ChannelEnabledWhileTheReadWasOut_ReadsAgainBeforeThisStartSends()
+    {
+        // A third input enabled after the device computed its two-input cap: this start, not just
+        // the next one, must ask again before it sends, or its own command goes out at a rate
+        // the device refuses.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        device.DuringCapabilityRead = () =>
+        {
+            if (device.CapabilityDocumentReads == 1)
+            {
+                EnableAnalog(device, 2);
+            }
+            else
+            {
+                device.CapabilityDocumentOnRead = BenchDocument(3518);
+            }
+        };
+        device.StreamingFrequency = 10000;
+
         await device.StartStreamingAsync();
 
         Assert.Equal(2, device.CapabilityDocumentReads);
