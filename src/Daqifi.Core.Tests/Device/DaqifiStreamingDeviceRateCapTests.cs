@@ -337,6 +337,32 @@ public class DaqifiStreamingDeviceRateCapTests
         Assert.Equal(3518, device.StreamingFrequency);
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_ChannelDisabledAndReenabledAroundTheRead_ReadsAgainOnTheNextStart()
+    {
+        // Three inputs, one disabled while the read is out (the device answers with the higher
+        // two-input cap), then re-enabled before the next start. The count taken before the read
+        // says three, so only noticing that the set moved during the read keeps that two-input
+        // cap from being trusted for three.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1, 2);
+        var third = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        device.DuringCapabilityRead = () => device.DisableChannel(third);
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+        device.DuringCapabilityRead = null;
+        device.EnableChannel(third);
+
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        device.StreamingFrequency = 10000;
+        await device.StartStreamingAsync();
+
+        Assert.Equal(2, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
     #endregion
 
     #region Helpers

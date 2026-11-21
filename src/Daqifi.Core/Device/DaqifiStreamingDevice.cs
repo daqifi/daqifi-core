@@ -481,12 +481,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         try
         {
-            // Counted before the query, not after: a channel enabled while the read is out was
-            // not in the set the device computed this cap for, and recording the larger count
-            // would vouch for the cap under a set it never saw. Counting first can only
-            // under-record, which costs at most one more read.
+            // The device computes the cap for whatever set is enabled at the moment it answers,
+            // which is unknowable if the set changed while the read was out, in either direction.
+            // So a read during which any channel changed vouches for nothing, and the next start
+            // asks again.
+            var channelStateBefore = ChannelStateVersion;
             var analogInputsQueried = EnabledAnalogInputCount();
             var document = await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            var channelSetHeldStill = ChannelStateVersion == channelStateBefore;
 
             // Recorded when the read produced the cap now in force: a fresh document, or no
             // document on a device that has none at all, which asking again with the same set
@@ -494,7 +496,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             // an older document is still in the metadata (a malformed or incomplete reply), since
             // that cap describes an earlier channel set and must not be vouched for under this
             // one. Not recorded when the read threw either; both are retried on the next start.
-            if (document is not null || Metadata.CapabilityDocument is null)
+            if (channelSetHeldStill && (document is not null || Metadata.CapabilityDocument is null))
             {
                 _lastCapabilityRead = new CapabilityRead(document, analogInputsQueried);
             }
