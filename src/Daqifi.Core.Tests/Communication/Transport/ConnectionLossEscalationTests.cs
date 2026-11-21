@@ -234,7 +234,7 @@ public class ConnectionLossEscalationTests
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
-            _watchdog.Arm();
+            _watchdog.Arm(this);
             return Task.CompletedTask;
         }
 
@@ -258,7 +258,7 @@ public class ConnectionLossEscalationTests
 
         public void ReportIoSuccess() => _watchdog.RecordSuccess();
 
-        private void HandleConnectionLost(Exception error)
+        private void HandleConnectionLost(Exception error, object session)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo, error));

@@ -217,6 +217,43 @@ public class TcpStreamTransportTests
         }
     }
 
+    [Fact]
+    public async Task TcpStreamTransport_Reconnect_OverADeadSession_IsLeftAloneByALateLossForTheOldOne()
+    {
+        // Reconnecting straight over a dead session (no Disconnect in between): the old socket is
+        // released rather than overwritten, and a loss the old session's detector delivers after
+        // the replacement does not touch the new connection.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            await transport.ConnectAsync();
+            var oldSession = transport.Stream;
+            await BreakTheConnectionFromThePeerAsync(listener, transport);
+
+            await transport.ConnectAsync();
+            var lost = new List<Exception?>();
+            transport.StatusChanged += (_, e) =>
+            {
+                if (!e.IsConnected) lost.Add(e.Error);
+            };
+
+            transport.HandleConnectionLost(new IOException("old session, late"), oldSession);
+
+            Assert.True(transport.IsConnected);
+            Assert.NotSame(oldSession, transport.Stream);
+            Assert.Empty(lost);
+            Assert.Throws<ObjectDisposedException>(() => oldSession.Write(new byte[1], 0, 1));
+            await transport.DisconnectAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     /// <summary>
     /// Has the peer close the connection, then writes until the stack reports the reset, which
     /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than

@@ -385,12 +385,19 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         if (IsConnected)
             return;
 
+        // Retire the previous session's drop detection before any new handle is published: a
+        // reconnect straight over a dead session (no Disconnect in between) would otherwise leave
+        // it armed. StartDropDetection() re-arms once the connect succeeds.
+        _watchdog.Disarm();
+
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
             connectAttempt: (options, attemptToken) =>
             {
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
 
+                // A dead port still held from the previous session is released, not overwritten.
+                _serialPort?.Dispose();
                 _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
                 {
                     ReadTimeout = timeout,
@@ -549,7 +556,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </remarks>
     internal void StartDropDetection()
     {
-        _watchdog.Arm();
+        _watchdog.Arm(_serialPort!);
 
         if (_livenessCheckInterval <= TimeSpan.Zero)
         {
@@ -712,13 +719,26 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// Tears down a connection that was detected as dropped and reports it as a loss.
     /// </summary>
     /// <param name="error">The condition that identified the drop.</param>
-    private void HandleConnectionLost(Exception error)
+    /// <param name="session">The port the watchdog was armed for.</param>
+    /// <remarks>
+    /// Internal so a test can deliver a loss for a port that has since been replaced.
+    /// </remarks>
+    internal void HandleConnectionLost(Exception error, object session)
     {
-        // Drop the reference before anything that can block: IsConnected must already read false
-        // when StatusChanged fires, so a handler (or the device registry's pruning) sees the truth.
-        // Closing a port whose device has physically vanished is the one call here that can stall,
-        // so it happens after the notification.
-        var port = Interlocked.Exchange(ref _serialPort, null);
+        // Only the port the loss was detected on is taken down. A loss that arrives after a
+        // reconnect replaced it (the detector was already running when the reconnect began) finds
+        // a different port here and leaves the new connection alone; the old port was already
+        // released by the reconnect.
+        //
+        // Dropping the reference comes before anything that can block: IsConnected must already
+        // read false when StatusChanged fires, so a handler (or the device registry's pruning)
+        // sees the truth. Closing a port whose device has physically vanished is the one call here
+        // that can stall, so it happens after the notification.
+        var port = (SerialPort)session;
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref _serialPort, null, port), port))
+        {
+            return;
+        }
 
         try
         {
