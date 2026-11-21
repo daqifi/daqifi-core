@@ -262,6 +262,32 @@ public class DaqifiStreamingDeviceRateCapTests
         Assert.Equal(3518, device.StreamingFrequency);
     }
 
+    [Fact]
+    public async Task StartStreamingAsync_AfterAnotherReadReplacedTheCap_ReadsTheCapabilityDocumentAgain()
+    {
+        // A read the start did not make (a reconnect's initialization, or a caller's own) can
+        // replace the cap with one computed for fewer channels. The channel set the start last
+        // read for has not grown, but the cap in hand no longer describes it, and trusting it
+        // starts a stream the device refuses.
+        var device = CreateTransportDevice(currentMaximumRateHz: null);
+        device.SendFrameOnStart = true;
+        EnableAnalog(device, 0, 1, 2);
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        await device.StartStreamingAsync();
+        await device.StopStreamingAsync();
+
+        // Someone else reads with a smaller set and gets a higher cap.
+        device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
+        await device.ReadCapabilityDocumentAsync();
+
+        device.CapabilityDocumentOnRead = BenchDocument(3518);
+        device.StreamingFrequency = 10000;
+        await device.StartStreamingAsync();
+
+        Assert.Equal(3, device.CapabilityDocumentReads);
+        Assert.Equal(3518, device.StreamingFrequency);
+    }
+
     #endregion
 
     #region Helpers
