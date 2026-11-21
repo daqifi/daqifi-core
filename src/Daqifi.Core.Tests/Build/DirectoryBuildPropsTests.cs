@@ -140,8 +140,8 @@ public class DirectoryBuildPropsTests
     [Fact]
     public void DirectoryBuildProps_DoesNotCentralizeTargetFramework()
     {
-        // The projects legitimately differ here (issue #643), and a shared default would hide
-        // that rather than settle it. Issue #638 calls this out explicitly.
+        // Each project decides its own frameworks (issue #643); a shared default would silently
+        // apply to any project added later. Issue #638 calls this out explicitly.
         var centralized = CentralizedPropertyNames();
 
         Assert.DoesNotContain("TargetFramework", centralized);

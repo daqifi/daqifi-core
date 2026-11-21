@@ -123,7 +123,7 @@ jobs:
       shell: bash
       run: |
         baseline=$(dotnet msbuild src/Daqifi.Core/Daqifi.Core.csproj \
-          -getProperty:PackageValidationBaselineVersion -p:TargetFramework=net10.0 | tr -d '[:space:]')
+          -getProperty:PackageValidationBaselineVersion | tr -d '[:space:]')
         latest=$(curl -sSf https://api.nuget.org/v3-flatcontainer/daqifi.core/index.json \
           | jq -r '[.versions[] | select(contains("-") | not)] | last')
         echo "baseline=$baseline latest=$latest"
@@ -175,15 +175,6 @@ jobs:
           framework=$(basename "$(dirname "$(dirname "$report")")")
           mv -f "$report" "src/coverage/coverage.$framework.cobertura.xml" \
             || echo "::warning::Could not move $report into place; $framework will be missing from the coverage summary."
-        done
-
-        # Losing one framework's report and not the other's is otherwise invisible: the table
-        # simply renders a row short. The expected list is read from the test project rather
-        # than repeated here, so it cannot drift from the frameworks the tests actually run on.
-        expected=$(sed -n 's:.*<TargetFrameworks>\(.*\)</TargetFrameworks>.*:\1:p' src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj | tr ';' ' ' || true)
-        for framework in $expected; do
-          test -f "src/coverage/coverage.$framework.cobertura.xml" \
-            || echo "::warning::No coverage report was produced for $framework."
         done
 
         reports=(src/coverage/*.cobertura.xml)

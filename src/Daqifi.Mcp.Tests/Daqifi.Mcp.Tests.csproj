@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Matches Daqifi.Mcp's target frameworks, so the MCP server is tested on
-         every framework it ships an asset for; see issue #643. -->
-    <TargetFrameworks>net10.0</TargetFrameworks>
+    <!-- Keep in step with Daqifi.Mcp's target framework(s), so the MCP server is
+         tested on every framework it ships an asset for; see issue #643. -->
+    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

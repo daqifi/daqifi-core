@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
 
     <!-- ImplicitUsings, Nullable and TreatWarningsAsErrors come from the repo-root Directory.Build.props. -->
 
@@ -21,7 +21,7 @@
          the assemblies actually in the .nupkg, for every target framework it
          claims to support. It is what reports a framework silently disappearing
          from the package, or a type that compiles but no longer exists for one
-         of the two TFMs. Runs during `dotnet pack` and fails it (CP0002 and
+         of its TFMs. Runs during `dotnet pack` and fails it (CP0002 and
          friends) when this build removes something the baseline shipped.
 
          The baseline MUST be bumped to the new version as part of every
