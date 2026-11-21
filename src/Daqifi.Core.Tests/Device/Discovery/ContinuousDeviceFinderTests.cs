@@ -1392,6 +1392,41 @@ public class ContinuousDeviceFinderTests
         Assert.False(inner.DisposedDuringPass);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_WhenThePassOutlastsItsWait_DisposesTheInnerFinderOnlyAfterThePassReturns(bool stopFirst)
+    {
+        var inner = new GatedDeviceFinder();
+
+        // A short PassTimeout bounds how long Dispose waits; the gated pass ignores it and stays.
+        var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromMilliseconds(100),
+            Interval = TimeSpan.FromMilliseconds(10)
+        });
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        var stop = stopFirst ? finder.StopAsync() : Task.CompletedTask;
+
+        // Returns once its bounded wait runs out, with the pass still inside the finder.
+        finder.Dispose();
+
+        Assert.False(inner.Disposed, "Dispose disposed the inner finder while the pass was still inside it");
+
+        inner.ReleaseFirstPass();
+        await stop.WaitAsync(WaitTimeout);
+
+        await WaitUntil.ThatAsync(
+            () => inner.Disposed,
+            "the inner finder was never disposed after the pass returned",
+            WaitTimeout);
+        Assert.Equal(1, inner.DisposeCount);
+        Assert.False(inner.DisposedDuringPass);
+    }
+
     #endregion
 
     #region Pass reports
@@ -2264,12 +2299,13 @@ public class ContinuousDeviceFinderTests
         private int _passesStarted;
         private int _passesInFlight;
         private int _maxConcurrentPasses;
-        private volatile bool _disposed;
+        private int _disposeCount;
         private volatile bool _disposedDuringPass;
 
         public int PassesStarted => Volatile.Read(ref _passesStarted);
         public int MaxConcurrentPasses => Volatile.Read(ref _maxConcurrentPasses);
-        public bool Disposed => _disposed;
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+        public bool Disposed => DisposeCount > 0;
         public bool DisposedDuringPass => _disposedDuringPass;
 
 #pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
@@ -2314,7 +2350,7 @@ public class ContinuousDeviceFinderTests
                 _disposedDuringPass = true;
             }
 
-            _disposed = true;
+            Interlocked.Increment(ref _disposeCount);
         }
     }
 

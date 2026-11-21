@@ -1104,6 +1104,12 @@ public class ContinuousDeviceFinder : IDisposable
     /// <see cref="ContinuousDiscoveryOptions.LeaveInnerFinderOpen"/> was set, the wrapped
     /// finder is also disposed.
     /// </summary>
+    /// <remarks>
+    /// Waits at most <see cref="ContinuousDiscoveryOptions.PassTimeout"/> for an in-flight pass to
+    /// return. A pass that ignores cancellation and outlasts that wait does not hold Dispose up,
+    /// and it does not have the wrapped finder disposed underneath it either: the finder is
+    /// disposed when that pass returns.
+    /// </remarks>
     public void Dispose()
     {
         CancellationTokenSource? cts;
@@ -1136,15 +1142,48 @@ public class ContinuousDeviceFinder : IDisposable
         // so a well-behaved finder returns promptly; the bound (scaled to PassTimeout) only
         // guards against a finder that ignores cancellation, so Dispose can never hang. The loop
         // uses ConfigureAwait(false) throughout, so the wait cannot deadlock on a captured context.
-        try
+        var loopExited = true;
+        if (loopTask != null)
         {
-            loopTask?.Wait(_passTimeout);
-        }
-        catch
-        {
-            // Ignore faults observed during shutdown.
+            try
+            {
+                loopExited = loopTask.Wait(_passTimeout);
+            }
+            catch
+            {
+                // A loop that faulted has exited; the fault itself is ignored during shutdown.
+            }
         }
 
+        if (loopExited)
+        {
+            ReleaseAfterLoop(cts);
+            return;
+        }
+
+        // The pass is still inside the finder and ignoring cancellation. Dispose returns on time
+        // all the same, but the finder (and the token source its pass token is linked to) is
+        // released only once that pass has come back, so a slow probe never runs against a
+        // disposed transport. Only this path schedules the release, so it still happens once.
+        loopTask!.ContinueWith(
+            static (_, state) =>
+            {
+                var (owner, source) = ((ContinuousDeviceFinder, CancellationTokenSource?))state!;
+                owner.ReleaseAfterLoop(source);
+            },
+            (this, cts),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Releases what <see cref="Dispose"/> may only release once the scan loop has exited: the
+    /// loop's token source and, unless <see cref="ContinuousDiscoveryOptions.LeaveInnerFinderOpen"/>
+    /// was set, the wrapped finder.
+    /// </summary>
+    private void ReleaseAfterLoop(CancellationTokenSource? cts)
+    {
         cts?.Dispose();
 
         if (!_leaveInnerFinderOpen && _finder is IDisposable disposableFinder)
