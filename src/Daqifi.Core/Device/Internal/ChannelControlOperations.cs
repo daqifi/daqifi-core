@@ -516,16 +516,21 @@ internal sealed class ChannelControlOperations
             _host.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
             PwmFrequencyHz = frequencyHz;
 
-            // The link can drop between the send and this record, and the status handler then
-            // clears the cache (ResetSentPwmFrequency, under this same lock). Recording after
-            // that would make the first call after the reconnect skip a frequency the device
-            // may no longer have — the same reasoning as the PWM enable record (#945).
+            // The cache may only name a frequency the device is known to have taken last, and
+            // the gate orders calls, not deliveries. A send from a flow that does not own a
+            // running exclusive operation is parked and replayed when it ends (#342) — after
+            // anything the owner sent meanwhile, which went straight out. So while parked sends
+            // are waiting, whether this send was one of them or went out ahead of them, the
+            // device may end on another frequency: clear the cache, and the next call sends.
+            var deliveredInOrder = !_host.HasDeferredSends;
+
+            // The link can also drop between the send and this record, and the status handler
+            // then clears the cache (ResetSentPwmFrequency, under this same lock). Recording
+            // after that would make the first call after the reconnect skip a frequency the
+            // device may no longer have — the same reasoning as the PWM enable record (#945).
             _host.WithChannelsLock(() =>
             {
-                if (_host.IsConnected)
-                {
-                    _lastSentPwmFrequencyHz = frequencyHz;
-                }
+                _lastSentPwmFrequencyHz = deliveredInOrder && _host.IsConnected ? frequencyHz : null;
             });
         }
     }

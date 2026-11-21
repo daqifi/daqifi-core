@@ -74,6 +74,18 @@ internal interface IDeviceOperationHost
     /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
     void Send<T>(IOutboundMessage<T> message);
 
+    /// <summary>
+    /// Whether sends parked behind another flow's exclusive operation are still waiting to go
+    /// out, so one of them can reach the device after a send made now (#342). A collaborator that
+    /// remembers what it last sent asks this to know whether delivery order matched call order.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DaqifiStreamingDevice"/> answers from its operation serializer. The default is
+    /// for hosts with no deferral at all — the test doubles — where a send always goes out in
+    /// call order.
+    /// </remarks>
+    bool HasDeferredSends => false;
+
     /// <inheritdoc cref="DaqifiDevice.Metadata"/>
     /// <remarks>
     /// The device's own metadata object, not a copy: the friendly-name write updates

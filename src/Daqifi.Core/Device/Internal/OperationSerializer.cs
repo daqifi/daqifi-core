@@ -171,6 +171,25 @@ internal sealed class OperationSerializer : IDisposable
         }
     }
 
+    /// <summary>
+    /// True while sends parked by <see cref="TryDeferSend{T}"/> have not all been handed on yet,
+    /// so one of them can still reach the device after a send made now.
+    /// </summary>
+    /// <remarks>
+    /// A point-in-time answer, and a conservative one: it stays true while the last parked send
+    /// is being replayed, because the backlog is only cleared once the drain sees it empty.
+    /// </remarks>
+    internal bool HasDeferredSends
+    {
+        get
+        {
+            lock (_deferralGate)
+            {
+                return _deferredSends != null;
+            }
+        }
+    }
+
     /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync{TResult}(Func{CancellationToken, Task{TResult}}, CancellationToken)"/>
     internal async Task<TResult> RunExclusiveAsync<TResult>(
         Func<CancellationToken, Task<TResult>> operation,

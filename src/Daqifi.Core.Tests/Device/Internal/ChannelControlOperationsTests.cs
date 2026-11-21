@@ -620,6 +620,24 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
+    public void SetPwmFrequency_WhileParkedSendsAreWaiting_DoesNotTrustTheCache()
+    {
+        // A parked send can replay after this one and change the frequency again (#342), so the
+        // device is not known to be on this value: the next call for it must still go out. The
+        // device-level interleaving is in DaqifiDeviceOperationSerializationTests.
+        var host = new FakeHost { HasDeferredSends = true };
+        var ops = new ChannelControlOperations(host);
+
+        ops.SetPwmFrequency(1500);
+
+        host.HasDeferredSends = false;
+        ops.SetPwmFrequency(1500);
+        ops.SetPwmFrequency(1500);
+
+        Assert.Equal(2, host.Calls.Count);
+    }
+
+    [Fact]
     public void SetPwmFrequency_LinkDropsWhileTheSendIsInFlight_DoesNotUndoTheReset()
     {
         // The send returns, the link drops and the status handler clears the cache, and only
@@ -1309,6 +1327,12 @@ public class ChannelControlOperationsTests
         /// can hold one call's command back while a second call runs.
         /// </summary>
         public Action? BeforeSend { get; set; }
+
+        /// <summary>
+        /// What the host reports about sends parked behind an exclusive operation, so a test can
+        /// stand in for a delivery order that no longer matches call order.
+        /// </summary>
+        public bool HasDeferredSends { get; set; }
 
         public void Send<T>(IOutboundMessage<T> message)
         {
