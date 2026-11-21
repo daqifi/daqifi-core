@@ -108,7 +108,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
     private readonly IntPtr _deviceRef;            // CFRetain'd in TryCreate; CFRelease'd in Dispose() (finalizer is the backstop).
     private readonly int _maxInputReportLength;
     private readonly int _maxOutputReportLength;
-    private readonly object _lifecycleLock = new();
+    private readonly Lock _lifecycleLock = new();
 
     private BlockingCollection<byte[]>? _inbox;
     private Thread? _ioThread;

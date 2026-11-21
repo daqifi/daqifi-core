@@ -87,8 +87,8 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly IProgress<DiscoveryPassReport>? _progress;
 
     private readonly Dictionary<string, TrackedDevice> _devices = new(StringComparer.Ordinal);
-    private readonly object _devicesLock = new();
-    private readonly object _lifecycleLock = new();
+    private readonly Lock _devicesLock = new();
+    private readonly Lock _lifecycleLock = new();
 
     private CancellationTokenSource? _cts;
     private Task? _loopTask;

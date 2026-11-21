@@ -9,7 +9,7 @@ namespace Daqifi.Core.Channel;
 /// </remarks>
 public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private IDataSample? _activeSample;
     private string _name;
     private bool _isEnabled;

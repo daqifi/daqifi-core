@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Daqifi.Core.Firmware.Winc;
 
 /// <summary>
@@ -175,9 +177,6 @@ internal static class WincBridgeProtocol
                 $"A register response is exactly 4 bytes; got {response.Length}.", nameof(response));
         }
 
-        return ((uint)response[0] << 24)
-             | ((uint)response[1] << 16)
-             | ((uint)response[2] << 8)
-             | response[3];
+        return BinaryPrimitives.ReadUInt32BigEndian(response);
     }
 }

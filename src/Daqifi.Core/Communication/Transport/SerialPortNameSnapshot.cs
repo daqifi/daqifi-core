@@ -45,7 +45,7 @@ internal sealed class SerialPortNameSnapshot
     internal static SerialPortNameSnapshot Shared { get; } = new(SerialPort.GetPortNames);
 
     private readonly Func<string[]> _enumerate;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private string[] _names = [];
     private long _takenAtMs;
     private bool _hasSnapshot;
