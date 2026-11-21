@@ -14,9 +14,8 @@
 
     Do not set TargetFramework here. Which frameworks a project builds for
     belongs in that project's .csproj; a default here would silently apply to
-    any project added later. If a project ever targets more than one framework
-    again, Daqifi.Mcp must still ship an asset for every framework Daqifi.Core
-    supports (issue #643).
+    any project added later. DirectoryBuildPropsTests keeps Daqifi.Mcp shipping
+    every framework Daqifi.Core does (issue #643).
   -->
   <PropertyGroup>
     <ImplicitUsings>enable</ImplicitUsings>
