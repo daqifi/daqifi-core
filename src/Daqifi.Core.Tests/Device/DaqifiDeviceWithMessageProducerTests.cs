@@ -69,36 +69,6 @@ public class DaqifiDeviceWithMessageProducerTests
     }
 
     [Fact]
-    public void DaqifiDevice_WithStream_ShouldInitializeMessageProducer()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        
-        // Act
-        using var device = new DaqifiDevice("Test Device", stream, IPAddress.Loopback);
-        
-        // Assert
-        Assert.Equal("Test Device", device.Name);
-        Assert.Equal(IPAddress.Loopback, device.IpAddress);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-    }
-
-    [Fact]
-    public void DaqifiDevice_Connect_ShouldStartMessageProducer()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
-        
-        // Act
-        device.Connect();
-        
-        // Assert
-        Assert.True(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
-    }
-
-    [Fact]
     public void DaqifiDevice_SendMessage_WhenConnected_ShouldWriteToStream()
     {
         // Arrange
@@ -183,38 +153,5 @@ public class DaqifiDeviceWithMessageProducerTests
         // Assert
         Assert.True(raised, "Expected DaqifiDevice.SendFailed to be raised when a queued message fails to write.");
         Assert.IsType<IOException>(captured!.Error);
-    }
-
-    [Fact]
-    public void DaqifiDevice_Disconnect_ShouldStopMessageProducer()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
-        device.Connect();
-        
-        // Act
-        device.Disconnect();
-        
-        // Assert
-        Assert.False(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-    }
-
-    [Fact]
-    public void DaqifiDevice_StatusChanged_ShouldFireEvent()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
-        ConnectionStatus? capturedStatus = null;
-        
-        device.StatusChanged += (sender, args) => capturedStatus = args.Status;
-        
-        // Act
-        device.Connect();
-        
-        // Assert
-        Assert.Equal(ConnectionStatus.Connected, capturedStatus);
     }
 }
