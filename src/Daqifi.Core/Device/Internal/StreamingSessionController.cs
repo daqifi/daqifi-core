@@ -154,6 +154,14 @@ internal sealed class StreamingSessionController
     private FrequencySource _frequencySource = FrequencySource.CoreDefault;
 
     /// <summary>
+    /// Makes every change to <see cref="_streamingFrequency"/> and <see cref="_frequencySource"/>
+    /// one step, including the check that decides whether a device-reported rate may replace the
+    /// current one: otherwise a caller's choice landing between that check and the write would be
+    /// overwritten and relabelled as adopted. Never held across a call into the host.
+    /// </summary>
+    private readonly Lock _frequencyLock = new();
+
+    /// <summary>
     /// Whether the rate is one this device object inherited from the device and nobody has
     /// chosen since. The device accepted it for whatever stream last set it, which says nothing
     /// about the interface and format the next start uses; see
@@ -179,8 +187,11 @@ internal sealed class StreamingSessionController
                     DescribeRejectedFrequency(value, maxSamplingRate));
             }
 
-            _streamingFrequency = value;
-            _frequencySource = FrequencySource.Chosen;
+            lock (_frequencyLock)
+            {
+                _streamingFrequency = value;
+                _frequencySource = FrequencySource.Chosen;
+            }
         }
     }
 
@@ -191,6 +202,7 @@ internal sealed class StreamingSessionController
     /// <param name="frequencyHz">The default rate, validated as the setter validates it.</param>
     internal void SetDefaultFrequency(int frequencyHz)
     {
+        // Runs only while the device is being constructed, before anything else can see it.
         StreamingFrequency = frequencyHz;
         _frequencySource = FrequencySource.CoreDefault;
     }
@@ -247,33 +259,37 @@ internal sealed class StreamingSessionController
     /// <returns><c>true</c> when the rate was adopted.</returns>
     internal bool TryAdoptStoredFrequency(int frequencyHz, bool? rateConfigured)
     {
-        if (_frequencySource == FrequencySource.Chosen)
-        {
-            return false;
-        }
-
-        var isPlaceholder = rateConfigured == false
-                            || (rateConfigured == null && frequencyHz == FirmwareBootDefaultStoredRateHz);
-        if (isPlaceholder)
-        {
-            SafeTrace(
-                $"[{nameof(TryAdoptStoredFrequency)}] The device reports {frequencyHz} Hz but has had no rate "
-                + $"configured since power-up; keeping {_streamingFrequency} Hz.");
-            return false;
-        }
-
         var maxSamplingRate = Math.Max(1, _host.MaxSamplingRate);
-        if (frequencyHz < 1 || frequencyHz > maxSamplingRate)
-        {
-            SafeTrace(
-                $"[{nameof(TryAdoptStoredFrequency)}] Ignoring the device's stored streaming rate of {frequencyHz} Hz, "
-                + $"which is outside 1..{maxSamplingRate} Hz; keeping {_streamingFrequency} Hz.");
-            return false;
-        }
 
-        _streamingFrequency = frequencyHz;
-        _frequencySource = FrequencySource.Adopted;
-        return true;
+        lock (_frequencyLock)
+        {
+            if (_frequencySource == FrequencySource.Chosen)
+            {
+                return false;
+            }
+
+            var isPlaceholder = rateConfigured == false
+                                || (rateConfigured == null && frequencyHz == FirmwareBootDefaultStoredRateHz);
+            if (isPlaceholder)
+            {
+                SafeTrace(
+                    $"[{nameof(TryAdoptStoredFrequency)}] The device reports {frequencyHz} Hz but has had no rate "
+                    + $"configured since power-up; keeping {_streamingFrequency} Hz.");
+                return false;
+            }
+
+            if (frequencyHz < 1 || frequencyHz > maxSamplingRate)
+            {
+                SafeTrace(
+                    $"[{nameof(TryAdoptStoredFrequency)}] Ignoring the device's stored streaming rate of {frequencyHz} Hz, "
+                    + $"which is outside 1..{maxSamplingRate} Hz; keeping {_streamingFrequency} Hz.");
+                return false;
+            }
+
+            _streamingFrequency = frequencyHz;
+            _frequencySource = FrequencySource.Adopted;
+            return true;
+        }
     }
 
     /// <summary>
@@ -308,6 +324,14 @@ internal sealed class StreamingSessionController
     /// </param>
     /// <returns><c>true</c> when the rate was lowered.</returns>
     internal bool LowerInheritedFrequency(int? maximumHz)
+    {
+        lock (_frequencyLock)
+        {
+            return LowerInheritedFrequencyLocked(maximumHz);
+        }
+    }
+
+    private bool LowerInheritedFrequencyLocked(int? maximumHz)
     {
         if (!IsFrequencyInherited)
         {
@@ -380,7 +404,10 @@ internal sealed class StreamingSessionController
 
         // The rate a stream ran at is the one a reconnect resumes it at, whatever the device
         // reports afterwards.
-        _frequencySource = FrequencySource.Chosen;
+        lock (_frequencyLock)
+        {
+            _frequencySource = FrequencySource.Chosen;
+        }
 
         BeginStreamingSession();
 
@@ -437,7 +464,10 @@ internal sealed class StreamingSessionController
             return;
         }
 
-        _streamingFrequency = newRateHz;
+        lock (_frequencyLock)
+        {
+            _streamingFrequency = newRateHz;
+        }
 
         SafeTrace(
             $"[{nameof(StartStreaming)}] Lowered the streaming frequency from {adjustedFromHz.Value} Hz "
@@ -555,8 +585,11 @@ internal sealed class StreamingSessionController
             case SessionCommandEffectKind.StartStreaming:
                 // Frequency first: anything observing IsStreaming must never catch it true next
                 // to a rate belonging to a previous session.
-                _streamingFrequency = effect.StreamingFrequency;
-                _frequencySource = FrequencySource.Chosen;
+                lock (_frequencyLock)
+                {
+                    _streamingFrequency = effect.StreamingFrequency;
+                    _frequencySource = FrequencySource.Chosen;
+                }
 
                 // A restart while already streaming is not a session boundary — the typed API
                 // cannot even express it (StartStreaming returns early) — so there is nothing to
