@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Microsoft.Extensions.Logging;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Firmware;
 
@@ -460,8 +461,10 @@ internal sealed class Pic32FirmwareUpdater
                 GetFlashCondition(failedState, Pic32CleanupOutcome.Recovered, flashProgress),
                 frozenPercent,
                 totalBytes);
-            Logger.LogInformation(
-                "Firmware re-erase cleanup succeeded; device is in a clean bootloader state.");
+            // Best-effort past the terminal commit: a throwing logger must not land in the
+            // catch below and attempt the illegal Recovered → Failed transition.
+            SafeLog(() => Logger.LogInformation(
+                "Firmware re-erase cleanup succeeded; device is in a clean bootloader state."));
             return Pic32CleanupOutcome.Recovered;
         }
         catch (Exception cleanupEx)
@@ -474,10 +477,10 @@ internal sealed class Pic32FirmwareUpdater
                 GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed, flashProgress),
                 frozenPercent,
                 totalBytes);
-            Logger.LogError(
+            SafeLog(() => Logger.LogError(
                 cleanupEx,
                 "Firmware re-erase cleanup failed after failure in {State}; device may be half-flashed.",
-                failedState);
+                failedState));
             return Pic32CleanupOutcome.CleanupFailed;
         }
     }

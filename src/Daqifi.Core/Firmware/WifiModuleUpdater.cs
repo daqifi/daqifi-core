@@ -3,6 +3,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware.Winc;
 using Microsoft.Extensions.Logging;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Firmware;
 
@@ -309,7 +310,8 @@ internal sealed class WifiModuleUpdater
                 Pic32FlashCondition.NotChanged,
                 _context.LastReportedPercent,
                 totalBytes);
-            Logger.LogWarning("WiFi module update canceled.");
+            // Best-effort past the terminal commit, so a throwing logger cannot replace the cancel.
+            SafeLog(() => Logger.LogWarning("WiFi module update canceled."));
             throw;
         }
         catch (Exception ex)
@@ -327,7 +329,7 @@ internal sealed class WifiModuleUpdater
                 Pic32FlashCondition.NotChanged,
                 _context.LastReportedPercent,
                 totalBytes);
-            Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState);
+            SafeLog(() => Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState));
 
             throw _context.CreateFirmwareUpdateException(
                 failedState, failedOperation, ex, Pic32FlashCondition.NotChanged);

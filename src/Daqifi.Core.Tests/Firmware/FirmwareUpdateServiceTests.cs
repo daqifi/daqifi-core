@@ -8,6 +8,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -1661,6 +1662,173 @@ public class FirmwareUpdateServiceTests
         Assert.Contains(laterEvents, e => e.CurrentState == FirmwareUpdateState.CleaningUp);
         var failed = Assert.Single(laterEvents, e => e.CurrentState == FirmwareUpdateState.Failed);
         Assert.Equal(Pic32FlashCondition.PossiblyHalfFlashed, failed.FlashCondition);
+    }
+
+    /// <summary>
+    /// A logger that throws only on the log line of a transition into <paramref name="state"/> —
+    /// a provider that misbehaves on exactly the terminal line.
+    /// </summary>
+    private sealed class ThrowOnTransitionLogger(FirmwareUpdateState state) : ILogger<FirmwareUpdateService>
+    {
+        public IDisposable? BeginScope<TState>(TState scopeState) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState logState,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(logState, exception);
+            if (message.StartsWith("Firmware update state transition:", StringComparison.Ordinal) &&
+                message.Contains($"-> {state} (", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Logger failure on the terminal transition.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenLoggerThrowsOnCompleteTransition_KeepsCompleteOutcome()
+    {
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, ProgramAck, ProgramAck, VersionAck })
+        {
+            hidTransport.EnqueueRead(read);
+        }
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Complete),
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            CreateFastOptions());
+
+        var events = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => events.Add(args.CurrentState);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(
+                new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(FirmwareUpdateState.Complete, events[^1]);
+        Assert.DoesNotContain(FirmwareUpdateState.Failed, events);
+        var complete = Assert.Single(reports, p => p.State == FirmwareUpdateState.Complete);
+        Assert.Equal(100, complete.PercentComplete);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenLoggerThrowsOnRecoveredTransition_KeepsRecoveredOutcome()
+    {
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, ProgramAck, ProgramAck, CrcMismatch, EraseAck })
+        {
+            hidTransport.EnqueueRead(read);
+        }
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Recovered),
+            new FakeBootloaderProtocol(
+                [[0xA1, 0x01], [0xA1, 0x02]],
+                crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            options);
+
+        var events = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => events.Add(args);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(
+                    new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false)));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Verifying, exception.FailedState);
+        Assert.Equal(Pic32FlashCondition.CleanBootloader, exception.FlashCondition);
+        Assert.Equal(FirmwareUpdateState.Recovered, service.CurrentState);
+        var recovered = Assert.Single(events, e => e.CurrentState == FirmwareUpdateState.Recovered);
+        Assert.Equal(Pic32FlashCondition.CleanBootloader, recovered.FlashCondition);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Recovered);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLoggerThrowsOnFailedTransition_KeepsFirmwareUpdateException()
+    {
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner
+            {
+                NextResult = new ExternalProcessResult(
+                    1,
+                    timedOut: false,
+                    TimeSpan.FromMilliseconds(10),
+                    ["some output"],
+                    ["fatal"])
+            },
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Failed),
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var events = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => events.Add(args);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(
+                    new FakeStreamingDevice("COM8"),
+                    firmwareDir,
+                    RecordingProgress(reports, throwOnFailed: false)));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        var failed = Assert.Single(events, e => e.CurrentState == FirmwareUpdateState.Failed);
+        Assert.Equal(Pic32FlashCondition.NotChanged, failed.FlashCondition);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
     }
 
     [Theory]

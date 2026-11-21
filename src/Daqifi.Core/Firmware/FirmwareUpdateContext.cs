@@ -1,6 +1,7 @@
 using System.Text;
 using Daqifi.Core.Device;
 using Microsoft.Extensions.Logging;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Firmware;
 
@@ -166,6 +167,7 @@ internal sealed class FirmwareUpdateContext
     {
         if (CommitTransition(nextState, operation, flashCondition) is { } args)
         {
+            LogTransition(args);
             StateChanged?.Invoke(_eventSender, args);
         }
     }
@@ -230,8 +232,11 @@ internal sealed class FirmwareUpdateContext
     /// typed signal that the board may be half-flashed.</item>
     /// <item>A throwing progress sink is logged and swallowed, and still runs after a throwing
     /// subscriber.</item>
+    /// <item>Every log call after the commit is best-effort (<see cref="Daqifi.Core.Internal.DiagnosticGuard.SafeLog"/>):
+    /// the logger is consumer code too, and a provider that throws on the transition line must not
+    /// skip the event and the report, or send a successful update into the failure path.</item>
     /// </list>
-    /// An illegal transition still throws, before any observer runs.
+    /// An illegal transition still throws, before anything is committed or any observer runs.
     /// </summary>
     private void EndOperation(
         FirmwareUpdateState terminalState,
@@ -242,8 +247,14 @@ internal sealed class FirmwareUpdateContext
         long bytesWritten,
         long totalBytes)
     {
-        if (CommitTransition(terminalState, operation, flashCondition) is { } args &&
-            StateChanged is { } handler)
+        var args = CommitTransition(terminalState, operation, flashCondition);
+
+        if (args != null)
+        {
+            SafeLog(() => LogTransition(args));
+        }
+
+        if (args != null && StateChanged is { } handler)
         {
             foreach (var subscriber in handler.GetInvocationList())
             {
@@ -253,10 +264,10 @@ internal sealed class FirmwareUpdateContext
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogWarning(
+                    SafeLog(() => Logger.LogWarning(
                         ex,
                         "A StateChanged subscriber threw on the {State} transition; the outcome is unchanged.",
-                        terminalState);
+                        terminalState));
                 }
             }
         }
@@ -267,15 +278,15 @@ internal sealed class FirmwareUpdateContext
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(
+            SafeLog(() => Logger.LogWarning(
                 ex,
                 "A progress sink threw on the {State} report; the outcome is unchanged.",
-                terminalState);
+                terminalState));
         }
     }
 
     /// <summary>
-    /// Validates and commits a transition and logs it, returning the event to raise — or null when
+    /// Validates and commits a transition, returning the event to raise — or null when
     /// <paramref name="nextState"/> is already the current state, which only refreshes the operation
     /// text and raises nothing.
     /// </summary>
@@ -302,16 +313,19 @@ internal sealed class FirmwareUpdateContext
         CurrentState = nextState;
         CurrentOperation = operation;
 
-        Logger.LogInformation(
-            "Firmware update state transition: {PreviousState} -> {CurrentState} ({Operation})",
-            previousState,
-            nextState,
-            operation);
-
         return new FirmwareUpdateStateChangedEventArgs(previousState, nextState, operation)
         {
             FlashCondition = flashCondition
         };
+    }
+
+    private void LogTransition(FirmwareUpdateStateChangedEventArgs args)
+    {
+        Logger.LogInformation(
+            "Firmware update state transition: {PreviousState} -> {CurrentState} ({Operation})",
+            args.PreviousState,
+            args.CurrentState,
+            args.Operation);
     }
 
     internal void ResetIfTerminalState()
