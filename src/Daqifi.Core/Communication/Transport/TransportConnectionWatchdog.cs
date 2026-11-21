@@ -121,9 +121,11 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
         Volatile.Write(ref _consecutiveFaults, 0);
-        Volatile.Write(ref _presenceMisses, 0);
         lock (_timerLock)
         {
+            // Reset with the session, under the lock a presence poll commits its verdict under,
+            // so a poll still running for the previous session cannot count against this one.
+            _presenceMisses = 0;
             Volatile.Write(ref _armedSession, session);
         }
     }
@@ -246,12 +248,12 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             return;
         }
 
+        // The session this poll speaks for, read before the probe runs: if the connection is
+        // replaced while the probe runs, the verdict is about the old one and must not land on
+        // the new one — not as a loss, and not as a miss counted toward the new one's threshold.
+        var session = Volatile.Read(ref _armedSession);
         try
         {
-            // The session this poll speaks for, read before the probe runs: if the connection is
-            // replaced while the probe runs, the verdict is about the old one and must not land
-            // on the new one.
-            var session = Volatile.Read(ref _armedSession);
             if (session is null)
             {
                 return;
@@ -263,13 +265,26 @@ internal sealed class TransportConnectionWatchdog : IDisposable
                 return;
             }
 
-            if (probe())
+            var present = probe();
+
+            int misses;
+            lock (_timerLock)
             {
-                Volatile.Write(ref _presenceMisses, 0);
-                return;
+                if (!ReferenceEquals(Volatile.Read(ref _armedSession), session))
+                {
+                    return;
+                }
+
+                if (present)
+                {
+                    _presenceMisses = 0;
+                    return;
+                }
+
+                misses = ++_presenceMisses;
             }
 
-            if (Interlocked.Increment(ref _presenceMisses) < PresenceMissThreshold)
+            if (misses < PresenceMissThreshold)
             {
                 return;
             }
@@ -287,7 +302,13 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             // CONSECUTIVE observed absences; letting a miss survive an exception would make
             // "absent, could-not-observe, absent" satisfy a two-miss threshold that never actually
             // saw the port absent twice in a row.
-            Volatile.Write(ref _presenceMisses, 0);
+            lock (_timerLock)
+            {
+                if (ReferenceEquals(Volatile.Read(ref _armedSession), session))
+                {
+                    _presenceMisses = 0;
+                }
+            }
         }
         finally
         {

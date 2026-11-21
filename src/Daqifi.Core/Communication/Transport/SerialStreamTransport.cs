@@ -441,6 +441,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             },
             onAttemptFailed: () =>
             {
+                // An attempt can fail after it armed detection for its port (a StatusChanged(true)
+                // subscriber that throws fails the attempt), so the failed attempt's detection and
+                // presence polling are retired with its port.
+                _watchdog.Disarm();
                 _serialPort?.Dispose();
                 _serialPort = null;
             },

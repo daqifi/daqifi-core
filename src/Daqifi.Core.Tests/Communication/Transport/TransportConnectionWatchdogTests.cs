@@ -331,6 +331,46 @@ public class TransportConnectionWatchdogTests
     }
 
     [Fact]
+    public async Task AMissFromAProbeOfAReplacedSession_DoesNotCountAgainstTheNewOne()
+    {
+        // A presence probe for the old session blocks; meanwhile the connection is replaced. The
+        // old probe then answers "absent": that verdict is about a port that is gone and must not
+        // count as the new session's first miss, or one transient miss on the new port would
+        // reach the two-miss threshold and close it.
+        var losses = new List<Exception>();
+        using var watchdog = CreateWatchdog(losses);
+        using var oldProbeEntered = new ManualResetEventSlim();
+        using var releaseOldProbe = new ManualResetEventSlim();
+        var newSession = new object();
+
+        watchdog.Arm(new object());
+        watchdog.StartPresencePolling(
+            () =>
+            {
+                oldProbeEntered.Set();
+                releaseOldProbe.Wait();
+                return false;
+            },
+            "old port gone",
+            TimeSpan.FromHours(1));
+        var oldPoll = Task.Run(watchdog.PollPresence);
+        Assert.True(oldProbeEntered.Wait(TimeSpan.FromSeconds(5)));
+
+        // The reconnect: re-armed and polling the new port before the old probe answers.
+        watchdog.Disarm();
+        watchdog.Arm(newSession);
+        watchdog.StartPresencePolling(() => false, "new port gone", TimeSpan.FromHours(1));
+        releaseOldProbe.Set();
+        await oldPoll.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // One miss on the new port.
+        watchdog.PollPresence();
+
+        Assert.Empty(losses);
+        Assert.True(watchdog.IsArmed);
+    }
+
+    [Fact]
     public void ConcurrentFaults_SignalLossExactlyOnce()
     {
         // Reader and writer loops report from different threads; the loss must be raised once.

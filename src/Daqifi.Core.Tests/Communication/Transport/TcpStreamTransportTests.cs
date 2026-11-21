@@ -281,6 +281,34 @@ public class TcpStreamTransportTests
         }
     }
 
+    [Fact]
+    public async Task TcpStreamTransport_AConnectFailedByAThrowingConnectedSubscriber_LeavesNoDetectionArmed()
+    {
+        // A StatusChanged(true) subscriber that throws fails the attempt after it armed drop
+        // detection for its stream; the failed attempt's detection must go with its socket.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            transport.StatusChanged += (_, e) =>
+            {
+                if (e.IsConnected) throw new InvalidOperationException("subscriber failed");
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => transport.ConnectAsync(ConnectionRetryOptions.NoRetry));
+
+            Assert.False(transport.IsConnected);
+            Assert.False(transport.IsDropDetectionArmed);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     /// <summary>
     /// Has the peer close the connection, then writes until the stack reports the reset, which
     /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than

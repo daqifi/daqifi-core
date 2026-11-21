@@ -310,10 +310,20 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 // whatever the fields hold by then.
                 _watchdog.Arm(_networkStream);
             },
-            onAttemptFailed: ReleaseSocket,
+            onAttemptFailed: () =>
+            {
+                // An attempt can fail after it armed detection for its stream (a StatusChanged(true)
+                // subscriber that throws fails the attempt), so the failed attempt's detection is
+                // retired with its socket.
+                _watchdog.Disarm();
+                ReleaseSocket();
+            },
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Whether drop detection is armed; for tests.</summary>
+    internal bool IsDropDetectionArmed => _watchdog.IsArmed;
 
     /// <summary>
     /// Disposes whatever socket is held and clears both references.
