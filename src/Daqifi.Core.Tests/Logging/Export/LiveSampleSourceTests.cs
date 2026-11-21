@@ -81,6 +81,62 @@ public class LiveSampleSourceTests
     }
 
     [Fact]
+    public async Task Export_TwoChannelsRenamedToTheSameName_GetTheirOwnColumnsAndValues()
+    {
+        // A channel's name is user-settable, so two enabled channels can share one. Keying the
+        // columns by that name gave both the same header and routed both channels' values into one
+        // slot, so each column showed whichever channel arrived last — silently.
+        var ai0 = Analog(0, "Temp");
+        var ai3 = Analog(3, "Temp");
+        var t1 = T0.AddSeconds(1);
+        var source = new LiveSampleSource(
+            Stream(
+                Sample(ai0, T0, 1.0), Sample(ai3, T0, 30.0),
+                Sample(ai0, t1, 2.0), Sample(ai3, t1, 40.0)),
+            [ai0, ai3], "Dev", "SN");
+
+        var lines = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
+
+        Assert.Equal(
+            new[]
+            {
+                "Relative Time (s),Dev:SN:Temp (AI0) (V),Dev:SN:Temp (AI3) (V)",
+                "0.000,1,30",
+                "1.000,2,40",
+            },
+            lines);
+    }
+
+    [Fact]
+    public void GetChannels_SharedNames_AreDisambiguatedByCanonicalLabel_UniqueNamesAreUntouched()
+    {
+        var source = new LiveSampleSource(
+            Empty(),
+            [Analog(0, "Probe"), Analog(1, "Solo"), Digital(5, "Probe"), Digital(6, "Pin")],
+            "Dev", "SN");
+
+        Assert.Equal(
+            new[] { "Probe (AI0)", "Solo", "Probe (DIO5)", "Pin" },
+            source.GetChannels().Select(c => c.ChannelName).ToArray());
+    }
+
+    [Fact]
+    public void GetChannels_DisambiguatedNameCollidingWithAnotherChannelsName_IsStillUnique()
+    {
+        // A user who already named a channel "Temp (AI3)" must not end up sharing a column with the
+        // AI3 that the disambiguation would otherwise rename to exactly that.
+        var source = new LiveSampleSource(
+            Empty(),
+            [Analog(0, "Temp"), Analog(3, "Temp"), Analog(4, "Temp (AI3)")],
+            "Dev", "SN");
+
+        var keys = source.GetChannels().Select(c => c.Key).ToArray();
+
+        Assert.Equal(keys.Length, keys.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal("Dev:SN:Temp (AI3)", keys[2]);
+    }
+
+    [Fact]
     public void Constructor_NullChannelEntry_Throws()
     {
         var ex = Assert.Throws<ArgumentException>(
