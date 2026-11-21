@@ -190,10 +190,11 @@ public class TcpStreamTransportTests
     [Fact]
     public async Task TcpStreamTransport_Disconnect_AfterThePeerResetTheSocket_ReleasesIt()
     {
-        // A read that hits a reset leaves the socket open but reporting Connected == false, and
-        // the watchdog needs several faults before it tears it down itself. Disconnect used to
-        // return early on !IsConnected in that window: no StatusChanged, the watchdog disarmed,
-        // and the socket held until the next connect overwrote it.
+        // An I/O failure on a reset connection leaves the socket open but reporting
+        // Connected == false, and the watchdog needs several faults before it tears it down
+        // itself. Disconnect used to return early on !IsConnected in that window: no
+        // StatusChanged, the watchdog disarmed, and the socket held until the next connect
+        // overwrote it.
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         try
@@ -201,13 +202,7 @@ public class TcpStreamTransportTests
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
             await transport.ConnectAsync();
-            using (var server = await listener.AcceptTcpClientAsync())
-            {
-                server.LingerState = new LingerOption(true, 0); // close with RST
-            }
-
-            ReadUntilTheResetLands(transport.Stream);
-            Assert.False(transport.IsConnected);
+            await BreakTheConnectionFromThePeerAsync(listener, transport);
             var reported = new List<bool>();
             transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
 
@@ -222,30 +217,78 @@ public class TcpStreamTransportTests
         }
     }
 
-    /// <summary>Reads until a read fails for a reason other than the operational read timeout.</summary>
-    private static void ReadUntilTheResetLands(Stream stream)
+    [Fact]
+    public async Task TcpStreamTransport_Reconnect_IgnoresALateFaultFromTheDeadSession()
     {
+        // Reconnecting straight over a dead session (no Disconnect in between) used to leave the
+        // old session's watchdog armed while the new socket was being opened, so a late fault
+        // from the old reader could declare the connection lost and dispose the new socket
+        // mid-connect.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            await transport.ConnectAsync();
+            await BreakTheConnectionFromThePeerAsync(listener, transport);
+            for (var i = 1; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+            {
+                transport.ReportIoFault(new IOException("old session"));
+            }
+
+            var lost = new List<Exception?>();
+            transport.StatusChanged += (_, e) =>
+            {
+                if (!e.IsConnected) lost.Add(e.Error);
+            };
+            transport.ConnectTaskFactory = client =>
+            {
+                transport.ReportIoFault(new IOException("old session, late"));
+                return client.ConnectAsync(IPAddress.Loopback, port);
+            };
+
+            await transport.ConnectAsync();
+
+            Assert.True(transport.IsConnected);
+            Assert.Empty(lost);
+            await transport.DisconnectAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Has the peer close the connection, then writes until the stack reports the reset, which
+    /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than
+    /// reading makes the failure arrive the same way on every platform.
+    /// </summary>
+    private static async Task BreakTheConnectionFromThePeerAsync(TcpListener listener, TcpStreamTransport transport)
+    {
+        using (await listener.AcceptTcpClientAsync())
+        {
+        }
+
+        var stream = transport.Stream;
         var deadline = Stopwatch.StartNew();
         while (deadline.Elapsed < TimeSpan.FromSeconds(10))
         {
             try
             {
-                if (stream.Read(new byte[16], 0, 16) == 0)
-                {
-                    continue;
-                }
-            }
-            catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.TimedOut })
-            {
-                continue;
+                stream.Write(new byte[] { 0x0A }, 0, 1);
             }
             catch (IOException)
             {
+                Assert.False(transport.IsConnected);
                 return;
             }
+
+            await Task.Delay(20);
         }
 
-        throw new TimeoutException("The peer's reset never reached a read.");
+        throw new TimeoutException("The peer's close never surfaced as a failed write.");
     }
 
     [Fact]

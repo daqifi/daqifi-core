@@ -243,6 +243,12 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         if (IsConnected)
             return;
 
+        // Retire the previous session's drop detection before any new handle is published: a
+        // reconnect straight over a dead session (no Disconnect in between) otherwise leaves it
+        // armed, and a late fault or presence miss from that session would tear down the new one.
+        // Arm() below starts the new session's detection once the connect has succeeded.
+        _watchdog.Disarm();
+
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
