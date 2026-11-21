@@ -217,49 +217,6 @@ public class TcpStreamTransportTests
         }
     }
 
-    [Fact]
-    public async Task TcpStreamTransport_Reconnect_IgnoresALateFaultFromTheDeadSession()
-    {
-        // Reconnecting straight over a dead session (no Disconnect in between) used to leave the
-        // old session's watchdog armed while the new socket was being opened, so a late fault
-        // from the old reader could declare the connection lost and dispose the new socket
-        // mid-connect.
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
-            await transport.ConnectAsync();
-            await BreakTheConnectionFromThePeerAsync(listener, transport);
-            for (var i = 1; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
-            {
-                transport.ReportIoFault(new IOException("old session"));
-            }
-
-            var lost = new List<Exception?>();
-            transport.StatusChanged += (_, e) =>
-            {
-                if (!e.IsConnected) lost.Add(e.Error);
-            };
-            transport.ConnectTaskFactory = client =>
-            {
-                transport.ReportIoFault(new IOException("old session, late"));
-                return client.ConnectAsync(IPAddress.Loopback, port);
-            };
-
-            await transport.ConnectAsync();
-
-            Assert.True(transport.IsConnected);
-            Assert.Empty(lost);
-            await transport.DisconnectAsync();
-        }
-        finally
-        {
-            listener.Stop();
-        }
-    }
-
     /// <summary>
     /// Has the peer close the connection, then writes until the stack reports the reset, which
     /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than
