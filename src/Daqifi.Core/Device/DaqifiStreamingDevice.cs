@@ -1311,70 +1311,40 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
-    /// the error-queue drain and the command with its <c>SYSTem:ERRor?</c> are separate exchanges,
-    /// and the entry read afterwards is only this command's own if no other caller can add to the
-    /// queue in between.
-    /// </remarks>
     public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.SaveAdcCalibrationAsync(ct), cancellationToken);
+        => _administration.SaveAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.LoadAdcCalibrationAsync(ct), cancellationToken);
+        => _administration.LoadAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, ct), cancellationToken);
+        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, ct), cancellationToken);
+        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.SaveFactoryAdcCalibrationAsync(ct), cancellationToken);
+        => _administration.SaveFactoryAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.LoadFactoryAdcCalibrationAsync(ct), cancellationToken);
+        => _administration.LoadFactoryAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.UseAdcCalibrationAsync(bank, ct), cancellationToken);
+        => _administration.UseAdcCalibrationAsync(bank, cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.SaveVoltagePrecisionAsync(ct), cancellationToken);
+        => _administration.SaveVoltagePrecisionAsync(cancellationToken);
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs exclusively, for the reason given on <see cref="SaveAdcCalibrationAsync"/>.
-    /// </remarks>
     public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)
-        => RunExclusiveAsync(ct => _administration.LoadVoltagePrecisionAsync(ct), cancellationToken);
+        => _administration.LoadVoltagePrecisionAsync(cancellationToken);
 
 
     // -----------------------------------------------------------------

@@ -89,6 +89,59 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
         Assert.Equal(new[] { CompetingCallersError }, errorQueue); // the competitor's error was not taken as this command's
     }
 
+    [Theory]
+    [InlineData(nameof(DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync), -1, true)]
+    [InlineData(nameof(DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync), -1, false)]
+    [InlineData(nameof(DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync), -1, true)]
+    [InlineData(nameof(DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync), -1, false)]
+    [InlineData(nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync), 2, true)]
+    [InlineData(nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync), -1, false)]
+    public async Task ConfirmingCalibrationCommand_InvalidArgument_ThrowsSynchronouslyWithoutWaitingForTheLock(
+        string method,
+        int invalidArgument,
+        bool preCancelled)
+    {
+        // A bad channel or bank is the caller's mistake and is reported as such straight away:
+        // not masked by a cancelled token, and not held back until another caller's long
+        // operation (a download, a network update) releases the device.
+        var device = ConnectedDevice(new Queue<string>());
+        var lockHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            lockHeld.SetResult();
+            await releaseLock.Task.ConfigureAwait(false);
+        }));
+        await lockHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using var cts = new CancellationTokenSource();
+        if (preCancelled)
+        {
+            cts.Cancel();
+        }
+
+        try
+        {
+            Func<Task> call = method switch
+            {
+                nameof(DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync) => () => device.SetAdcCalibrationSlopeAsync(invalidArgument, 1.0, cts.Token),
+                nameof(DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync) => () => device.SetAdcCalibrationOffsetAsync(invalidArgument, 0.0, cts.Token),
+                nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync) => () => device.UseAdcCalibrationAsync(invalidArgument, cts.Token),
+                _ => throw new ArgumentOutOfRangeException(nameof(method), method, null),
+            };
+
+            // Assert.Throws, not ThrowsAsync: the call itself must throw, before any task exists.
+            Assert.Throws<ArgumentOutOfRangeException>(() => { _ = call(); });
+        }
+        finally
+        {
+            releaseLock.SetResult();
+            await holder.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Empty(device.SentCommands);
+    }
+
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_AnotherCallersQuery_WaitsForTheWholeReconfiguration()
     {
