@@ -1,3 +1,4 @@
+using System.IO.Ports;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Tests.TestSupport;
 
@@ -39,6 +40,8 @@ public class SerialStreamTransportDropDetectionTests
             dropped.Set();
         };
 
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
+
         transport.StartDropDetection();
         Assert.True(transport.IsLivenessMonitorActive);
 
@@ -72,6 +75,8 @@ public class SerialStreamTransportDropDetectionTests
             }
         };
 
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
+
         transport.StartDropDetection();
 
         for (var i = 0; i < 50; i++)
@@ -101,6 +106,8 @@ public class SerialStreamTransportDropDetectionTests
                 Interlocked.Increment(ref drops);
             }
         };
+
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
 
         transport.StartDropDetection();
 
@@ -143,6 +150,8 @@ public class SerialStreamTransportDropDetectionTests
             }
         };
 
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
+
         transport.StartDropDetection();
         Assert.True(transport.IsLivenessMonitorActive);
 
@@ -174,6 +183,8 @@ public class SerialStreamTransportDropDetectionTests
             }
         };
 
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
+
         transport.StartDropDetection();
 
         Assert.False(transport.IsLivenessMonitorActive);
@@ -200,6 +211,8 @@ public class SerialStreamTransportDropDetectionTests
             PortPresenceProbe = _ => true
         };
 
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
+
         transport.StartDropDetection();
 
         Assert.False(transport.IsLivenessMonitorActive);
@@ -215,6 +228,8 @@ public class SerialStreamTransportDropDetectionTests
         {
             PortPresenceProbe = _ => Volatile.Read(ref present)
         };
+
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
 
         transport.StartDropDetection();
         Assert.True(transport.IsLivenessMonitorActive);
@@ -257,6 +272,8 @@ public class SerialStreamTransportDropDetectionTests
             captured = e;
             Interlocked.Increment(ref drops);
         };
+
+        transport.SetSerialPortForTesting(new SerialPort("COM-test"));
 
         transport.StartDropDetection();
 

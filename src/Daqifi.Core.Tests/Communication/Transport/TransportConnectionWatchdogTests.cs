@@ -8,9 +8,11 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 /// </summary>
 public class TransportConnectionWatchdogTests
 {
+    private static readonly object Session = new();
+
     private static TransportConnectionWatchdog CreateWatchdog(List<Exception> losses)
     {
-        return new TransportConnectionWatchdog("Test transport (X)", losses.Add);
+        return new TransportConnectionWatchdog("Test transport (X)", (ex, _) => losses.Add(ex));
     }
 
     [Fact]
@@ -18,7 +20,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold - 1; i++)
         {
@@ -34,7 +36,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         var last = new IOException("device gone");
         for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
@@ -66,7 +68,7 @@ public class TransportConnectionWatchdogTests
         // be torn down, no matter how many total failures accumulate.
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         for (var round = 0; round < 20; round++)
         {
@@ -102,7 +104,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
         {
@@ -112,7 +114,7 @@ public class TransportConnectionWatchdogTests
         Assert.Single(losses);
 
         // Reconnect: the next cycle must start from zero, not one failure away from disconnecting.
-        watchdog.Arm();
+        watchdog.Arm(Session);
         watchdog.RecordFault(new IOException("first of the new cycle"));
 
         Assert.Single(losses);
@@ -126,7 +128,7 @@ public class TransportConnectionWatchdogTests
         // report a disconnect, never a loss.
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold - 1; i++)
         {
@@ -148,7 +150,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         var present = true;
         watchdog.StartPresencePolling(() => present, "port gone", TimeSpan.FromHours(1));
@@ -167,7 +169,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         var present = true;
         watchdog.StartPresencePolling(() => present, "port gone", TimeSpan.FromHours(1));
@@ -190,7 +192,7 @@ public class TransportConnectionWatchdogTests
         // A one-off enumeration hiccup is not an unplug.
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         var present = true;
         watchdog.StartPresencePolling(() => present, "port gone", TimeSpan.FromHours(1));
@@ -212,7 +214,7 @@ public class TransportConnectionWatchdogTests
         // A broken observation is not evidence of a drop.
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         watchdog.StartPresencePolling(() => throw new UnauthorizedAccessException(), "port gone",
             TimeSpan.FromHours(1));
@@ -234,7 +236,7 @@ public class TransportConnectionWatchdogTests
         // threshold — the exception has to break the run, not merely fail to extend it.
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         var step = 0;
         watchdog.StartPresencePolling(
@@ -269,7 +271,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         watchdog.StartPresencePolling(() => false, "port gone", TimeSpan.Zero);
 
@@ -282,8 +284,8 @@ public class TransportConnectionWatchdogTests
         // The bound the docs promise: miss-threshold intervals of absence, plus up to one interval
         // of phase between the drop and the next poll.
         var signalled = new ManualResetEventSlim(false);
-        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", _ => signalled.Set());
-        watchdog.Arm();
+        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", (_, _) => signalled.Set());
+        watchdog.Arm(Session);
 
         var interval = TimeSpan.FromMilliseconds(50);
         watchdog.StartPresencePolling(() => false, "port gone", interval);
@@ -297,7 +299,7 @@ public class TransportConnectionWatchdogTests
     {
         var losses = new List<Exception>();
         using var watchdog = CreateWatchdog(losses);
-        watchdog.Arm();
+        watchdog.Arm(Session);
         watchdog.StartPresencePolling(() => false, "port gone", TimeSpan.FromHours(1));
 
         Assert.True(watchdog.IsPollingPresence);
@@ -309,19 +311,79 @@ public class TransportConnectionWatchdogTests
     }
 
     [Fact]
+    public void ALoss_IsReportedWithTheSessionItWasArmedFor()
+    {
+        // The transport uses this to release only the connection the loss was detected on.
+        object? reported = null;
+        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", (_, session) => reported = session);
+        var first = new object();
+        var second = new object();
+        watchdog.Arm(first);
+        watchdog.Disarm();
+        watchdog.Arm(second);
+
+        for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+        {
+            watchdog.RecordFault(new IOException("gone"));
+        }
+
+        Assert.Same(second, reported);
+    }
+
+    [Fact]
+    public async Task AMissFromAProbeOfAReplacedSession_DoesNotCountAgainstTheNewOne()
+    {
+        // A presence probe for the old session blocks; meanwhile the connection is replaced. The
+        // old probe then answers "absent": that verdict is about a port that is gone and must not
+        // count as the new session's first miss, or one transient miss on the new port would
+        // reach the two-miss threshold and close it.
+        var losses = new List<Exception>();
+        using var watchdog = CreateWatchdog(losses);
+        using var oldProbeEntered = new ManualResetEventSlim();
+        using var releaseOldProbe = new ManualResetEventSlim();
+        var newSession = new object();
+
+        watchdog.Arm(new object());
+        watchdog.StartPresencePolling(
+            () =>
+            {
+                oldProbeEntered.Set();
+                releaseOldProbe.Wait();
+                return false;
+            },
+            "old port gone",
+            TimeSpan.FromHours(1));
+        var oldPoll = Task.Run(watchdog.PollPresence);
+        Assert.True(oldProbeEntered.Wait(TimeSpan.FromSeconds(5)));
+
+        // The reconnect: re-armed and polling the new port before the old probe answers.
+        watchdog.Disarm();
+        watchdog.Arm(newSession);
+        watchdog.StartPresencePolling(() => false, "new port gone", TimeSpan.FromHours(1));
+        releaseOldProbe.Set();
+        await oldPoll.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // One miss on the new port.
+        watchdog.PollPresence();
+
+        Assert.Empty(losses);
+        Assert.True(watchdog.IsArmed);
+    }
+
+    [Fact]
     public void ConcurrentFaults_SignalLossExactlyOnce()
     {
         // Reader and writer loops report from different threads; the loss must be raised once.
         var losses = new List<Exception>();
         var gate = new object();
-        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", ex =>
+        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", (ex, _) =>
         {
             lock (gate)
             {
                 losses.Add(ex);
             }
         });
-        watchdog.Arm();
+        watchdog.Arm(Session);
 
         Parallel.For(0, 200, _ => watchdog.RecordFault(new IOException("gone")));
 

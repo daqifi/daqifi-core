@@ -55,16 +55,18 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// </summary>
     internal static readonly TimeSpan DefaultPresencePollInterval = TimeSpan.FromSeconds(1);
 
-    private readonly Action<Exception> _onConnectionLost;
+    private readonly Action<Exception, object> _onConnectionLost;
     private readonly string _description;
     private readonly Lock _timerLock = new();
 
     /// <summary>
-    /// 1 while a connection is established and a loss may still be signalled, 0 otherwise. The
-    /// armed-to-disarmed transition is the one-shot gate: whichever signal wins the race performs
-    /// it, and every later signal sees 0 and does nothing.
+    /// The session (the transport's handle for one connection) this watchdog is armed for, or
+    /// <c>null</c> while disarmed. Taking it back to <c>null</c> is the one-shot gate: whichever
+    /// signal wins the race does it, every later signal finds nothing, and the winner hands the
+    /// transport the session it took, so a loss detected for one connection can never be applied
+    /// to the connection that replaced it.
     /// </summary>
-    private int _armed;
+    private object? _armedSession;
 
     private int _consecutiveFaults;
     private int _presenceMisses;
@@ -82,11 +84,11 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// <c>"Serial transport (/dev/cu.usbmodem1101)"</c>.
     /// </param>
     /// <param name="onConnectionLost">
-    /// Invoked at most once per armed cycle when the connection is declared lost. Invoked on the
-    /// reporting thread (a reader/writer loop) or on a timer thread, never with an internal lock
-    /// held.
+    /// Invoked at most once per armed cycle when the connection is declared lost, with the session
+    /// that cycle was armed for. Invoked on the reporting thread (a reader/writer loop) or on a
+    /// timer thread, never with an internal lock held.
     /// </param>
-    public TransportConnectionWatchdog(string description, Action<Exception> onConnectionLost)
+    public TransportConnectionWatchdog(string description, Action<Exception, object> onConnectionLost)
     {
         _description = description ?? throw new ArgumentNullException(nameof(description));
         _onConnectionLost = onConnectionLost ?? throw new ArgumentNullException(nameof(onConnectionLost));
@@ -95,7 +97,7 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// <summary>
     /// Gets a value indicating whether a connection loss can still be signalled.
     /// </summary>
-    public bool IsArmed => Volatile.Read(ref _armed) == 1;
+    public bool IsArmed => Volatile.Read(ref _armedSession) is not null;
 
     /// <summary>
     /// Gets a value indicating whether presence polling is currently running.
@@ -114,11 +116,20 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// <summary>
     /// Arms the watchdog after a successful connect, clearing any state left by a previous cycle.
     /// </summary>
-    public void Arm()
+    /// <param name="session">
+    /// The transport's handle for the connection just established. A loss is reported with it.
+    /// </param>
+    public void Arm(object session)
     {
+        ArgumentNullException.ThrowIfNull(session);
         Volatile.Write(ref _consecutiveFaults, 0);
-        Volatile.Write(ref _presenceMisses, 0);
-        Volatile.Write(ref _armed, 1);
+        lock (_timerLock)
+        {
+            // Reset with the session, under the lock a presence poll commits its verdict under,
+            // so a poll still running for the previous session cannot count against this one.
+            _presenceMisses = 0;
+            Volatile.Write(ref _armedSession, session);
+        }
     }
 
     /// <summary>
@@ -128,8 +139,15 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// </summary>
     public void Disarm()
     {
-        Volatile.Write(ref _armed, 0);
-        StopPresencePolling();
+        Timer? timer;
+        lock (_timerLock)
+        {
+            Volatile.Write(ref _armedSession, null);
+            timer = _presenceTimer;
+            _presenceTimer = null;
+        }
+
+        timer?.Dispose();
         Volatile.Write(ref _consecutiveFaults, 0);
         Volatile.Write(ref _presenceMisses, 0);
     }
@@ -145,14 +163,17 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     {
         ArgumentNullException.ThrowIfNull(probe);
 
-        if (!IsArmed || interval <= TimeSpan.Zero)
+        if (interval <= TimeSpan.Zero)
         {
             return;
         }
 
         lock (_timerLock)
         {
-            if (_disposed)
+            // Checked under the timer lock: a loss signalled between an unlocked check and the
+            // timer being created would stop polling first and leave this timer running on a
+            // disarmed watchdog, ready to probe on behalf of whatever session is armed next.
+            if (_disposed || !IsArmed)
             {
                 return;
             }
@@ -186,7 +207,8 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     /// <param name="error">The exception the failed operation raised.</param>
     public void RecordFault(Exception error)
     {
-        if (!IsArmed)
+        var session = Volatile.Read(ref _armedSession);
+        if (session is null)
         {
             return;
         }
@@ -197,7 +219,7 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             return;
         }
 
-        SignalConnectionLost(new TransportNotConnectedException(
+        SignalConnectionLost(session, new TransportNotConnectedException(
             $"{_description} saw {ConsecutiveFaultThreshold} consecutive I/O failures with no " +
             "successful transfer in between; the connection is treated as lost.",
             error));
@@ -228,9 +250,13 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             return;
         }
 
+        // The session this poll speaks for, read before the probe runs: if the connection is
+        // replaced while the probe runs, the verdict is about the old one and must not land on
+        // the new one — not as a loss, and not as a miss counted toward the new one's threshold.
+        var session = Volatile.Read(ref _armedSession);
         try
         {
-            if (!IsArmed)
+            if (session is null)
             {
                 return;
             }
@@ -241,18 +267,31 @@ internal sealed class TransportConnectionWatchdog : IDisposable
                 return;
             }
 
-            if (probe())
+            var present = probe();
+
+            int misses;
+            lock (_timerLock)
             {
-                Volatile.Write(ref _presenceMisses, 0);
+                if (!ReferenceEquals(Volatile.Read(ref _armedSession), session))
+                {
+                    return;
+                }
+
+                if (present)
+                {
+                    _presenceMisses = 0;
+                    return;
+                }
+
+                misses = ++_presenceMisses;
+            }
+
+            if (misses < PresenceMissThreshold)
+            {
                 return;
             }
 
-            if (Interlocked.Increment(ref _presenceMisses) < PresenceMissThreshold)
-            {
-                return;
-            }
-
-            SignalConnectionLost(new TransportNotConnectedException(_presenceLostMessage));
+            SignalConnectionLost(session, new TransportNotConnectedException(_presenceLostMessage));
         }
         catch
         {
@@ -265,7 +304,13 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             // CONSECUTIVE observed absences; letting a miss survive an exception would make
             // "absent, could-not-observe, absent" satisfy a two-miss threshold that never actually
             // saw the port absent twice in a row.
-            Volatile.Write(ref _presenceMisses, 0);
+            lock (_timerLock)
+            {
+                if (ReferenceEquals(Volatile.Read(ref _armedSession), session))
+                {
+                    _presenceMisses = 0;
+                }
+            }
         }
         finally
         {
@@ -274,19 +319,31 @@ internal sealed class TransportConnectionWatchdog : IDisposable
     }
 
     /// <summary>
-    /// Declares the connection lost, at most once per armed cycle.
+    /// Declares <paramref name="session"/> lost, at most once per armed cycle.
     /// </summary>
-    private void SignalConnectionLost(Exception error)
+    private void SignalConnectionLost(object session, Exception error)
     {
-        // Disarm and signal in one step. Whichever of the two detectors gets here first owns the
-        // notification; the other sees 0 and returns.
-        if (Interlocked.Exchange(ref _armed, 0) != 1)
+        // Disarm and signal in one step, and only for the session the detector observed.
+        // Whichever detector gets here first owns the notification; the other, or one that
+        // observed a session since replaced, finds nothing to take and returns. The session's
+        // presence timer is detached in the same locked step: Arm and StartPresencePolling take
+        // this lock too, so the timer taken here can only be the lost session's, never one a
+        // reconnect has started since.
+        Timer? timer;
+        lock (_timerLock)
         {
-            return;
+            if (!ReferenceEquals(Volatile.Read(ref _armedSession), session))
+            {
+                return;
+            }
+
+            Volatile.Write(ref _armedSession, null);
+            timer = _presenceTimer;
+            _presenceTimer = null;
         }
 
-        StopPresencePolling();
-        _onConnectionLost(error);
+        timer?.Dispose();
+        _onConnectionLost(error, session);
     }
 
     /// <summary>
@@ -306,6 +363,6 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             _presenceTimer = null;
         }
 
-        Volatile.Write(ref _armed, 0);
+        Volatile.Write(ref _armedSession, null);
     }
 }

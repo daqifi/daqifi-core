@@ -217,6 +217,98 @@ public class TcpStreamTransportTests
         }
     }
 
+    [Fact]
+    public async Task TcpStreamTransport_Reconnect_OverADeadSession_IsLeftAloneByALateLossForTheOldOne()
+    {
+        // Reconnecting straight over a dead session (no Disconnect in between): the old socket is
+        // released rather than overwritten, and a loss the old session's detector delivers after
+        // the replacement does not touch the new connection.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            await transport.ConnectAsync();
+            var oldSession = transport.Stream;
+            await BreakTheConnectionFromThePeerAsync(listener, transport);
+
+            await transport.ConnectAsync();
+            var lost = new List<Exception?>();
+            transport.StatusChanged += (_, e) =>
+            {
+                if (!e.IsConnected) lost.Add(e.Error);
+            };
+
+            transport.HandleConnectionLost(new IOException("old session, late"), oldSession);
+
+            Assert.True(transport.IsConnected);
+            Assert.NotSame(oldSession, transport.Stream);
+            Assert.Empty(lost);
+            Assert.Throws<ObjectDisposedException>(() => oldSession.Write(new byte[1], 0, 1));
+            await transport.DisconnectAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_ConnectedSubscriberThatDisconnectsAtOnce_LeavesConnectAsyncSucceeding()
+    {
+        // A StatusChanged(true) subscriber is free to disconnect synchronously. Arming drop
+        // detection after that notification found the stream already gone and threw out of the
+        // ConnectAsync that had succeeded.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            transport.StatusChanged += (_, e) =>
+            {
+                if (e.IsConnected) transport.Disconnect();
+            };
+
+            await transport.ConnectAsync();
+
+            Assert.False(transport.IsConnected);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_AConnectFailedByAThrowingConnectedSubscriber_LeavesNoDetectionArmed()
+    {
+        // A StatusChanged(true) subscriber that throws fails the attempt after it armed drop
+        // detection for its stream; the failed attempt's detection must go with its socket.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            transport.StatusChanged += (_, e) =>
+            {
+                if (e.IsConnected) throw new InvalidOperationException("subscriber failed");
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => transport.ConnectAsync(ConnectionRetryOptions.NoRetry));
+
+            Assert.False(transport.IsConnected);
+            Assert.False(transport.IsDropDetectionArmed);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     /// <summary>
     /// Has the peer close the connection, then writes until the stack reports the reset, which
     /// leaves the client socket held but reporting <c>Connected == false</c>. Writing rather than

@@ -2141,7 +2141,7 @@ public class DeviceReconnectTests
                 _isConnected = true;
             }
 
-            _watchdog?.Arm();
+            _watchdog?.Arm(this);
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
         }
 
@@ -2177,7 +2177,7 @@ public class DeviceReconnectTests
 
         public void ReportIoSuccess() => _watchdog?.RecordSuccess();
 
-        private void HandleConnectionLost(Exception error)
+        private void HandleConnectionLost(Exception error, object session)
         {
             lock (_gate)
             {

@@ -123,6 +123,26 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
+    public void SerialStreamTransport_ALossForAPortSinceReplaced_LeavesTheNewPortAlone()
+    {
+        // A drop detector already running for the old port when a reconnect replaced it can
+        // deliver its verdict afterwards. It must not take down, or report as lost, the new port.
+        using var transport = new SerialStreamTransport("COM1", livenessCheckInterval: TimeSpan.Zero);
+        var oldPort = new DisposalTrackingSerialPort();
+        var newPort = new DisposalTrackingSerialPort();
+        transport.SetSerialPortForTesting(oldPort);
+        transport.StartDropDetection();
+        transport.SetSerialPortForTesting(newPort);
+        var reported = new List<bool>();
+        transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+
+        transport.HandleConnectionLost(new IOException("old port gone"), oldPort);
+
+        Assert.False(newPort.IsDisposed);
+        Assert.Empty(reported);
+    }
+
+    [Fact]
     public void SerialStreamTransport_Stream_WhenPortClosedMidOperation_ThrowsTypedException_NotRawBaseStreamMessage()
     {
         // Arrange - simulate the issue #238 scenario: the port is non-null but closed
