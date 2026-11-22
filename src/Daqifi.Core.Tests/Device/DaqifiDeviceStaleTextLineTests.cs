@@ -2,6 +2,8 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
+using Microsoft.Extensions.Time.Testing;
 using System.Diagnostics;
 using System.Text;
 
@@ -765,13 +767,21 @@ public class DaqifiDeviceStaleTextLineTests
         // For a directory listing that means caching a partial or empty card silently, since a
         // listing cut short before its end-of-listing marker reads as Unterminated, which is not an
         // error. Identical setup to the opted-in test above, minus the opt-in.
+        //
+        // On the device's stepped clock (issue #637): the window is counted in device time, so
+        // waiting it out costs the suite nothing and needs no slack for a loaded runner.
+        var clock = new FakeTimeProvider();
+        var sendBoundary = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
-        using var device = new StaleLineTestableDevice("Non-Opted-In Device", transport);
+        using var device = new StaleLineTestableDevice(
+            "Non-Opted-In Device",
+            transport,
+            onSendBoundaryCaptured: () => sendBoundary.TrySetResult(clock.GetUtcNow()));
+        device.SetTimeProviderForTesting(clock);
 
         device.Connect();
 
-        var sw = Stopwatch.StartNew();
-        var lines = await device.CallExecuteTextCommandAsync(
+        var call = device.CallExecuteTextCommandAsync(
             () =>
             {
                 device.Send(ScpiMessageProducer.GetSystemError);
@@ -779,12 +789,14 @@ public class DaqifiDeviceStaleTextLineTests
             },
             responseTimeoutMs: 3000,
             completionTimeoutMs: 1500);
-        sw.Stop();
+
+        var waited = await DeviceTimeFromSendToEndAsync(clock, call, sendBoundary.Task, transport.WaitForLineCollected);
+        var lines = await call;
 
         Assert.Contains(lines, l => l.Contains("No error"));
         Assert.True(
-            sw.ElapsedMilliseconds >= 1000,
-            $"Expected an exchange that did not opt in to wait out its 1500ms completion window; took {sw.ElapsedMilliseconds}ms.");
+            waited >= TimeSpan.FromMilliseconds(1500),
+            $"Expected an exchange that did not opt in to wait out its 1500ms completion window; it ended {waited.TotalMilliseconds:F0}ms of device time after sending.");
 
         device.Disconnect();
     }
@@ -796,13 +808,18 @@ public class DaqifiDeviceStaleTextLineTests
         // alongside a command's output, and an exchange that never asked for a terminator has no
         // reason to treat it as one — it may still be mid-dump. Without this half, SYSTem:LOG? on
         // a device with something to complain about would return a truncated log.
+        var clock = new FakeTimeProvider();
+        var sendBoundary = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
-        using var device = new StaleLineTestableDevice("Unasking Device", transport);
+        using var device = new StaleLineTestableDevice(
+            "Unasking Device",
+            transport,
+            onSendBoundaryCaptured: () => sendBoundary.TrySetResult(clock.GetUtcNow()));
+        device.SetTimeProviderForTesting(clock);
 
         device.Connect();
 
-        var sw = Stopwatch.StartNew();
-        var lines = await device.CallExecuteTextCommandAsync(
+        var call = device.CallExecuteTextCommandAsync(
             () =>
             {
                 device.Send(new ScpiMessage("SYSTem:LOG?"));
@@ -811,12 +828,14 @@ public class DaqifiDeviceStaleTextLineTests
             responseTimeoutMs: 3000,
             completionTimeoutMs: 400,
             terminatorShortCircuit: true);
-        sw.Stop();
+
+        var waited = await DeviceTimeFromSendToEndAsync(clock, call, sendBoundary.Task, transport.WaitForLineCollected);
+        var lines = await call;
 
         Assert.Contains(lines, l => l.Contains("No error"));
         Assert.True(
-            sw.ElapsedMilliseconds >= 350,
-            $"Expected the exchange to wait out its 400ms completion window for a reply it never asked for; took {sw.ElapsedMilliseconds}ms.");
+            waited >= TimeSpan.FromMilliseconds(400),
+            $"Expected the exchange to wait out its 400ms completion window for a reply it never asked for; it ended {waited.TotalMilliseconds:F0}ms of device time after sending.");
 
         device.Disconnect();
     }
@@ -830,43 +849,32 @@ public class DaqifiDeviceStaleTextLineTests
         // report an empty SD card for a card with files on it.
         //
         // The stale terminator is released at the stale-line boundary and provably collected before
-        // the setup action returns, which puts it inside the capture-to-send window (#553); the
-        // listing line then arrives 150ms after the send boundary, by which point an exchange that
-        // had stopped on the stale terminator would already have returned without it.
+        // the setup action returns, which puts it inside the capture-to-send window (#553). The
+        // listing line is released only once the exchange has sent and has been given real time to
+        // stop on the stale terminator, so an exchange that does stop on it returns without it.
         //
         // Unlike the #553 test above, the stale line here is CONTENT, not a blank — so it is not
         // dropped, the wait loop counts it as evidence immediately, and phase 2's completion window
-        // is what has to cover the listing line's arrival rather than phase 1's much longer
-        // first-response timeout. That window is therefore 2000ms against a 150ms release: more
-        // than ten times the delay it has to cover, so a runner that starves the release thread
-        // still lands inside it (issue #687, and the CI failure this replaced).
+        // is what has to cover the listing line's arrival. On the device's stepped clock (issue
+        // #637) that window cannot run out while the test holds the clock still, so the listing's
+        // arrival needs no margin against a loaded runner (issue #687, and the CI failure the
+        // wall-clock version of this test once was).
+        var clock = new FakeTimeProvider();
+        var sendBoundary = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var transport = new TwoStageReleaseTransport(
             staleLine: "0,\"No error\"\r\n",
             contentLine: "/data/log.bin 4096\r\n");
 
-        Thread? releaseContent = null;
         using var device = new StaleBoundaryHookTestableDevice(
             "Stale-Terminator Device",
             transport,
             onStaleLineBoundaryCaptured: () => transport.ReleaseStale(),
-            onSendBoundaryCaptured: () =>
-            {
-                // One exchange, so one release; guarded so a future extra exchange cannot turn a
-                // second Start() on the same thread into an unrelated failure here.
-                if (releaseContent != null) return;
-
-                releaseContent = new Thread(() =>
-                {
-                    Thread.Sleep(150);
-                    transport.ReleaseContent();
-                })
-                { IsBackground = true, Name = "stale-terminator-test-content-release" };
-                releaseContent.Start();
-            });
+            onSendBoundaryCaptured: () => sendBoundary.TrySetResult(clock.GetUtcNow()));
+        device.SetTimeProviderForTesting(clock);
 
         device.Connect();
 
-        var lines = await device.CallExecuteTextCommandAsync(
+        var call = device.CallExecuteTextCommandAsync(
             () =>
             {
                 Assert.True(
@@ -878,6 +886,24 @@ public class DaqifiDeviceStaleTextLineTests
             completionTimeoutMs: 2000,
             terminatorShortCircuit: true);
 
+        await PumpToSendBoundaryAsync(clock, call, sendBoundary.Task);
+
+        // The clock is held still from here, so an exchange that is correctly waiting for more
+        // cannot time out however long this takes. One that stops on the stale terminator needs no
+        // device time to do it, only a moment of real time to return.
+        var stoppedOnTheStaleTerminator = await Task.WhenAny(call, Task.Delay(150)) == call;
+        Assert.False(
+            stoppedOnTheStaleTerminator,
+            "The exchange ended on a terminator that arrived before it sent, before its own listing could arrive.");
+
+        transport.ReleaseContent();
+        Assert.True(
+            transport.WaitForContentConsumed(TimeSpan.FromSeconds(10)),
+            "The reader never collected the listing line.");
+        await FakeClockPump.UntilAsync(
+            clock, call, TimeSpan.FromMilliseconds(50), "the exchange never finished waiting out its completion window.");
+        var lines = await call;
+
         // The listing survived: collection did not stop on the leading stale terminator.
         Assert.Contains(lines, l => l.Contains("/data/log.bin"));
 
@@ -886,7 +912,6 @@ public class DaqifiDeviceStaleTextLineTests
         // what leaves TrySplitAtSdListTerminator the authority on which terminator is the real one.
         Assert.Contains(lines, l => l.Contains("No error"));
 
-        releaseContent?.Join(TimeSpan.FromSeconds(10));
         device.Disconnect();
     }
 
@@ -899,17 +924,19 @@ public class DaqifiDeviceStaleTextLineTests
         // holds the producer thread, so this exchange's SYSTem:ERRor? provably cannot be on the
         // wire when the reply lands — nothing has been asked, so nothing can be answering, and the
         // line-count boundary alone cannot tell.
+        var clock = new FakeTimeProvider();
+        var sendBoundary = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var transport = new QueuedWriteTransport();
 
-        var terminatorReleased = false;
         using var device = new StaleLineTestableDevice(
             "Queued-Terminator Device",
             transport,
             onSendBoundaryCaptured: () =>
             {
-                terminatorReleased = true;
                 transport.ReleaseLine("0,\"No error\"\r\n");
+                sendBoundary.TrySetResult(clock.GetUtcNow());
             });
+        device.SetTimeProviderForTesting(clock);
 
         device.Connect();
 
@@ -919,25 +946,22 @@ public class DaqifiDeviceStaleTextLineTests
             transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
             "The producer never picked up the earlier command.");
 
-        // The window is wide, and the bound well inside it, because the two outcomes have to be
-        // unmistakable: an exchange that short-circuits here returns in roughly the time the reader
-        // takes to pick the line up (~350ms observed), one that correctly keeps waiting returns no
-        // earlier than this window. A bound near the window's own length would sit between them.
-        // The write hold is bounded at 30s, so 1500ms cannot expire it.
-        var sw = Stopwatch.StartNew();
-        var lines = await device.CallExecuteTextCommandAsync(
+        // On the device's stepped clock (issue #637), so the two outcomes are unmistakable without
+        // a margin: an exchange that short-circuits here ends without the clock moving past its
+        // send boundary at all, one that correctly keeps waiting ends no earlier than its window.
+        // The write hold is bounded at 30s of real time, which a stepped window cannot approach.
+        var call = device.CallExecuteTextCommandAsync(
             () => device.Send(ScpiMessageProducer.GetSystemError),
             responseTimeoutMs: 3000,
             completionTimeoutMs: 1500,
             terminatorShortCircuit: true);
-        sw.Stop();
+
+        var waited = await DeviceTimeFromSendToEndAsync(clock, call, sendBoundary.Task, transport.WaitForLinesCollected);
+        var lines = await call;
 
         Assert.True(
-            terminatorReleased,
-            "The exchange never reached its send boundary, so the terminator was never put on the wire.");
-        Assert.True(
-            sw.ElapsedMilliseconds >= 1000,
-            $"Expected the exchange to keep waiting for a terminator that cannot be its own; took {sw.ElapsedMilliseconds}ms.");
+            waited >= TimeSpan.FromMilliseconds(1500),
+            $"Expected the exchange to keep waiting for a terminator that cannot be its own; it ended {waited.TotalMilliseconds:F0}ms of device time after sending.");
         Assert.Contains(lines, l => l.Contains("No error"));
 
         transport.ReleaseWrite();
@@ -946,6 +970,58 @@ public class DaqifiDeviceStaleTextLineTests
             "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
 
         device.Disconnect();
+    }
+
+    /// <summary>
+    /// Steps <paramref name="clock"/> until the exchange captures its send boundary — the drain
+    /// and settle waits in front of it run on that clock — and leaves it there.
+    /// </summary>
+    /// <remarks>
+    /// Surfaces the exchange's own failure if it ends before reaching the boundary, rather than
+    /// reporting only that the boundary never came.
+    /// </remarks>
+    private static async Task PumpToSendBoundaryAsync(FakeTimeProvider clock, Task exchange, Task sendBoundary)
+    {
+        await FakeClockPump.UntilAsync(
+            clock,
+            Task.WhenAny(sendBoundary, exchange),
+            TimeSpan.FromMilliseconds(10),
+            "the exchange never reached its send boundary.");
+
+        if (!sendBoundary.IsCompleted)
+        {
+            await exchange;
+            Assert.Fail("The exchange ended without reaching its send boundary.");
+        }
+    }
+
+    /// <summary>
+    /// Runs an exchange on <paramref name="clock"/> and reports how much device time passed
+    /// between its send boundary and its end — the time it spent waiting once it had sent.
+    /// </summary>
+    /// <remarks>
+    /// The clock is held still at the send boundary until the reply has provably been collected,
+    /// so the reader thread gets all the real time it needs without the exchange's windows
+    /// running down meanwhile. An exchange that ends on that reply therefore ends having spent
+    /// no device time past the boundary, and one that waits out its window has spent at least
+    /// the window: nothing in between depends on how promptly the runner schedules anything.
+    /// </remarks>
+    private static async Task<TimeSpan> DeviceTimeFromSendToEndAsync(
+        FakeTimeProvider clock,
+        Task exchange,
+        Task<DateTimeOffset> sendBoundary,
+        Func<TimeSpan, bool> waitForReplyCollected)
+    {
+        await PumpToSendBoundaryAsync(clock, exchange, sendBoundary);
+
+        Assert.True(
+            waitForReplyCollected(TimeSpan.FromSeconds(10)),
+            "The reader never collected the reply, so there was nothing for the exchange to end on.");
+
+        await FakeClockPump.UntilAsync(
+            clock, exchange, TimeSpan.FromMilliseconds(50), "the exchange never finished waiting out its completion window.");
+
+        return clock.GetUtcNow() - await sendBoundary;
     }
 
     /// <summary>
@@ -1302,6 +1378,9 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="TwoStageStream.WaitForStaleConsumed"/>.</summary>
         public bool WaitForStaleConsumed(TimeSpan timeout) => _stream.WaitForStaleConsumed(timeout);
 
+        /// <summary>See <see cref="TwoStageStream.WaitForContentConsumed"/>.</summary>
+        public bool WaitForContentConsumed(TimeSpan timeout) => _stream.WaitForContentConsumed(timeout);
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
@@ -1336,6 +1415,8 @@ public class DaqifiDeviceStaleTextLineTests
             private readonly byte[] _content;
             private readonly object _gate = new();
             private readonly TaskCompletionSource<bool> _staleConsumed =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource<bool> _contentConsumed =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);
             private bool _staleReleased;
             private bool _contentReleased;
@@ -1385,6 +1466,12 @@ public class DaqifiDeviceStaleTextLineTests
             /// </remarks>
             public bool WaitForStaleConsumed(TimeSpan timeout) => _staleConsumed.Task.Wait(timeout);
 
+            /// <summary>
+            /// Blocks until the reader has provably turned the content line into a collected line,
+            /// by the same next-read rule as <see cref="WaitForStaleConsumed"/>.
+            /// </summary>
+            public bool WaitForContentConsumed(TimeSpan timeout) => _contentConsumed.Task.Wait(timeout);
+
             public override int Read(byte[] buffer, int offset, int count)
             {
                 lock (_gate)
@@ -1395,6 +1482,11 @@ public class DaqifiDeviceStaleTextLineTests
                     if (_staleReleased && _stalePosition >= _stale.Length)
                     {
                         _staleConsumed.TrySetResult(true);
+                    }
+
+                    if (_contentReleased && _contentPosition >= _content.Length)
+                    {
+                        _contentConsumed.TrySetResult(true);
                     }
 
                     // The stale line always drains first -- it is the one released earliest on
@@ -1485,6 +1577,9 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>Puts a line on the wire for the reader to pick up.</summary>
         public void ReleaseLine(string line) => _stream.ReleaseLine(line);
 
+        /// <summary>See <see cref="HoldableStream.WaitForLinesCollected"/>.</summary>
+        public bool WaitForLinesCollected(TimeSpan timeout) => _stream.WaitForLinesCollected(timeout);
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
@@ -1531,6 +1626,8 @@ public class DaqifiDeviceStaleTextLineTests
             private readonly object _writeGate = new();
             private byte[]? _current;
             private int _position;
+            private int _linesReleased;
+            private int _linesCollected;
             private bool _holdWrites;
             private bool _writeStarted;
             private bool _holdExpired;
@@ -1604,6 +1701,39 @@ public class DaqifiDeviceStaleTextLineTests
                 lock (_gate)
                 {
                     _pending.Enqueue(Encoding.ASCII.GetBytes(line));
+                    _linesReleased++;
+                }
+            }
+
+            /// <summary>
+            /// Blocks until the reader has provably turned every released line into a collected
+            /// line.
+            /// </summary>
+            /// <remarks>
+            /// A line counts as collected on the reader's <em>next</em> entry into
+            /// <see cref="Read"/> after its last byte was handed over: the consumer runs one thread
+            /// through read, parse, raise <c>MessageParsed</c>, read, so coming back for more bytes
+            /// means the line built from the previous read has already been appended to the
+            /// exchange's collected lines.
+            /// </remarks>
+            public bool WaitForLinesCollected(TimeSpan timeout)
+            {
+                var clock = Stopwatch.StartNew();
+
+                lock (_gate)
+                {
+                    while (_linesCollected < _linesReleased)
+                    {
+                        var remaining = timeout - clock.Elapsed;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            return false;
+                        }
+
+                        Monitor.Wait(_gate, remaining);
+                    }
+
+                    return true;
                 }
             }
 
@@ -1619,7 +1749,16 @@ public class DaqifiDeviceStaleTextLineTests
             {
                 lock (_gate)
                 {
-                    if (_current == null || _position >= _current.Length)
+                    // Entering a read with the current line fully handed over: see
+                    // WaitForLinesCollected for why this is the moment it is known to be collected.
+                    if (_current != null && _position >= _current.Length)
+                    {
+                        _current = null;
+                        _linesCollected++;
+                        Monitor.PulseAll(_gate);
+                    }
+
+                    if (_current == null)
                     {
                         _current = _pending.Count > 0 ? _pending.Dequeue() : null;
                         _position = 0;

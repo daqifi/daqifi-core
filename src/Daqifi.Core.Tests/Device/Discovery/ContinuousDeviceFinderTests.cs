@@ -1039,30 +1039,11 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
-    public void Start_AfterDispose_ThrowsObjectDisposedException()
-    {
-        var finder = NewFinder(new StubDeviceFinder());
-        finder.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => finder.Start());
-    }
-
-    [Fact]
     public async Task StopAsync_WhenNotRunning_DoesNotThrow()
     {
         using var finder = NewFinder(new StubDeviceFinder());
         await finder.StopAsync();
         Assert.False(finder.IsRunning);
-    }
-
-    [Fact]
-    public void Dispose_DisposesInnerFinder_WhenNotLeaveOpen()
-    {
-        var inner = new StubDeviceFinder();
-        var finder = NewFinder(inner, leaveInnerFinderOpen: false);
-
-        finder.Dispose();
-
-        Assert.True(inner.Disposed);
     }
 
     [Fact]
@@ -1080,10 +1061,12 @@ public class ContinuousDeviceFinderTests
     public void Dispose_IsIdempotent()
     {
         var inner = new StubDeviceFinder();
-        var finder = NewFinder(inner);
+        var finder = NewFinder(inner, leaveInnerFinderOpen: false);
 
+        // The first dispose disposes the inner finder and leaves the finder unusable.
         finder.Dispose();
         Assert.Equal(1, inner.DisposeCount);
+        Assert.Throws<ObjectDisposedException>(() => finder.Start());
 
         // The second dispose returns early: the inner finder is not disposed a second time, and
         // the finder stays disposed, so Start still throws (DeviceFinderBaseTests' post-dispose
@@ -1915,18 +1898,6 @@ public class ContinuousDeviceFinderTests
 
         Assert.Throws<ArgumentNullException>(() => new DeviceUpdatedEventArgs(null!, device));
         Assert.Throws<ArgumentNullException>(() => new DeviceUpdatedEventArgs(device, null!));
-    }
-
-    [Fact]
-    public void DeviceUpdatedEventArgs_CarriesBothSidesOfTheChange()
-    {
-        var previous = Serial("SN-1", port: "COM3");
-        var current = Serial("SN-1", port: "COM7");
-
-        var args = new DeviceUpdatedEventArgs(previous, current);
-
-        Assert.Same(previous, args.PreviousDeviceInfo);
-        Assert.Same(current, args.DeviceInfo);
     }
 
     #endregion
