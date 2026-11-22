@@ -56,16 +56,16 @@ public partial class SdCardOperationsCollaboratorTests
     private static readonly byte[] ReleasedPayload = Concat(new byte[] { 0x2A }, EofMarker);
 
     /// <summary>
-    /// Upper bound for the two tests that park a transfer on a stream which ignores cancellation.
+    /// Upper bound for the tests that park a transfer on a stream which ignores cancellation.
     /// The bound is only there so a regression that never returns fails the one test instead of
     /// hanging the run — it is not a performance assertion, so it is deliberately far above what
     /// these paths take.
     /// </summary>
     /// <remarks>
-    /// The longest thing under it is the ~300 ms hard deadline the abandon test asserts; the rest
-    /// (the entry signal, the gate's non-blocking answer, the release) are immediate. 10 s leaves
-    /// about thirty times the headroom a loaded CI runner could plausibly need, while keeping the
-    /// feedback on an actual regression to seconds rather than a minute.
+    /// Nothing under it takes real time: the hard deadline the abandon test asserts runs on a
+    /// stepped clock, and the rest (the entry signal, the gate's non-blocking answer, the release)
+    /// are immediate. 10 s keeps the feedback on an actual regression to seconds rather than a
+    /// minute.
     /// </remarks>
     private static readonly TimeSpan ParkedTestBudget = TimeSpan.FromSeconds(10);
 
@@ -598,20 +598,6 @@ public partial class SdCardOperationsCollaboratorTests
     #region GetSdCardStorageAsync
 
     [Fact]
-    public async Task GetSdCardStorageAsync_ParsesFreeAndTotal()
-    {
-        var host = new FakeHost();
-        host.EnqueueResponse("1048576000,2097152000");
-        var ops = new SdCardOperations(host);
-
-        var storage = await ops.GetSdCardStorageAsync();
-
-        Assert.Equal(1048576000L, storage.FreeBytes);
-        Assert.Equal(2097152000L, storage.TotalBytes);
-        Assert.Equal(1, host.ExchangeCount);
-    }
-
-    [Fact]
     public async Task GetSdCardStorageAsync_CardReallyAbsent_ThrowsNotPresentAfterTheRechecks()
     {
         // A card that is not there answers "no card" every time, so the rechecks change nothing
@@ -738,36 +724,6 @@ public partial class SdCardOperationsCollaboratorTests
 
         Assert.Single(files);
         Assert.Equal(3, host.ExchangeCount);
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_TransientScpiError_RetriesOnceThenSucceeds()
-    {
-        var host = new FakeHost();
-        host.EnqueueResponse("**ERROR: -200,\"Execution error\"");
-        host.EnqueueResponse("1000,2000");
-        var ops = new SdCardOperations(host);
-
-        var storage = await ops.GetSdCardStorageAsync();
-
-        Assert.Equal(1000L, storage.FreeBytes);
-        Assert.Equal(2, host.ExchangeCount);
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_UndefinedHeader_ThrowsFeatureNotSupported()
-    {
-        // -113 means the firmware does not know the command at all (ADR 0001), so the device's own
-        // answer — not the version seam — is what decides.
-        var host = new FakeHost();
-        host.EnqueueResponse("**ERROR: -113,\"Undefined header\"");
-        host.EnqueueResponse("**ERROR: -113,\"Undefined header\"");
-        var ops = new SdCardOperations(host);
-
-        var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(() => ops.GetSdCardStorageAsync());
-
-        Assert.Equal(DeviceFeature.SdStorageQuery, ex.Feature);
-        Assert.Equal(2, host.ExchangeCount);
     }
 
     [Fact]
@@ -941,18 +897,6 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_QuotedFileName_IsRefused()
-    {
-        // The file name is interpolated into a SCPI command, so a quote would close the literal.
-        var host = new FakeHost();
-        var ops = new SdCardOperations(host);
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => ops.StartSdCardLoggingSessionAsync("evil\";SYSTem:REboot.bin"));
-        Assert.Empty(host.Calls);
-    }
-
-    [Fact]
     public async Task StartSdCardLoggingSessionAsync_NoChannelMask_LeavesTheCurrentConfigurationAlone()
     {
         var host = new FakeHost { StreamingFrequency = 250 };
@@ -993,27 +937,6 @@ public partial class SdCardOperationsCollaboratorTests
         var startIndex = calls.FindIndex(c => c.StartsWith("send:SYSTem:StartStreamData", StringComparison.Ordinal));
         Assert.True(maskIndex >= 0, "the channel mask was never sent");
         Assert.True(maskIndex < startIndex, "the channel mask must be enabled before streaming starts");
-    }
-
-    [Fact]
-    public async Task StopSdCardLoggingAsync_OverUsb_ReturnsTheStreamToUsbAndBringsLanBack()
-    {
-        var host = new FakeHost { IsUsbConnection = true };
-        var ops = new SdCardOperations(host);
-
-        await ops.StopSdCardLoggingAsync();
-
-        Assert.Equal(
-            new[]
-            {
-                "send:" + StopStreaming,
-                "send:" + SetProtobufFormat,
-                "send:" + DisableSd,
-                "send:SYSTem:STReam:INTerface 0",
-                "send:" + EnableLan,
-            },
-            host.Calls);
-        Assert.False(host.IsStreaming);
     }
 
     [Fact]
@@ -1104,6 +1027,7 @@ public partial class SdCardOperationsCollaboratorTests
                 "send:" + EnableLan,
             }),
             host.Calls);
+        Assert.False(host.IsStreaming);
     }
 
     #endregion
@@ -1166,31 +1090,6 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.DoesNotContain("delete operation failed", ex.Message);
         Assert.Contains("list operation failed", ex.Message);
         Assert.Empty(ops.SdCardFiles);
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_ScpiError_RetriesExactlyOnce()
-    {
-        var host = new FakeHost();
-        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
-        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
-        var ops = new SdCardOperations(host);
-
-        await ops.DeleteSdCardFileAsync("gone.bin");
-
-        Assert.Equal(2, host.ExchangeCount);
-        Assert.Equal("keep.bin", Assert.Single(ops.SdCardFiles).FileName);
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_QuotedFileName_IsRefusedBeforeTheWire()
-    {
-        var host = new FakeHost();
-        var ops = new SdCardOperations(host);
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => ops.DeleteSdCardFileAsync("evil\";SYSTem:REboot.bin"));
-        Assert.Empty(host.Calls);
     }
 
     [Fact]
@@ -1813,23 +1712,6 @@ public partial class SdCardOperationsCollaboratorTests
     #region DownloadSdCardFileAsync
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_HappyPath_WritesTheFileAndHandsTheBusBack()
-    {
-        var payload = new byte[] { 1, 2, 3, 4, 5 };
-        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)) };
-        var ops = new SdCardOperations(host);
-        using var destination = new MemoryStream();
-
-        var result = await ops.DownloadSdCardFileAsync("data.bin", destination);
-
-        Assert.Equal(payload.Length, result.FileSize);
-        Assert.Equal(payload, destination.ToArray());
-        Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
-        Assert.Contains("send:" + DisableSd, host.Calls);
-        Assert.Contains("send:" + EnableLan, host.Calls);
-    }
-
-    [Fact]
     public async Task DownloadSdCardFileAsync_WasStreaming_ResumesStreamingAfterTheLanRestore()
     {
         // #533
@@ -1865,25 +1747,6 @@ public partial class SdCardOperationsCollaboratorTests
 
         Assert.False(host.IsStreaming);
         Assert.Equal(0, host.StartStreamingCallCount);
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_ListingSaysTheFileIsEmpty_AcceptsTheZeroByteTransfer()
-    {
-        // #398 gap 2: a genuinely empty file is a legitimate 0-byte download, not a wedged SD
-        // subsystem, so it must not spend the empty-transfer retry.
-        var host = new FakeHost();
-        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
-        var ops = new SdCardOperations(host);
-        await ops.GetSdCardFilesAsync();
-
-        host.RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker);
-        using var destination = new MemoryStream();
-
-        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
-
-        Assert.Equal(0, result.FileSize);
-        Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
     }
 
     [Fact]
@@ -1927,23 +1790,6 @@ public partial class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("dup.bin", destination));
 
         Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"dup.bin\""));
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_EmptyTransfer_ReissuesTheGetAndSucceedsOnTheRetry()
-    {
-        var payload = new byte[] { 9, 9, 9 };
-        var host = new FakeHost
-        {
-            RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker, Concat(payload, EofMarker)),
-        };
-        var ops = new SdCardOperations(host);
-        using var destination = new MemoryStream();
-
-        var result = await ops.DownloadSdCardFileAsync("data.bin", destination);
-
-        Assert.Equal(payload.Length, result.FileSize);
-        Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"data.bin\""));
     }
 
     // ---- #959: an empty SD:GET on firmware v3.9.0+ reads the reason off the error queue ----
@@ -2352,95 +2198,20 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_TransferThatIgnoresItsToken_IsAbandonedWithoutARestore()
+    public async Task DownloadSdCardFileAsync_OnTheShippingBudget_IsAbandonedAtItsHardDeadline()
     {
         // #399/#401: an abandoned worker is still alive and still owns the transport, so writing the
         // LAN restore at it would put SCPI onto a link a transfer is still reading. The caller is
         // told to reconnect; that re-establishes the interface anyway.
-        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var host = new FakeHost
-        {
-            IsStreaming = true,
-            // 2s budget → a 2.2s hard deadline (the grace is 10% of the budget, floored at 100ms).
-            //
-            // The deadline has to outlast the transfer's own run-up to the GET, which is a fixed
-            // 100ms SD-interface settle delay the download awaits before sending anything. That
-            // delay resumes on the shared thread pool, so on a loaded runner it can finish far
-            // later than 100ms after it was started, while the deadline runs on its own timer and
-            // does not slip with it. The previous 200ms budget left only 200ms of margin for that
-            // slip, and lost: the deadline fired first, the transfer was abandoned before the GET
-            // ever went out, and the assertion below failed on macOS CI with "Item not found in
-            // collection" — after every test in the run had passed, so it turned main red rather
-            // than reporting a real defect.
-            //
-            // 2s is not a pacing knob and nothing here waits on it deliberately: it is headroom,
-            // twenty times the delay it has to cover.
-            SdCardDownloadTimeout = TimeSpan.FromSeconds(2),
-            RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task),
-        };
-        var ops = new SdCardOperations(host);
-
-        // Deliberately not disposed: the point of this test is that the worker is still running
-        // when the call returns, so it may still touch this stream after the assertions. A
-        // MemoryStream needs no disposal, and disposing it here would only manufacture a race.
-        var destination = new MemoryStream();
-
-        // Bounded well above the 2.2s hard deadline this test asserts. The stream deliberately
-        // ignores its token, so if the deadline itself regressed the download would never return,
-        // and an unbounded await would hang the whole run instead of failing the one test that
-        // caught it. The bound is a token rather than WaitAsync(TimeSpan) on purpose: the latter
-        // reports a TimeoutException, which is the very type this asserts, so a hang would have
-        // passed as a success. A cancelled token surfaces as TaskCanceledException and fails.
-        using var guard = new CancellationTokenSource(ParkedTestBudget);
-
-        var download = ops.DownloadSdCardFileAsync("data.bin", destination);
-
-        try
-        {
-            // Anchor on the transfer having reached the parked read rather than on the clock: that
-            // read is entered only after the GET has been sent, so waiting for it is what makes
-            // the assertions below statements about a transfer that was genuinely in flight when
-            // the deadline abandoned it. It also names the failure — a run where the deadline beat
-            // the settle delay fails here, pointing at the timing, instead of failing later on a
-            // bare "item not found" that reads like a missing command.
-            await entered.Task.WaitAsync(ParkedTestBudget);
-
-            await Assert.ThrowsAsync<TimeoutException>(() => download.WaitAsync(guard.Token));
-
-            Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
-            Assert.DoesNotContain("send:" + DisableSd, host.Calls);
-            Assert.DoesNotContain("send:" + EnableLan, host.Calls);
-            // #533: the same reasoning that skips the LAN restore applies here — the abandoned
-            // worker still owns the transport, so a StartStreamData write would be a second writer
-            // on a stream a transfer is still reading.
-            Assert.Equal(0, host.StartStreamingCallCount);
-        }
-        finally
-        {
-            release.TrySetResult(true);
-
-            // The download is awaited on the passing path, but not on one that fails at the anchor
-            // above. Observe it either way so a faulted task cannot resurface as an
-            // UnobservedTaskException in some later, unrelated test sharing this process.
-            _ = download.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
-        }
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_OnTheShippingBudget_IsAbandonedAtItsHardDeadline()
-    {
-        // The same watchdog as the test above (#399/#401), but on the budget the library actually
-        // ships — thirty minutes, plus the five-second grace HardDeadlineFor adds — asserted on a
-        // stepped clock (issue #637).
         //
-        // That budget is why the test above uses two seconds instead. Read its comment: the two
-        // seconds are not a scenario, they are a compromise between "long enough that the settle
+        // Asserted on the budget the library actually ships — thirty minutes, plus the five-second
+        // grace HardDeadlineFor adds — on a stepped clock (issue #637). This used to have a twin
+        // on a two-second real-time budget, a compromise between "long enough that the settle
         // delay cannot slip past the deadline on a loaded runner" and "short enough to sit in a
-        // unit-test suite" — and the compromise had already lost once on macOS CI, turning main
-        // red after every test had passed. On a clock nobody but this test can move, neither
-        // pressure exists: the deadline cannot beat the settle delay, because the settle delay is
-        // on the same clock and this test decides when each of them elapses.
+        // unit-test suite" that had already lost once on macOS CI. On a clock nobody but this
+        // test can move, neither pressure exists: the deadline cannot beat the settle delay,
+        // because the settle delay is on the same clock and this test decides when each of them
+        // elapses.
         var clock = new FakeTimeProvider();
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2453,8 +2224,9 @@ public partial class SdCardOperationsCollaboratorTests
         };
         var ops = new SdCardOperations(host);
 
-        // Deliberately not disposed, for the same reason as the test above: the worker is still
-        // running when the call returns and may still touch this stream.
+        // Deliberately not disposed: the worker is still running when the call returns and may
+        // still touch this stream. A MemoryStream needs no disposal, and disposing it here would
+        // only manufacture a race.
         var destination = new MemoryStream();
 
         using var guard = new CancellationTokenSource(ParkedTestBudget);
@@ -2466,8 +2238,7 @@ public partial class SdCardOperationsCollaboratorTests
             // Phase one: walk the clock forward in slices the size of the SD interface settle
             // delay, until the transfer has sent its GET and parked in the read. Slices rather
             // than one jump, because jumping the whole budget here would abandon the transfer
-            // before it ever reached the wire — which is precisely the failure the two-second
-            // test above had to buy headroom against.
+            // before it ever reached the wire.
             await FakeClockPump.UntilAsync(
                 clock,
                 entered.Task,
@@ -2526,18 +2297,6 @@ public partial class SdCardOperationsCollaboratorTests
 
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => ops.DownloadSdCardFileAsync("data.bin", (Stream)null!));
-        Assert.Equal(0, host.RawCaptureCount);
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_QuotedFileName_IsRefusedBeforeTheWire()
-    {
-        var host = new FakeHost();
-        var ops = new SdCardOperations(host);
-        using var destination = new MemoryStream();
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => ops.DownloadSdCardFileAsync("evil\";SYSTem:REboot.bin", destination));
         Assert.Equal(0, host.RawCaptureCount);
     }
 

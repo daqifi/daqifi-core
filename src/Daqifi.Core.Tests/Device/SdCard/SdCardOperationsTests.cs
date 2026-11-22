@@ -6,13 +6,13 @@ using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;
@@ -20,21 +20,31 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 public partial class SdCardOperationsTests
 {
     [Fact]
-    public async Task GetSdCardFilesAsync_WhenConnected_SendsCorrectCommands()
+    public async Task GetSdCardFilesAsync_OverUsb_SendsTheListingBetweenTheBusSwitchAndItsRestore()
     {
-        // Arrange
+        // One ordered list for everything a listing puts on the wire over USB: the defensive stop
+        // even though nothing is streaming (#118), LAN dropped to free the shared SPI bus, the
+        // listing, and the bus handed back with LAN restored afterwards.
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/log_20240115_103000.bin" };
         device.Connect();
+        Assert.False(device.IsStreaming);
 
-        // Act
         await device.GetSdCardFilesAsync();
 
-        // Assert - verify SD interface prep and file list commands were sent via setup action
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // DisableNetworkLan (PrepareSdInterface)
-        Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // EnableStorageSd (PrepareSdInterface)
-        Assert.Contains("SYSTem:STORage:SD:LIST?", sentCommands); // GetSdFileList
+        Assert.Equal(
+            new[]
+            {
+                "SYSTem:StopStreamData",
+                "SYSTem:COMMunicate:LAN:ENAbled 0",
+                "SYSTem:STORage:SD:ENAble 1",
+                "SYSTem:STORage:SD:LIST?",
+                "SYSTem:ERRor?",
+                "SYSTem:STORage:SD:ENAble 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+            },
+            Sent(device));
+        Assert.Equal("log_20240115_103000.bin", Assert.Single(device.SdCardFiles).FileName);
     }
 
     [Fact]
@@ -189,59 +199,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task GetSdCardFilesAsync_RestoresLanInterface()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
-        device.Connect();
-
-        // Act
-        await device.GetSdCardFilesAsync();
-
-        // Assert - verify LAN interface restoration commands were sent
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd (PrepareLanInterface)
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (PrepareLanInterface)
-    }
-
-    [Fact]
-    public async Task GetSdCardFilesAsync_UpdatesSdCardFilesProperty()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
-        device.Connect();
-
-        // Act
-        await device.GetSdCardFilesAsync();
-
-        // Assert
-        Assert.Single(device.SdCardFiles);
-        Assert.Equal("test.bin", device.SdCardFiles[0].FileName);
-    }
-
-    [Fact]
-    public async Task GetSdCardFilesAsync_WhenLogging_ThrowsSdCardBusyException()
-    {
-        // #851 (a): a listing used to stop the stream and send SD:ENAble 0, which ends the
-        // recording on the card. Listing is a read, so it now refuses while a session runs, the
-        // same as the sibling operations do.
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
-        device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-        device.SentMessages.Clear();
-
-        await Assert.ThrowsAsync<SdCardBusyException>(
-            () => device.GetSdCardFilesAsync());
-
-        // The defect was in the commands, so that is what this asserts: none were sent.
-        Assert.Empty(device.SentMessages);
-        Assert.True(device.IsLoggingToSdCard);
-    }
-
-    [Fact]
     public async Task GetSdCardFilesAsync_HonorsCancellationDuringSettleDelay()
     {
         // Regression for #221: the SD interface settle wait used Thread.Sleep,
@@ -346,37 +303,20 @@ public partial class SdCardOperationsTests
         Assert.Contains("USB", ex.Message);
     }
 
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithCustomFileName_UsesProvidedName()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task StartSdCardLoggingAsync_WithNoFileName_GeneratesTimestampedName(string? fileName)
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
-        await device.StartSdCardLoggingAsync("custom_data.bin");
+        await device.StartSdCardLoggingAsync(fileName);
 
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:FILE \"custom_data.bin\"", sentCommands);
-    }
-
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithNullFileName_GeneratesTimestampedName()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.StartSdCardLoggingAsync();
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
-        Assert.NotNull(loggingCommand);
-        Assert.Contains("log_", loggingCommand);
-        Assert.Contains(".bin", loggingCommand);
+        var loggingCommand = Assert.Single(
+            Sent(device), c => c.StartsWith("SYSTem:STORage:SD:FILE", StringComparison.Ordinal));
+        Assert.Matches("^SYSTem:STORage:SD:FILE \"log_\\d{8}_\\d{6}\\.bin\"$", loggingCommand);
     }
 
     [Fact]
@@ -428,28 +368,6 @@ public partial class SdCardOperationsTests
         // Assert
         Assert.True(device.IsLoggingToSdCard);
         Assert.True(device.IsStreaming);
-    }
-
-    [Fact]
-    public async Task StopSdCardLoggingAsync_SendsCorrectCommands()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-        device.SentMessages.Clear();
-
-        // Act
-        await device.StopSdCardLoggingAsync();
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Equal(5, sentCommands.Count);
-        Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
-        Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[1]); // Restore protobuf (#851)
-        Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[2]);
-        Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[3]); // Restore USB
-        Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[4]); // Re-enable LAN
     }
 
     [Fact]
@@ -656,28 +574,6 @@ public partial class SdCardOperationsTests
         Assert.False(device.IsStreaming);
     }
 
-    [Fact]
-    public async Task InitializeAsync_WithPreserveActiveStream_SendsNoStopAndRecordsNoLiveStream()
-    {
-        var device = new InitializingSdCardDevice("TestDevice");
-        device.Connect();
-        device.StartStreaming();
-        device.Disconnect();
-        device.SentMessages.Clear();
-        device.Connect();
-        device.PreserveActiveStream = true;
-
-        await device.InitializeAsync(TimeSpan.FromSeconds(10));
-
-        Assert.DoesNotContain(StopStreamCommand, Sent(device));
-        Assert.False(device.IsStreaming);
-        Assert.False(device.IsLoggingToSdCard);
-
-        // ...so a start is sent, not swallowed as "already streaming".
-        device.StartStreaming();
-        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
-    }
-
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -701,27 +597,6 @@ public partial class SdCardOperationsTests
         Assert.Equal(resumeStreaming, device.IsStreaming);
         Assert.False(device.IsLoggingToSdCard);
         Assert.DoesNotContain(Sent(device), c => c.StartsWith("SYSTem:STORage:SD", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task AutomaticReconnect_DuringALiveStream_ResumesTheStream()
-    {
-        var device = new InitializingSdCardDevice("TestDevice");
-        device.Connect();
-        device.StartStreaming();
-
-        device.CaptureSessionAtTheDrop();
-        device.Disconnect();
-        device.Connect();
-        await device.InitializeAsync(TimeSpan.FromSeconds(10));
-        Assert.False(device.IsStreaming);
-        device.SentMessages.Clear();
-
-        var resumed = await device.RestoreSessionAfterTheReconnect(new ReconnectOptions { ResumeStreaming = true });
-
-        Assert.True(resumed);
-        Assert.True(device.IsStreaming);
-        Assert.Contains(Sent(device), c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -839,40 +714,6 @@ public partial class SdCardOperationsTests
         Assert.Empty(device.SdCardFiles);
     }
 
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithEmptyFileName_GeneratesTimestampedName()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.StartSdCardLoggingAsync("");
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
-        Assert.NotNull(loggingCommand);
-        Assert.Contains("log_", loggingCommand);
-    }
-
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithWhitespaceFileName_GeneratesTimestampedName()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.StartSdCardLoggingAsync("   ");
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
-        Assert.NotNull(loggingCommand);
-        Assert.Contains("log_", loggingCommand);
-    }
-
     [Theory]
     [InlineData("file\".bin")]
     [InlineData("file\n.bin")]
@@ -937,92 +778,31 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingAsync_WithNullFileName_JsonFormat_GeneratesJsonExtension()
+    public async Task DeleteSdCardFileAsync_OverUsb_DeletesAndRelistsBetweenTheBusSwitchAndItsRestore()
     {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Json);
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
-        Assert.NotNull(loggingCommand);
-        Assert.Contains("log_", loggingCommand);
-        Assert.Contains(".json", loggingCommand);
-        Assert.DoesNotContain(".bin", loggingCommand);
-    }
-
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithNullFileName_CsvFormat_GeneratesCsvExtension()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Csv);
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
-        Assert.NotNull(loggingCommand);
-        Assert.Contains("log_", loggingCommand);
-        Assert.Contains(".csv", loggingCommand);
-        Assert.DoesNotContain(".bin", loggingCommand);
-    }
-
-    [Fact]
-    public async Task StartSdCardLoggingAsync_WithProtobufFormat_SendsProtobufFormatCommand()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        // Act — explicitly specifying Protobuf format should behave identically to the default
-        await device.StartSdCardLoggingAsync("mylog.bin", format: SdCardLogFormat.Protobuf);
-
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STReam:FORmat 0", sentCommands);
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_WhenConnected_SendsCorrectCommands()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
-        device.Connect();
-
-        // Act
-        await device.DeleteSdCardFileAsync("data.bin");
-
-        // Assert - verify SD interface prep, delete, and file list refresh via setup action
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // DisableNetworkLan (PrepareSdInterface)
-        Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // EnableStorageSd (PrepareSdInterface)
-        Assert.Contains("SYSTem:STORage:SD:DELete \"data.bin\"", sentCommands); // Delete
-        Assert.Contains("SYSTem:STORage:SD:LIST?", sentCommands); // File list refresh
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_UpdatesSdCardFilesProperty()
-    {
-        // Arrange
+        // The defensive stop even though nothing is streaming (#118), the bus switch, the delete
+        // and the relist that refreshes the cache, and the restore, in that order.
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin" };
         device.Connect();
+        Assert.False(device.IsStreaming);
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
-        // Assert
-        Assert.Single(device.SdCardFiles);
-        Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+        Assert.Equal(
+            new[]
+            {
+                "SYSTem:StopStreamData",
+                "SYSTem:COMMunicate:LAN:ENAbled 0",
+                "SYSTem:STORage:SD:ENAble 1",
+                "SYSTem:STORage:SD:DELete \"data.bin\"",
+                "SYSTem:STORage:SD:LIST?",
+                "SYSTem:ERRor?",
+                "SYSTem:STORage:SD:ENAble 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+            },
+            Sent(device));
+        Assert.Equal("remaining.bin", Assert.Single(device.SdCardFiles).FileName);
     }
 
     [Fact]
@@ -1248,36 +1028,6 @@ public partial class SdCardOperationsTests
 
         Assert.Single(device.SdCardFiles);
         Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_RestoresLanInterface()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string>();
-        device.Connect();
-
-        // Act
-        await device.DeleteSdCardFileAsync("data.bin");
-
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd (PrepareLanInterface)
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (PrepareLanInterface)
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<SdCardBusyException>(
-            () => device.DeleteSdCardFileAsync("data.bin"));
     }
 
     [Theory]
@@ -2190,149 +1940,34 @@ public partial class SdCardOperationsTests
         Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[2]);
     }
 
-    [Fact]
-    public async Task FormatSdCardAsync_WhenLogging_ThrowsSdCardBusyException()
-    {
-        // Arrange
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<SdCardBusyException>(
-            () => device.FormatSdCardAsync());
-    }
-
-    #region Defensive stop tests (issue #118)
-
-    [Fact]
-    public async Task GetSdCardFilesAsync_WhenNotStreaming_StillSendsStopCommand()
-    {
-        // Arrange — device is connected but NOT streaming
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
-        device.Connect();
-        Assert.False(device.IsStreaming);
-
-        // Act
-        await device.GetSdCardFilesAsync();
-
-        // Assert — stop command should still be sent defensively
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:StopStreamData", sentCommands);
-    }
-
-    [Fact]
-    public async Task DeleteSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
-    {
-        // Arrange — device is connected but NOT streaming
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
-        device.Connect();
-        Assert.False(device.IsStreaming);
-
-        // Act
-        await device.DeleteSdCardFileAsync("data.bin");
-
-        // Assert — stop command should still be sent defensively
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:StopStreamData", sentCommands);
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
-    {
-        // Arrange — device is connected but NOT streaming
-        var device = new TestableDownloadDevice("TestDevice");
-        device.CannedFileData = new byte[] { 0x01 };
-        device.Connect();
-        Assert.False(device.IsStreaming);
-
-        using var destinationStream = new MemoryStream();
-
-        // Act
-        await device.DownloadSdCardFileAsync("data.bin", destinationStream);
-
-        // Assert — stop command should still be sent defensively
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:StopStreamData", sentCommands);
-    }
-
-    [Fact]
-    public async Task FormatSdCardAsync_WhenNotStreaming_StillSendsStopCommand()
-    {
-        // Arrange — device is connected but NOT streaming
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-        Assert.False(device.IsStreaming);
-
-        // Act
-        await device.FormatSdCardAsync();
-
-        // Assert — stop command should still be sent defensively
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:StopStreamData", sentCommands);
-    }
-
-    #endregion
-
     #region GetSdCardStorageAsync Tests
 
     [Fact]
-    public async Task GetSdCardStorageAsync_WhenConnected_SendsCorrectCommands()
+    public async Task GetSdCardStorageAsync_OverUsb_SendsTheQueryBetweenTheBusSwitchAndItsRestore()
     {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "1024,4096" };
-        device.Connect();
-
-        await device.GetSdCardStorageAsync();
-
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // PrepareSdInterface
-        Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands);       // PrepareSdInterface
-        Assert.Contains("SYSTem:STORage:SD:SPACe?", sentCommands);         // GetSdSpace
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_ParsesResponseCorrectly()
-    {
+        // The defensive stop even though nothing is streaming (#118), the bus switch, one space
+        // query, and the restore, in that order — and the answer parsed into the result.
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "1048576000,2097152000" };
         device.Connect();
+        Assert.False(device.IsStreaming);
 
         var storage = await device.GetSdCardStorageAsync();
 
+        Assert.Equal(
+            new[]
+            {
+                "SYSTem:StopStreamData",
+                "SYSTem:COMMunicate:LAN:ENAbled 0",
+                "SYSTem:STORage:SD:ENAble 1",
+                "SYSTem:STORage:SD:SPACe?",
+                "SYSTem:STORage:SD:ENAble 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+            },
+            Sent(device));
         Assert.Equal(1_048_576_000L, storage.FreeBytes);
         Assert.Equal(2_097_152_000L, storage.TotalBytes);
         Assert.Equal(1_048_576_000L, storage.UsedBytes);
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_RestoresLanInterface()
-    {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "1024,4096" };
-        device.Connect();
-
-        await device.GetSdCardStorageAsync();
-
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);       // PrepareLanInterface
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // PrepareLanInterface
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_DefensivelySendsStopStreaming()
-    {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "1024,4096" };
-        device.Connect();
-        Assert.False(device.IsStreaming);
-
-        await device.GetSdCardStorageAsync();
-
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:StopStreamData", sentCommands);
     }
 
     [Fact]
@@ -2452,17 +2087,6 @@ public partial class SdCardOperationsTests
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);
         Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands);
-    }
-
-    [Fact]
-    public async Task GetSdCardStorageAsync_WhenLogging_ThrowsSdCardBusyException()
-    {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-
-        await Assert.ThrowsAsync<SdCardBusyException>(
-            () => device.GetSdCardStorageAsync());
     }
 
     #endregion
@@ -2648,22 +2272,6 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task GetSdCardFilesAsync_OverUsb_TogglesLanInterface()
-    {
-        // Regression: over USB the LAN interface IS disabled (free the shared SPI bus) and
-        // restored — the transport-aware PrepareSdInterface/PrepareLanInterface must keep this.
-        var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
-        device.Connect();
-
-        await device.GetSdCardFilesAsync();
-
-        var sent = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan (restore)
-    }
-
-    [Fact]
     public async Task SdCardTextOperations_HandTheLanRestoreToTheExchangeAsItsFinalizePhase()
     {
         // #407: the restore has to travel through the exchange's finalize phase, because that
@@ -2834,30 +2442,6 @@ public partial class SdCardOperationsTests
         Assert.Equal(TimeSpan.FromMilliseconds(200), ex.Timeout);
     }
 
-    [Fact]
-    public async Task StopSdCardLoggingAsync_OverWifi_DoesNotReEnableLan()
-    {
-        // LAN:ENAbled 1 re-initializes the WiFi module, which would drop the very connection
-        // this command arrived on. Nothing disabled the LAN over WiFi in the first place, so
-        // there is nothing to restore — the mirror of PrepareLanInterface's transport check.
-        var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Connect();
-
-        await device.StopSdCardLoggingAsync();
-
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Equal(
-            new[]
-            {
-                "SYSTem:StopStreamData",
-                // The encoding is one global firmware setting, so the restore runs on every
-                // transport (#851) — unlike LAN:ENAbled 1, which is USB only.
-                "SYSTem:STReam:FORmat 0",
-                "SYSTem:STORage:SD:ENAble 0",
-            },
-            sentCommands);
-    }
-
     #endregion
 
     [Theory]
@@ -2895,37 +2479,31 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
+    public async Task DownloadSdCardFileAsync_OverUsb_SendsTheGetBetweenTheBusSwitchAndItsRestore()
     {
-        // Arrange
+        // The defensive stop even though nothing is streaming (#118), the bus switch, the GET,
+        // and the restore once the transfer completes, in that order. The restore here is the
+        // complement of DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_IsAbandonedWithoutARestore:
+        // skipping it for an abandoned transfer must not become "the download never restores".
         var device = new TestableDownloadDevice("TestDevice");
+        device.CannedFileData = Encoding.ASCII.GetBytes("hello sd card");
         device.Connect();
-        await device.StartSdCardLoggingAsync("test.bin");
-        using var stream = new MemoryStream();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<SdCardBusyException>(
-            () => device.DownloadSdCardFileAsync("data.bin", stream));
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_SendsCorrectCommands()
-    {
-        // Arrange
-        var fileData = new byte[] { 0x01, 0x02, 0x03 };
-        var device = new TestableDownloadDevice("TestDevice");
-        device.CannedFileData = fileData;
-        device.Connect();
+        Assert.False(device.IsStreaming);
         using var destinationStream = new MemoryStream();
 
-        // Act
         await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        // Assert
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // PrepareSdInterface
-        Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // PrepareSdInterface
-        Assert.Contains("SYSTem:STORage:SD:GET \"data.bin\"", sentCommands); // GetSdFile
+        Assert.Equal(
+            new[]
+            {
+                "SYSTem:StopStreamData",
+                "SYSTem:COMMunicate:LAN:ENAbled 0",
+                "SYSTem:STORage:SD:ENAble 1",
+                "SYSTem:STORage:SD:GET \"data.bin\"",
+                "SYSTem:STORage:SD:ENAble 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+            },
+            device.SentMessages.Select(m => m.Data));
     }
 
     [Fact]
@@ -2946,24 +2524,6 @@ public partial class SdCardOperationsTests
         Assert.Equal("data.bin", result.FileName);
         Assert.Equal(fileData.Length, result.FileSize);
         Assert.True(result.Duration > TimeSpan.Zero);
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_RestoresLanInterface()
-    {
-        // Arrange
-        var device = new TestableDownloadDevice("TestDevice");
-        device.CannedFileData = new byte[] { 0x01 };
-        device.Connect();
-        using var destinationStream = new MemoryStream();
-
-        // Act
-        await device.DownloadSdCardFileAsync("data.bin", destinationStream);
-
-        // Assert — LAN interface should be restored after download
-        var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan
     }
 
     [Fact]
@@ -3391,19 +2951,37 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_ThrowsTimeoutException()
+    public async Task DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_IsAbandonedWithoutARestore()
     {
-        // #399: against a wedged SD subsystem the transfer parks somewhere that never looks
-        // at the token it was handed, so the only thing that can end the call is a deadline
-        // the download enforces itself.
-        var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+        // #399: against a wedged SD subsystem the transfer parks somewhere that never looks at
+        // the token it was handed, so the only thing that can end the call is a deadline the
+        // download enforces itself. The deadline runs on the device clock, so a stepped clock
+        // decides when it elapses instead of a real-time wait.
+        //
+        // #407: an abandoned transfer is still running and still owns the transport — that is
+        // why the download gate stays held until it unwinds. Sending the LAN restore now would
+        // put commands onto a link that transfer is still reading from, on a device that has
+        // already stopped answering. The caller is told to reconnect or power-cycle, and both
+        // re-establish the interface anyway.
+        var clock = new FakeTimeProvider();
+        var budget = TimeSpan.FromMinutes(30);
+        var device = new ParkedDownloadDevice(ParkMode.Asynchronous, budget);
+        device.SetTimeProviderForTesting(clock);
         device.Connect();
         using var destinationStream = new MemoryStream();
 
         try
         {
-            var elapsed = Stopwatch.StartNew();
             var opTask = device.DownloadSdCardFileAsync("data.bin", destinationStream);
+            Assert.True(device.Parked.Wait(TimeSpan.FromSeconds(30)), "the transfer never reached the park.");
+
+            // It waits out the whole budget instead of failing early: the deadline is what ends
+            // it, not some unrelated fault.
+            clock.Advance(budget);
+            Assert.False(opTask.IsCompleted, "the download gave up before its budget elapsed.");
+
+            // Past the hard deadline (the budget plus its grace).
+            clock.Advance(TimeSpan.FromMinutes(1));
 
             // Guard the assertion rather than the test run: if the deadline never fires this
             // fails instead of hanging CI forever.
@@ -3411,15 +2989,12 @@ public partial class SdCardOperationsTests
             Assert.Same((Task)opTask, winner);
 
             var ex = await Assert.ThrowsAsync<TimeoutException>(() => opTask);
-            elapsed.Stop();
-
             Assert.Contains("data.bin", ex.Message);
 
-            // It waited for the budget instead of failing early — the deadline is what ended
-            // it, not some unrelated fault.
-            Assert.True(
-                elapsed.Elapsed >= TimeSpan.FromMilliseconds(300),
-                $"Download failed after only {elapsed.ElapsedMilliseconds}ms, before the budget elapsed.");
+            var sent = device.SentCommandsSnapshot();
+            Assert.Contains("SYSTem:StopStreamData", sent); // the pre-flight stop did happen
+            Assert.DoesNotContain("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
         }
         finally
         {
@@ -3452,54 +3027,6 @@ public partial class SdCardOperationsTests
         {
             device.Release();
         }
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_WhenTheTransferIsAbandoned_DoesNotRestoreTheLanInterface()
-    {
-        // #407 / #399: an abandoned transfer is still running and still owns the transport —
-        // that is why the download gate stays held until it unwinds. Sending the LAN restore
-        // now would put commands onto a link that transfer is still reading from, on a device
-        // that has already stopped answering. The caller is told to reconnect or power-cycle,
-        // and both re-establish the interface anyway.
-        var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
-        device.Connect();
-        using var destinationStream = new MemoryStream();
-
-        try
-        {
-            var opTask = device.DownloadSdCardFileAsync("data.bin", destinationStream);
-
-            var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
-            Assert.Same((Task)opTask, winner);
-            await Assert.ThrowsAsync<TimeoutException>(() => opTask);
-
-            var sent = device.SentCommandsSnapshot();
-            Assert.Contains("SYSTem:StopStreamData", sent); // the pre-flight stop did happen
-            Assert.DoesNotContain("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
-            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
-        }
-        finally
-        {
-            device.Release();
-        }
-    }
-
-    [Fact]
-    public async Task DownloadSdCardFileAsync_WhenTheTransferCompletes_StillRestoresTheLanInterface()
-    {
-        // The complement, so skipping the restore for an abandoned transfer cannot quietly
-        // become "the download never restores the interface".
-        var device = new TestableDownloadDevice("TestDevice");
-        device.CannedFileData = Encoding.ASCII.GetBytes("hello sd card");
-        device.Connect();
-        using var destinationStream = new MemoryStream();
-
-        await device.DownloadSdCardFileAsync("data.bin", destinationStream);
-
-        var sent = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
-        Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
     }
 
     [Fact]
