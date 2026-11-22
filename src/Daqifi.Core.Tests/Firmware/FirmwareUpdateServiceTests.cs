@@ -8,6 +8,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -1480,6 +1481,464 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("clean bootloader state", exception.RecoveryGuidance);
     }
 
+    // ----- A consumer callback throwing on Failed must not replace the real failure -----
+
+    private const string FailedObserverMessage = "Observer failure on Failed.";
+
+    private static void ThrowFromStateChangedOnFailed(FirmwareUpdateService service)
+    {
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.Failed)
+            {
+                throw new InvalidOperationException(FailedObserverMessage);
+            }
+        };
+    }
+
+    /// <summary>
+    /// A progress sink that records every report and, when <paramref name="throwOnFailed"/> is
+    /// set, then throws on the Failed one.
+    /// </summary>
+    private static SyncProgress<FirmwareUpdateProgress> RecordingProgress(
+        List<FirmwareUpdateProgress> reports,
+        bool throwOnFailed)
+    {
+        return new SyncProgress<FirmwareUpdateProgress>(p =>
+        {
+            reports.Add(p);
+            if (throwOnFailed && p.State == FirmwareUpdateState.Failed)
+            {
+                throw new InvalidOperationException(FailedObserverMessage);
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task UpdateFirmwareAsync_WhenObserverThrowsOnFailed_KeepsFirmwareUpdateException(
+        bool cleanupEraseRuns,
+        bool fromProgressSink)
+    {
+        // Both Failed endings of the PIC32 cleanup: the HID link is gone so no re-erase can run,
+        // or the re-erase runs and fails. Either way the caller must still get the
+        // FirmwareUpdateException with its half-flashed verdict, not the observer's exception.
+        var reports = new List<FirmwareUpdateProgress>();
+        var progress = RecordingProgress(reports, throwOnFailed: fromProgressSink);
+        Action<FirmwareUpdateService>? subscriber = fromProgressSink ? null : ThrowFromStateChangedOnFailed;
+
+        var run = cleanupEraseRuns
+            ? await RunFailingPic32UpdateAsync(
+                hidReads: [VersionAck, EraseAck, ProgramAck, ProgramAck, CrcMismatch, InvalidAck],
+                verifyCrc: true,
+                configureService: subscriber,
+                progress: progress)
+            : await RunFailingPic32UpdateAsync(
+                hidReads: [VersionAck, EraseAck, ProgramAck],
+                dropTransportWhenReadsRunOut: true,
+                configureService: subscriber,
+                progress: progress);
+
+        Assert.Equal(
+            cleanupEraseRuns ? FirmwareUpdateState.Verifying : FirmwareUpdateState.Programming,
+            run.Exception.FailedState);
+        Assert.NotNull(run.Exception.RecoveryGuidance);
+        Assert.Contains("half-flashed", run.Exception.RecoveryGuidance);
+        AssertFlashCondition(Pic32FlashCondition.PossiblyHalfFlashed, FirmwareUpdateState.Failed, run);
+        // The terminal progress report still goes out even when the state subscriber threw first.
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateFirmwareAsync_WhenCanceledAndObserverThrowsOnFailed_KeepsOperationCanceledException(
+        bool fromProgressSink)
+    {
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromSeconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([], Array.Empty<HidDeviceInfo>()),
+            options);
+
+        using var cts = new CancellationTokenSource();
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.WaitingForBootloader)
+            {
+                cts.Cancel();
+            }
+        };
+        if (!fromProgressSink)
+        {
+            ThrowFromStateChangedOnFailed(service);
+        }
+
+        var reports = new List<FirmwareUpdateProgress>();
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateFirmwareAsync(
+                    new FakeStreamingDevice("COM3"),
+                    hexPath,
+                    RecordingProgress(reports, throwOnFailed: fromProgressSink),
+                    cancellationToken: cts.Token));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenCanceledMidFlashAndFirstSubscriberThrowsOnFailed_LaterSubscriberStillGetsFlashCondition()
+    {
+        // A cancel throws no FirmwareUpdateException, so the terminal event's flash condition is
+        // the only typed signal that the board may be half-flashed. A subscriber that throws on
+        // it must not keep the event from the subscribers added after it.
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, InvalidAck })
+        {
+            hidTransport.EnqueueRead(read); // version, erase, cleanup re-erase rejected
+        }
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            options);
+
+        using var cts = new CancellationTokenSource();
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.Programming)
+            {
+                cts.Cancel();
+            }
+
+            if (args.CurrentState == FirmwareUpdateState.Failed)
+            {
+                throw new InvalidOperationException(FailedObserverMessage);
+            }
+        };
+        var laterEvents = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => laterEvents.Add(args);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateFirmwareAsync(
+                    new FakeStreamingDevice("COM3"), hexPath, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Contains(laterEvents, e => e.CurrentState == FirmwareUpdateState.CleaningUp);
+        var failed = Assert.Single(laterEvents, e => e.CurrentState == FirmwareUpdateState.Failed);
+        Assert.Equal(Pic32FlashCondition.PossiblyHalfFlashed, failed.FlashCondition);
+    }
+
+    /// <summary>
+    /// A logger that throws only on the log line of a transition into <paramref name="state"/> —
+    /// a provider that misbehaves on exactly the terminal line.
+    /// </summary>
+    private sealed class ThrowOnTransitionLogger(FirmwareUpdateState state) : ILogger<FirmwareUpdateService>
+    {
+        public IDisposable? BeginScope<TState>(TState scopeState) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState logState,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(logState, exception);
+            if (message.StartsWith("Firmware update state transition:", StringComparison.Ordinal) &&
+                message.Contains($"-> {state} (", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Logger failure on the terminal transition.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenLoggerThrowsOnCompleteTransition_KeepsCompleteOutcome()
+    {
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, ProgramAck, ProgramAck, VersionAck })
+        {
+            hidTransport.EnqueueRead(read);
+        }
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Complete),
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            CreateFastOptions());
+
+        var events = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => events.Add(args.CurrentState);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(
+                new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(FirmwareUpdateState.Complete, events[^1]);
+        Assert.DoesNotContain(FirmwareUpdateState.Failed, events);
+        var complete = Assert.Single(reports, p => p.State == FirmwareUpdateState.Complete);
+        Assert.Equal(100, complete.PercentComplete);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenLoggerThrowsOnRecoveredTransition_KeepsRecoveredOutcome()
+    {
+        var hidTransport = new FakeHidTransport();
+        foreach (var read in new[] { VersionAck, EraseAck, ProgramAck, ProgramAck, CrcMismatch, EraseAck })
+        {
+            hidTransport.EnqueueRead(read);
+        }
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Recovered),
+            new FakeBootloaderProtocol(
+                [[0xA1, 0x01], [0xA1, 0x02]],
+                crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            options);
+
+        var events = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => events.Add(args);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(
+                    new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false)));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Verifying, exception.FailedState);
+        Assert.Equal(Pic32FlashCondition.CleanBootloader, exception.FlashCondition);
+        Assert.Equal(FirmwareUpdateState.Recovered, service.CurrentState);
+        var recovered = Assert.Single(events, e => e.CurrentState == FirmwareUpdateState.Recovered);
+        Assert.Equal(Pic32FlashCondition.CleanBootloader, recovered.FlashCondition);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Recovered);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLoggerThrowsOnFailedTransition_KeepsFirmwareUpdateException()
+    {
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner
+            {
+                NextResult = new ExternalProcessResult(
+                    1,
+                    timedOut: false,
+                    TimeSpan.FromMilliseconds(10),
+                    ["some output"],
+                    ["fatal"])
+            },
+            new ThrowOnTransitionLogger(FirmwareUpdateState.Failed),
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var events = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => events.Add(args);
+        var reports = new List<FirmwareUpdateProgress>();
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(
+                    new FakeStreamingDevice("COM8"),
+                    firmwareDir,
+                    RecordingProgress(reports, throwOnFailed: false)));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        var failed = Assert.Single(events, e => e.CurrentState == FirmwareUpdateState.Failed);
+        Assert.Equal(Pic32FlashCondition.NotChanged, failed.FlashCondition);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateWifiModuleAsync_WhenObserverThrowsOnFailed_KeepsFirmwareUpdateException(
+        bool fromProgressSink)
+    {
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner
+            {
+                NextResult = new ExternalProcessResult(
+                    1,
+                    timedOut: false,
+                    TimeSpan.FromMilliseconds(10),
+                    ["some output"],
+                    ["fatal"])
+            },
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        if (!fromProgressSink)
+        {
+            ThrowFromStateChangedOnFailed(service);
+        }
+
+        var reports = new List<FirmwareUpdateProgress>();
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(
+                    new FakeStreamingDevice("COM8"),
+                    firmwareDir,
+                    RecordingProgress(reports, throwOnFailed: fromProgressSink)));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+        Assert.Equal(Pic32FlashCondition.NotChanged, exception.FlashCondition);
+        Assert.NotNull(exception.RecoveryGuidance);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateWifiModuleAsync_WhenCanceledAndObserverThrowsOnFailed_KeepsOperationCanceledException(
+        bool fromProgressSink)
+    {
+        var device = new FakeStreamingDevice("COM8");
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        if (!fromProgressSink)
+        {
+            ThrowFromStateChangedOnFailed(service);
+        }
+
+        // Cancel as the update-mode request goes out, so the cancel always lands in the pause
+        // before the apply, however slow the runner is.
+        using var cts = new CancellationTokenSource();
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var reports = new List<FirmwareUpdateProgress>();
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(
+                    device,
+                    firmwareDir,
+                    RecordingProgress(reports, throwOnFailed: fromProgressSink),
+                    cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Single(reports, p => p.State == FirmwareUpdateState.Failed);
+    }
+
     // ----- #944: the condition of the PIC32 flash is a value, not message text -----
 
     private static readonly byte[] VersionAck = [0x01, 0x10];
@@ -1498,7 +1957,9 @@ public class FirmwareUpdateServiceTests
             bool bootloaderEnumerates = true,
             bool dropTransportWhenReadsRunOut = false,
             bool verifyCrc = false,
-            Action<FirmwareUpdateServiceOptions>? configure = null)
+            Action<FirmwareUpdateServiceOptions>? configure = null,
+            Action<FirmwareUpdateService>? configureService = null,
+            IProgress<FirmwareUpdateProgress>? progress = null)
     {
         var hidTransport = new FakeHidTransport();
         foreach (var read in hidReads)
@@ -1535,12 +1996,13 @@ public class FirmwareUpdateServiceTests
 
         var events = new List<FirmwareUpdateStateChangedEventArgs>();
         service.StateChanged += (_, args) => events.Add(args);
+        configureService?.Invoke(service);
 
         var hexPath = CreateTempFile();
         try
         {
             var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
-                () => service.UpdateFirmwareAsync(new FakeStreamingDevice("COM3"), hexPath));
+                () => service.UpdateFirmwareAsync(new FakeStreamingDevice("COM3"), hexPath, progress));
             return (exception, service, events);
         }
         finally
