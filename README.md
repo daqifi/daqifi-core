@@ -8,7 +8,7 @@
 [![Downloads](https://img.shields.io/nuget/dt/Daqifi.Core?style=flat-square)](https://www.nuget.org/packages/Daqifi.Core)
 [![Build](https://img.shields.io/github/actions/workflow/status/daqifi/daqifi-core/ci.yml?style=flat-square&label=build)](https://github.com/daqifi/daqifi-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](https://github.com/daqifi/daqifi-core/blob/main/LICENSE)
-![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0-512BD4?style=flat-square&logo=dotnet)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
 
 **[daqifi.com](https://daqifi.com)** · **[DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop)** · **[Report an issue](https://github.com/daqifi/daqifi-core/issues)**
@@ -46,6 +46,9 @@ ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sam
 device.EnableChannel(ai0);
 device.StreamingFrequency = 100;
 device.StartStreaming();
+
+// Let samples arrive for a while before the device is disposed
+await Task.Delay(TimeSpan.FromSeconds(10));
 ```
 
 A real, working program — no GUI required. Prefer the raw protobuf frame instead? Subscribe to
@@ -95,7 +98,7 @@ More examples at [daqifi.com](https://daqifi.com).
 
 Pick whichever transport fits your setup — each snippet is a standalone, copy-paste-ready starting point.
 
-**TCP with a resilient retry preset** (5 retries, longer timeouts):
+**TCP with a resilient retry preset** (5 attempts, longer timeouts):
 
 ```csharp
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
@@ -122,6 +125,7 @@ await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(de
 
 ```csharp
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device;
 
 var options = new DeviceConnectionOptions
 {
@@ -315,7 +319,7 @@ running. After a reconnect, call `SetPwmEnabled` again (`true` to carry on, `fal
 
 ### Network configuration
 
-`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
+`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, `SecurityType`, and (for a WPA network, the default) `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
