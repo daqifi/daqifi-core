@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Internal;
 using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Device.Internal;
@@ -197,7 +198,7 @@ internal sealed class ReconnectSupervisor
         var epoch = expectedEpoch;
         var options = Options;
 
-        _ = Task.Run(async () =>
+        _ = CallerContextFree.Run(async () =>
         {
             var wasCanceled = false;
             int? turnedAwayDrop = null;

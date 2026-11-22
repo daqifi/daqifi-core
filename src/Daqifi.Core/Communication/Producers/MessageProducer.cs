@@ -235,7 +235,9 @@ public class MessageProducer<T> : IMessageProducer<T>
                         IsBackground = true,
                         Name = $"MessageProducer-{typeof(T).Name}"
                     };
-                    _producerThread.Start();
+                    // UnsafeStart: the writer must not inherit the starter's AsyncLocal state;
+                    // see CallerContextFree for why that matters.
+                    _producerThread.UnsafeStart();
                     return;
                 }
 
