@@ -620,6 +620,47 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
+    public void SetPwmFrequency_WhileParkedSendsAreWaiting_DoesNotTrustTheCache()
+    {
+        // A parked send can replay after this one and change the frequency again (#342), so the
+        // device is not known to be on this value: the next call for it must still go out. The
+        // device-level interleaving is in DaqifiDeviceOperationSerializationTests.
+        var host = new FakeHost { HasDeferredSends = true };
+        var ops = new ChannelControlOperations(host);
+
+        ops.SetPwmFrequency(1500);
+
+        host.HasDeferredSends = false;
+        ops.SetPwmFrequency(1500);
+        ops.SetPwmFrequency(1500);
+
+        Assert.Equal(2, host.Calls.Count);
+    }
+
+    [Fact]
+    public void SetPwmFrequency_LinkDropsWhileTheSendIsInFlight_DoesNotUndoTheReset()
+    {
+        // The send returns, the link drops and the status handler clears the cache, and only
+        // then does the call reach its record step. Recording it would make the first call
+        // after the reconnect skip a frequency the device may no longer have (#345).
+        var host = new FakeHost();
+        var ops = new ChannelControlOperations(host);
+        host.OnSend = () =>
+        {
+            host.IsConnected = false;
+            ops.ResetSentPwmFrequency();
+        };
+
+        ops.SetPwmFrequency(1500);
+
+        host.OnSend = null;
+        host.IsConnected = true;
+        ops.SetPwmFrequency(1500);
+
+        Assert.Equal(2, host.Calls.Count);
+    }
+
+    [Fact]
     public void SetPwmFrequency_DifferentValue_SendsAgain()
     {
         var host = new FakeHost();
@@ -915,6 +956,258 @@ public class ChannelControlOperationsTests
 
     #endregion
 
+    #region Two calls at once — the last command sent matches the state Core records
+
+    [Fact]
+    public async Task EnableChannel_TwoCallsAtOnce_LastMaskSentCoversBothChannels()
+    {
+        // Each call computes the ADC mask from every channel's IsEnabled and then sends it. The
+        // first call computes {1}, the second {1,2}; if the first call's send lands last, the
+        // device ends on {1} while Core says channel 2 is on too.
+        var ch1 = new AnalogChannel(channelNumber: 1, resolution: 65535);
+        var ch2 = new AnalogChannel(channelNumber: 2, resolution: 65535);
+        var host = new FakeHost(ch1, ch2);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: false,
+            () => ops.EnableChannel(ch1),
+            () => ops.EnableChannel(ch2));
+
+        Assert.True(ch1.IsEnabled);
+        Assert.True(ch2.IsEnabled);
+        Assert.Equal("send:ENAble:VOLTage:DC 6", host.Calls[^1]); // (1u << 1) | (1u << 2)
+    }
+
+    [Fact]
+    public async Task DisableAllChannels_RacingAnEnable_LastMaskSentMatchesTheChannels()
+    {
+        var ch1 = new AnalogChannel(channelNumber: 1, resolution: 65535) { IsEnabled = true };
+        var ch2 = new AnalogChannel(channelNumber: 2, resolution: 65535);
+        var host = new FakeHost(ch1, ch2);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: false,
+            ops.DisableAllChannels,
+            () => ops.EnableChannel(ch2));
+
+        Assert.False(ch1.IsEnabled);
+        Assert.True(ch2.IsEnabled);
+        Assert.Equal("send:ENAble:VOLTage:DC 4", host.Calls[^1]); // 1u << 2
+    }
+
+    [Fact]
+    public async Task DisableChannel_RacingAnEnableOfAnotherDigitalChannel_LeavesDioEnabled()
+    {
+        // The DIO enable is one global switch: disabling the last enabled digital channel turns
+        // it off, enabling any turns it on. The disable's "off" must not land after the
+        // enable's "on".
+        var d0 = new DigitalChannel(channelNumber: 0) { IsEnabled = true };
+        var d1 = new DigitalChannel(channelNumber: 1);
+        var host = new FakeHost(d0, d1);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: false,
+            () => ops.DisableChannel(d0),
+            () => ops.EnableChannel(d1));
+
+        Assert.False(d0.IsEnabled);
+        Assert.True(d1.IsEnabled);
+        Assert.Equal("send:DIO:PORt:ENAble 1", host.Calls[^1]);
+    }
+
+    [Fact]
+    public async Task SetDioDirection_TwoCallsAtOnce_RecordsTheDirectionSentLast()
+    {
+        // Send, then record: the first call's command goes out, the second call sends and records
+        // its own, and only then does the first record — leaving Core on Output while the device
+        // took Input last.
+        var digital = new DigitalChannel(channelNumber: 5);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetDioDirection(digital, ChannelDirection.Output),
+            () => ops.SetDioDirection(digital, ChannelDirection.Input));
+
+        Assert.Equal("send:DIO:PORt:DIRection 5,0", host.Calls[^1]);
+        Assert.Equal(ChannelDirection.Input, digital.Direction);
+    }
+
+    [Fact]
+    public async Task SetDioValue_TwoCallsAtOnce_RecordsTheLevelSentLast()
+    {
+        var digital = new DigitalChannel(channelNumber: 5);
+        digital.ApplyDirection(ChannelDirection.Output);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetDioValue(digital, true),
+            () => ops.SetDioValue(digital, false));
+
+        Assert.Equal("send:DIO:PORt:STATe 5,0", host.Calls[^1]);
+        Assert.False(digital.OutputValue);
+    }
+
+    [Fact]
+    public async Task SetPwmEnabled_TwoCallsAtOnce_RecordsTheStateSentLast()
+    {
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetPwmEnabled(digital, true),
+            () => ops.SetPwmEnabled(digital, false));
+
+        Assert.Equal("send:PWM:CHannel:ENable 4,0", host.Calls[^1]);
+        Assert.False(digital.IsPwmEnabled);
+    }
+
+    [Fact]
+    public async Task SetDioValue_WhilePwmIsBeingEnabled_IsRefusedOnceTheEnableLands()
+    {
+        // The PWM guard on digital writes (#449) read the channel before the enable in flight had
+        // recorded PWM, so the write went out to a pin the firmware was about to ignore it on,
+        // and Core recorded a level the pin never drove.
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        var secondError = await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetPwmEnabled(digital, true),
+            () => ops.SetDioValue(digital, true));
+
+        Assert.IsType<InvalidOperationException>(secondError);
+        Assert.Equal(new[] { "send:PWM:CHannel:ENable 4,1" }, host.Calls);
+        Assert.True(digital.IsPwmEnabled);
+        Assert.False(digital.OutputValue);
+    }
+
+    [Fact]
+    public async Task SetPwmDutyCycle_TwoCallsAtOnce_RecordsTheDutySentLast()
+    {
+        var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetPwmDutyCycle(digital, 25),
+            () => ops.SetPwmDutyCycle(digital, 75));
+
+        Assert.Equal("send:PWM:CHannel:DUTY 4,75", host.Calls[^1]);
+        Assert.Equal(75, digital.PwmDutyCyclePercent);
+    }
+
+    [Fact]
+    public async Task SetPwmFrequency_TwoCallsAtOnce_RemembersTheFrequencySentLast()
+    {
+        // A wrong "already sent" value is worse than a wrong property: the skip-if-unchanged
+        // guard (#345) would then drop a later call for the frequency Core believes is set.
+        var host = new FakeHost();
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.SetPwmFrequency(1000),
+            () => ops.SetPwmFrequency(2000));
+
+        Assert.Equal("send:PWM:CHannel:FREQuency 0,2000", host.Calls[^1]);
+        Assert.Equal(2000, ops.PwmFrequencyHz);
+
+        ops.SetPwmFrequency(1000);
+
+        Assert.Equal("send:PWM:CHannel:FREQuency 0,1000", host.Calls[^1]);
+    }
+
+    [Fact]
+    public async Task StageAnalogOutput_TwoCallsAtOnce_RecordsTheVoltageSentLast()
+    {
+        var output = new AnalogOutputChannel(0, minimumVoltage: 0.0, maximumVoltage: 5.0);
+        var host = new FakeHost(output);
+        var ops = new ChannelControlOperations(host);
+
+        await RunWithFirstSendHeldAsync(
+            host, holdAfterTheCommandIsSent: true,
+            () => ops.StageAnalogOutput(0, 1.5),
+            () => ops.StageAnalogOutput(0, 2.5));
+
+        Assert.Equal("send:SOURce:VOLTage:LEVel 0,2.5", host.Calls[^1]);
+        Assert.Equal(2.5, output.PendingVoltage);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="first"/> until its first command reaches the host and holds it
+    /// there, starts <paramref name="second"/> on another thread and gives it time to run, then
+    /// lets <paramref name="first"/> go and waits for both. Holding before the command is
+    /// recorded models the second call's command reaching the device first; holding after it
+    /// models the second call sending and recording while the first has sent but not recorded.
+    /// </summary>
+    /// <returns>What <paramref name="second"/> threw, or <c>null</c>.</returns>
+    /// <remarks>
+    /// Before the fix the second call ran to completion inside the hold. With it, the second
+    /// call waits for the first, so the grace period below simply elapses — the test passes
+    /// either way it is scheduled, and can only miss the bug on a machine too loaded to run the
+    /// second call within it.
+    /// </remarks>
+    private static async Task<Exception?> RunWithFirstSendHeldAsync(
+        FakeHost host, bool holdAfterTheCommandIsSent, Action first, Action second)
+    {
+        var firstIsHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var held = 0;
+        Action hold = () =>
+        {
+            if (Interlocked.Exchange(ref held, 1) == 0)
+            {
+                firstIsHeld.SetResult();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+
+        if (holdAfterTheCommandIsSent)
+        {
+            host.OnSend = hold;
+        }
+        else
+        {
+            host.BeforeSend = hold;
+        }
+
+        var firstTask = Task.Run(first);
+        await firstIsHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var secondTask = Task.Run(second);
+        await Task.WhenAny(secondTask, Task.Delay(TimeSpan.FromMilliseconds(250)));
+
+        release.Set();
+        await firstTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            await secondTask.WaitAsync(TimeSpan.FromSeconds(10));
+            return null;
+        }
+        catch (TimeoutException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
+
+    #endregion
+
     /// <summary>
     /// An <see cref="IDigitalChannel"/> that records whether its <see cref="Direction"/> was
     /// assigned from inside <see cref="FakeHost.WithChannelsLock"/>. A wrapper rather than a
@@ -984,18 +1277,14 @@ public class ChannelControlOperationsTests
         private readonly object _channelsLockObj = new();
 
         /// <summary>
-        /// True while a <see cref="WithChannelsLock"/> callback is on the stack. Lets
-        /// <see cref="Send{T}"/> catch the exact regression <see cref="IDeviceOperationHost.WithChannelsLock"/>
-        /// forbids — blocking I/O issued from inside the critical section — instead of silently
-        /// passing it.
-        /// </summary>
-        private bool _inChannelsLock;
-
-        /// <summary>
-        /// Whether a <see cref="WithChannelsLock"/> callback is currently on the stack, so a test
+        /// Whether the calling thread is inside a <see cref="WithChannelsLock"/> callback, so a test
         /// can assert that a mutation happens inside the critical section rather than beside it.
+        /// Also lets <see cref="Send{T}"/> catch the exact regression
+        /// <see cref="IDeviceOperationHost.WithChannelsLock"/> forbids — blocking I/O issued from
+        /// inside the critical section. Asked per thread, so a test that runs two calls at once
+        /// does not mistake the other thread's critical section for its own.
         /// </summary>
-        public bool InChannelsLock => _inChannelsLock;
+        public bool InChannelsLock => Monitor.IsEntered(_channelsLockObj);
 
         public FakeHost(params IChannel[] channels)
         {
@@ -1033,14 +1322,28 @@ public class ChannelControlOperationsTests
         /// </summary>
         public Exception? SendFailure { get; set; }
 
+        /// <summary>
+        /// Runs at the start of a <see cref="Send{T}"/>, before the command is recorded, so a test
+        /// can hold one call's command back while a second call runs.
+        /// </summary>
+        public Action? BeforeSend { get; set; }
+
+        /// <summary>
+        /// What the host reports about sends parked behind an exclusive operation, so a test can
+        /// stand in for a delivery order that no longer matches call order.
+        /// </summary>
+        public bool HasDeferredSends { get; set; }
+
         public void Send<T>(IOutboundMessage<T> message)
         {
-            if (_inChannelsLock)
+            if (InChannelsLock)
             {
                 throw new InvalidOperationException(
                     "Send was called from inside WithChannelsLock — blocking I/O must stay outside " +
                     "the channels lock (see IDeviceOperationHost.WithChannelsLock).");
             }
+
+            BeforeSend?.Invoke();
 
             if (SendFailure is not null)
             {
@@ -1057,15 +1360,7 @@ public class ChannelControlOperationsTests
         {
             lock (_channelsLockObj)
             {
-                _inChannelsLock = true;
-                try
-                {
-                    action();
-                }
-                finally
-                {
-                    _inChannelsLock = false;
-                }
+                action();
             }
         }
 
@@ -1112,6 +1407,8 @@ public class ChannelControlOperationsTests
         public void Disconnect() => throw new NotSupportedException();
         public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+        public Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
         public Task ExecuteRawCaptureAsync(
             Func<System.IO.Stream, CancellationToken, Task> rawAction,

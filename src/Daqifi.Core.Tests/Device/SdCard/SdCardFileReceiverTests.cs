@@ -356,6 +356,25 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileEndsOnAZeroByteRead_DoesNotProbeTheStreamAgain()
+    {
+        // A listed-empty file that ends on a zero-length read is already a completed download, so
+        // nothing about the stream is left to ask. The transport's CanRead is only consulted to
+        // name a stall, and a stream that has since disconnected can throw from it — which would
+        // turn the successful empty download into an exception after the fact.
+        var replyFraming = Encoding.ASCII.GetBytes("DAQIFI> ");
+        using var sourceStream = new CanReadThrowsAfterDrainStream(replyFraming);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "empty.bin", listedFileSizeBytes: 0);
+
+        Assert.Equal(0, bytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ListedEmptyFileGoesQuietOnASocket_CompletesWithoutWaitingOutTheIdleWindow()
     {
         // The socket case of #888: a quiet socket surfaces nothing at all (no zero-length read),
@@ -1444,6 +1463,59 @@ public class SdCardFileReceiverTests
             if (available <= 0) return 0;
 
             var toRead = Math.Min(Math.Min(count, _chunkSize), available);
+            Array.Copy(_data, _position, buffer, offset, toRead);
+            _position += toRead;
+            return toRead;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Read(buffer, offset, count));
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A transport that delivers its data, then returns 0 bytes and from then on behaves as a
+    /// disconnected stream whose readiness getter throws.
+    /// </summary>
+    private sealed class CanReadThrowsAfterDrainStream : Stream
+    {
+        private readonly byte[] _data;
+        private int _position;
+        private bool _drained;
+
+        public CanReadThrowsAfterDrainStream(byte[] data)
+        {
+            _data = data;
+        }
+
+        public override bool CanRead => _drained
+            ? throw new ObjectDisposedException(nameof(CanReadThrowsAfterDrainStream))
+            : true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var toRead = Math.Min(count, _data.Length - _position);
+            if (toRead <= 0)
+            {
+                _drained = true;
+                return 0;
+            }
+
             Array.Copy(_data, _position, buffer, offset, toRead);
             _position += toRead;
             return toRead;

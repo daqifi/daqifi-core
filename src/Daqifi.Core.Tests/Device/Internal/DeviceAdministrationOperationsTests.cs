@@ -393,7 +393,8 @@ public class DeviceAdministrationOperationsTests
     /// the command and the <c>SYSTem:ERRor?</c> that reads the device's verdict on it. The drain is
     /// what makes the verdict attributable: without it, the entry popped afterwards could belong to
     /// any earlier command. That it happens before the exchange rather than inside it is the whole
-    /// reason the ordering is asserted and not just the set of calls.
+    /// reason the ordering is asserted and not just the set of calls. Both run inside one exclusive
+    /// block, so no other caller's command can land between the drain and the verdict.
     /// </summary>
     [Theory]
     [MemberData(nameof(ConfirmingOperations))]
@@ -407,11 +408,13 @@ public class DeviceAdministrationOperationsTests
 
         await Invoke(call, host);
 
-        Assert.Equal(4, host.Calls.Count);
-        Assert.Equal("drain:16", host.Calls[0]);
-        Assert.Equal("exchange", host.Calls[1]);
-        Assert.StartsWith("send:" + expectedCommand, host.Calls[2], StringComparison.Ordinal);
-        Assert.Equal("send:SYSTem:ERRor?", host.Calls[3]);
+        Assert.Equal(6, host.Calls.Count);
+        Assert.Equal("exclusive:enter", host.Calls[0]);
+        Assert.Equal("drain:16", host.Calls[1]);
+        Assert.Equal("exchange", host.Calls[2]);
+        Assert.StartsWith("send:" + expectedCommand, host.Calls[3], StringComparison.Ordinal);
+        Assert.Equal("send:SYSTem:ERRor?", host.Calls[4]);
+        Assert.Equal("exclusive:exit", host.Calls[5]);
     }
 
     /// <summary>
@@ -785,6 +788,19 @@ public class DeviceAdministrationOperationsTests
         {
             Calls.Add("drain:" + maxIterations);
             return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        }
+
+        public async Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
+        {
+            Calls.Add("exclusive:enter");
+            try
+            {
+                await operation(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                Calls.Add("exclusive:exit");
+            }
         }
         public Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,

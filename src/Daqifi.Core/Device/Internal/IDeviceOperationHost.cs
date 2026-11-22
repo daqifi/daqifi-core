@@ -74,6 +74,18 @@ internal interface IDeviceOperationHost
     /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
     void Send<T>(IOutboundMessage<T> message);
 
+    /// <summary>
+    /// Whether sends parked behind another flow's exclusive operation are still waiting to go
+    /// out, so one of them can reach the device after a send made now (#342). A collaborator that
+    /// remembers what it last sent asks this to know whether delivery order matched call order.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DaqifiStreamingDevice"/> answers from its operation serializer. The default is
+    /// for hosts with no deferral at all — the test doubles — where a send always goes out in
+    /// call order.
+    /// </remarks>
+    bool HasDeferredSends => false;
+
     /// <inheritdoc cref="DaqifiDevice.Metadata"/>
     /// <remarks>
     /// The device's own metadata object, not a copy: the friendly-name write updates
@@ -124,6 +136,26 @@ internal interface IDeviceOperationHost
     Task<IReadOnlyList<string>> DrainErrorQueueAsync(
         int maxIterations = 256,
         CancellationToken cancellationToken = default);
+
+    /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>
+    /// <remarks>
+    /// <para>
+    /// For sequences whose meaning depends on no other caller's command landing between their
+    /// exchanges. Two collaborators need it:
+    /// </para>
+    /// <para>
+    /// The confirming administration commands drain the error queue in one exchange and read the
+    /// command's verdict in the next; a rejected command from another caller in between would
+    /// queue an error the verdict then pops, reporting an accepted command as refused.
+    /// </para>
+    /// <para>
+    /// The SD download on firmware v3.9.0+ (#959) reads the queue before an <c>SD:GET</c> to empty
+    /// it, and again after an empty reply to find out why. A raw capture and each error-queue read
+    /// take the device lock separately, so without one block around all three a query could pop
+    /// the GET's error first, or a failing command could queue one that would be blamed on the GET.
+    /// </para>
+    /// </remarks>
+    Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default);
 
     /// <inheritdoc cref="DaqifiDevice.ExecuteRawCaptureAsync"/>
     Task ExecuteRawCaptureAsync(

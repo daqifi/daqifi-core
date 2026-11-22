@@ -67,14 +67,28 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     private const int StartConfirmationErrorQueueReads = 4;
 
     /// <summary>
-    /// How many analog inputs were enabled when <see cref="StartStreamingAsync"/> last read the
-    /// capability document, or <c>-1</c> before its first read. The device computes its rate cap
-    /// for the set enabled at the moment of the read, so this is what says whether that figure
-    /// still describes the device — see <see cref="RefreshSampleRateCapAsync"/>. A read made by
-    /// anyone else does not update it, which can cost one redundant read and cannot cost
-    /// correctness: a count that is too low only ever asks again.
+    /// What <see cref="StartStreamingAsync"/>'s last capability read left behind: the document it
+    /// put in <see cref="DeviceMetadata.CapabilityDocument"/> and how many analog inputs were
+    /// enabled when it was read. <c>null</c> before the first read.
     /// </summary>
-    private int _capabilityReadAnalogInputCount = -1;
+    /// <remarks>
+    /// The device computes its rate cap for the set enabled at the moment of the read, so the
+    /// count says whether the cap still describes the device — see
+    /// <see cref="RefreshSampleRateCapAsync"/>. The document is kept beside it because any other
+    /// read (initialization on a reconnect, or a caller's own
+    /// <see cref="DaqifiDevice.ReadCapabilityDocumentAsync"/>) replaces the cap without updating
+    /// the count; a count left describing a larger set than the cap was read for would then
+    /// wave through a start the cap no longer covers. When the metadata holds a different
+    /// document from the one recorded here, the record is about a cap that is gone.
+    /// </remarks>
+    private CapabilityRead? _lastCapabilityRead;
+
+    /// <summary>
+    /// How many capability reads one start makes while the channel set keeps changing under them.
+    /// </summary>
+    private const int MaxCapabilityReadsPerStart = 3;
+
+    private sealed record CapabilityRead(CapabilityDocument? Document, int AnalogInputCount);
 
     /// <summary>
     /// Raised when a stream frame was withheld from consumers because the device should not have
@@ -463,20 +477,44 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             return;
         }
 
-        if (EnabledAnalogInputCount() <= _capabilityReadAnalogInputCount)
+        if (_lastCapabilityRead is { } lastRead
+            && ReferenceEquals(lastRead.Document, Metadata.CapabilityDocument)
+            && EnabledAnalogInputCount() <= lastRead.AnalogInputCount)
         {
             return;
         }
 
         try
         {
-            await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            // The device computes the cap for whatever set is enabled at the moment it answers,
+            // which is unknowable if the set changed while the read was out, in either direction.
+            // Such a read vouches for nothing, and since this start is about to rely on the cap
+            // it is asked again for the set as it is now — a few times, then the start goes ahead
+            // on the last answer rather than never starting while a caller keeps reconfiguring.
+            for (var read = 1; read <= MaxCapabilityReadsPerStart; read++)
+            {
+                var channelStateBefore = ChannelStateVersion;
+                var analogInputsQueried = EnabledAnalogInputCount();
+                var document = await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+                if (ChannelStateVersion != channelStateBefore)
+                {
+                    continue;
+                }
 
-            // Recorded whether or not the device answered. A device that supplied no document
-            // has still been asked with this channel set, and asking it again with the same set
-            // would cost the same second and learn the same nothing. Not recorded when the read
-            // threw, so a transient failure is retried on the next start.
-            _capabilityReadAnalogInputCount = EnabledAnalogInputCount();
+                // Recorded when the read produced the cap now in force: a fresh document, or no
+                // document on a device that has none at all, which asking again with the same set
+                // would only fail to produce again. Not recorded when the read returned nothing
+                // but an older document is still in the metadata (a malformed or incomplete
+                // reply), since that cap describes an earlier channel set and must not be vouched
+                // for under this one. Not recorded when the read threw either; both are retried
+                // on the next start.
+                if (document is not null || Metadata.CapabilityDocument is null)
+                {
+                    _lastCapabilityRead = new CapabilityRead(document, analogInputsQueried);
+                }
+
+                break;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -1394,8 +1432,25 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public NetworkConfiguration NetworkConfiguration => _networkOperations.NetworkConfiguration;
 
     /// <inheritdoc />
-    public Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
-        => _networkOperations.UpdateNetworkConfigurationAsync(configuration, cancellationToken);
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
+    /// the reconfiguration is a dozen sends that only make sense as one sequence — another
+    /// caller's commands must not land between the staged settings, the save and the apply, nor
+    /// restart the stream it stopped — followed by the WiFi module's restart window, which other
+    /// callers' queries would otherwise run into. Their sends are deferred and their text queries
+    /// wait until it finishes, about two seconds.
+    /// </remarks>
+    public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        // Checked before the lock wait so they surface exactly as they did before it: a
+        // pre-cancelled token as OperationCanceledException rather than the lock wait's
+        // TaskCanceledException, and a null configuration ahead of either.
+        ArgumentNullException.ThrowIfNull(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await RunExclusiveAsync(ct => _networkOperations.UpdateNetworkConfigurationAsync(configuration, ct), cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
@@ -1624,6 +1679,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     void IDeviceOperationHost.StartStreaming() => StartStreaming();
 
     void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
+
+    bool IDeviceOperationHost.HasDeferredSends => HasDeferredSends;
 
     DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
 

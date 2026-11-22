@@ -32,15 +32,21 @@ internal sealed class ReconnectSupervisor
 
     private ReconnectOptions _options = new();
 
-    // 0 = idle, 1 = a reconnect loop is running. Guards against a second loop being started by
-    // the Lost that a failing attempt's own teardown can produce.
-    private int _reconnectRunning;
+    // Makes "claim the loop, or record the drop it turns away" and "release the loop and take the
+    // drop it turned away" each one step, so a drop can never be recorded after the loop that
+    // would replay it has already looked. Held only for those few assignments.
+    private readonly Lock _loopGate = new();
 
-    // Volatile: written by the thread that starts a loop and by the loop's own cleanup, read by
-    // Cancel from any thread. A stale read only ever delays a cancellation, never corrupts one —
-    // the epoch check is what actually stops the loop — but there is no reason to leave even that
-    // on the table.
-    private volatile CancellationTokenSource? _reconnectCts;
+    // The running loop's cancellation source, or null while idle. One field rather than a
+    // "running" flag beside a nullable source, so "running with nothing to cancel" cannot be
+    // represented. Guards against a second loop being started by the Lost that a failing
+    // attempt's own teardown can produce. Written under _loopGate; read without it by Cancel.
+    private CancellationTokenSource? _runningLoop;
+
+    // The epoch of a drop the single-flight guard turned away while a loop was running, or null.
+    // The finishing loop replays exactly that drop, on that drop's own epoch, so a caller who
+    // superseded it in the meantime is never handed a reconnect they did not want. Under _loopGate.
+    private int? _turnedAwayDropEpoch;
 
     // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
     // when it starts and re-checks before each step that touches device state; a change means
@@ -62,7 +68,7 @@ internal sealed class ReconnectSupervisor
     }
 
     /// <summary>Whether a reconnect loop is running right now.</summary>
-    internal bool IsRunning => Volatile.Read(ref _reconnectRunning) != 0;
+    internal bool IsRunning => Volatile.Read(ref _runningLoop) is not null;
 
     /// <summary>
     /// Stops any reconnect in progress. Safe to call at any time, including when nothing is
@@ -73,7 +79,7 @@ internal sealed class ReconnectSupervisor
     {
         try
         {
-            _reconnectCts?.Cancel();
+            Volatile.Read(ref _runningLoop)?.Cancel();
         }
         catch (ObjectDisposedException)
         {
@@ -162,20 +168,40 @@ internal sealed class ReconnectSupervisor
 
         // One loop at a time. A failing attempt tears the transport down again, which can
         // produce another Lost; without this that would fork a second loop racing the first.
-        if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
+        var cts = new CancellationTokenSource();
+        lock (_loopGate)
         {
-            return;
+            // Checked again inside the gate. A drop that passed the check above and was delayed
+            // getting here may since have been superseded, and a newer session's drop may have
+            // been recorded meanwhile; a stale drop must neither displace that record nor start
+            // a loop. A newer drop can only be recorded after the epoch moved, so once this check
+            // passes under the gate, nothing newer is waiting to be overwritten.
+            if (Volatile.Read(ref _sessionEpoch) != expectedEpoch)
+            {
+                cts.Dispose();
+                return;
+            }
+
+            if (_runningLoop is not null)
+            {
+                _turnedAwayDropEpoch = expectedEpoch;
+                cts.Dispose();
+                return;
+            }
+
+            Volatile.Write(ref _runningLoop, cts);
         }
 
-        var cts = new CancellationTokenSource();
-        _reconnectCts = cts;
-
-        var epoch = Volatile.Read(ref _sessionEpoch);
+        // The loop runs on the epoch the drop was detected on, never a fresh read: a Supersede
+        // landing after the check above must leave this loop stale, and re-reading here would
+        // adopt the caller's new epoch as the loop's own and rebuild a session they just closed.
+        var epoch = expectedEpoch;
         var options = Options;
 
         _ = CallerContextFree.Run(async () =>
         {
             var wasCanceled = false;
+            int? turnedAwayDrop = null;
 
             try
             {
@@ -191,21 +217,28 @@ internal sealed class ReconnectSupervisor
             {
                 wasCanceled = cts.IsCancellationRequested;
 
-                // Clear the token source before releasing the running flag, so a loop started
-                // by the next drop cannot have its own source nulled out from under it.
-                _reconnectCts = null;
+                lock (_loopGate)
+                {
+                    Volatile.Write(ref _runningLoop, null);
+                    turnedAwayDrop = _turnedAwayDropEpoch;
+                    _turnedAwayDropEpoch = null;
+                }
+
                 cts.Dispose();
-                Interlocked.Exchange(ref _reconnectRunning, 0);
             }
 
-            // A drop that landed in the moments between this loop finishing its work and
-            // releasing the running flag would have been skipped by the single-flight guard,
-            // stranding the device on Lost with nothing trying to bring it back. Pick it up.
-            // Exhausting the attempts settles on Failed, and cancellation is excluded here, so
-            // neither can retrigger.
-            if (!wasCanceled)
+            // A drop that arrived while this loop ran was turned away by the single-flight guard,
+            // stranding the device on Lost with nothing trying to bring it back. Pick it up, on
+            // its own epoch: replaying on the current one would let a loop that merely went stale
+            // (a Disconnect that superseded it before it could cancel anything) restart itself on
+            // the caller's epoch, and BeginIfEnabled re-checks that the drop's session is still
+            // current and still Lost. A cancelled loop suppresses only a drop from its own
+            // session, which the cancellation was about; a drop from a newer session (a caller's
+            // Connect cancelled this loop, then that connection dropped) has a policy nobody
+            // cancelled. Exhausting the attempts settles on Failed, so it cannot retrigger.
+            if (turnedAwayDrop is { } drop && !(wasCanceled && drop == epoch))
             {
-                BeginIfEnabled(Volatile.Read(ref _sessionEpoch));
+                BeginIfEnabled(drop);
             }
         });
     }

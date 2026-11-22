@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Microsoft.Extensions.Logging;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Firmware;
 
@@ -417,11 +418,12 @@ internal sealed class Pic32FirmwareUpdater
                 failedOperation = canceled ? "PIC32 firmware update canceled." : _context.CurrentOperation;
             }
 
-            _context.TransitionToState(
-                FirmwareUpdateState.Failed,
+            _context.FailOperation(
+                progress,
                 failedOperation,
-                GetFlashCondition(failedState, outcome, flashProgress));
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, failedOperation, 0, totalBytes);
+                GetFlashCondition(failedState, outcome, flashProgress),
+                frozenPercent,
+                totalBytes);
             return outcome;
         }
 
@@ -451,41 +453,34 @@ internal sealed class Pic32FirmwareUpdater
             var recoveredOperation = canceled
                 ? "Update canceled; flash re-erased — device is in a clean bootloader state and can be re-flashed."
                 : "Flash re-erased; device is in a clean bootloader state and can be re-flashed.";
-            _context.TransitionToState(
-                FirmwareUpdateState.Recovered,
+            // Observers are isolated here: a throwing subscriber or progress sink cannot turn
+            // a clean re-erase into a half-flashed verdict via the catch below.
+            _context.RecoverOperation(
+                progress,
                 recoveredOperation,
-                GetFlashCondition(failedState, Pic32CleanupOutcome.Recovered, flashProgress));
-            _context.ReportProgress(progress, FirmwareUpdateState.Recovered, frozenPercent, recoveredOperation, 0, totalBytes);
-            Logger.LogInformation(
-                "Firmware re-erase cleanup succeeded; device is in a clean bootloader state.");
+                GetFlashCondition(failedState, Pic32CleanupOutcome.Recovered, flashProgress),
+                frozenPercent,
+                totalBytes);
+            // Best-effort past the terminal commit: a throwing logger must not land in the
+            // catch below and attempt the illegal Recovered → Failed transition.
+            SafeLog(() => Logger.LogInformation(
+                "Firmware re-erase cleanup succeeded; device is in a clean bootloader state."));
             return Pic32CleanupOutcome.Recovered;
         }
         catch (Exception cleanupEx)
         {
-            if (_context.CurrentState == FirmwareUpdateState.Recovered)
-            {
-                // The re-erase itself succeeded — a StateChanged subscriber or
-                // progress sink threw after the Recovered transition committed.
-                // The device is clean; a consumer callback must not turn that
-                // into a half-flashed verdict (and Recovered → Failed is not a
-                // legal transition).
-                Logger.LogWarning(
-                    cleanupEx,
-                    "A state/progress observer threw after the Recovered transition; cleanup itself succeeded.");
-                return Pic32CleanupOutcome.Recovered;
-            }
-
             const string cleanupFailedOperation =
                 "Cleanup re-erase failed; device may be in a half-flashed state.";
-            _context.TransitionToState(
-                FirmwareUpdateState.Failed,
+            _context.FailOperation(
+                progress,
                 cleanupFailedOperation,
-                GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed, flashProgress));
-            _context.ReportProgress(progress, FirmwareUpdateState.Failed, frozenPercent, cleanupFailedOperation, 0, totalBytes);
-            Logger.LogError(
+                GetFlashCondition(failedState, Pic32CleanupOutcome.CleanupFailed, flashProgress),
+                frozenPercent,
+                totalBytes);
+            SafeLog(() => Logger.LogError(
                 cleanupEx,
                 "Firmware re-erase cleanup failed after failure in {State}; device may be half-flashed.",
-                failedState);
+                failedState));
             return Pic32CleanupOutcome.CleanupFailed;
         }
     }
