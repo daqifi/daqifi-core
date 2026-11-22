@@ -213,21 +213,25 @@ public class DaqifiDeviceOperationSerializationTests
         await entered.Task.WaitAsync(DeadlockBudget);
 
         // Deferred, not blocked: Send has always been fire-and-forget and must keep returning
-        // immediately even when the device is owned by someone else.
-        var sw = Stopwatch.StartNew();
-        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
-        sw.Stop();
+        // immediately even when the device is owned by someone else. The wait is bounded and
+        // taken while the owner is still held, because only the release below can free a Send
+        // that regressed to waiting for the owner: an unbounded await would hang instead of fail.
+        var send = Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        try
+        {
+            var returnedWhileOwned = await Task.WhenAny(send, Task.Delay(TimeSpan.FromSeconds(2))) == send;
+            Assert.True(returnedWhileOwned, "Send blocked while another flow owned the device.");
+            await send;
 
-        Assert.True(
-            sw.Elapsed < TimeSpan.FromSeconds(2),
-            $"Send blocked for {sw.Elapsed.TotalSeconds:0.##}s while another flow owned the device.");
-
-        // Long enough that the producer thread would have written it had it been queued.
-        await Task.Delay(250);
-        Assert.DoesNotContain(transport.Writes, w => w.Contains("DIO:PORt:STATe", StringComparison.Ordinal));
-
-        release.SetResult();
-        await operation.WaitAsync(DeadlockBudget);
+            // Long enough that the producer thread would have written it had it been queued.
+            await Task.Delay(250);
+            Assert.DoesNotContain(transport.Writes, w => w.Contains("DIO:PORt:STATe", StringComparison.Ordinal));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await operation.WaitAsync(DeadlockBudget);
+        }
 
         await WaitForWriteAsync(transport, "DIO:PORt:STATe");
     }
