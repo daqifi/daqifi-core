@@ -62,8 +62,8 @@ public class BackgroundWorkCallerContextTests
     [Fact]
     public void TheWatchdogsPresenceTimer_DoesNotInheritTheStartersFlowState()
     {
-        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", _ => { });
-        watchdog.Arm();
+        using var watchdog = new TransportConnectionWatchdog("Test transport (X)", (_, _) => { });
+        watchdog.Arm(new object());
         bool? seenOnTimer = null;
         using var polled = new ManualResetEventSlim();
 
