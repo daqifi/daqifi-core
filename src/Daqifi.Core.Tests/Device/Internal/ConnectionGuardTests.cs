@@ -141,6 +141,8 @@ public class ConnectionGuardTests
         public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task RunExclusiveAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
         public Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

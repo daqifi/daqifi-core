@@ -1394,8 +1394,25 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public NetworkConfiguration NetworkConfiguration => _networkOperations.NetworkConfiguration;
 
     /// <inheritdoc />
-    public Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
-        => _networkOperations.UpdateNetworkConfigurationAsync(configuration, cancellationToken);
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
+    /// the reconfiguration is a dozen sends that only make sense as one sequence — another
+    /// caller's commands must not land between the staged settings, the save and the apply, nor
+    /// restart the stream it stopped — followed by the WiFi module's restart window, which other
+    /// callers' queries would otherwise run into. Their sends are deferred and their text queries
+    /// wait until it finishes, about two seconds.
+    /// </remarks>
+    public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        // Checked before the lock wait so they surface exactly as they did before it: a
+        // pre-cancelled token as OperationCanceledException rather than the lock wait's
+        // TaskCanceledException, and a null configuration ahead of either.
+        ArgumentNullException.ThrowIfNull(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await RunExclusiveAsync(ct => _networkOperations.UpdateNetworkConfigurationAsync(configuration, ct), cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)

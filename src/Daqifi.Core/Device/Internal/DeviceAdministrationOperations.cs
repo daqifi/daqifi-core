@@ -309,9 +309,16 @@ internal sealed class DeviceAdministrationOperations
     /// <para>
     /// The command and its <c>SYSTem:ERRor?</c> query go out in one text exchange, so no other
     /// exchange can interleave between them. The drain necessarily runs in exchanges of its own
-    /// beforehand, so a caller driving the same device from another thread can still slip a
-    /// command into that gap; these are administration operations that already assume one caller
-    /// at a time.
+    /// beforehand, so the drain and the verdict together run under
+    /// <see cref="IDeviceOperationHost.RunExclusiveAsync"/>: another thread's command — a rejected
+    /// fire-and-forget send whose error would otherwise be popped here and reported against this
+    /// one — waits until the verdict has been read.
+    /// </para>
+    /// <para>
+    /// The connection and cancellation check runs before the exclusive wait, and every caller
+    /// validates its arguments and builds <paramref name="command"/> before calling this, so a
+    /// bad argument, a disconnected device or a pre-cancelled token is reported straight away
+    /// rather than after waiting behind another caller's operation.
     /// </para>
     /// <para>
     /// Side effect worth knowing about: the drain discards whatever the queue held. A caller who
@@ -323,19 +330,24 @@ internal sealed class DeviceAdministrationOperations
     {
         _host.EnsureConnected(cancellationToken);
 
-        await _host.DrainErrorQueueAsync(ErrorQueueDrainCap, cancellationToken).ConfigureAwait(false);
-
-        var lines = await _host.ExecuteTextCommandAsync(
-            () =>
+        await _host.RunExclusiveAsync(
+            async ct =>
             {
-                _host.Send(command);
-                _host.Send(ScpiMessageProducer.GetSystemError);
-            },
-            responseTimeoutMs: ConfirmationResponseTimeoutMs,
-            completionTimeoutMs: ConfirmationCompletionTimeoutMs,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+                await _host.DrainErrorQueueAsync(ErrorQueueDrainCap, ct).ConfigureAwait(false);
 
-        ThrowIfNotAccepted(command.Data, lines);
+                var lines = await _host.ExecuteTextCommandAsync(
+                    () =>
+                    {
+                        _host.Send(command);
+                        _host.Send(ScpiMessageProducer.GetSystemError);
+                    },
+                    responseTimeoutMs: ConfirmationResponseTimeoutMs,
+                    completionTimeoutMs: ConfirmationCompletionTimeoutMs,
+                    cancellationToken: ct).ConfigureAwait(false);
+
+                ThrowIfNotAccepted(command.Data, lines);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
