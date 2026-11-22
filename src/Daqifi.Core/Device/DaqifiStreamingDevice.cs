@@ -1642,6 +1642,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
+    bool IDeviceOperationHost.HasDeferredSends => HasDeferredSends;
+
     DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
 
     void IDeviceOperationHost.Disconnect() => Disconnect();

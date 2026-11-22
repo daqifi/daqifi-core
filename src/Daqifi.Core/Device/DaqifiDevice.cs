@@ -1380,6 +1380,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     public long DroppedDeferredSendCount => _operations.DroppedDeferredSendCount;
 
+    /// <inheritdoc cref="OperationSerializer.HasDeferredSends"/>
+    internal bool HasDeferredSends => _operations.HasDeferredSends;
+
     /// <summary>
     /// How long the text exchange lets the outbound queue drain before it takes the stream.
     /// </summary>

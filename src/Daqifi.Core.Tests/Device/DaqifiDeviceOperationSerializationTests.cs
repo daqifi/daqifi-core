@@ -319,6 +319,54 @@ public class DaqifiDeviceOperationSerializationTests
     }
 
     [Fact]
+    public async Task SetPwmFrequency_AfterAParkedFrequencyReplaysOverTheOwnersOne_SendsTheNextRequest()
+    {
+        // Codex, PR #1016. A frequency set from another flow is parked behind the operation, the
+        // operation's own set goes straight out, and the parked one replays after it — so the
+        // device ends on the parked frequency. Core must not then believe the owner's frequency
+        // is the one in effect: the skip-if-unchanged guard (#345) would drop the next request
+        // for it and leave the wrong frequency running.
+        using var transport = new RecordingTransport();
+        using var device = new DaqifiStreamingDevice("PWM Device", transport);
+        device.Connect();
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            device.SetPwmFrequency(200);
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+        await Task.Run(() => device.SetPwmFrequency(100));
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+        await WaitForWriteAsync(transport, "FREQuency 0,100");
+
+        var wire = string.Concat(transport.Writes);
+        Assert.True(
+            wire.IndexOf("FREQuency 0,200", StringComparison.Ordinal) < wire.IndexOf("FREQuency 0,100", StringComparison.Ordinal),
+            $"expected the parked 100 Hz to replay after the owner's 200 Hz. Writes: {wire}");
+
+        device.SetPwmFrequency(200);
+
+        int Sends200() => string.Concat(transport.Writes).Split("FREQuency 0,200").Length - 1;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (Sends200() < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(2, Sends200());
+
+        device.Disconnect();
+    }
+
+    [Fact]
     public async Task Send_FromAnotherFlow_IsHeldBackDuringAPlainTextExchange()
     {
         // The hazard the whole feature exists for: a text query owns the stream with the protobuf
