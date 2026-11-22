@@ -243,10 +243,17 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         if (IsConnected)
             return;
 
+        // Retire the previous session's drop detection before any new handle is published: a
+        // reconnect straight over a dead session (no Disconnect in between) would otherwise leave
+        // it armed. Arm() below starts the new session's detection once the connect succeeds.
+        _watchdog.Disarm();
+
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
             {
+                // A dead socket still held from the previous session is released, not overwritten.
+                ReleaseSocket();
                 _tcpClient = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
                     : new TcpClient();
@@ -296,13 +303,27 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
 
                 EnableKeepAlive(_tcpClient);
+
+                // Armed for this exact stream before the executor announces the connection: a
+                // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
+                // (which arms its own session) synchronously, and arming afterwards would act on
+                // whatever the fields hold by then.
+                _watchdog.Arm(_networkStream);
             },
-            onAttemptFailed: ReleaseSocket,
+            onAttemptFailed: () =>
+            {
+                // An attempt can fail after it armed detection for its stream (a StatusChanged(true)
+                // subscriber that throws fails the attempt), so the failed attempt's detection is
+                // retired with its socket.
+                _watchdog.Disarm();
+                ReleaseSocket();
+            },
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        _watchdog.Arm();
     }
+
+    /// <summary>Whether drop detection is armed; for tests.</summary>
+    internal bool IsDropDetectionArmed => _watchdog.IsArmed;
 
     /// <summary>
     /// Disposes whatever socket is held and clears both references.
@@ -413,12 +434,32 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// Tears down a connection that was detected as dropped and reports it as a loss.
     /// </summary>
     /// <param name="error">The condition that identified the drop.</param>
-    private void HandleConnectionLost(Exception error)
+    /// <param name="session">The stream of the connection the watchdog was armed for.</param>
+    /// <remarks>
+    /// Internal so a test can deliver a loss for a connection that has since been replaced.
+    /// </remarks>
+    internal void HandleConnectionLost(Exception error, object session)
     {
+        // Only the connection the loss was detected on is taken down. A loss that arrives after a
+        // reconnect replaced it (the detector was already running when the reconnect began) finds
+        // a different stream here and leaves the new connection alone; the old socket was already
+        // released by the reconnect.
+        var stream = (NetworkStream)session;
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref _networkStream, null, stream), stream))
+        {
+            return;
+        }
+
         // Drop the references before anything that can block: IsConnected must already read false
         // when StatusChanged fires, so a handler (or the device registry's pruning) sees the truth.
-        var stream = Interlocked.Exchange(ref _networkStream, null);
-        var client = Interlocked.Exchange(ref _tcpClient, null);
+        // The client is taken only if it is the one this stream belongs to.
+        var client = Volatile.Read(ref _tcpClient);
+        if (client is null
+            || !ReferenceEquals(client.Client, stream.Socket)
+            || !ReferenceEquals(Interlocked.CompareExchange(ref _tcpClient, null, client), client))
+        {
+            client = null;
+        }
 
         try
         {
