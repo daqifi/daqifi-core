@@ -61,13 +61,15 @@ public class DeviceLinkTypeTests
     }
 
     [Fact]
-    public void DaqifiDevice_ExposesItsAddressThroughTheNetworkFacet()
+    public void DaqifiDevice_DoesNotClaimTheNetworkFacet()
     {
-        var address = IPAddress.Parse("192.168.1.42");
-        IDevice device = new DaqifiDevice("Device", address);
+        // DaqifiDevice serves every transport, so implementing the facet would make a USB device
+        // claim a network address. Only the factory's TCP device implements it (issue #616); see
+        // DaqifiDeviceFactoryTests for those paths.
+        using var streamingDevice = new DaqifiStreamingDevice("Device", new SerialStreamTransport("COM_TEST_616"));
+        IDevice device = streamingDevice;
 
-        var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
-        Assert.Equal(address, networked.IpAddress);
+        Assert.False(device is INetworkAddressedDevice);
     }
 
     private sealed class LinkTransport : IStreamTransport

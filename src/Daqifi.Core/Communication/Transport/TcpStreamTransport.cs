@@ -152,6 +152,33 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     public string? Hostname { get; }
 
     /// <summary>
+    /// The address this transport reaches: the connected socket's remote address when there is
+    /// one (so a host-name connect reports what the name resolved to), otherwise the address it
+    /// was constructed with. <c>null</c> for a host-name transport that has not connected.
+    /// </summary>
+    internal IPAddress? RemoteAddress
+    {
+        get
+        {
+            try
+            {
+                if (_tcpClient?.Client?.RemoteEndPoint is IPEndPoint remote)
+                {
+                    return remote.Address.IsIPv4MappedToIPv6 ? remote.Address.MapToIPv4() : remote.Address;
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+
+            return Hostname == null ? _endPoint.Address : null;
+        }
+    }
+
+    /// <summary>
     /// Gets the local interface address the outbound socket will bind to, or null to let the OS choose.
     /// </summary>
     public IPAddress? LocalInterface => _localInterface;

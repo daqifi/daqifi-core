@@ -281,6 +281,20 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         InitializeStreamingDevice();
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class with a transport
+    /// and the network address it reaches. Used by <see cref="NetworkStreamingDevice"/>.
+    /// </summary>
+    /// <param name="name">The name of the device.</param>
+    /// <param name="transport">The transport for device communication.</param>
+    /// <param name="ipAddress">The IP address the transport reaches, if known.</param>
+    /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+    private protected DaqifiStreamingDevice(string name, IStreamTransport transport, IPAddress? ipAddress, ILogger? logger)
+        : base(name, transport, ipAddress, logger)
+    {
+        InitializeStreamingDevice();
+    }
+
     private void InitializeStreamingDevice()
     {
         // Built here rather than in field initializers because each needs `this` as its host,

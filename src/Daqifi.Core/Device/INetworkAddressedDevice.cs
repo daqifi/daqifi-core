@@ -3,7 +3,9 @@ using System.Net;
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// A device that can be reached at a network address. Implemented by <see cref="DaqifiDevice"/>.
+/// A device that is reached at a network address. Every device <see cref="DaqifiDeviceFactory"/>
+/// connects over TCP (including WiFi devices from discovery) implements it; a device it connects
+/// over serial does not.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -18,7 +20,9 @@ namespace Daqifi.Core.Device;
 public interface INetworkAddressedDevice
 {
     /// <summary>
-    /// Gets the IP address of the device, or <c>null</c> when it is not known.
+    /// Gets the IP address of the device: for a factory-built device, the address the connection
+    /// was made to (for a host-name connect, the address the name resolved to). <c>null</c> only
+    /// when an implementation genuinely does not know it.
     /// </summary>
     IPAddress? IpAddress { get; }
 }

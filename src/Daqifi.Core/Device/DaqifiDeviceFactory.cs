@@ -451,6 +451,19 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Internal method that handles the actual connection logic with a transport.
     /// </summary>
+    /// <summary>
+    /// Builds the device for an already-connected transport. A TCP transport gets a
+    /// <see cref="NetworkStreamingDevice"/>, which implements <see cref="INetworkAddressedDevice"/>
+    /// with the address the transport reached; any other transport gets a plain
+    /// <see cref="DaqifiStreamingDevice"/>, which does not claim a network address (issue #616).
+    /// </summary>
+    internal static DaqifiStreamingDevice CreateDevice(IStreamTransport transport, DeviceConnectionOptions options)
+    {
+        return transport is TcpStreamTransport tcp
+            ? new NetworkStreamingDevice(options.DeviceName, tcp, tcp.RemoteAddress, options.Logger)
+            : new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger);
+    }
+
     private static async Task<DaqifiStreamingDevice> ConnectWithTransportAsync(
         IStreamTransport transport,
         DeviceConnectionOptions options,
@@ -470,12 +483,11 @@ public static class DaqifiDeviceFactory
 
             // Step 2: Create the device with the transport
             // Note: Once created, the device owns the transport and will dispose it
-            device = new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger)
-            {
-                // Read by InitializeAsync below; set before Connect so it is never observed
-                // half-applied.
-                PreserveActiveStream = options.PreserveActiveStream
-            };
+            device = CreateDevice(transport, options);
+
+            // Read by InitializeAsync below; set before Connect so it is never observed
+            // half-applied.
+            device.PreserveActiveStream = options.PreserveActiveStream;
 
             // Step 3: Connect the device (starts message producers/consumers)
             await device.ConnectAsync(cancellationToken).ConfigureAwait(false);

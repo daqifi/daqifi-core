@@ -39,8 +39,9 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `ErrorOccurred` event - Background read/parse/decode failures (see [Error Surface](#error-surface))
 
 `IDevice` carries nothing that depends on how the device is attached. A network address is a
-WiFi/TCP fact, so it lives on the `INetworkAddressedDevice` capability interface, which
-`DaqifiDevice` implements:
+WiFi/TCP fact, so it lives on the `INetworkAddressedDevice` capability interface. Every device
+`DaqifiDeviceFactory` connects over TCP (including WiFi devices from discovery) implements it and
+reports the address it connected to; a device it connects over serial does not:
 
 ```csharp
 if (device is INetworkAddressedDevice { IpAddress: { } address })

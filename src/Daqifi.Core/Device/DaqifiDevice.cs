@@ -41,7 +41,7 @@ namespace Daqifi.Core.Device;
 /// it restarts it on a fresh thread afterwards.
 /// </para>
 /// </remarks>
-public class DaqifiDevice : IDevice, INetworkAddressedDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
+public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
 {
     /// <summary>
     /// Gets the name of the device.
@@ -52,9 +52,11 @@ public class DaqifiDevice : IDevice, INetworkAddressedDevice, IDisposable, IAsyn
     /// Gets the IP address of the device, if known.
     /// </summary>
     /// <remarks>
-    /// The address passed to the constructor. The transport constructor takes none, so this is
-    /// <c>null</c> for a device built that way. Reach it through
-    /// <see cref="INetworkAddressedDevice"/> when holding the device as an <see cref="IDevice"/>.
+    /// The address passed to the constructor; the public transport constructor takes none, so it
+    /// is <c>null</c> for a device built that way. This class is used for every transport, so it
+    /// does not implement <see cref="INetworkAddressedDevice"/>. A device that
+    /// <see cref="DaqifiDeviceFactory"/> connects over TCP does, and reports the address it was
+    /// dialed at: ask <c>device is INetworkAddressedDevice</c> rather than reading this.
     /// </remarks>
     public IPAddress? IpAddress { get; }
 
@@ -1297,7 +1299,20 @@ public class DaqifiDevice : IDevice, INetworkAddressedDevice, IDisposable, IAsyn
     /// <param name="transport">The transport for device communication.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
-        : this(name, ipAddress: null, logger)
+        : this(name, transport, ipAddress: null, logger)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DaqifiDevice"/> class with a transport and the
+    /// network address it reaches. Used by the factory's network device (issue #616).
+    /// </summary>
+    /// <param name="name">The name of the device.</param>
+    /// <param name="transport">The transport for device communication.</param>
+    /// <param name="ipAddress">The IP address the transport reaches, if known.</param>
+    /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+    private protected DaqifiDevice(string name, IStreamTransport transport, IPAddress? ipAddress, ILogger? logger)
+        : this(name, ipAddress, logger)
     {
         _transport = transport;
 

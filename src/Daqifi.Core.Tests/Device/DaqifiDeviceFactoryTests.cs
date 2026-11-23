@@ -523,6 +523,106 @@ public class DaqifiDeviceFactoryTests
 
     #endregion
 
+    #region Network capability (issue #616)
+
+    private static readonly DeviceConnectionOptions BareConnect = new()
+    {
+        ConnectionRetry = new ConnectionRetryOptions
+        {
+            Enabled = false,
+            ConnectionTimeout = TimeSpan.FromSeconds(5)
+        },
+        InitializeDevice = false
+    };
+
+    /// <summary>
+    /// Runs <paramref name="connect"/> against a loopback listener that accepts the handshake and
+    /// nothing else — all a connect with <c>InitializeDevice = false</c> needs.
+    /// </summary>
+    private static async Task WithLoopbackListenerAsync(Func<int, Task> connect)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            await connect(((IPEndPoint)listener.LocalEndpoint).Port);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task ConnectTcpAsync_ByIpAddress_ReturnsANetworkDeviceAtTheConnectAddress()
+    {
+        await WithLoopbackListenerAsync(async port =>
+        {
+            await using var device = await DaqifiDeviceFactory.ConnectTcpAsync(IPAddress.Loopback, port, BareConnect);
+
+            var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
+            Assert.Equal(IPAddress.Loopback, networked.IpAddress);
+        });
+    }
+
+    [Fact]
+    public async Task ConnectTcpAsync_ByHostName_ReportsTheResolvedAddress()
+    {
+        await WithLoopbackListenerAsync(async port =>
+        {
+            await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("localhost", port, BareConnect);
+
+            var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
+            Assert.NotNull(networked.IpAddress);
+            Assert.True(IPAddress.IsLoopback(networked.IpAddress!), $"Expected a loopback address, got {networked.IpAddress}");
+        });
+    }
+
+    [Fact]
+    public async Task ConnectFromDeviceInfoAsync_WiFi_ReturnsANetworkDeviceAtTheDiscoveredAddress()
+    {
+        await WithLoopbackListenerAsync(async port =>
+        {
+            var deviceInfo = new TestDeviceInfo
+            {
+                ConnectionType = ConnectionType.WiFi,
+                IPAddress = IPAddress.Loopback,
+                Port = port
+            };
+
+            await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo, BareConnect);
+
+            var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
+            Assert.Equal(IPAddress.Loopback, networked.IpAddress);
+        });
+    }
+
+    [Fact]
+    public void CreateDevice_SerialTransport_IsNotANetworkDevice()
+    {
+        // The serial factory path (ConnectSerialAsync) builds its device here once the port is
+        // open; a test cannot open a real port, so it checks the construction step directly.
+        using var device = DaqifiDeviceFactory.CreateDevice(
+            new SerialStreamTransport("COM_TEST_616"), DeviceConnectionOptions.Default);
+
+        Assert.False(device is INetworkAddressedDevice);
+        Assert.True(device.IsUsbConnection);
+    }
+
+    [Fact]
+    public void CreateDevice_TcpTransport_IsANetworkDeviceAtTheTransportAddress()
+    {
+        var address = IPAddress.Parse("192.0.2.10");
+        using var device = DaqifiDeviceFactory.CreateDevice(
+            new TcpStreamTransport(address, 9760), DeviceConnectionOptions.Default);
+
+        var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
+        Assert.Equal(address, networked.IpAddress);
+        Assert.False(device.IsUsbConnection);
+    }
+
+    #endregion
+
     #region Test Helpers
 
     /// <summary>
