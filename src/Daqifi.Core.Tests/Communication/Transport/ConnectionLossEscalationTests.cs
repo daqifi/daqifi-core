@@ -207,6 +207,8 @@ public class ConnectionLossEscalationTests
     /// </summary>
     private sealed class WatchedFailingTransport : IStreamTransport, ITransportHealthSink
     {
+        public bool IsUsbConnection => false;
+
         private readonly TransportConnectionWatchdog _watchdog;
         private bool _isConnected;
         private bool _disposed;

@@ -111,6 +111,8 @@ public class DeviceStatusChangedIsolationTests
     /// </summary>
     private sealed class DroppableTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         private bool _isConnected;
         private bool _disposed;

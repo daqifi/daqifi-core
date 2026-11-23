@@ -556,6 +556,8 @@ public class DaqifiDeviceRawCaptureLockTests
 
     private sealed class CaptureTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private bool _isConnected;
         private bool _disposed;
 

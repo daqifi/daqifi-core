@@ -169,6 +169,8 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
 
     private sealed class SlowLinkTransport(bool complete) : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private bool _isConnected;
         private bool _disposed;
 

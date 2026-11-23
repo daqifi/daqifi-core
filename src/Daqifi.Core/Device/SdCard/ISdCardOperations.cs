@@ -169,11 +169,6 @@ public interface ISdCardOperations
     /// Set it again after each connect, and after a reboot. Read it back with
     /// <see cref="GetSdCardCrcProtectionAsync"/> before a capture whose integrity matters.
     /// </para>
-    /// <para>
-    /// Added with a default body, as <see cref="Firmware.IFirmwareUpdateService"/>'s targeted
-    /// overloads were, so an implementation of this interface written before it existed still
-    /// compiles and loads; that default throws <see cref="NotSupportedException"/>.
-    /// </para>
     /// </remarks>
     /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
@@ -202,13 +197,7 @@ public interface ISdCardOperations
     /// the card came back in the other mode, because something other than this call (another
     /// connection, a raw command) changed the setting while it waited.
     /// </exception>
-    /// <exception cref="NotSupportedException">
-    /// Thrown by an implementation written before this member existed, which inherits the default
-    /// body. <see cref="DaqifiStreamingDevice"/> implements it.
-    /// </exception>
-    Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "This ISdCardOperations implementation does not support CRC-protected SD writes.");
+    Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reads whether CRC-protected SD card writes are on (firmware v3.9.0 and later). See
@@ -231,13 +220,7 @@ public interface ISdCardOperations
     /// Thrown when the device answered with a SCPI error or with no readable <c>0</c> or
     /// <c>1</c>. A live stream running at the time can bury the answer among stream data.
     /// </exception>
-    /// <exception cref="NotSupportedException">
-    /// Thrown by an implementation written before this member existed, which inherits the default
-    /// body. <see cref="DaqifiStreamingDevice"/> implements it.
-    /// </exception>
-    Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "This ISdCardOperations implementation does not support CRC-protected SD writes.");
+    Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Starts logging data to the SD card.

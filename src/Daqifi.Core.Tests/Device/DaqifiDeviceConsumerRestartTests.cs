@@ -468,6 +468,8 @@ public class DaqifiDeviceConsumerRestartTests
     /// </remarks>
     private sealed class StallingReadMockTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly StallingStream _stream;
         private bool _isConnected;
         private bool _disposed;

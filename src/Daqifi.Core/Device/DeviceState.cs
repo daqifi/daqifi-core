@@ -34,16 +34,12 @@ public enum DeviceState
     Ready,
 
     /// <summary>
-    /// Named for a device that is actively acquiring samples, but never assigned: starting or
-    /// stopping a stream does not change <see cref="DaqifiDevice.State"/>, so a connected,
-    /// initialized device reports <see cref="Ready"/> while it streams. Live acquisition state
-    /// is <see cref="IStreamingDevice.IsStreaming"/>.
-    /// </summary>
-    [Obsolete("No code sets this value, so waiting for it waits forever. Use IStreamingDevice.IsStreaming.")]
-    Streaming,
-
-    /// <summary>
     /// Device is connected and its initialization failed. The initialization can be retried.
     /// </summary>
-    Error
+    /// <remarks>
+    /// Pinned to <c>6</c>, its value since 1.x: the slot before it belonged to a <c>Streaming</c>
+    /// member that nothing ever assigned and that was removed in 2.0. Live acquisition state is
+    /// <see cref="IStreamingDevice.IsStreaming"/>.
+    /// </remarks>
+    Error = 6
 }

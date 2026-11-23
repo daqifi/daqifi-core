@@ -554,6 +554,8 @@ public class DaqifiStreamingDeviceRateCapTests
     /// <summary>A transport over a stream nothing ever arrives on.</summary>
     private sealed class SinkTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly NullSinkStream _stream = new();
         private bool _isConnected;
         private bool _disposed;

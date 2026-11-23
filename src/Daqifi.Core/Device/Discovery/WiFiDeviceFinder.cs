@@ -417,7 +417,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
                 MacAddress = NetworkAddressHelper.GetMacAddressString(message),
                 Port = (int)message.DevicePort,
                 LocalInterfaceAddress = localInterfaceAddress,
-                Type = DiscoveryDeviceTypeMapper.FromPartNumber(message.DevicePn),
+                Type = DeviceTypeDetector.DetectFromPartNumber(message.DevicePn),
                 IsPowerOn = message.PwrStatus == 1,
                 ConnectionType = ConnectionType.WiFi
             };

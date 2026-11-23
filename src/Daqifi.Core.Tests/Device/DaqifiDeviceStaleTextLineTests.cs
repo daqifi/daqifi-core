@@ -1192,6 +1192,8 @@ public class DaqifiDeviceStaleTextLineTests
     /// </remarks>
     private sealed class ReleaseOnStreamAccessMockTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly WithheldLineStream _stream;
         private int _streamAccessCount;
         private int _releaseOnAccess = -1;
@@ -1345,6 +1347,8 @@ public class DaqifiDeviceStaleTextLineTests
     /// </summary>
     private sealed class TwoStageReleaseTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly TwoStageStream _stream;
         private bool _isConnected;
         private bool _disposed;
@@ -1540,6 +1544,8 @@ public class DaqifiDeviceStaleTextLineTests
     /// </remarks>
     private sealed class QueuedWriteTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly HoldableStream _stream = new();
         private bool _isConnected;
         private bool _disposed;

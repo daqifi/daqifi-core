@@ -356,6 +356,8 @@ public class DeviceErrorSurfaceTests
     /// </summary>
     private sealed class StreamBackedTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly Stream _stream;
         private bool _isConnected;
         private bool _disposed;
@@ -462,6 +464,8 @@ public class DeviceErrorSurfaceTests
     /// </summary>
     private sealed class ScriptedStreamTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private bool _isConnected;
         private bool _disposed;
 

@@ -145,6 +145,8 @@ public class DaqifiDeviceThreadAccountingTests
     /// </summary>
     private sealed class ImmediateReplyMockTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly ImmediateReplyStream _stream;
         private bool _isConnected;
         private bool _disposed;

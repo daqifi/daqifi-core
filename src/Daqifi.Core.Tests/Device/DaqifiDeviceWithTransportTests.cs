@@ -70,6 +70,8 @@ public class DaqifiDeviceWithTransportTests
     // Mock transport for testing device behavior without network dependencies
     private class MockStreamTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         private bool _isConnected;
         private bool _disposed;
@@ -581,6 +583,8 @@ public class DaqifiDeviceWithTransportTests
     // _serialPort.BaseStream — a new instance after each Disconnect → Connect.
     private class SwappingMockStreamTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private MemoryStream _stream = new();
         private bool _isConnected;
         private bool _disposed;

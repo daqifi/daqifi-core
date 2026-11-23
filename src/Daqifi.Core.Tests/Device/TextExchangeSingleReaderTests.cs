@@ -309,6 +309,8 @@ public class TextExchangeSingleReaderTests
     /// </summary>
     private sealed class WireDeviceTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private bool _isConnected;
         private bool _disposed;
 

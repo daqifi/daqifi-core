@@ -504,7 +504,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 MacAddress = null,
                 Port = srv.Port,
                 LocalInterfaceAddress = ResolveLocalInterfaceAddress(address, interfaces),
-                Type = DiscoveryDeviceTypeMapper.FromPartNumber(partNumber),
+                Type = DeviceTypeDetector.DetectFromPartNumber(partNumber),
                 IsPowerOn = true,
                 ConnectionType = ConnectionType.WiFi
             });

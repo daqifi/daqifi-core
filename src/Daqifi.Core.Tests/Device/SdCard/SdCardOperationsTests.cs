@@ -3517,6 +3517,8 @@ public partial class SdCardOperationsTests
     /// <summary>A connected transport whose stream discards writes and has nothing to read.</summary>
     private sealed class DiscardingTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         public Stream Stream => Stream.Null;
         public bool IsConnected { get; private set; }
         public string ConnectionInfo => IsConnected ? "Mock: Connected" : "Mock: Disconnected";

@@ -375,6 +375,8 @@ public class TextExchangeLineFramingTests
     /// </summary>
     private sealed class ScriptedReplyTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly ScriptedReplyStream _stream;
         private bool _isConnected;
         private bool _disposed;

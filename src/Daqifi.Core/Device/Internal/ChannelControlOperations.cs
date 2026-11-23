@@ -269,7 +269,7 @@ internal sealed class ChannelControlOperations
 
         // Gate on Type (matching SetDioDirection) rather than the IDigitalChannel interface,
         // so both DIO methods accept the same set of channels. The SCPI command only needs
-        // the channel number; OutputValue mirroring is best-effort local bookkeeping.
+        // the channel number.
         if (channel.Type != ChannelType.Digital)
         {
             throw new ArgumentException("A digital output value can only be set on digital channels.", nameof(channel));
@@ -279,30 +279,12 @@ internal sealed class ChannelControlOperations
 
         EnsureChannelBelongs(channel);
 
-        // The PWM check, the send and the record as one step (see _commandGate).
+        // The PWM check and the send as one step (see _commandGate). Nothing is recorded: the
+        // pin's level comes back in the stream as IDigitalChannel.IsHigh (#901).
         lock (_commandGate)
         {
             EnsurePwmNotEnabled(channel);
-
-            // Send first, then record — the rule SetDioDirection sets out above. A send that
-            // throws leaves Core's view of the channel as it was (#945).
             _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
-
-            // OutputValue is obsolete, but it stays correct while it is still part of the
-            // public surface: a caller who reads it must not see a stale level (#901).
-            _host.WithChannelsLock(() =>
-            {
-                if (channel is DigitalChannel digitalChannel)
-                {
-                    digitalChannel.ApplyOutputValue(value);
-                }
-                else if (channel is IDigitalChannel foreignChannel)
-                {
-#pragma warning disable CS0618
-                    foreignChannel.OutputValue = value;
-#pragma warning restore CS0618
-                }
-            });
         }
     }
 
@@ -366,8 +348,7 @@ internal sealed class ChannelControlOperations
         _host.Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
 
         // Disabling PWM leaves the pin high-impedance and the firmware zeroes its stored
-        // output value; ExitPwm mirrors that so local state doesn't claim a driven level.
-        // The stored direction is intentionally left as-is: the firmware keeps it and
+        // output value. The stored direction is intentionally left as-is: the firmware keeps it and
         // re-applies it (resuming driving) on the next state or direction write, or on the
         // next streaming tick — verified on hardware.
         _host.WithChannelsLock(() =>
@@ -389,16 +370,6 @@ internal sealed class ChannelControlOperations
                 {
                     digitalChannel.ExitPwm();
                 }
-            }
-            else if (channel is IDigitalChannel foreignChannel)
-            {
-#pragma warning disable CS0618 // an implementation Core does not own has only the public setters
-                foreignChannel.IsPwmEnabled = enabled;
-                if (!enabled)
-                {
-                    foreignChannel.OutputValue = false;
-                }
-#pragma warning restore CS0618
             }
         });
     }

@@ -1979,6 +1979,8 @@ public class DeviceReconnectTests
     /// </summary>
     private sealed class ScriptedReconnectTransport : IStreamTransport, ITransportHealthSink
     {
+        public bool IsUsbConnection => false;
+
         private readonly object _gate = new();
         private readonly TransportConnectionWatchdog? _watchdog;
         private IdleStream _stream = new();

@@ -681,7 +681,7 @@ public class DaqifiDeviceFactoryTests
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }
-        public Daqifi.Core.Device.Discovery.DeviceType Type { get; set; } = Daqifi.Core.Device.Discovery.DeviceType.Nyquist1;
+        public Daqifi.Core.Device.DeviceType Type { get; set; } = Daqifi.Core.Device.DeviceType.Nyquist1;
         public bool IsPowerOn { get; set; } = true;
         public ConnectionType ConnectionType { get; set; } = ConnectionType.Unknown;
         public string? PortName { get; set; }

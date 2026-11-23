@@ -134,6 +134,8 @@ public class StreamTransportCancellationTests
     /// </summary>
     private sealed class LegacyStreamTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         private bool _isConnected;
 

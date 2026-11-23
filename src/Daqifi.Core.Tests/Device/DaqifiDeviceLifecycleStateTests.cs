@@ -487,14 +487,15 @@ public class DaqifiDeviceLifecycleStateTests
 
     #endregion
 
-    #region A state value no code sets
+    #region Numeric values
 
     [Fact]
-    public void DeviceStateStreaming_IsMarkedObsolete()
+    public void DeviceStateError_KeepsItsNumericValue()
     {
-        var member = typeof(DeviceState).GetMember("Streaming").Single();
-
-        Assert.NotNull(member.GetCustomAttribute<ObsoleteAttribute>());
+        // Streaming (5), which nothing ever set, was removed in 2.0. Error keeps 6 so a value
+        // persisted or logged as a number still reads back as the same state.
+        Assert.Equal(6, (int)DeviceState.Error);
+        Assert.False(Enum.IsDefined(typeof(DeviceState), 5));
     }
 
     #endregion
@@ -523,6 +524,8 @@ public class DaqifiDeviceLifecycleStateTests
     /// </summary>
     private sealed class ReopeningTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private volatile LiveStream? _stream;
 
         /// <summary>The stream of the most recent connect, including after a drop.</summary>

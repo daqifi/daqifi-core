@@ -73,7 +73,6 @@ public class IntrospectionToolContractTests
             {
                 Assert.Null(c.PwmCapable);
                 Assert.Null(c.PwmEnabled);
-                Assert.Null(c.OutputValue);
             });
     }
 
@@ -348,7 +347,6 @@ public class DigitalPinToolContractTests
 
         var result = await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 1, high: true);
 
-        Assert.True(result.OutputValue);
         Assert.Equal(nameof(ChannelDirection.Output), result.Direction);
 
         var direction = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortDirection(1, 1).Data);
@@ -405,7 +403,7 @@ public class DigitalPinToolContractTests
 
         var result = await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 4, high: true);
 
-        Assert.True(result.OutputValue);
+        Assert.Equal(nameof(ChannelDirection.Output), result.Direction);
         Assert.Contains(ScpiMessageProducer.SetDioPortState(4, 1).Data, device.Sent);
     }
 }

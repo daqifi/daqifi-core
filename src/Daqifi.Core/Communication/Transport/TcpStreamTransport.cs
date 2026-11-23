@@ -213,6 +213,11 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     public bool IsConnected => _tcpClient?.Connected == true && _networkStream != null;
 
     /// <summary>
+    /// Always <c>false</c>: a TCP transport reaches the device over its WiFi/LAN module.
+    /// </summary>
+    public bool IsUsbConnection => false;
+
+    /// <summary>
     /// Gets information about the transport connection.
     /// </summary>
     public string ConnectionInfo

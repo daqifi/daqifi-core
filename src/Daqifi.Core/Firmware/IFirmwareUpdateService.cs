@@ -54,9 +54,6 @@ public interface IFirmwareUpdateService
     /// <summary>
     /// Executes a PIC32 firmware update targeting one specific bootloader by device path, for when
     /// several identical bootloaders (same VID/PID, and no serial to tell them apart) are present.
-    /// Added as a default interface method so existing implementers and callers of the untargeted
-    /// overload above are unaffected; implementations that support targeting (the production
-    /// <c>FirmwareUpdateService</c>) override it. The default throws <see cref="NotSupportedException"/>.
     /// </summary>
     /// <param name="device">The connected streaming device to update.</param>
     /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
@@ -71,18 +68,13 @@ public interface IFirmwareUpdateService
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress,
         string? targetDevicePath,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "This IFirmwareUpdateService implementation does not support targeted (device-path) firmware updates.");
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Executes a PIC32 firmware update targeting one specific bootloader by USB physical-location
     /// key, for callers that know the target device's location (e.g. from <c>IDeviceInfo.LocationKey</c>
     /// in serial/app mode) but not its future bootloader device path — the path only exists once the
-    /// device has already rebooted into bootloader mode. Added as a default interface method so
-    /// existing implementers and callers of the untargeted/path-targeted overloads above are
-    /// unaffected; implementations that support location-key targeting (the production
-    /// <c>FirmwareUpdateService</c>) override it. The default throws <see cref="NotSupportedException"/>.
+    /// device has already rebooted into bootloader mode.
     /// </summary>
     /// <param name="device">The connected streaming device to update.</param>
     /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
@@ -105,9 +97,7 @@ public interface IFirmwareUpdateService
         IProgress<FirmwareUpdateProgress>? progress,
         string? targetDevicePath,
         string? targetLocationKey,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "This IFirmwareUpdateService implementation does not support targeted (location-key) firmware updates.");
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Executes a WiFi module update using an external flashing tool.
