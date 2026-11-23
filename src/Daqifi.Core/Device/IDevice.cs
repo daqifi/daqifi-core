@@ -1,6 +1,5 @@
 using Daqifi.Core.Communication.Messages;
 using System;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,11 +20,6 @@ public interface IDevice : IAsyncDisposable
     /// Gets the name of the device.
     /// </summary>
     string Name { get; }
-
-    /// <summary>
-    /// Gets the IP address of the device.
-    /// </summary>
-    IPAddress? IpAddress { get; }
 
     /// <summary>
     /// Gets a value indicating whether the device is connected.

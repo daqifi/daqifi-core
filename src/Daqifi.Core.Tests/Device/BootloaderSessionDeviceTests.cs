@@ -184,9 +184,11 @@ public class BootloaderSessionDeviceTests
     }
 
     [Fact]
-    public void IpAddress_IsNull()
+    public void IsNotANetworkAddressedDevice()
     {
-        Assert.Null(new BootloaderSessionDevice().IpAddress);
+        // A bootloader session is reached over USB HID, never over the network, so it no longer
+        // carries an always-null IpAddress stub (issue #616).
+        Assert.False(typeof(INetworkAddressedDevice).IsAssignableFrom(typeof(BootloaderSessionDevice)));
     }
 
     [Fact]

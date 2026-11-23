@@ -1,5 +1,4 @@
 using System.IO;
-using System.Net;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
@@ -47,7 +46,6 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     /// <c>{ SerialPortName = null }</c>, which the constructor's fallback cannot express.
     /// </remarks>
     public string? SerialPortName { get; set; }
-    public IPAddress? IpAddress => null;
     public bool IsConnected { get; private set; }
     public ConnectionStatus Status => _status;
     public DeviceMetadata Metadata { get; } = new();

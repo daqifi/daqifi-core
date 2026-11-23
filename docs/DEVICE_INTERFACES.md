@@ -22,7 +22,6 @@ reconnect, feature gating, thread-safety rules, and diagnostics.
 The base interface for all DAQiFi devices, providing fundamental connection and communication capabilities:
 
 - `Name` - Device identifier
-- `IpAddress` - Network address (for WiFi devices)
 - `IsConnected` - Connection status
 - `Status` - Detailed connection status (`Disconnected`, `Connecting`, `Connected`, `Lost`;
   plus `Retrying` / `Failed` once reconnection is enabled — see
@@ -38,6 +37,17 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `StatusChanged` event - Connection status notifications
 - `MessageReceived` event - Incoming data notifications
 - `ErrorOccurred` event - Background read/parse/decode failures (see [Error Surface](#error-surface))
+
+`IDevice` carries nothing that depends on how the device is attached. A network address is a
+WiFi/TCP fact, so it lives on the `INetworkAddressedDevice` capability interface, which
+`DaqifiDevice` implements:
+
+```csharp
+if (device is INetworkAddressedDevice { IpAddress: { } address })
+{
+    Console.WriteLine($"Reached at {address}");
+}
+```
 
 ### IStreamingDevice
 
@@ -1106,7 +1116,9 @@ catch (FeatureNotSupportedException ex)
 
 `DaqifiDeviceFactory` returns `DaqifiStreamingDevice`, which inherits `Supports` from
 `DaqifiDevice` and adds `IsUsbConnection`. Neither is declared on `IStreamingDevice`, so code
-holding only the interface needs the concrete type. The requirement table and `-113`
+holding only the interface needs the concrete type. `IsUsbConnection` asks the transport
+(`IStreamTransport.IsUsbConnection`), so a custom transport over a USB link should override that
+member to return `true`. The requirement table and `-113`
 backstop live in [ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site
 pattern only.
 

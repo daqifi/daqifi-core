@@ -2,7 +2,6 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -86,11 +85,6 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
 
     /// <inheritdoc />
     public string Name { get; }
-
-    /// <summary>
-    /// Always <c>null</c>: a bootloader session is reached over USB HID, never over the network.
-    /// </summary>
-    public IPAddress? IpAddress => null;
 
     /// <inheritdoc />
     public bool IsConnected => Volatile.Read(ref _isConnected) == Connected;

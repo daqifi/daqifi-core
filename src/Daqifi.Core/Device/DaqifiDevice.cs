@@ -41,7 +41,7 @@ namespace Daqifi.Core.Device;
 /// it restarts it on a fresh thread afterwards.
 /// </para>
 /// </remarks>
-public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
+public class DaqifiDevice : IDevice, INetworkAddressedDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
 {
     /// <summary>
     /// Gets the name of the device.
@@ -51,6 +51,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <summary>
     /// Gets the IP address of the device, if known.
     /// </summary>
+    /// <remarks>
+    /// The address passed to the constructor. The transport constructor takes none, so this is
+    /// <c>null</c> for a device built that way. Reach it through
+    /// <see cref="INetworkAddressedDevice"/> when holding the device as an <see cref="IDevice"/>.
+    /// </remarks>
     public IPAddress? IpAddress { get; }
 
     /// <summary>

@@ -21,14 +21,11 @@ public enum ProtobufMessageType
     Stream,
 
     /// <summary>
-    /// Reserved. <see cref="ProtobufProtocolHandler.DetectMessageType"/> never returns
-    /// this value: SD card responses arrive on the text/raw-byte path, not as live
-    /// protobuf frames. Kept so existing callers can still name the slot.
-    /// </summary>
-    SdCard,
-
-    /// <summary>
     /// Error message from the device.
     /// </summary>
-    Error
+    /// <remarks>
+    /// Pinned to <c>4</c>, the value it had before the never-returned <c>SdCard</c> member was
+    /// removed (issue #612), so a value persisted or compiled against 1.x keeps its meaning.
+    /// </remarks>
+    Error = 4
 }

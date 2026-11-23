@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
@@ -758,7 +757,6 @@ public class LanChipInfoProviderExtensionsTests
         public bool ThrowOnSend { get; set; }
 
         public string Name => "SCRIPTED";
-        public IPAddress? IpAddress => null;
         public bool IsConnected { get; set; } = true;
         public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
         public DeviceMetadata Metadata { get; } = new();
