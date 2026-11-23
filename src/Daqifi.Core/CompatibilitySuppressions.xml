@@ -80,6 +80,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Channel.IChannel.set_Direction(Daqifi.Core.Channel.ChannelDirection)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Channel.IDigitalChannel.get_OutputValue</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>

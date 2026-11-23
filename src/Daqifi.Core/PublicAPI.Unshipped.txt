@@ -3,6 +3,7 @@
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.IsPwmEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.OutputValue.get -> bool
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Channel.IChannel.Direction.set -> void
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.IsPwmEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.get -> bool
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.set -> void

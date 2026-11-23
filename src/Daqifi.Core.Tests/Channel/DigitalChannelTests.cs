@@ -153,7 +153,7 @@ public class DigitalChannelTests
         // Act
         channel.Name = "DIO 1";
         channel.IsEnabled = true;
-        ((IChannel)channel).Direction = ChannelDirection.Output;
+        channel.ApplyDirection(ChannelDirection.Output);
 
         // Assert
         Assert.Equal("DIO 1", channel.Name);

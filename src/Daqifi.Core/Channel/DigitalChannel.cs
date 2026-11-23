@@ -109,17 +109,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// <see cref="IChannel"/> requires a setter. Assigning through it sends nothing to the device
-    /// and only moves Core's view, which the next status message overwrites; it is kept for
-    /// callers that carry a channel's state across a re-created object.
-    /// </summary>
-    ChannelDirection IChannel.Direction
-    {
-        get => Direction;
-        set => ApplyDirection(value);
-    }
-
-    /// <summary>
     /// Gets the most recent data sample received on this channel.
     /// </summary>
     public IDataSample? ActiveSample

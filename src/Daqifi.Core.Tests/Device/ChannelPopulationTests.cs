@@ -73,7 +73,7 @@ public class ChannelPopulationTests
         analog0.IsEnabled = true;
         var digital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
         digital1.IsEnabled = true;
-        digital1.Direction = ChannelDirection.Output;
+        ((DigitalChannel)digital1).ApplyDirection(ChannelDirection.Output);
 
         // Repopulate with the same shape — identity is unchanged, so instances are reused.
         device.PopulateChannelsFromStatus(message);

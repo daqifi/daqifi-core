@@ -255,10 +255,6 @@ internal sealed class ChannelControlOperations
             {
                 digitalChannel.ApplyDirection(direction);
             }
-            else
-            {
-                channel.Direction = direction;
-            }
         });
     }
 

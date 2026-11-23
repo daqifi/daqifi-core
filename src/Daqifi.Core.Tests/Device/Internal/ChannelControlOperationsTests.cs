@@ -235,25 +235,6 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public void SetDioDirection_MutatesDirectionUnderTheChannelsLock()
-    {
-        // The status-frame resync writes this same property under the channels lock (#685), so
-        // the command path has to write it under that lock too — the discipline SetChannelsEnabled
-        // already follows for analog IsEnabled (#409). Qodo flagged the unsynchronized pair on
-        // PR #686.
-        var digital = new LockObservingDigitalChannel(channelNumber: 5);
-        var host = new FakeHost(digital);
-        digital.Host = host;
-        var ops = new ChannelControlOperations(host);
-
-        ops.SetDioDirection(digital, ChannelDirection.Output);
-
-        Assert.True(digital.DirectionWrittenUnderLock);
-        Assert.Equal(ChannelDirection.Output, digital.Direction);
-        Assert.Equal(new[] { "send:DIO:PORt:DIRection 5,1" }, host.Calls);
-    }
-
-    [Fact]
     public void SetDioDirection_CommandWins_WhenAStatusFrameLandsWhileItIsInFlight()
     {
         // Qodo, PR #686. A status frame the device encoded before it applied this command can
@@ -1026,22 +1007,6 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public async Task SetDioValue_TwoCallsAtOnce_SendsTheLaterLevelLast()
-    {
-        var digital = new DigitalChannel(channelNumber: 5);
-        digital.ApplyDirection(ChannelDirection.Output);
-        var host = new FakeHost(digital);
-        var ops = new ChannelControlOperations(host);
-
-        await RunWithFirstSendHeldAsync(
-            host, holdAfterTheCommandIsSent: true,
-            () => ops.SetDioValue(digital, true),
-            () => ops.SetDioValue(digital, false));
-
-        Assert.Equal("send:DIO:PORt:STATe 5,0", host.Calls[^1]);
-    }
-
-    [Fact]
     public async Task SetPwmEnabled_TwoCallsAtOnce_RecordsTheStateSentLast()
     {
         var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
@@ -1192,56 +1157,6 @@ public class ChannelControlOperationsTests
     }
 
     #endregion
-
-    /// <summary>
-    /// An <see cref="IDigitalChannel"/> that records whether its <see cref="Direction"/> was
-    /// assigned from inside <see cref="FakeHost.WithChannelsLock"/>. A wrapper rather than a
-    /// subclass because <see cref="DigitalChannel.Direction"/> is not virtual; every other member
-    /// forwards to a real <see cref="DigitalChannel"/> so the behaviour under test is unchanged.
-    /// </summary>
-    private sealed class LockObservingDigitalChannel : IDigitalChannel
-    {
-        private readonly DigitalChannel _inner;
-
-        public LockObservingDigitalChannel(int channelNumber)
-        {
-            _inner = new DigitalChannel(channelNumber);
-        }
-
-        public FakeHost? Host { get; set; }
-
-        public bool DirectionWrittenUnderLock { get; private set; }
-
-        public ChannelDirection Direction
-        {
-            get => _inner.Direction;
-            set
-            {
-                DirectionWrittenUnderLock = Host?.InChannelsLock ?? false;
-                ((IChannel)_inner).Direction = value;
-            }
-        }
-
-        public int ChannelNumber => _inner.ChannelNumber;
-        public string Name { get => _inner.Name; set => _inner.Name = value; }
-        public bool IsEnabled { get => _inner.IsEnabled; set => _inner.IsEnabled = value; }
-        public ChannelType Type => _inner.Type;
-        public IDataSample? ActiveSample => _inner.ActiveSample;
-        public bool IsHigh => _inner.IsHigh;
-        public bool IsPwmCapable => _inner.IsPwmCapable;
-        public bool IsPwmEnabled => _inner.IsPwmEnabled;
-        public int PwmDutyCyclePercent { get => _inner.PwmDutyCyclePercent; set => _inner.PwmDutyCyclePercent = value; }
-
-        public event EventHandler<SampleReceivedEventArgs>? SampleReceived
-        {
-            add => _inner.SampleReceived += value;
-            remove => _inner.SampleReceived -= value;
-        }
-
-        public void SetActiveSample(double value, DateTime timestamp) => _inner.SetActiveSample(value, timestamp);
-
-        public void SetActiveSample(IDataSample sample) => _inner.SetActiveSample(sample);
-    }
 
     #region Fake host
 

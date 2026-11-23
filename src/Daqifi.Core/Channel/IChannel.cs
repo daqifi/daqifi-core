@@ -26,16 +26,17 @@ public interface IChannel
     ChannelType Type { get; }
 
     /// <summary>
-    /// Gets or sets the channel direction (Input or Output).
+    /// Gets the channel direction (Input or Output).
     /// </summary>
     /// <remarks>
     /// On a digital channel this tracks the direction the <i>device</i> reports, resynced from
     /// every status message, so it stays right across a reconnect even though the pin's direction
     /// persists on the board and nothing in Core's init sequence resets it (#685). Use
-    /// <c>IStreamingDevice.SetDioDirection</c> to change it; assigning here only moves Core's
-    /// view, and the next status message will overwrite it with the device's.
+    /// <c>IStreamingDevice.SetDioDirection</c> to change it. There is no setter: one could only
+    /// move Core's view without moving the pin, and code that checked this before commanding the
+    /// pin would then skip the command.
     /// </remarks>
-    ChannelDirection Direction { get; set; }
+    ChannelDirection Direction { get; }
 
     /// <summary>
     /// Gets the most recent data sample received on this channel.

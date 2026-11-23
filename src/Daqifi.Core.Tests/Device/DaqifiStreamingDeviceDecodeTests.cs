@@ -319,7 +319,7 @@ public class DaqifiStreamingDeviceDecodeTests
         var dio1 = DigitalChannel(device, 1);
         dio0.IsEnabled = true;
         dio1.IsEnabled = true;
-        dio1.Direction = ChannelDirection.Output;
+        ((Daqifi.Core.Channel.DigitalChannel)dio1).ApplyDirection(ChannelDirection.Output);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
