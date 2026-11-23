@@ -289,6 +289,11 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     internal string PortName => _portName;
 
     /// <summary>
+    /// Always <c>true</c>: a serial transport is the device's USB CDC link.
+    /// </summary>
+    public bool IsUsbConnection => true;
+
+    /// <summary>
     /// Gets information about the transport connection.
     /// </summary>
     public string ConnectionInfo

@@ -31,6 +31,27 @@ public interface IStreamTransport : IDisposable
     string ConnectionInfo { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this transport reaches the device over USB.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The device needs to know its link type: the SD card and the WiFi/LAN module share one SPI
+    /// bus, so every SD operation prepares that bus differently on USB than on the network (see
+    /// <see cref="Daqifi.Core.Device.DaqifiStreamingDevice.IsUsbConnection"/>, which reads this).
+    /// The transport is the one thing that knows what it is, so the answer lives here rather than
+    /// in a type test on the device (issue #612).
+    /// </para>
+    /// <para>
+    /// The default is <c>false</c>, so an existing implementation keeps compiling unchanged and is
+    /// treated as a network link. <see cref="SerialStreamTransport"/> returns <c>true</c>; a custom
+    /// transport over a USB link should override this to return <c>true</c> too. The answer is a
+    /// fact about the kind of link, not its state, so it does not change with
+    /// <see cref="IsConnected"/>.
+    /// </para>
+    /// </remarks>
+    bool IsUsbConnection => false;
+
+    /// <summary>
     /// Occurs when the connection status changes.
     /// </summary>
     /// <remarks>

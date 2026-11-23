@@ -346,7 +346,6 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
     private sealed class MinimalStreamingDevice : IStreamingDevice
     {
         public string Name => "Minimal";
-        public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; } = true;
         public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
         public DeviceMetadata Metadata { get; } = new();

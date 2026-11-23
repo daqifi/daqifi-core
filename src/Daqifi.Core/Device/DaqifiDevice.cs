@@ -51,7 +51,26 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <summary>
     /// Gets the IP address of the device, if known.
     /// </summary>
-    public IPAddress? IpAddress { get; }
+    /// <remarks>
+    /// For a device <see cref="DaqifiDeviceFactory"/> connects over TCP, the address its connection
+    /// currently reaches; otherwise the address passed to the constructor (the public transport
+    /// constructor takes none, so it is <c>null</c> for a device built that way). This class is used for every transport, so it
+    /// does not implement <see cref="INetworkAddressedDevice"/>. A device that
+    /// <see cref="DaqifiDeviceFactory"/> connects over TCP does: ask
+    /// <c>device is INetworkAddressedDevice</c> rather than reading this.
+    /// </remarks>
+    public IPAddress? IpAddress => CurrentNetworkAddress ?? _ipAddress;
+
+    /// <summary>The address passed to the constructor, if any.</summary>
+    private readonly IPAddress? _ipAddress;
+
+    /// <summary>
+    /// The live network address of a network-attached device, which takes precedence over the
+    /// constructor's. <see cref="NetworkStreamingDevice"/> reads it from its transport, so
+    /// <see cref="IpAddress"/> and <see cref="INetworkAddressedDevice.IpAddress"/> are the same
+    /// read and follow a reconnect that lands on a different peer.
+    /// </summary>
+    private protected virtual IPAddress? CurrentNetworkAddress => null;
 
     /// <summary>
     /// Gets a value indicating whether the device is currently connected.
@@ -1257,7 +1276,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public DaqifiDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
     {
         Name = name;
-        IpAddress = ipAddress;
+        _ipAddress = ipAddress;
         _logger = logger ?? NullLogger.Instance;
         _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         _lifecycleGate = new LifecycleGate(

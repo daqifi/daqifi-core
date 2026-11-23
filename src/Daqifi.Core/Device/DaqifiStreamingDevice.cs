@@ -234,7 +234,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// operation prepares that bus, what a silent transport means to a file transfer, and
     /// whether SD logging can be started at all.
     /// </summary>
-    public virtual bool IsUsbConnection => Transport is SerialStreamTransport;
+    /// <remarks>
+    /// Asks the transport (<see cref="IStreamTransport.IsUsbConnection"/>) rather than testing its
+    /// concrete type, so a custom <see cref="IStreamTransport"/> over a USB link gets the right
+    /// answer by overriding that member. <c>false</c> when the device has no transport.
+    /// </remarks>
+    public virtual bool IsUsbConnection => Transport?.IsUsbConnection == true;
 
     /// <summary>
     /// Gets the most recently retrieved list of files on the SD card.

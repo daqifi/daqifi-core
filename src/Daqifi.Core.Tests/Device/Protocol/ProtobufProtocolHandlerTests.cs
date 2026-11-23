@@ -263,7 +263,6 @@ public class ProtobufProtocolHandlerTests
         new(
             statusMessageHandler: _ => routed.Add("status"),
             streamMessageHandler: _ => routed.Add("stream"),
-            sdCardMessageHandler: _ => routed.Add("sdcard"),
             errorMessageHandler: _ => routed.Add("error"));
 
     private static DaqifiOutMessage MessageOfType(ProtobufMessageType messageType)

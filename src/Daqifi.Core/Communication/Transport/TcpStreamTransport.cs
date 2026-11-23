@@ -84,6 +84,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     private readonly TransportConnectionWatchdog _watchdog;
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
+    private volatile IPAddress? _connectedAddress;
     private bool _disposed;
 
     /// <summary>
@@ -150,6 +151,38 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// Gets the hostname if provided instead of IP address.
     /// </summary>
     public string? Hostname { get; }
+
+    /// <summary>
+    /// The address this transport reaches: the peer of the most recent successful connect, so a
+    /// host-name transport reports what the name resolved to <i>that time</i> and follows it when
+    /// a reconnect resolves somewhere else. Before any connect it is the constructed address, or
+    /// <c>null</c> for a host name. It keeps the last peer across a disconnect.
+    /// </summary>
+    internal IPAddress? RemoteAddress =>
+        _connectedAddress ?? (Hostname == null ? _endPoint.Address : null);
+
+    /// <summary>
+    /// The connected socket's peer address, IPv4-mapped addresses unwrapped; <c>null</c> when the
+    /// socket cannot say.
+    /// </summary>
+    private static IPAddress? PeerAddressOf(TcpClient client)
+    {
+        try
+        {
+            if (client.Client?.RemoteEndPoint is IPEndPoint remote)
+            {
+                return remote.Address.IsIPv4MappedToIPv6 ? remote.Address.MapToIPv4() : remote.Address;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (SocketException)
+        {
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Gets the local interface address the outbound socket will bind to, or null to let the OS choose.
@@ -294,6 +327,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 }
 
                 _networkStream = _tcpClient.GetStream();
+                _connectedAddress = PeerAddressOf(_tcpClient) ?? _connectedAddress;
 
                 // After a successful connect, lower the receive timeout to a short operational
                 // value so consumer threads blocked in a synchronous read can always be stopped

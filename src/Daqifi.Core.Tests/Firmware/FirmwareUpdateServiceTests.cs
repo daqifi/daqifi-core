@@ -1,5 +1,4 @@
 using System.IO;
-using System.Net;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
@@ -4948,7 +4947,6 @@ public class FirmwareUpdateServiceTests
         public int LanApplySentCount { get; private set; }
 
         public string Name { get; }
-        public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
         public DeviceMetadata Metadata { get; } = new();
@@ -5086,7 +5084,6 @@ public class FirmwareUpdateServiceTests
             IsConnected = true;
         }
         public string Name { get; }
-        public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
         public DeviceMetadata Metadata { get; } = new();
@@ -5951,7 +5948,6 @@ public class FirmwareUpdateServiceTests
         /// <inheritdoc />
         public string? SerialPortName { get; set; }
 
-        public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => _status;
         public DeviceMetadata Metadata { get; } = new();
