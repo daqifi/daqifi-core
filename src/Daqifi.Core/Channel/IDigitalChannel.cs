@@ -6,17 +6,6 @@ namespace Daqifi.Core.Channel;
 public interface IDigitalChannel : IChannel
 {
     /// <summary>
-    /// Gets or sets the output value for digital output channels (true = high, false = low).
-    /// This is local bookkeeping mirroring the last commanded state; use
-    /// <c>IStreamingDevice.SetDioValue</c> to change the device.
-    /// </summary>
-    [Obsolete(
-        "Read IsHigh instead: it now reports the pin's streamed state for an output as well as an input. "
-        + "To change the pin, call IStreamingDevice.SetDioValue. This property is a local note of the last "
-        + "commanded value and is never confirmed by the device. It will be removed in a future major version.")]
-    bool OutputValue { get; set; }
-
-    /// <summary>
     /// Gets whether the pin is currently high (true) or low (false), as reported by the most
     /// recent streamed sample. Valid for an input pin and for a driven output pin alike: the
     /// firmware reads the pin back, not the direction register (#901). Returns
@@ -30,20 +19,10 @@ public interface IDigitalChannel : IChannel
     bool IsPwmCapable { get; }
 
     /// <summary>
-    /// Gets or sets whether PWM output is enabled on this channel. This is local bookkeeping
-    /// mirroring the last commanded state; use <c>IStreamingDevice.SetPwmEnabled</c> to change
-    /// the device.
+    /// Gets whether PWM output is enabled on this channel. This is local bookkeeping mirroring
+    /// the last commanded state; use <c>IStreamingDevice.SetPwmEnabled</c> to change the device.
     /// </summary>
-    bool IsPwmEnabled
-    {
-        get;
-
-        [Obsolete(
-            "Call IStreamingDevice.SetPwmEnabled to start or stop PWM, and read Mode or IsPwmEnabled to see it. "
-            + "Assigning here sends nothing to the device, and Core then refuses digital commands for a pin "
-            + "that is not in PWM mode. This setter will be removed in a future major version.")]
-        set;
-    }
+    bool IsPwmEnabled { get; }
 
     /// <summary>
     /// Gets the one mode the pin is in: input, output or PWM.

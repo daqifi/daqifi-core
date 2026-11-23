@@ -88,9 +88,8 @@ public sealed record DeviceStatus(
 }
 
 /// <summary>
-/// A single channel on a device. <see cref="OutputValue"/> is the last commanded output level
-/// for digital channels; <see cref="PwmCapable"/>/<see cref="PwmEnabled"/> report PWM hardware
-/// support and the last commanded PWM state (all three are null for analog channels).
+/// A single channel on a device. <see cref="PwmCapable"/>/<see cref="PwmEnabled"/> report PWM
+/// hardware support and the last commanded PWM state (both are null for analog channels).
 /// <see cref="Unit"/> is the engineering unit this channel's readings are expressed in — the
 /// device's own (typically <c>"V"</c>) until a caller configures a transducer conversion, and
 /// <c>null</c> until the capability document has been read.
@@ -109,7 +108,6 @@ public sealed record ChannelInfo(
     string Name,
     bool Enabled,
     string Direction,
-    bool? OutputValue,
     bool? PwmCapable,
     bool? PwmEnabled,
     string? Unit = null,
@@ -128,9 +126,6 @@ public sealed record ChannelInfo(
             ch.Name,
             ch.IsEnabled,
             ch.Direction.ToString(),
-#pragma warning disable CS0618 // IDigitalChannel.OutputValue is obsolete; this wire field follows it out (#901)
-            digital?.OutputValue,
-#pragma warning restore CS0618
             digital?.IsPwmCapable,
             digital?.IsPwmEnabled,
             (ch as IScaledChannel)?.Unit,
@@ -192,19 +187,16 @@ public sealed record ConfigureDigitalResult(
     int SampleRateHz);
 
 /// <summary>
-/// Result of a digital direction or output change, reflecting the channel's state after the
-/// operation. <see cref="OutputValue"/> is the last commanded output level; it is meaningful
-/// only while <see cref="Direction"/> is Output.
+/// Result of a digital direction or output change, reflecting the channel's direction after the
+/// operation. The pin's level is not echoed: Core keeps no local copy of a commanded level, and
+/// the streamed reading only reflects the write once the next sample arrives (#901).
 /// </summary>
-public sealed record DigitalPinResult(string DeviceId, int Channel, string Direction, bool OutputValue)
+public sealed record DigitalPinResult(string DeviceId, int Channel, string Direction)
 {
     public static DigitalPinResult From(string deviceId, IChannel ch) => new(
         deviceId,
         ch.ChannelNumber,
-        ch.Direction.ToString(),
-#pragma warning disable CS0618 // IDigitalChannel.OutputValue is obsolete; this wire field follows it out (#901)
-        ch is IDigitalChannel digital && digital.OutputValue);
-#pragma warning restore CS0618
+        ch.Direction.ToString());
 }
 
 /// <summary>

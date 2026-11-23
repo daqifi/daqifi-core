@@ -430,6 +430,8 @@ public class DaqifiDeviceAsyncLifecycleTests
     /// </summary>
     private sealed class ScriptedErrorTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private bool _isConnected;
         private bool _disposed;
 
@@ -538,6 +540,8 @@ public class DaqifiDeviceAsyncLifecycleTests
     /// </summary>
     private sealed class ThrowOnDisconnectTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         private bool _isConnected;
 
@@ -597,6 +601,8 @@ public class DaqifiDeviceAsyncLifecycleTests
     /// </summary>
     private sealed class GatedMockTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         private readonly TaskCompletionSource _connectGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _connectEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);

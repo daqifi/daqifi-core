@@ -176,6 +176,8 @@ public class DaqifiStreamingDevicePwmFrequencyTests
 
     private sealed class DropTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly MemoryStream _stream = new();
         public Stream Stream => _stream;
         public bool IsConnected { get; private set; }

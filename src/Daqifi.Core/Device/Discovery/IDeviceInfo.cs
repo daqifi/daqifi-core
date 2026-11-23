@@ -44,7 +44,9 @@ public interface IDeviceInfo
     IPAddress? LocalInterfaceAddress { get; }
 
     /// <summary>
-    /// Gets the device type.
+    /// Gets the device type, from the part number the device reported during discovery
+    /// (<see cref="DeviceType.Unknown"/> when it reported none, or one Core does not recognise).
+    /// The same enum as <see cref="DeviceMetadata.DeviceType"/> on a connected device.
     /// </summary>
     DeviceType Type { get; }
 
@@ -77,40 +79,12 @@ public interface IDeviceInfo
     /// <see cref="IUsbLocationProvider"/>; Windows-only in v1, always null elsewhere.
     /// </summary>
     /// <remarks>
-    /// Implemented as a default interface property (so adding it does not break existing
-    /// implementers — the same technique used by
-    /// <see cref="Daqifi.Core.Firmware.IFirmwareUpdateService"/>'s targeted-update overloads):
-    /// an external <c>IDeviceInfo</c> implementation compiled before this member existed
+    /// Implemented as a default interface property, so adding it did not break existing
+    /// implementers: an external <c>IDeviceInfo</c> implementation compiled before this member existed
     /// inherits this default (null, meaning "not resolved") without recompiling.
     /// <see cref="DeviceInfo"/> overrides it with a real stored value.
     /// </remarks>
     string? LocationKey => null;
-}
-
-/// <summary>
-/// Device type enumeration.
-/// </summary>
-public enum DeviceType
-{
-    /// <summary>
-    /// Unknown device type.
-    /// </summary>
-    Unknown = 0,
-
-    /// <summary>
-    /// Nyquist 1 device.
-    /// </summary>
-    Nyquist1 = 1,
-
-    /// <summary>
-    /// Nyquist 2 device.
-    /// </summary>
-    Nyquist2 = 2,
-
-    /// <summary>
-    /// Nyquist 3 device.
-    /// </summary>
-    Nyquist3 = 3
 }
 
 /// <summary>

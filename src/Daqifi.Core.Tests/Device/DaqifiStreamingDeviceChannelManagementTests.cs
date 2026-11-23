@@ -12,10 +12,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-// IDigitalChannel.OutputValue is obsolete (#901); these tests keep covering it until it
-// is removed in a major version.
-#pragma warning disable CS0618
-
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
@@ -443,14 +439,13 @@ public class DaqifiStreamingDeviceChannelManagementTests
     #region SetDioValue
 
     [Fact]
-    public void SetDioValue_High_SetsOutputValueAndSendsCommand()
+    public void SetDioValue_High_SendsOneState()
     {
         var device = CreateConnectedDevice();
         var channel = (IDigitalChannel)DigitalChannelAt(device, 1);
 
         device.SetDioValue(channel, true);
 
-        Assert.True(channel.OutputValue);
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetDioPortState(1, 1).Data, sent.Data);
     }
@@ -460,11 +455,9 @@ public class DaqifiStreamingDeviceChannelManagementTests
     {
         var device = CreateConnectedDevice();
         var channel = (IDigitalChannel)DigitalChannelAt(device, 3);
-        channel.OutputValue = true;
 
         device.SetDioValue(channel, false);
 
-        Assert.False(channel.OutputValue);
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetDioPortState(3, 0).Data, sent.Data);
     }
@@ -488,19 +481,16 @@ public class DaqifiStreamingDeviceChannelManagementTests
     }
 
     [Fact]
-    public void SetDioValue_WhilePwmEnabled_ThrowsInvalidOperationExceptionAndDoesNotMirrorOutputValue()
+    public void SetDioValue_WhilePwmEnabled_ThrowsInvalidOperationExceptionAndSendsNothing()
     {
-        // The firmware ignores the write entirely; Core must not report success or mirror a
-        // level the pin does not actually have (#449).
+        // The firmware ignores the write entirely; Core must not report success (#449).
         var device = CreateConnectedDevice(digitalChannels: 8);
         var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
         device.SentMessages.Clear();
-        var outputValueBeforeAttempt = channel.OutputValue;
 
-        var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioValue(channel, !outputValueBeforeAttempt));
+        var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioValue(channel, true));
         Assert.Contains("SetPwmEnabled", ex.Message);
-        Assert.Equal(outputValueBeforeAttempt, channel.OutputValue);
         Assert.Empty(device.SentMessages);
     }
 
@@ -618,21 +608,6 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(2, false).Data, sent.Data);
-    }
-
-    [Fact]
-    public void SetPwmEnabled_False_ClearsOutputValueBookkeeping()
-    {
-        // Firmware zeroes the stored output value when PWM is disabled; local state mirrors it.
-        var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-        channel.OutputValue = true;
-        channel.IsPwmEnabled = true;
-
-        device.SetPwmEnabled(channel, false);
-
-        Assert.False(channel.IsPwmEnabled);
-        Assert.False(channel.OutputValue);
     }
 
     [Fact]

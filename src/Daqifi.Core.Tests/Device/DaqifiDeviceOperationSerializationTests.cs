@@ -1499,6 +1499,8 @@ public class DaqifiDeviceOperationSerializationTests
     /// <summary>Transport over a <see cref="GatedWriteStream"/>.</summary>
     private sealed class GatedWriteTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly GatedWriteStream _stream;
         private bool _isConnected;
         private bool _disposed;
@@ -1564,6 +1566,8 @@ public class DaqifiDeviceOperationSerializationTests
     /// </summary>
     private sealed class BlockedWriteTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly BlockingStream _stream = new();
         private bool _isConnected;
         private bool _disposed;
@@ -1652,6 +1656,8 @@ public class DaqifiDeviceOperationSerializationTests
     /// </summary>
     private sealed class RecordingTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly RecordingStream _stream = new();
         private bool _isConnected;
         private bool _disposed;

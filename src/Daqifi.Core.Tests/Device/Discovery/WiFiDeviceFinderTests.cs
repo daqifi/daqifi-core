@@ -17,7 +17,7 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 public class WiFiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
-    // DiscoveryDeviceTypeMapperTests (issue #283).
+    // DeviceTypeDetectorTests (issue #283).
     [NetworkBrowseFact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {

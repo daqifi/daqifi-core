@@ -412,6 +412,8 @@ public class SdCardFileNameResolutionTests
         public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task FormatSdCardAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SdCardCrcProtectionResult> SetSdCardCrcProtectionAsync(bool enabled, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SdCardDownloadResult> DownloadSdCardFileAsync(string fileName, Stream destinationStream, IProgress<SdCardTransferProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SdCardDownloadResult> DownloadSdCardFileAsync(string fileName, IProgress<SdCardTransferProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

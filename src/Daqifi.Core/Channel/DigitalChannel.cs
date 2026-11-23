@@ -15,7 +15,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     private bool _isEnabled;
     private Action? _enablementChanged;
     private ChannelDirection _direction;
-    private bool _outputValue;
     private bool _isPwmEnabled;
     private int _pwmDutyCyclePercent;
     private bool _isPwmCapable;
@@ -93,9 +92,10 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// Gets or sets the channel direction (Input or Output). While PWM is enabled this reads
+    /// Gets the channel direction (Input or Output). While PWM is enabled this reads
     /// <see cref="ChannelDirection.Output"/>, because the PWM timer is driving the pin; the
     /// direction the pin returns to when PWM is disabled is kept and reported again from then on.
+    /// Use <c>IStreamingDevice.SetDioDirection</c> to change it.
     /// </summary>
     public ChannelDirection Direction
     {
@@ -106,12 +106,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
                 return _isPwmEnabled ? ChannelDirection.Output : _direction;
             }
         }
-
-        [Obsolete(
-            "Call IStreamingDevice.SetDioDirection to change the pin, and read Mode or Direction to see it. "
-            + "Assigning here sends nothing to the device and only moves Core's view, which the next status "
-            + "message overwrites. This setter will be removed in a future major version.")]
-        set { ApplyDirection(value); }
     }
 
     /// <summary>
@@ -126,20 +120,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
                 return _activeSample;
             }
         }
-    }
-
-    /// <summary>
-    /// Gets or sets the output value for digital output channels (true = high, false = low).
-    /// Local bookkeeping mirroring the last commanded state; setting it does not drive the pin.
-    /// </summary>
-    [Obsolete(
-        "Read IsHigh instead: it now reports the pin's streamed state for an output as well as an input. "
-        + "To change the pin, call IStreamingDevice.SetDioValue. This property is a local note of the last "
-        + "commanded value and is never confirmed by the device. It will be removed in a future major version.")]
-    public bool OutputValue
-    {
-        get { lock (_lock) { return _outputValue; } }
-        set { lock (_lock) { _outputValue = value; } }
     }
 
     /// <summary>
@@ -168,20 +148,13 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// Gets or sets whether PWM output is enabled on this channel (local bookkeeping mirroring
-    /// the last commanded state). The same fact as <see cref="Mode"/> being
-    /// <see cref="DigitalPinMode.Pwm"/>. Assigning <see langword="true"/> on a channel that is
-    /// not <see cref="IsPwmCapable"/> is ignored: such a pin cannot be in PWM mode.
+    /// Gets whether PWM output is enabled on this channel (local bookkeeping mirroring the last
+    /// commanded state). The same fact as <see cref="Mode"/> being
+    /// <see cref="DigitalPinMode.Pwm"/>. Use <c>IStreamingDevice.SetPwmEnabled</c> to change it.
     /// </summary>
     public bool IsPwmEnabled
     {
         get { lock (_lock) { return _isPwmEnabled; } }
-
-        [Obsolete(
-            "Call IStreamingDevice.SetPwmEnabled to start or stop PWM, and read Mode or IsPwmEnabled to see it. "
-            + "Assigning here sends nothing to the device, and Core then refuses digital commands for a pin "
-            + "that is not in PWM mode. This setter will be removed in a future major version.")]
-        set { lock (_lock) { _isPwmEnabled = value && _isPwmCapable; } }
     }
 
     /// <summary>
@@ -225,7 +198,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
         _name = $"Digital Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;
-        _outputValue = false;
         _isPwmEnabled = false;
         _pwmDutyCyclePercent = DefaultPwmDutyCyclePercent;
     }
@@ -238,14 +210,6 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     internal void ApplyDirection(ChannelDirection direction)
     {
         lock (_lock) { _direction = direction; }
-    }
-
-    /// <summary>
-    /// Records the level last commanded by <c>SetDioValue</c>.
-    /// </summary>
-    internal void ApplyOutputValue(bool value)
-    {
-        lock (_lock) { _outputValue = value; }
     }
 
     /// <summary>
@@ -283,15 +247,13 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// Moves the pin out of PWM mode, back to its stored direction. The firmware zeroes its
-    /// stored output level when PWM stops, so the recorded level is cleared with it.
+    /// Moves the pin out of PWM mode, back to its stored direction.
     /// </summary>
     internal void ExitPwm()
     {
         lock (_lock)
         {
             _isPwmEnabled = false;
-            _outputValue = false;
         }
     }
 

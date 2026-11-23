@@ -293,29 +293,7 @@ public class SampleRateCapTests
 
     #endregion
 
-    #region EnforceStreamingFrequencyCap — the deprecated opt-in enforcement
-
-    // These cover the [Obsolete] opt-in path, which stays until the next major version (#899).
-    // Starting a stream now applies the cap itself, so nothing needs to call these members; the
-    // cases are kept so the behaviour they still have is the behaviour they are documented with.
-#pragma warning disable CS0618 // Type or member is obsolete
-
-    [Fact]
-    public void EnforceStreamingFrequencyCap_RateAboveTheCap_LowersItAndReportsThePreviousRate()
-    {
-        // Held as IStreamingDevice: the cap and its enforcement are what a consumer of the
-        // interface (the MCP server, the desktop app) calls, with no downcast.
-        IStreamingDevice device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 7746));
-        device.StreamingFrequency = 7746;
-
-        // The channel set grew, so the device's next document read reports a lower cap.
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
-
-        Assert.Equal(3518, device.MaximumStreamingFrequencyHz);
-        Assert.Equal(7746, device.EnforceStreamingFrequencyCap());
-        Assert.Equal(3518, device.StreamingFrequency);
-    }
+    #region StreamingFrequency setter
 
     [Fact]
     public void StreamingFrequency_AboveAnAlreadyReportedCap_IsKeptUntilTheStream()
@@ -329,36 +307,6 @@ public class SampleRateCapTests
 
         Assert.Equal(7746, device.StreamingFrequency);
     }
-
-    [Fact]
-    public void EnforceStreamingFrequencyCap_RateUnderTheCap_ChangesNothing()
-    {
-        var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
-        device.StreamingFrequency = 1000;
-
-        Assert.Null(device.EnforceStreamingFrequencyCap());
-        Assert.Equal(1000, device.StreamingFrequency);
-    }
-
-    [Fact]
-    public void EnforceStreamingFrequencyCap_WithNothingEnabled_LeavesTheRateAlone()
-    {
-        var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 0));
-        device.StreamingFrequency = 7746;
-
-        Assert.Null(device.EnforceStreamingFrequencyCap());
-        Assert.Equal(7746, device.StreamingFrequency);
-    }
-
-    [Fact]
-    public void EnforceOn_NullDevice_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() => SampleRateCap.EnforceOn(null!));
-    }
-
-#pragma warning restore CS0618 // Type or member is obsolete
 
     #endregion
 

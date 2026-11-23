@@ -1139,7 +1139,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter, IPartialR
             FirmwareVersion = statusMessage.DeviceFwRev ?? "Unknown",
             ConnectionType = ConnectionType.Serial,
             PortName = portName,
-            Type = DiscoveryDeviceTypeMapper.FromPartNumber(statusMessage.DevicePn),
+            Type = DeviceTypeDetector.DetectFromPartNumber(statusMessage.DevicePn),
             IsPowerOn = true,
             LocationKey = locationKey
         };

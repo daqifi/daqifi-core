@@ -1118,9 +1118,8 @@ catch (FeatureNotSupportedException ex)
 `DaqifiDeviceFactory` returns `DaqifiStreamingDevice`, which inherits `Supports` from
 `DaqifiDevice` and adds `IsUsbConnection`. Neither is declared on `IStreamingDevice`, so code
 holding only the interface needs the concrete type. `IsUsbConnection` asks the transport
-(`IStreamTransport.IsUsbConnection`), so a custom transport over a USB link should override that
-member to return `true`. The requirement table and `-113`
-backstop live in [ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site
+(`IStreamTransport.IsUsbConnection`), which every transport must implement: a custom transport
+over a USB link returns `true`. The requirement table and `-113` backstop live in [ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site
 pattern only.
 
 ## SCPI Commands

@@ -16,7 +16,7 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 public class SerialDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
-    // DiscoveryDeviceTypeMapperTests (issue #283).
+    // DeviceTypeDetectorTests (issue #283).
 
     [Fact]
     public async Task DiscoverAsync_RaisesDiscoveryCompletedEvent()

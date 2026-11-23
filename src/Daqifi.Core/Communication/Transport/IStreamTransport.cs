@@ -5,9 +5,8 @@ namespace Daqifi.Core.Communication.Transport;
 /// Abstracts the underlying connection type (TCP or serial) and provides
 /// a unified Stream interface for message producers and consumers. HID
 /// (<see cref="IHidTransport"/>) is a separate, non-stream transport. UDP has no
-/// transport abstraction to point at: device discovery uses
-/// <see cref="System.Net.Sockets.UdpClient"/> directly, and the <c>IUdpTransport</c> seam that
-/// was once meant for it is obsolete and scheduled for removal (issue #924).
+/// transport abstraction: device discovery uses <see cref="System.Net.Sockets.UdpClient"/>
+/// directly.
 /// </summary>
 public interface IStreamTransport : IDisposable
 {
@@ -42,14 +41,16 @@ public interface IStreamTransport : IDisposable
     /// in a type test on the device (issue #612).
     /// </para>
     /// <para>
-    /// The default is <c>false</c>, so an existing implementation keeps compiling unchanged and is
-    /// treated as a network link. <see cref="SerialStreamTransport"/> returns <c>true</c>; a custom
-    /// transport over a USB link should override this to return <c>true</c> too. The answer is a
-    /// fact about the kind of link, not its state, so it does not change with
+    /// Every implementation must answer, because a wrong answer is silent: a USB transport that
+    /// reports <c>false</c> makes the device refuse SD logging and skip the USB stream-interface
+    /// setup. <see cref="SerialStreamTransport"/> returns <c>true</c>;
+    /// <see cref="TcpStreamTransport"/> returns <c>false</c>. A custom transport over any USB link
+    /// (a CDC serial port reached through a platform USB API, for example) returns <c>true</c>.
+    /// The answer is a fact about the kind of link, not its state, so it does not change with
     /// <see cref="IsConnected"/>.
     /// </para>
     /// </remarks>
-    bool IsUsbConnection => false;
+    bool IsUsbConnection { get; }
 
     /// <summary>
     /// Occurs when the connection status changes.

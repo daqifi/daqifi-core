@@ -1,10 +1,63 @@
 #nullable enable
+*REMOVED*Daqifi.Core.Channel.DigitalChannel.Direction.set -> void
+*REMOVED*Daqifi.Core.Channel.DigitalChannel.IsPwmEnabled.set -> void
+*REMOVED*Daqifi.Core.Channel.DigitalChannel.OutputValue.get -> bool
+*REMOVED*Daqifi.Core.Channel.DigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Channel.IChannel.Direction.set -> void
+*REMOVED*Daqifi.Core.Channel.IDigitalChannel.IsPwmEnabled.set -> void
+*REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.get -> bool
+*REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Close() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.ConnectionInfo.get -> string!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.IsOpen.get -> bool
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Open() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.OpenAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.ReceiveAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<(byte[]! Data, System.Net.IPEndPoint! RemoteEndPoint)?>!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.SendBroadcastAsync(byte[]! data, System.Net.IPEndPoint! endPoint) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.SendBroadcastAsync(byte[]! data, int port) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.SendUnicastAsync(byte[]! data, System.Net.IPEndPoint! endPoint) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.StatusChanged -> System.EventHandler<Daqifi.Core.Communication.Transport.TransportStatusEventArgs!>?
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.Close() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.ConnectionInfo.get -> string!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.Dispose() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.IsOpen.get -> bool
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.LocalPort.get -> int
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.Open() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.OpenAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.ReceiveAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<(byte[]! Data, System.Net.IPEndPoint! RemoteEndPoint)?>!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.SendBroadcastAsync(byte[]! data, System.Net.IPEndPoint! endPoint) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.SendBroadcastAsync(byte[]! data, int port) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.SendUnicastAsync(byte[]! data, System.Net.IPEndPoint! endPoint) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.StatusChanged -> System.EventHandler<Daqifi.Core.Communication.Transport.TransportStatusEventArgs!>?
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist1 = 1 -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist2 = 2 -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist3 = 3 -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Unknown = 0 -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
+*REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
+*REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
+*REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void

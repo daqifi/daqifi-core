@@ -185,6 +185,8 @@ public class TextExchangeReadTimeoutTests
     /// </summary>
     private sealed class TimeoutRecordingTransport : IStreamTransport
     {
+        public bool IsUsbConnection => false;
+
         private readonly RecordingStream _stream;
         private bool _isConnected;
         private bool _disposed;

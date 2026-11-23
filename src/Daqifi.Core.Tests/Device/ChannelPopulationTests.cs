@@ -2,10 +2,6 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Xunit;
 
-// IDigitalChannel.OutputValue is obsolete (#901); these tests keep covering it until it
-// is removed in a major version.
-#pragma warning disable CS0618
-
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
@@ -77,8 +73,7 @@ public class ChannelPopulationTests
         analog0.IsEnabled = true;
         var digital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
         digital1.IsEnabled = true;
-        digital1.Direction = ChannelDirection.Output;
-        digital1.OutputValue = true;
+        ((DigitalChannel)digital1).ApplyDirection(ChannelDirection.Output);
 
         // Repopulate with the same shape — identity is unchanged, so instances are reused.
         device.PopulateChannelsFromStatus(message);
@@ -91,7 +86,6 @@ public class ChannelPopulationTests
         Assert.Same(digital1, newDigital1);
         Assert.True(newDigital1.IsEnabled);
         Assert.Equal(ChannelDirection.Output, newDigital1.Direction);
-        Assert.True(newDigital1.OutputValue);
 
         // A channel that was never configured keeps its defaults.
         var newAnalog1 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 1);

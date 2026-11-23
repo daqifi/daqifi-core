@@ -202,12 +202,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </remarks>
     public int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
 
-    /// <inheritdoc cref="IStreamingDevice.EnforceStreamingFrequencyCap" />
-    [Obsolete("Starting a stream applies the cap itself, so this call is no longer needed. "
-              + "Read MaximumStreamingFrequencyHz to see the limit. This member will be removed "
-              + "in a future major version.")]
-    public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
-
     /// <summary>
     /// Adopts the rate the device reported it has stored, unless a rate has been chosen on this
     /// device; see <see cref="StreamingFrequency"/>.

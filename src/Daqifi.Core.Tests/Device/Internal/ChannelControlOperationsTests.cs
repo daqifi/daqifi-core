@@ -11,10 +11,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-// IDigitalChannel.OutputValue is obsolete (#901); these tests keep covering it until it
-// is removed in a major version.
-#pragma warning disable CS0618
-
 namespace Daqifi.Core.Tests.Device.Internal;
 
 /// <summary>
@@ -239,25 +235,6 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public void SetDioDirection_MutatesDirectionUnderTheChannelsLock()
-    {
-        // The status-frame resync writes this same property under the channels lock (#685), so
-        // the command path has to write it under that lock too — the discipline SetChannelsEnabled
-        // already follows for analog IsEnabled (#409). Qodo flagged the unsynchronized pair on
-        // PR #686.
-        var digital = new LockObservingDigitalChannel(channelNumber: 5);
-        var host = new FakeHost(digital);
-        digital.Host = host;
-        var ops = new ChannelControlOperations(host);
-
-        ops.SetDioDirection(digital, ChannelDirection.Output);
-
-        Assert.True(digital.DirectionWrittenUnderLock);
-        Assert.Equal(ChannelDirection.Output, digital.Direction);
-        Assert.Equal(new[] { "send:DIO:PORt:DIRection 5,1" }, host.Calls);
-    }
-
-    [Fact]
     public void SetDioDirection_CommandWins_WhenAStatusFrameLandsWhileItIsInFlight()
     {
         // Qodo, PR #686. A status frame the device encoded before it applied this command can
@@ -265,12 +242,12 @@ public class ChannelControlOperationsTests
         // this device sends no unsolicited status frames (bench-measured), so there may be no
         // later frame at all, and Core would report the pin backwards indefinitely while the
         // device sat in the commanded direction. The command has to have the last word.
-        var digital = new DigitalChannel(channelNumber: 5) { Direction = ChannelDirection.Input };
+        var digital = new DigitalChannel(channelNumber: 5);
         var host = new FakeHost(digital);
         var ops = new ChannelControlOperations(host);
 
         // A stale status frame resyncing Direction back to Input, mid-command.
-        host.OnSend = () => digital.Direction = ChannelDirection.Input;
+        host.OnSend = () => digital.ApplyDirection(ChannelDirection.Input);
 
         ops.SetDioDirection(digital, ChannelDirection.Output);
 
@@ -283,7 +260,7 @@ public class ChannelControlOperationsTests
     {
         // Recording a direction the pin never took would tell every caller the pin is doing
         // something it is not — the same principle as the PWM guard (#449).
-        var digital = new DigitalChannel(channelNumber: 5) { Direction = ChannelDirection.Input };
+        var digital = new DigitalChannel(channelNumber: 5);
         var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
         var ops = new ChannelControlOperations(host);
 
@@ -319,7 +296,8 @@ public class ChannelControlOperationsTests
     [Fact]
     public void SetDioDirection_PwmEnabledChannel_Throws()
     {
-        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true) { IsPwmEnabled = true };
+        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true);
+        digital.EnterPwm();
         var host = new FakeHost(digital);
         var ops = new ChannelControlOperations(host);
 
@@ -328,7 +306,7 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public void SetDioValue_ValidDigitalChannel_SendsAndMirrorsOutputValue()
+    public void SetDioValue_ValidDigitalChannel_Sends()
     {
         var digital = new DigitalChannel(channelNumber: 2);
         var host = new FakeHost(digital);
@@ -336,14 +314,14 @@ public class ChannelControlOperationsTests
 
         ops.SetDioValue(digital, true);
 
-        Assert.True(digital.OutputValue);
         Assert.Equal(new[] { "send:DIO:PORt:STATe 2,1" }, host.Calls);
     }
 
     [Fact]
     public void SetDioValue_PwmEnabledChannel_Throws()
     {
-        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true) { IsPwmEnabled = true };
+        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true);
+        digital.EnterPwm();
         var host = new FakeHost(digital);
         var ops = new ChannelControlOperations(host);
 
@@ -369,21 +347,17 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public void SetPwmEnabled_Disabling_ZeroesOutputValueButKeepsDirection()
+    public void SetPwmEnabled_Disabling_KeepsDirection()
     {
-        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true)
-        {
-            IsPwmEnabled = true,
-            OutputValue = true,
-            Direction = ChannelDirection.Output
-        };
+        var digital = new DigitalChannel(channelNumber: 0, isPwmCapable: true);
+        digital.ApplyDirection(ChannelDirection.Output);
+        digital.EnterPwm();
         var host = new FakeHost(digital);
         var ops = new ChannelControlOperations(host);
 
         ops.SetPwmEnabled(digital, false);
 
         Assert.False(digital.IsPwmEnabled);
-        Assert.False(digital.OutputValue);
         Assert.Equal(ChannelDirection.Output, digital.Direction);
     }
 
@@ -423,7 +397,6 @@ public class ChannelControlOperationsTests
         // marked PWM here would make Core refuse every digital command for it (#945).
         var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
         digital.ApplyDirection(ChannelDirection.Output);
-        digital.ApplyOutputValue(true);
         if (!enabled)
         {
             digital.EnterPwm();
@@ -438,7 +411,6 @@ public class ChannelControlOperationsTests
         Assert.Equal(modeBefore, digital.Mode);
         Assert.Equal(!enabled, digital.IsPwmEnabled);
         Assert.Equal(ChannelDirection.Output, digital.Direction);
-        Assert.True(digital.OutputValue);
         Assert.Empty(host.Calls);
     }
 
@@ -466,7 +438,6 @@ public class ChannelControlOperationsTests
 
         Assert.Throws<IOException>(() => ops.SetDioValue(digital, true));
 
-        Assert.False(digital.OutputValue);
         Assert.Equal(DigitalPinMode.Output, digital.Mode);
         Assert.Empty(host.Calls);
     }
@@ -516,7 +487,6 @@ public class ChannelControlOperationsTests
         pwmOverInput.EnterPwm();
         var plainOutput = new DigitalChannel(channelNumber: 1);
         plainOutput.ApplyDirection(ChannelDirection.Output);
-        plainOutput.ApplyOutputValue(true);
         var host = new FakeHost(pwmOverOutput, pwmOverInput, plainOutput);
         var ops = new ChannelControlOperations(host);
 
@@ -526,7 +496,6 @@ public class ChannelControlOperationsTests
         Assert.Equal(DigitalPinMode.Input, pwmOverInput.Mode);
         // A channel that was not in PWM mode is not touched.
         Assert.Equal(DigitalPinMode.Output, plainOutput.Mode);
-        Assert.True(plainOutput.OutputValue);
         Assert.Empty(host.Calls);
     }
 
@@ -1038,23 +1007,6 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
-    public async Task SetDioValue_TwoCallsAtOnce_RecordsTheLevelSentLast()
-    {
-        var digital = new DigitalChannel(channelNumber: 5);
-        digital.ApplyDirection(ChannelDirection.Output);
-        var host = new FakeHost(digital);
-        var ops = new ChannelControlOperations(host);
-
-        await RunWithFirstSendHeldAsync(
-            host, holdAfterTheCommandIsSent: true,
-            () => ops.SetDioValue(digital, true),
-            () => ops.SetDioValue(digital, false));
-
-        Assert.Equal("send:DIO:PORt:STATe 5,0", host.Calls[^1]);
-        Assert.False(digital.OutputValue);
-    }
-
-    [Fact]
     public async Task SetPwmEnabled_TwoCallsAtOnce_RecordsTheStateSentLast()
     {
         var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
@@ -1074,8 +1026,7 @@ public class ChannelControlOperationsTests
     public async Task SetDioValue_WhilePwmIsBeingEnabled_IsRefusedOnceTheEnableLands()
     {
         // The PWM guard on digital writes (#449) read the channel before the enable in flight had
-        // recorded PWM, so the write went out to a pin the firmware was about to ignore it on,
-        // and Core recorded a level the pin never drove.
+        // recorded PWM, so the write went out to a pin the firmware was about to ignore it on.
         var digital = new DigitalChannel(channelNumber: 4, isPwmCapable: true);
         var host = new FakeHost(digital);
         var ops = new ChannelControlOperations(host);
@@ -1088,7 +1039,6 @@ public class ChannelControlOperationsTests
         Assert.IsType<InvalidOperationException>(secondError);
         Assert.Equal(new[] { "send:PWM:CHannel:ENable 4,1" }, host.Calls);
         Assert.True(digital.IsPwmEnabled);
-        Assert.False(digital.OutputValue);
     }
 
     [Fact]
@@ -1207,57 +1157,6 @@ public class ChannelControlOperationsTests
     }
 
     #endregion
-
-    /// <summary>
-    /// An <see cref="IDigitalChannel"/> that records whether its <see cref="Direction"/> was
-    /// assigned from inside <see cref="FakeHost.WithChannelsLock"/>. A wrapper rather than a
-    /// subclass because <see cref="DigitalChannel.Direction"/> is not virtual; every other member
-    /// forwards to a real <see cref="DigitalChannel"/> so the behaviour under test is unchanged.
-    /// </summary>
-    private sealed class LockObservingDigitalChannel : IDigitalChannel
-    {
-        private readonly DigitalChannel _inner;
-
-        public LockObservingDigitalChannel(int channelNumber)
-        {
-            _inner = new DigitalChannel(channelNumber);
-        }
-
-        public FakeHost? Host { get; set; }
-
-        public bool DirectionWrittenUnderLock { get; private set; }
-
-        public ChannelDirection Direction
-        {
-            get => _inner.Direction;
-            set
-            {
-                DirectionWrittenUnderLock = Host?.InChannelsLock ?? false;
-                _inner.Direction = value;
-            }
-        }
-
-        public int ChannelNumber => _inner.ChannelNumber;
-        public string Name { get => _inner.Name; set => _inner.Name = value; }
-        public bool IsEnabled { get => _inner.IsEnabled; set => _inner.IsEnabled = value; }
-        public ChannelType Type => _inner.Type;
-        public IDataSample? ActiveSample => _inner.ActiveSample;
-        public bool OutputValue { get => _inner.OutputValue; set => _inner.OutputValue = value; }
-        public bool IsHigh => _inner.IsHigh;
-        public bool IsPwmCapable => _inner.IsPwmCapable;
-        public bool IsPwmEnabled { get => _inner.IsPwmEnabled; set => _inner.IsPwmEnabled = value; }
-        public int PwmDutyCyclePercent { get => _inner.PwmDutyCyclePercent; set => _inner.PwmDutyCyclePercent = value; }
-
-        public event EventHandler<SampleReceivedEventArgs>? SampleReceived
-        {
-            add => _inner.SampleReceived += value;
-            remove => _inner.SampleReceived -= value;
-        }
-
-        public void SetActiveSample(double value, DateTime timestamp) => _inner.SetActiveSample(value, timestamp);
-
-        public void SetActiveSample(IDataSample sample) => _inner.SetActiveSample(sample);
-    }
 
     #region Fake host
 

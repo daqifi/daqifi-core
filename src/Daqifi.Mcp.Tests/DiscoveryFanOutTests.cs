@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Mcp.Tests;

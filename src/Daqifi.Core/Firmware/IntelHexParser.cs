@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Daqifi.Core.Firmware;
 
@@ -19,32 +18,6 @@ public class IntelHexParser
     /// Default protected memory range end address (calibration data).
     /// </summary>
     public const uint DefaultEndProtectedAddress = 0x1D200000;
-
-    /// <summary>
-    /// Default protected memory range start address (calibration data).
-    /// </summary>
-    /// <remarks>
-    /// Kept so that source written against the shipped name still compiles, which is the
-    /// compatibility this library promises (see <c>docs/adr/0002-binary-compatibility-policy.md</c>).
-    /// Because it is a <see langword="const" />, an assembly compiled against the old name has
-    /// the literal value baked in and does not reference this field at all - only source that is
-    /// recompiled sees the obsoletion warning.
-    /// </remarks>
-    [Obsolete($"Use {nameof(DefaultBeginProtectedAddress)} instead. This name will be removed in a future major version.")]
-    [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores",
-        Justification = "Deliberately preserves the shipped spelling; the replacement above is the conforming name.")]
-    public const uint DEFAULT_BEGIN_PROTECTED_ADDRESS = DefaultBeginProtectedAddress;
-
-    /// <summary>
-    /// Default protected memory range end address (calibration data).
-    /// </summary>
-    /// <remarks>
-    /// Kept for source compatibility; see <see cref="DEFAULT_BEGIN_PROTECTED_ADDRESS" />.
-    /// </remarks>
-    [Obsolete($"Use {nameof(DefaultEndProtectedAddress)} instead. This name will be removed in a future major version.")]
-    [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores",
-        Justification = "Deliberately preserves the shipped spelling; the replacement above is the conforming name.")]
-    public const uint DEFAULT_END_PROTECTED_ADDRESS = DefaultEndProtectedAddress;
 
     private readonly uint _beginProtectedAddress;
     private readonly uint _endProtectedAddress;
