@@ -257,6 +257,84 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_WpaThenOpenNetwork_AppliesOpenSecurityMode()
+    {
+        // #986: an open network is security mode 0, which proto3 drops on the wire. Round-trip
+        // the SYSInfoPB-shaped status through the encoder so field 60 is genuinely absent.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 1, infMode: 1));
+        Assert.Equal(1u, metadata.WifiSecurityMode);
+
+        var openStatus = DaqifiOutMessage.Parser.ParseFrom(
+            SysInfoStatus(securityMode: 0, infMode: 4).ToByteArray());
+        metadata.UpdateFromProtobuf(openStatus);
+
+        Assert.Equal(0u, metadata.WifiSecurityMode);
+        Assert.Equal(4u, metadata.WifiInfrastructureMode);
+    }
+
+    [Theory]
+    [InlineData("discovery")]
+    [InlineData("sd-metadata")]
+    [InlineData("stream")]
+    [InlineData("empty")]
+    public void UpdateFromProtobuf_MessageWithoutWifiSettings_KeepsSecurityMode(string kind)
+    {
+        // Messages that carry no WiFi settings leave field 60 out for a different reason, and
+        // must not be read as "the device is now on an open network".
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 3, infMode: 1));
+
+        var message = kind switch
+        {
+            // The firmware's UDP discovery reply (fields_discovery): identity and ports, no WiFi.
+            "discovery" => new DaqifiOutMessage
+            {
+                DevicePn = "Nq1",
+                DeviceFwRev = "3.9.1",
+                DeviceHwRev = "2.0",
+                DeviceSn = 4242,
+                AnalogInPortNum = 16,
+                DigitalPortNum = 16,
+                HostName = "daqifi-001",
+            },
+            // The SD log metadata message (fields_sd_metadata).
+            "sd-metadata" => new DaqifiOutMessage
+            {
+                TimestampFreq = 50_000_000,
+                AnalogInPortNum = 16,
+                DigitalPortNum = 16,
+                DeviceSn = 4242,
+                DevicePn = "Nq1",
+                DeviceFwRev = "3.9.1",
+            },
+            "stream" => new DaqifiOutMessage { MsgTimeStamp = 1234, AnalogInData = { 1, 2, 3 } },
+            _ => new DaqifiOutMessage(),
+        };
+
+        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(message.ToByteArray()));
+
+        Assert.Equal(3u, metadata.WifiSecurityMode);
+        Assert.Equal(1u, metadata.WifiInfrastructureMode);
+    }
+
+    /// <summary>
+    /// A status shaped like the firmware's SYSTem:SYSInfoPB? reply (fields_info), which encodes the
+    /// WiFi settings block (fields 58-61) together with the device identity.
+    /// </summary>
+    private static DaqifiOutMessage SysInfoStatus(uint securityMode, uint infMode) => new()
+    {
+        DevicePn = "Nq1",
+        DeviceFwRev = "3.9.1",
+        DeviceSn = 4242,
+        AnalogInPortNum = 16,
+        DigitalPortNum = 16,
+        Ssid = "DAQiFi",
+        WifiSecurityMode = securityMode,
+        WifiInfMode = infMode,
+    };
+
+    [Fact]
     public void UpdateFromProtobuf_UpdatesIpAddress()
     {
         // Arrange

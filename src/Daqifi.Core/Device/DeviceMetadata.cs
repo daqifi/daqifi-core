@@ -251,7 +251,14 @@ public class DeviceMetadata
             DevicePort = (int)message.DevicePort;
         }
 
-        if (message.WifiSecurityMode > 0)
+        // Security mode 0 is a real value (an open network), but proto3 never encodes a 0, so an
+        // open network arrives as "field 60 absent" -- the same as a message that has no WiFi
+        // settings at all. The infrastructure mode tells the two apart: the firmware encodes
+        // fields 60 and 61 together from the same WiFi settings (SYSTem:SYSInfoPB?), and field 61
+        // is never 0 (1 = STA, 4 = AP), so its presence proves the message reported the WiFi
+        // settings. The discovery reply and the SD log metadata carry the part number and
+        // firmware version but neither WiFi field, so they keep the last known mode (#986).
+        if (message.WifiSecurityMode > 0 || message.WifiInfMode > 0)
         {
             WifiSecurityMode = message.WifiSecurityMode;
         }
