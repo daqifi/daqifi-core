@@ -449,9 +449,6 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
-    /// Internal method that handles the actual connection logic with a transport.
-    /// </summary>
-    /// <summary>
     /// Builds the device for an already-connected transport. A TCP transport gets a
     /// <see cref="NetworkStreamingDevice"/>, which implements <see cref="INetworkAddressedDevice"/>
     /// with the address the transport reached; any other transport gets a plain
@@ -464,6 +461,9 @@ public static class DaqifiDeviceFactory
             : new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger);
     }
 
+    /// <summary>
+    /// Internal method that handles the actual connection logic with a transport.
+    /// </summary>
     private static async Task<DaqifiStreamingDevice> ConnectWithTransportAsync(
         IStreamTransport transport,
         DeviceConnectionOptions options,
