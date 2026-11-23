@@ -84,6 +84,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     private readonly TransportConnectionWatchdog _watchdog;
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
+    private volatile IPAddress? _connectedAddress;
     private bool _disposed;
 
     /// <summary>
@@ -152,30 +153,35 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     public string? Hostname { get; }
 
     /// <summary>
-    /// The address this transport reaches: the connected socket's remote address when there is
-    /// one (so a host-name connect reports what the name resolved to), otherwise the address it
-    /// was constructed with. <c>null</c> for a host-name transport that has not connected.
+    /// The address this transport reaches: the peer of the most recent successful connect, so a
+    /// host-name transport reports what the name resolved to <i>that time</i> and follows it when
+    /// a reconnect resolves somewhere else. Before any connect it is the constructed address, or
+    /// <c>null</c> for a host name. It keeps the last peer across a disconnect.
     /// </summary>
-    internal IPAddress? RemoteAddress
-    {
-        get
-        {
-            try
-            {
-                if (_tcpClient?.Client?.RemoteEndPoint is IPEndPoint remote)
-                {
-                    return remote.Address.IsIPv4MappedToIPv6 ? remote.Address.MapToIPv4() : remote.Address;
-                }
-            }
-            catch (ObjectDisposedException)
-            {
-            }
-            catch (SocketException)
-            {
-            }
+    internal IPAddress? RemoteAddress =>
+        _connectedAddress ?? (Hostname == null ? _endPoint.Address : null);
 
-            return Hostname == null ? _endPoint.Address : null;
+    /// <summary>
+    /// The connected socket's peer address, IPv4-mapped addresses unwrapped; <c>null</c> when the
+    /// socket cannot say.
+    /// </summary>
+    private static IPAddress? PeerAddressOf(TcpClient client)
+    {
+        try
+        {
+            if (client.Client?.RemoteEndPoint is IPEndPoint remote)
+            {
+                return remote.Address.IsIPv4MappedToIPv6 ? remote.Address.MapToIPv4() : remote.Address;
+            }
         }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (SocketException)
+        {
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -321,6 +327,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 }
 
                 _networkStream = _tcpClient.GetStream();
+                _connectedAddress = PeerAddressOf(_tcpClient) ?? _connectedAddress;
 
                 // After a successful connect, lower the receive timeout to a short operational
                 // value so consumer threads blocked in a synchronous read can always be stopped

@@ -457,7 +457,7 @@ public static class DaqifiDeviceFactory
     internal static DaqifiStreamingDevice CreateDevice(IStreamTransport transport, DeviceConnectionOptions options)
     {
         return transport is TcpStreamTransport tcp
-            ? new NetworkStreamingDevice(options.DeviceName, tcp, tcp.RemoteAddress, options.Logger)
+            ? new NetworkStreamingDevice(options.DeviceName, tcp, options.Logger)
             : new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger);
     }
 

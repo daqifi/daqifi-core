@@ -52,13 +52,25 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Gets the IP address of the device, if known.
     /// </summary>
     /// <remarks>
-    /// The address passed to the constructor; the public transport constructor takes none, so it
-    /// is <c>null</c> for a device built that way. This class is used for every transport, so it
+    /// For a device <see cref="DaqifiDeviceFactory"/> connects over TCP, the address its connection
+    /// currently reaches; otherwise the address passed to the constructor (the public transport
+    /// constructor takes none, so it is <c>null</c> for a device built that way). This class is used for every transport, so it
     /// does not implement <see cref="INetworkAddressedDevice"/>. A device that
-    /// <see cref="DaqifiDeviceFactory"/> connects over TCP does, and reports the address it was
-    /// dialed at: ask <c>device is INetworkAddressedDevice</c> rather than reading this.
+    /// <see cref="DaqifiDeviceFactory"/> connects over TCP does: ask
+    /// <c>device is INetworkAddressedDevice</c> rather than reading this.
     /// </remarks>
-    public IPAddress? IpAddress { get; }
+    public IPAddress? IpAddress => CurrentNetworkAddress ?? _ipAddress;
+
+    /// <summary>The address passed to the constructor, if any.</summary>
+    private readonly IPAddress? _ipAddress;
+
+    /// <summary>
+    /// The live network address of a network-attached device, which takes precedence over the
+    /// constructor's. <see cref="NetworkStreamingDevice"/> reads it from its transport, so
+    /// <see cref="IpAddress"/> and <see cref="INetworkAddressedDevice.IpAddress"/> are the same
+    /// read and follow a reconnect that lands on a different peer.
+    /// </summary>
+    private protected virtual IPAddress? CurrentNetworkAddress => null;
 
     /// <summary>
     /// Gets a value indicating whether the device is currently connected.
@@ -1264,7 +1276,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public DaqifiDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
     {
         Name = name;
-        IpAddress = ipAddress;
+        _ipAddress = ipAddress;
         _logger = logger ?? NullLogger.Instance;
         _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         _lifecycleGate = new LifecycleGate(
@@ -1299,20 +1311,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="transport">The transport for device communication.</param>
     /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
     public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
-        : this(name, transport, ipAddress: null, logger)
-    {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DaqifiDevice"/> class with a transport and the
-    /// network address it reaches. Used by the factory's network device (issue #616).
-    /// </summary>
-    /// <param name="name">The name of the device.</param>
-    /// <param name="transport">The transport for device communication.</param>
-    /// <param name="ipAddress">The IP address the transport reaches, if known.</param>
-    /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
-    private protected DaqifiDevice(string name, IStreamTransport transport, IPAddress? ipAddress, ILogger? logger)
-        : this(name, ipAddress, logger)
+        : this(name, ipAddress: null, logger)
     {
         _transport = transport;
 

@@ -7,26 +7,38 @@ namespace Daqifi.Core.Device;
 /// <summary>
 /// The streaming device <see cref="DaqifiDeviceFactory"/> returns for a TCP connection. It is a
 /// <see cref="DaqifiStreamingDevice"/> in every respect, and additionally implements
-/// <see cref="INetworkAddressedDevice"/>, reporting the address the connection reached.
+/// <see cref="INetworkAddressedDevice"/>, reporting the address its transport is connected to.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Internal on purpose: a caller holding the device asks <c>device is INetworkAddressedDevice</c>
 /// and never needs to name this type. Keeping the facet off <see cref="DaqifiDevice"/> itself is
 /// what lets a serial device answer "no" (issue #616).
-/// <see cref="INetworkAddressedDevice.IpAddress"/> is implemented by the inherited
-/// <see cref="DaqifiDevice.IpAddress"/>.
+/// </para>
+/// <para>
+/// The address is read from the transport on every call rather than captured at construction:
+/// a host-name transport re-resolves on reconnect, and the device must report the peer it is
+/// actually talking to. <see cref="INetworkAddressedDevice.IpAddress"/> is implemented by the
+/// inherited <see cref="DaqifiDevice.IpAddress"/>, which reads through
+/// <see cref="CurrentNetworkAddress"/>, so the two can never disagree.
+/// </para>
 /// </remarks>
 internal sealed class NetworkStreamingDevice : DaqifiStreamingDevice, INetworkAddressedDevice
 {
+    private readonly TcpStreamTransport _tcpTransport;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="NetworkStreamingDevice"/> class.
     /// </summary>
     /// <param name="name">The name of the device.</param>
-    /// <param name="transport">The connected TCP transport; the device takes ownership of it.</param>
-    /// <param name="ipAddress">The address the transport reached.</param>
+    /// <param name="transport">The TCP transport; the device takes ownership of it.</param>
     /// <param name="logger">Optional logger for device diagnostics.</param>
-    public NetworkStreamingDevice(string name, TcpStreamTransport transport, IPAddress? ipAddress, ILogger? logger)
-        : base(name, transport, ipAddress, logger)
+    public NetworkStreamingDevice(string name, TcpStreamTransport transport, ILogger? logger)
+        : base(name, transport, logger)
     {
+        _tcpTransport = transport;
     }
+
+    /// <inheritdoc />
+    private protected override IPAddress? CurrentNetworkAddress => _tcpTransport.RemoteAddress;
 }

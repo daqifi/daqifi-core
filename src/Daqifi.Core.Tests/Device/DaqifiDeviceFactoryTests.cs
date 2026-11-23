@@ -598,6 +598,50 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
+    public async Task NetworkDevice_FollowsAReconnectThatLandsOnADifferentPeer()
+    {
+        // A host-name transport re-resolves on every connect. Simulated with the transport's
+        // connect seam: the same name lands on IPv4 loopback first, then on IPv6 loopback, so
+        // the one device instance must report the second peer after the reconnect, not the
+        // address it was built with.
+        if (!Socket.OSSupportsIPv6)
+        {
+            return;
+        }
+
+        var first = new TcpListener(IPAddress.Loopback, 0);
+        var second = new TcpListener(IPAddress.IPv6Loopback, 0);
+        first.Start();
+        second.Start();
+        try
+        {
+            var target = (IPEndPoint)first.LocalEndpoint;
+            var transport = new TcpStreamTransport("daqifi-peer.test", 9760)
+            {
+                ConnectTaskFactory = client => client.ConnectAsync(target.Address, target.Port)
+            };
+            await transport.ConnectAsync(BareConnect.ConnectionRetry);
+            using var device = DaqifiDeviceFactory.CreateDevice(transport, BareConnect);
+            var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
+
+            Assert.Equal(IPAddress.Loopback, networked.IpAddress);
+            Assert.Equal(IPAddress.Loopback, device.IpAddress);
+
+            await transport.DisconnectAsync();
+            target = (IPEndPoint)second.LocalEndpoint;
+            await transport.ConnectAsync(BareConnect.ConnectionRetry);
+
+            Assert.Equal(IPAddress.IPv6Loopback, networked.IpAddress);
+            Assert.Equal(IPAddress.IPv6Loopback, device.IpAddress);
+        }
+        finally
+        {
+            first.Stop();
+            second.Stop();
+        }
+    }
+
+    [Fact]
     public void CreateDevice_SerialTransport_IsNotANetworkDevice()
     {
         // The serial factory path (ConnectSerialAsync) builds its device here once the port is
