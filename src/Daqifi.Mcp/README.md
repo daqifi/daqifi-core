@@ -39,6 +39,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `set_sample_rate` | Set sample rate in Hz (ceiling depends on the enabled channel count; over-cap requests are rejected). |
 | `read_channel_values` | Latest value on every enabled channel, with the timestamp it was sampled at. |
 | `capture_samples` | A block of live data as rows: one row per sample tick, one column per channel. |
+| `drive_and_capture` | A `capture_samples` block with a digital edge driven inside it, so an output's effect on an input is in one capture. |
 | `start_sd_logging` | Start on-device SD logging (**requires a USB/serial connection**). |
 | `stop_sd_logging` | Stop SD logging. |
 | `list_sd_files` | List the log files on the SD card, with size and creation date. |
@@ -56,6 +57,21 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 > afterwards; a session that was already running is read and left alone. Neither works while the
 > device is logging to its SD card — the data goes to the card instead of to this machine, so those
 > calls are refused with that explanation rather than returning nothing.
+>
+> **Driving an output while you measure.** A capture holds the device for its whole window, so a
+> separate `set_digital_output` can only land before it or after it — never inside the rows.
+> `drive_and_capture` is the one call that does both: it puts the pin at the opposite level, starts
+> the capture, drives the pin to `high` `delayMs` after the first sample, and with `pulseWidthMs`
+> returns it. A pulse is always released, including when the call fails or is cancelled part-way,
+> and a failed call also undoes a step; `leftHigh` says where the pin ended up.
+>
+> The edge is timed by this machine, not the device, so it is good to a few milliseconds and no
+> better. `edgeIssuedAtMs` is when the command was sent, measured from the first sample's arrival —
+> the earliest the pin can have moved, with the transport and the firmware still ahead of it. For
+> the edge on the device's own clock, enable the driven channel with `configure_digital_channels`:
+> the firmware reads the pin back, so its `DIO` column shows the transition in the same rows as the
+> analog response. At least one analog channel has to be enabled — the response is what the capture
+> is for, and a Nyquist streaming digital channels alone often does not start.
 >
 > **Retrieve before you stream**, unless `discover_devices` reports a `firmwareVersion` of 3.7.3 or
 > later (treat an empty or unknown version as older). On older firmware a live streaming session
@@ -109,7 +125,7 @@ supports MCP prompts:
 | `start_sd_log` | Discover, connect over USB, configure channels and rate, start SD logging. |
 | `summarize_sd_log` | Stop the log, download it, and summarize a channel. |
 | `read_voltage_now` | What is on one analog input right now. |
-| `drive_and_measure` | Drive a digital output, then measure an analog input across the transition. |
+| `drive_and_measure` | Drive a digital output inside a capture (`drive_and_capture`) and report what an analog input did across the edge. |
 
 The tool descriptions say what each tool does on its own; what they cannot say is which four to
 call, in what order, to answer "is this signal noisy?". That is what these carry.
@@ -159,7 +175,7 @@ the setting you meant. If your MCP client reports that the server failed to star
 log for that line.
 
 `--read-only` blocks anything that changes the device or the card: channel/rate configuration,
-DIO/PWM output, analog output (`set_analog_output`, `latch_analog_outputs`), start/stop logging, and
+DIO/PWM output (`drive_and_capture` included), analog output (`set_analog_output`, `latch_analog_outputs`), start/stop logging, and
 `delete_sd_file`. Reading data back is still allowed — `list_sd_files`, `get_sd_storage`,
 `download_sd_file`, `list_analog_outputs` and `read_analog_output` all work, since they change
 nothing on the device (the download does write its two files into this machine's temp directory,

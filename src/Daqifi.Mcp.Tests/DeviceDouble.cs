@@ -126,10 +126,17 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
         return device;
     }
 
+    /// <summary>
+    /// Runs on the sending flow as each command goes out, before it is recorded. Lets a test ask
+    /// something only that flow can answer — whether it holds the device's operation lock, say.
+    /// </summary>
+    internal Action<string>? OnSend { get; set; }
+
     public override void Send<T>(IOutboundMessage<T> message)
     {
         if (message is IOutboundMessage<string> text)
         {
+            OnSend?.Invoke(text.Data);
             _sent.Enqueue(text.Data);
         }
     }

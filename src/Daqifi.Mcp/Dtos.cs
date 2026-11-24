@@ -500,6 +500,43 @@ public sealed record CaptureResult(
     IReadOnlyList<CaptureRow> Rows);
 
 /// <summary>
+/// A capture with a digital edge driven part-way through it: when the edge went out, and the rows
+/// it should be visible in.
+/// </summary>
+/// <param name="Channel">The digital channel that was driven.</param>
+/// <param name="High">
+/// The level the edge drove the pin to. It was put at the opposite level before the capture
+/// started, so the rows ahead of the edge are that baseline.
+/// </param>
+/// <param name="DelayMs">The delay actually used, after clamping to the capture window.</param>
+/// <param name="PulseWidthMs">The pulse width actually used, or null for a step that was left in place.</param>
+/// <param name="EdgeIssuedAtMs">
+/// When the edge command was sent, in milliseconds after the capture's first sample arrived — add
+/// it to the first row's timestamp to find the edge in the rows. It is this machine's clock, in
+/// whole milliseconds, and it is when the command <i>left</i>: the pin moves a few milliseconds
+/// later, after the transport and the firmware have had it. Null when the capture ended (its
+/// duration or its row budget) before the edge was due, in which case the pin never left its
+/// baseline.
+/// </param>
+/// <param name="ReleasedAtMs">
+/// When the pin was returned to its baseline, on the same clock. Null when it was not: a step, or
+/// an edge that never went out. Later than <paramref name="EdgeIssuedAtMs"/> +
+/// <paramref name="PulseWidthMs"/> when the capture ended mid-pulse and the release happened on
+/// the way out.
+/// </param>
+/// <param name="LeftHigh">The level the pin was left at when the call returned.</param>
+/// <param name="Capture">The captured block, exactly as <c>capture_samples</c> returns one.</param>
+public sealed record DriveAndCaptureResult(
+    int Channel,
+    bool High,
+    int DelayMs,
+    int? PulseWidthMs,
+    int? EdgeIssuedAtMs,
+    int? ReleasedAtMs,
+    bool LeftHigh,
+    CaptureResult Capture);
+
+/// <summary>
 /// What version of this MCP server is running and whether a newer one has been published
 /// (issue #727).
 /// </summary>

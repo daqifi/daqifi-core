@@ -264,6 +264,20 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.CaptureSamplesAsync(deviceId, durationMs, maxRows, cancellationToken));
 
+    [McpServerTool(Name = "drive_and_capture", ReadOnly = false, Destructive = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("capture_samples with a digital edge inside it, to record what an output does to an input. Sets the pin to the opposite level, starts capturing, drives it to `high` after delayMs, and with pulseWidthMs returns it. Needs an analog channel enabled; enable the driven channel too and its DIO column shows the edge. Host-timed: edgeIssuedAtMs is when the command was sent, a few ms before the pin moves. Refused while PWM runs on the channel.")]
+    public static Task<DriveAndCaptureResult> DriveAndCapture(
+        DaqifiAgent agent,
+        [Description("The device_id to drive and capture from.")] string deviceId,
+        [Description("The digital channel to drive (e.g. 0-15 on Nyquist). Switched to output if needed.")] int channel,
+        [Description("The level the edge drives the pin to: true for high. The pin is put at the opposite level before the capture starts.")] bool high,
+        [Description("Baseline to record before the edge, in milliseconds from the first sample (default 200; clamped to 0..durationMs).")] int delayMs = 200,
+        [Description("Return the pin to its baseline this many milliseconds after the edge (clamped to what is left of the capture). 0, the default, leaves it at the new level.")] int pulseWidthMs = 0,
+        [Description("How long to capture, in milliseconds (default 1000; clamped to 250..60000). Stream start-up, about 100 ms, comes out of it.")] int durationMs = 1000,
+        [Description("Most rows to return (default 500; clamped to 1..10000). Budget for delayMs at your sample rate, or the capture ends before the edge.")] int maxRows = 500,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.DriveAndCaptureAsync(deviceId, channel, high, delayMs, pulseWidthMs, durationMs, maxRows, cancellationToken));
+
     // Surface real exception messages (validation + Core errors) to the agent rather than a
     // generic "An error occurred". Cancellation is allowed to propagate untouched.
     private static T Guard<T>(Func<T> action)

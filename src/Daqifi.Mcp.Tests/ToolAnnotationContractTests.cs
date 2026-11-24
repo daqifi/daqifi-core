@@ -68,6 +68,8 @@ public class ToolAnnotationContractTests
         ("delete_sd_file", false, true, false),
         ("read_channel_values", false, false, false),
         ("capture_samples", false, false, false),
+        // A capture, but one that moves a pin: confirmed like set_digital_output, not like its sibling.
+        ("drive_and_capture", false, true, false),
     };
 
     [Theory]

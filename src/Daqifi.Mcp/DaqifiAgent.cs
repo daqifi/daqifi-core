@@ -483,16 +483,24 @@ public sealed class DaqifiAgent
         {
             ct.ThrowIfCancellationRequested();
             RequirePwmDisabled(ch);
-
-            if (ch.Direction != ChannelDirection.Output)
-            {
-                streaming.SetDioDirection(ch, ChannelDirection.Output);
-            }
-
-            streaming.SetDioValue(ch, high);
+            DriveDigitalOutput(streaming, ch, high);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Direction, then value — the order every digital write here uses. Call it inside the
+    /// device's exclusive section, after <see cref="RequirePwmDisabled"/>.
+    /// </summary>
+    private static void DriveDigitalOutput(IStreamingDevice streaming, IChannel channel, bool high)
+    {
+        if (channel.Direction != ChannelDirection.Output)
+        {
+            streaming.SetDioDirection(channel, ChannelDirection.Output);
+        }
+
+        streaming.SetDioValue(channel, high);
     }
 
     /// <summary>
@@ -1327,6 +1335,124 @@ public sealed class DaqifiAgent
             ClampLiveWindow(durationMs, MinCaptureDurationMs, MaxCaptureDurationMs),
             cancellationToken).ConfigureAwait(false);
 
+        return ToCaptureResult(deviceId, run);
+    }
+
+    /// <summary>
+    /// Captures a block of live data and drives a digital channel part-way through it, so an edge
+    /// this server causes and the analog response to it land in the same rows. The pin is put at
+    /// the opposite level first, driven to <paramref name="high"/> <paramref name="delayMs"/>
+    /// after the first sample, and — when <paramref name="pulseWidthMs"/> is positive — returned
+    /// to that opposite level afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The writes happen inside the capture's own exclusive section. They have to:
+    /// <see cref="CaptureSamplesAsync"/> holds the device for its whole window, so a separate
+    /// <c>set_digital_output</c> can only land before the capture or after it, seconds from the
+    /// rows it was meant to appear in.
+    /// </para>
+    /// <para>
+    /// The baseline is written rather than assumed because nothing knows the pin's level
+    /// otherwise — Core records no commanded value, and the stream only reports a pin whose
+    /// channel is enabled. Establishing it is what makes "the edge" a real transition and gives a
+    /// pulse a level to return to.
+    /// </para>
+    /// </remarks>
+    public async Task<DriveAndCaptureResult> DriveAndCaptureAsync(
+        string deviceId,
+        int channel,
+        bool high,
+        int delayMs,
+        int pulseWidthMs,
+        int durationMs,
+        int maxRows,
+        CancellationToken cancellationToken)
+    {
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var ch = RequireDigitalChannel(device, channel);
+
+        var rowBudget = Math.Clamp(maxRows, 1, MaxCaptureRows);
+        var window = ClampLiveWindow(durationMs, MinCaptureDurationMs, MaxCaptureDurationMs);
+        var (delay, pulseWidth) = ClampStimulus(delayMs, pulseWidthMs, window);
+
+        DigitalStimulus? stimulus = null;
+        var run = await RunLiveCaptureAsync(
+            deviceId,
+            channels => new SampleRowSink(channels, rowBudget),
+            window,
+            cancellationToken,
+            channels => stimulus = ArmDigitalStimulus(deviceId, streaming, ch, channels, high, delay, pulseWidth))
+            .ConfigureAwait(false);
+
+        return new DriveAndCaptureResult(
+            ch.ChannelNumber,
+            high,
+            (int)delay.TotalMilliseconds,
+            pulseWidth is { } width ? (int)width.TotalMilliseconds : null,
+            stimulus!.EdgeIssuedAtMs,
+            stimulus.ReleasedAtMs,
+            stimulus.IsAsserted ? high : !high,
+            ToCaptureResult(deviceId, run));
+    }
+
+    /// <summary>
+    /// Fits a stimulus inside the capture window it rides on: the edge no later than the window's
+    /// end, and a pulse no longer than what is left after it. Clamped rather than rejected for the
+    /// reason <see cref="ClampLiveWindow"/> is, and the result reports what was used. Zero or less
+    /// for <paramref name="pulseWidthMs"/> means no pulse — the pin stays where the edge put it.
+    /// Internal for testing.
+    /// </summary>
+    internal static (TimeSpan Delay, TimeSpan? PulseWidth) ClampStimulus(int delayMs, int pulseWidthMs, TimeSpan window)
+    {
+        var windowMs = (int)window.TotalMilliseconds;
+        var delay = Math.Clamp(delayMs, 0, windowMs);
+
+        TimeSpan? pulseWidth = pulseWidthMs <= 0
+            ? null
+            : TimeSpan.FromMilliseconds(Math.Min(pulseWidthMs, Math.Max(1, windowMs - delay)));
+
+        return (TimeSpan.FromMilliseconds(delay), pulseWidth);
+    }
+
+    /// <summary>
+    /// Checks that a stimulus can run on this capture, puts the pin at its baseline level, and
+    /// returns the stimulus ready to start. Runs inside the capture's exclusive section, before
+    /// the stream is started, so a refusal here leaves the device untouched.
+    /// </summary>
+    private static DigitalStimulus ArmDigitalStimulus(
+        string deviceId,
+        IStreamingDevice streaming,
+        IChannel channel,
+        IReadOnlyList<ChannelKey> captured,
+        bool high,
+        TimeSpan delay,
+        TimeSpan? pulseWidth)
+    {
+        // Inside the exclusive section for the reason SetDigitalDirectionAsync gives (#449), and
+        // it covers every write the stimulus makes: nothing can enable PWM until the capture ends.
+        RequirePwmDisabled(channel);
+
+        // Required rather than advised. The capture exists to show an analog response, and a
+        // Nyquist with only digital channels enabled often does not start streaming at all — the
+        // edge would then never fire (it waits for a first sample) and the call would return an
+        // empty capture that reads like a dead input.
+        if (captured.All(c => c.Type != ChannelType.Analog))
+        {
+            throw new InvalidOperationException(
+                $"No analog channel is enabled on '{deviceId}', so there is no response to record "
+                + "(and a digital-only stream often does not start). Enable at least one with "
+                + "configure_analog_channels, then call drive_and_capture again.");
+        }
+
+        DriveDigitalOutput(streaming, channel, !high);
+
+        return new DigitalStimulus(level => streaming.SetDioValue(channel, level), high, delay, pulseWidth);
+    }
+
+    private static CaptureResult ToCaptureResult(string deviceId, LiveRun<SampleRowSink> run)
+    {
         var rows = run.Sink.Complete();
 
         return new CaptureResult(
@@ -1381,12 +1507,18 @@ public sealed class DaqifiAgent
     /// change the channel set the rows are aligned to and the data would silently stop meaning what
     /// its columns say. The budgets that bound a capture are what keep that block bounded.
     /// </para>
+    /// <para>
+    /// Holding it is also why a capture that drives a pin has to do so from in here:
+    /// <paramref name="armStimulus"/> is the only way a digital write can land inside the window
+    /// rather than queue up behind it. Whatever it asserts is released before the block is left.
+    /// </para>
     /// </remarks>
     private async Task<LiveRun<TSink>> RunLiveCaptureAsync<TSink>(
         string deviceId,
         Func<IReadOnlyList<ChannelKey>, TSink> createSink,
         TimeSpan window,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<IReadOnlyList<ChannelKey>, DigitalStimulus>? armStimulus = null)
         where TSink : ILiveSampleSink
     {
         var (device, streaming, live) = RequireLiveSamples(deviceId);
@@ -1397,41 +1529,75 @@ public sealed class DaqifiAgent
             var startStream = DecideStreamOwnership(streaming.IsStreaming, _options.ReadOnly);
             var channels = RequireEnabledChannels(device, deviceId);
             var sink = createSink(channels);
+            var stimulus = armStimulus?.Invoke(channels);
 
             // A device-wide running total, so what this capture cost is the difference across it.
             var droppedBefore = live.DroppedLiveSampleCount;
+            LiveCaptureOutcome outcome;
+            long dropped;
+            int sampleRateHz;
+            var completed = false;
             try
             {
-                var outcome = await LiveSampleCapture.DrainAsync(
+                // Started here, on this flow, and not from a timer or Task.Run of its own: Core
+                // parks a Send from any flow that does not own the device's operation lock until
+                // the exclusive block ends, which for a stimulus is after the capture it was
+                // meant to appear in. The ownership is an AsyncLocal, so the schedule inherits it
+                // by being started inside the block.
+                stimulus?.Start();
+
+                outcome = await LiveSampleCapture.DrainAsync(
                     live.StreamSamplesAsync(),
-                    sink,
+                    stimulus is null ? sink : new FirstSampleTap(sink, stimulus.OnFirstSample),
                     window,
                     startStream ? streaming.StartStreaming : null,
                     ct).ConfigureAwait(false);
 
-                return new LiveRun<TSink>(
-                    sink,
-                    channels,
-                    outcome,
-                    live.DroppedLiveSampleCount - droppedBefore,
-                    startStream,
-                    streaming.StreamingFrequency);
+                dropped = live.DroppedLiveSampleCount - droppedBefore;
+                sampleRateHz = streaming.StreamingFrequency;
+                completed = true;
             }
             finally
             {
-                if (startStream)
+                try
                 {
-                    try
+                    // The pin first: an output left asserted reaches whatever is wired to it, and
+                    // that outranks a stream left running. On every way out — the window ending,
+                    // an error, a cancel.
+                    if (stimulus is not null)
                     {
-                        streaming.StopStreaming();
+                        await stimulus.FinishAsync(restoreStep: !completed).ConfigureAwait(false);
                     }
-                    catch (DeviceNotConnectedException)
+                }
+                catch (DeviceNotConnectedException) when (!completed)
+                {
+                    // Same as the stop below: the device went away, the capture is already
+                    // throwing about it, and there is no pin left to release.
+                }
+                finally
+                {
+                    if (startStream)
                     {
-                        // The device went away mid-capture, which the capture itself is already
-                        // throwing about. Nothing to stop, and that exception is the useful one.
+                        try
+                        {
+                            streaming.StopStreaming();
+                        }
+                        catch (DeviceNotConnectedException)
+                        {
+                            // The device went away mid-capture, which the capture itself is already
+                            // throwing about. Nothing to stop, and that exception is the useful one.
+                        }
                     }
                 }
             }
+
+            return new LiveRun<TSink>(
+                sink,
+                channels,
+                outcome,
+                dropped,
+                startStream,
+                sampleRateHz);
         }, cancellationToken).ConfigureAwait(false);
     }
 
