@@ -36,18 +36,18 @@ public class ArgumentBindingErrorTests
     {
         // The issue's own two cases: the parameter name a caller had to read stderr to learn...
         { "get_device_status", "{}", "deviceId is required." },
-        { "set_sample_rate", """{"deviceId":"serial:FAKE"}""", "rateHz is required." },
+        { "set_sample_rate", """{"deviceId":"serial:FAKE"}""", "sampleRateHz is required." },
         // ...and the type it should have sent, which the marshaller's JsonException does not
         // name at all (its path is only "$": each argument is deserialized on its own).
-        { "set_sample_rate", """{"deviceId":"serial:FAKE","rateHz":"fast"}""", "rateHz must be an integer." },
-        { "set_sample_rate", """{"deviceId":"serial:FAKE","rateHz":1.5}""", "rateHz must be an integer." },
-        { "set_sample_rate", """{"deviceId":"serial:FAKE","rateHz":null}""", "rateHz must be an integer." },
+        { "set_sample_rate", """{"deviceId":"serial:FAKE","sampleRateHz":"fast"}""", "sampleRateHz must be an integer." },
+        { "set_sample_rate", """{"deviceId":"serial:FAKE","sampleRateHz":1.5}""", "sampleRateHz must be an integer." },
+        { "set_sample_rate", """{"deviceId":"serial:FAKE","sampleRateHz":null}""", "sampleRateHz must be an integer." },
         // Too large for the parameter fails the same way a fraction does, and one sentence covers
         // both: what the caller has to do is send a sample rate that exists.
         {
             "set_sample_rate",
-            """{"deviceId":"serial:FAKE","rateHz":99999999999999999999}""",
-            "rateHz must be an integer."
+            """{"deviceId":"serial:FAKE","sampleRateHz":99999999999999999999}""",
+            "sampleRateHz must be an integer."
         },
         { "get_device_status", """{"deviceId":5}""", "deviceId must be a string." },
         { "set_analog_output", """{"deviceId":"serial:FAKE","channel":0,"volts":"high"}""", "volts must be a number." },
@@ -68,14 +68,13 @@ public class ArgumentBindingErrorTests
             """{"deviceId":"serial:FAKE","enabledChannels":[true,false]}""",
             "enabledChannels must be an array of integers."
         },
-        // start_sd_logging's fileName is ["string","null"], and an explicit null for an omitted
-        // optional is something clients send routinely. Blaming it for the sibling's error would
-        // be the very failure #917 is about, just moved: a caller told to fix the one argument
-        // that was already right.
+        // The marshaller takes an explicit null for a string. Blaming it for the sibling's error
+        // would be the very failure #917 is about, just moved: a caller told to fix the one
+        // argument that was already right.
         {
-            "start_sd_logging",
-            """{"deviceId":"serial:FAKE","fileName":null,"format":123}""",
-            "format must be a string."
+            "configure_analog_channels",
+            """{"deviceId":null,"enabledChannels":"0,1"}""",
+            "enabledChannels must be an array."
         },
         {
             "start_sd_logging",
@@ -94,12 +93,69 @@ public class ArgumentBindingErrorTests
         Assert.Equal(expected, await ExplainAsync(tool, argumentsJson));
     }
 
+    public static TheoryData<string, string, string> EnumMismatches() => new()
+    {
+        {
+            "set_digital_direction",
+            """{"deviceId":"serial:FAKE","channel":1,"direction":"sideways"}""",
+            "direction must be one of 'input', 'output'."
+        },
+        // Exactly what the schema lists: no aliases, no other case, no number behind the name.
+        {
+            "set_digital_direction",
+            """{"deviceId":"serial:FAKE","channel":1,"direction":"OUTPUT"}""",
+            "direction must be one of 'input', 'output'."
+        },
+        {
+            "set_digital_direction",
+            """{"deviceId":"serial:FAKE","channel":1,"direction":1}""",
+            "direction must be one of 'input', 'output'."
+        },
+        // The one the marshaller would have let through: it reads a list as flags, so this bound,
+        // to output.
+        {
+            "set_digital_direction",
+            """{"deviceId":"serial:FAKE","channel":1,"direction":"input, output"}""",
+            "direction must be one of 'input', 'output'."
+        },
+        {
+            "start_sd_logging",
+            """{"deviceId":"serial:FAKE","format":"parquet"}""",
+            "format must be one of 'protobuf', 'json', 'csv'."
+        },
+        {
+            "get_hardware_info",
+            """{"deviceType":"nyquist1, nyquist2"}""",
+            "deviceType must be one of 'unknown', 'nyquist1', 'nyquist2', 'nyquist3'."
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(EnumMismatches))]
+    public void AValueOutsideTheAdvertisedEnum_IsRefusedWithTheValuesThatAreInIt(
+        string tool, string argumentsJson, string expected)
+    {
+        Assert.Equal(expected, ArgumentBindingErrors.EnumMismatch(SchemaOf(tool), Arguments(argumentsJson)));
+    }
+
+    [Theory]
+    [InlineData("set_digital_direction", """{"deviceId":"serial:FAKE","channel":1,"direction":"output"}""")]
+    [InlineData("set_digital_direction", """{"deviceId":"serial:FAKE","channel":1}""")]
+    [InlineData("start_sd_logging", """{"deviceId":"serial:FAKE"}""")]
+    [InlineData("get_hardware_info", "{}")]
+    [InlineData("get_hardware_info", """{"deviceType":null}""")]
+    [InlineData("get_hardware_info", """{"deviceType":"nyquist2"}""")]
+    public void AValueInTheAdvertisedEnum_OrNoneAtAll_IsNotRefused(string tool, string argumentsJson)
+    {
+        Assert.Null(ArgumentBindingErrors.EnumMismatch(SchemaOf(tool), Arguments(argumentsJson)));
+    }
+
     public static TheoryData<string, string> CallsThatBind() => new()
     {
         // The marshaller is more forgiving than the schema it advertises, and anything it accepts
         // must never be reported as a mismatch — otherwise an argument that bound perfectly well
         // gets the blame for another one's error. These are the leniencies it actually has.
-        { "set_sample_rate", """{"deviceId":"serial:FAKE","rateHz":"100"}""" },
+        { "set_sample_rate", """{"deviceId":"serial:FAKE","sampleRateHz":"100"}""" },
         { "configure_analog_channels", """{"deviceId":"serial:FAKE","enabledChannels":["0","1"]}""" },
         { "configure_analog_channels", """{"deviceId":"serial:FAKE","enabledChannels":null}""" },
         { "get_device_status", """{"deviceId":null}""" },
@@ -130,9 +186,9 @@ public class ArgumentBindingErrorTests
         // A tool that was entered and refused the call is already explaining itself, and must
         // keep doing so verbatim.
         var failure = await Assert.ThrowsAsync<McpException>(
-            () => InvokeAsync("set_sample_rate", """{"deviceId":"serial:FAKE","rateHz":0}"""));
+            () => InvokeAsync("set_sample_rate", """{"deviceId":"serial:FAKE","sampleRateHz":0}"""));
 
-        Assert.Equal("rate_hz must be >= 1.", failure.Message);
+        Assert.Equal("sampleRateHz must be >= 1.", failure.Message);
     }
 
     [Fact]
@@ -143,7 +199,7 @@ public class ArgumentBindingErrorTests
         // on: when they all fit, nothing here can explain the failure and it is handed back as
         // it is rather than rewritten into binding language.
         var schema = AdvertisedMcpTools.All.Single(t => t.Name == "set_sample_rate").InputSchema;
-        var arguments = Arguments("""{"deviceId":"serial:FAKE","rateHz":100}""");
+        var arguments = Arguments("""{"deviceId":"serial:FAKE","sampleRateHz":100}""");
 
         var explained = ArgumentBindingErrors.Explain(
             new JsonException("The JSON value could not be converted to System.Int32. Path: $"),
@@ -184,13 +240,20 @@ public class ArgumentBindingErrorTests
             "get_device_status", cancellationToken: timeout.Token);
         var wrongType = await client.CallToolAsync(
             "set_sample_rate",
-            new Dictionary<string, object?> { ["deviceId"] = "serial:nope", ["rateHz"] = "fast" },
+            new Dictionary<string, object?> { ["deviceId"] = "serial:nope", ["sampleRateHz"] = "fast" },
             cancellationToken: timeout.Token);
 
+        var outsideEnum = await client.CallToolAsync(
+            "get_hardware_info",
+            new Dictionary<string, object?> { ["deviceType"] = "nyquist1, nyquist2" },
+            cancellationToken: timeout.Token);
+
+        Assert.True(outsideEnum.IsError);
+        Assert.Contains("deviceType must be one of", TextOf(outsideEnum), StringComparison.Ordinal);
         Assert.True(missing.IsError);
         Assert.Contains("deviceId is required.", TextOf(missing), StringComparison.Ordinal);
         Assert.True(wrongType.IsError);
-        Assert.Contains("rateHz must be an integer.", TextOf(wrongType), StringComparison.Ordinal);
+        Assert.Contains("sampleRateHz must be an integer.", TextOf(wrongType), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -199,29 +262,21 @@ public class ArgumentBindingErrorTests
     /// </summary>
     /// <remarks>
     /// <para>
-    /// For those versions the SDK reshapes a non-object return type into a
-    /// <c>{"result": ...}</c> envelope, matching the <c>structuredContent</c> it sends, and it
-    /// decides whether to by testing the registered tool instance's concrete type. Anything that
-    /// replaces those instances — an earlier attempt at #917 wrapped each one in a
-    /// <c>DelegatingMcpServerTool</c> — skips the reshaping while the invoke path still sends the
-    /// envelope. Six tools then advertised a bare array or string and answered with
-    /// <c>{"result": ...}</c> against it; such a client also requires an object schema outright
-    /// and rejects the rest.
+    /// Those versions require an object, so the SDK wraps any other return type in a
+    /// <c>{"result": ...}</c> envelope that newer ones do not get. Every tool returns a named
+    /// record, so there is nothing to wrap and every client is served the same schema.
     /// </para>
     /// <para>
-    /// Two things make this the shape the test has to take. Every test that reads
-    /// <c>ProtocolTool</c> stays green through all of that, because that is the one thing such a
-    /// wrapper forwards faithfully — only the wire shows it. And the protocol version has to be
-    /// pinned: the SDK's own client probes with <c>server/discover</c> and lands on 2026-07-28,
-    /// where the natural, unenveloped schema is the correct answer, so a session built that way
-    /// cannot see the difference either. Hence raw JSON-RPC with <c>initialize</c>.
+    /// The protocol version has to be pinned: the SDK's own client probes with
+    /// <c>server/discover</c> and lands on 2026-07-28, which never wraps. Hence raw JSON-RPC with
+    /// <c>initialize</c>.
     /// </para>
     /// </remarks>
     [Theory]
     [InlineData("2024-11-05")]
     [InlineData("2025-06-18")]
     [InlineData("2025-11-25")]
-    public async Task EveryToolAdvertisesTheResultEnvelope_ToAClientOnALegacyProtocolVersion(
+    public async Task EveryToolAdvertisesItsOwnRecord_ToAClientOnALegacyProtocolVersion(
         string protocolVersion)
     {
         using var timeout = new CancellationTokenSource(ServerBudget);
@@ -242,15 +297,11 @@ public class ArgumentBindingErrorTests
                 $"{name} advertises a non-object outputSchema: {schema.GetRawText()}");
         });
 
-        // One tool spelled out, so a reshaping that silently stopped happening is caught by what
-        // the envelope looks like and not only by its type. list_connected_devices returns a
-        // list, which unenveloped is advertised as a bare array.
-        var listed = tools
-            .Single(t => t.GetProperty("name").GetString() == "list_connected_devices")
-            .GetProperty("outputSchema");
-        Assert.Equal(
-            "array",
-            listed.GetProperty("properties").GetProperty("result").GetProperty("type").GetString());
+        // And it is the tool's own record, not the envelope: a client sees one shape whatever
+        // version it negotiated (issue #1042).
+        Assert.All(tools, tool => Assert.False(
+            tool.GetProperty("outputSchema").GetProperty("properties").TryGetProperty("result", out _),
+            $"{tool.GetProperty("name").GetString()} is wrapped in the SDK's result envelope."));
     }
 
     /// <summary>
@@ -376,6 +427,9 @@ public class ArgumentBindingErrorTests
         var options = new McpClientOptions { DiscoverProbeTimeout = Timeout.InfiniteTimeSpan };
         return await McpClient.CreateAsync(transport, options, cancellationToken: cancellationToken);
     }
+
+    private static JsonElement SchemaOf(string tool) =>
+        AdvertisedMcpTools.All.Single(t => t.Name == tool).InputSchema;
 
     private static string TextOf(CallToolResult result) =>
         string.Join("\n", result.Content.OfType<TextContentBlock>().Select(c => c.Text));

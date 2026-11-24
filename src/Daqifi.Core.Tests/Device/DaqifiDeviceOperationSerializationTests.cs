@@ -216,7 +216,7 @@ public class DaqifiDeviceOperationSerializationTests
         // immediately even when the device is owned by someone else. The wait is bounded and
         // taken while the owner is still held, because only the release below can free a Send
         // that regressed to waiting for the owner: an unbounded await would hang instead of fail.
-        var send = Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        var send = Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, true)));
         try
         {
             var returnedWhileOwned = await Task.WhenAny(send, Task.Delay(TimeSpan.FromSeconds(2))) == send;
@@ -247,7 +247,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         await device.RunExclusiveAsync(async _ =>
         {
-            device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+            device.Send(ScpiMessageProducer.SetDioPortState(4, true));
             await WaitForWriteAsync(transport, "DIO:PORt:STATe");
         }).WaitAsync(DeadlockBudget);
 
@@ -276,7 +276,7 @@ public class DaqifiDeviceOperationSerializationTests
         {
             for (var channel = 1; channel <= 5; channel++)
             {
-                device.Send(ScpiMessageProducer.SetDioPortState(channel, 1));
+                device.Send(ScpiMessageProducer.SetDioPortState(channel, true));
             }
         });
 
@@ -365,7 +365,7 @@ public class DaqifiDeviceOperationSerializationTests
         var sender = new Thread(() =>
         {
             sendNow.Wait(DeadlockBudget);
-            device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+            device.Send(ScpiMessageProducer.SetDioPortState(4, true));
             sent.Set();
         })
         {
@@ -407,7 +407,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         await device.RunTextExchangeAsync(async _ =>
         {
-            device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+            device.Send(ScpiMessageProducer.SetDioPortState(4, true));
 
             // Fails here, inside the exchange, if the send was parked — rather than passing later
             // on the backlog the exchange flushes on its way out.
@@ -460,7 +460,7 @@ public class DaqifiDeviceOperationSerializationTests
         // token fires.
         for (var i = 0; i < 5; i++)
         {
-            device.Send(ScpiMessageProducer.SetDioPortState(i, 1));
+            device.Send(ScpiMessageProducer.SetDioPortState(i, true));
         }
 
         var before = InboundSubscriberCount(device);
@@ -873,7 +873,7 @@ public class DaqifiDeviceOperationSerializationTests
         device.Connect();
         Assert.True(device.IsConnected);
 
-        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, true)));
 
         await WaitForWriteAsync(transport, "DIO:PORt:STATe");
 
@@ -909,7 +909,7 @@ public class DaqifiDeviceOperationSerializationTests
             leaked = Task.Run(() =>
             {
                 sendNow.Wait(DeadlockBudget);
-                device.Send(ScpiMessageProducer.SetDioPortState(5, 1));
+                device.Send(ScpiMessageProducer.SetDioPortState(5, true));
                 sendDone.Set();
             });
             return Task.CompletedTask;
@@ -964,7 +964,7 @@ public class DaqifiDeviceOperationSerializationTests
         using var producer = new MessageProducer<string>(stream);
         producer.Start();
 
-        producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+        producer.Send(ScpiMessageProducer.SetDioPortState(4, true));
 
         Assert.True(stream.WaitForWriteToStart(DeadlockBudget), "The producer never started writing.");
 
@@ -1012,7 +1012,7 @@ public class DaqifiDeviceOperationSerializationTests
                && clock.Elapsed < samplingCeiling)
         {
             attempts++;
-            producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+            producer.Send(ScpiMessageProducer.SetDioPortState(4, true));
 
             // Spun rather than slept: the window is a handful of instructions wide, and a poll
             // that sleeps between reads steps straight over it. Bounded all the same -- an empty
@@ -1054,7 +1054,7 @@ public class DaqifiDeviceOperationSerializationTests
         using var device = new SlowDrainTextExchangeDevice("Draining Device", transport);
         device.Connect();
 
-        device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+        device.Send(ScpiMessageProducer.SetDioPortState(4, true));
         Assert.True(transport.WaitForWriteToStart(DeadlockBudget), "The producer never started writing.");
 
         var exchange = Task.Run(() => device.RunTextExchangeAsync(() => { }));
@@ -1298,7 +1298,7 @@ public class DaqifiDeviceOperationSerializationTests
     {
         public TaggedBinaryMessage(string tag) => Data = Encoding.UTF8.GetBytes(tag);
 
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
 
         public byte[] GetBytes() => Data;
     }
@@ -1314,7 +1314,7 @@ public class DaqifiDeviceOperationSerializationTests
         internal override TimeSpan OutboundDrainWait => TimeSpan.FromSeconds(5);
 
         public Task<IReadOnlyList<string>> RunTextExchangeAsync(Action setupAction) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 300, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(300), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     // ── The inbound path stays clear ────────────────────────────────────────────────────────
@@ -1382,8 +1382,8 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
 
         /// <summary>
@@ -1395,8 +1395,8 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupActionAsync,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
     }
 
@@ -1529,9 +1529,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GatedWriteTransport));
             _isConnected = true;
@@ -1539,17 +1537,13 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _stream.ReleaseWrites();
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1584,9 +1578,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public void ReleaseWrites() => _stream.Release();
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(BlockedWriteTransport));
             _isConnected = true;
@@ -1594,17 +1586,13 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _stream.Release();
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1674,9 +1662,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(RecordingTransport));
             _isConnected = true;
@@ -1684,16 +1670,12 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

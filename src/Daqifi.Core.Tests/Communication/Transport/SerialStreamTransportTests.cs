@@ -105,7 +105,7 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Disconnect_WithAPortThatClosedUnderneathIt_ReleasesThePort()
+    public async Task SerialStreamTransport_Disconnect_WithAPortThatClosedUnderneathIt_ReleasesThePort()
     {
         // A port that closed on its own (unplug, a DTR reset re-enumerating the COM port) still
         // sits in the transport with IsOpen == false. Disconnect used to return early on
@@ -116,7 +116,7 @@ public class SerialStreamTransportTests
         var reported = new List<bool>();
         transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
 
-        transport.Disconnect();
+        await transport.DisconnectAsync();
 
         Assert.True(port.IsDisposed);
         Assert.Equal(new[] { false }, reported);
@@ -161,21 +161,6 @@ public class SerialStreamTransportTests
         // The message must name the transport state, not the raw framework message.
         Assert.DoesNotContain("BaseStream is only available", ex.Message);
         Assert.Contains("not connected", ex.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void SerialStreamTransport_Connect_WithMissingPort_ThrowsTheTypedExceptionUnwrapped()
-    {
-        // The synchronous entry point blocks on ConnectAsync. An exact-type match proves it
-        // unwraps the failure (GetAwaiter().GetResult()) instead of surfacing an AggregateException.
-        var portName = AbsentSerialPorts.Create();
-        using var transport = new SerialStreamTransport(portName);
-
-        var ex = Assert.Throws<SerialPortConnectException>(() => transport.Connect());
-
-        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
-        Assert.Equal(portName, ex.PortName);
-        Assert.False(transport.IsConnected);
     }
 
     [Fact]
@@ -266,7 +251,7 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Dispose_ShouldCleanupResources()
+    public async Task SerialStreamTransport_Dispose_ShouldCleanupResources()
     {
         // Arrange
         var transport = new SerialStreamTransport("COM1");
@@ -275,7 +260,7 @@ public class SerialStreamTransportTests
         transport.Dispose();
         
         // Assert - Should throw ObjectDisposedException for operations after disposal
-        Assert.Throws<ObjectDisposedException>(() => transport.Connect());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => transport.ConnectAsync());
         Assert.Throws<ObjectDisposedException>(() => transport.Stream);
     }
 

@@ -418,7 +418,7 @@ public class DaqifiDeviceConsumerRestartTests
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
         {
-            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 100, completionTimeoutMs: 50);
+            return ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(100), completionTimeout: TimeSpan.FromMilliseconds(50));
         }
 
         public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)
@@ -496,9 +496,7 @@ public class DaqifiDeviceConsumerRestartTests
         /// <summary>Everything written to the stream so far, as ASCII.</summary>
         public string Written => _stream.Written;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(StallingReadMockTransport));
             _isConnected = true;
@@ -506,17 +504,13 @@ public class DaqifiDeviceConsumerRestartTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             _stream.Release();
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

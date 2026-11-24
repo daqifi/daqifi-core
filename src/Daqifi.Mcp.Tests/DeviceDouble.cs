@@ -168,12 +168,12 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     /// </summary>
     protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
         Action setupAction,
-        int responseTimeoutMs = 1000,
-        int completionTimeoutMs = 250,
-        CancellationToken cancellationToken = default,
+        TimeSpan? responseTimeout = null,
+        TimeSpan? completionTimeout = null,
         Func<CancellationToken, Task>? prepareAsync = null,
         Func<Task>? finalizeAsync = null,
-        bool keepBlankLines = false)
+        bool keepBlankLines = false,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         setupAction();
@@ -204,11 +204,11 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     // subscribes in the synchronous prefix of its iterator, and awaiting it from here keeps that
     // inside this iterator's own first MoveNextAsync, which the capture relies on.
     async IAsyncEnumerable<LiveSample> ILiveSampleSource.StreamSamplesAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken, int? bufferCapacity)
+        int? bufferCapacity, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         try
         {
-            await foreach (var sample in StreamSamplesAsync(cancellationToken, bufferCapacity).ConfigureAwait(false))
+            await foreach (var sample in StreamSamplesAsync(bufferCapacity, cancellationToken).ConfigureAwait(false))
             {
                 yield return sample;
             }

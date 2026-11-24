@@ -249,6 +249,7 @@ public interface ISdCardOperations
     /// <see cref="SdCardRecording"/>.
     /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="ArgumentException"><paramref name="channelMask"/> is not a decimal bitmask.</exception>
     Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -273,6 +274,7 @@ public interface ISdCardOperations
     /// file name and logging format.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="ArgumentException"><paramref name="channelMask"/> is not a decimal bitmask.</exception>
     Task<SdCardRecording> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>

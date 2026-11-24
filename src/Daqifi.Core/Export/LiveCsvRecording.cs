@@ -211,7 +211,7 @@ public static class LiveCsvRecordingExtensions
         // Disposed by hand rather than with `await using`, because ConfigureAwait(false) on an
         // IAsyncEnumerator yields a ConfiguredAsyncDisposable, which is no longer an enumerator.
         var enumerator = live
-            .StreamSamplesAsync(linked.Token, bufferCapacity)
+            .StreamSamplesAsync(bufferCapacity, linked.Token)
             .GetAsyncEnumerator(linked.Token);
         try
         {

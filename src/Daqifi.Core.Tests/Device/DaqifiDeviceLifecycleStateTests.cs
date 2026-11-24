@@ -549,7 +549,7 @@ public class DaqifiDeviceLifecycleStateTests
                 new TransportStatusEventArgs(false, ConnectionInfo, new IOException("the device went away")));
         }
 
-        public void Connect()
+        private void Connect()
         {
             if (IsConnected)
             {
@@ -567,7 +567,7 @@ public class DaqifiDeviceLifecycleStateTests
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
         }
 
-        public void Disconnect()
+        private void Disconnect()
         {
             if (!IsConnected)
             {
@@ -578,15 +578,13 @@ public class DaqifiDeviceLifecycleStateTests
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
         }
 
-        public Task ConnectAsync()
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             Connect();
             return Task.CompletedTask;
         }
 
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions) => ConnectAsync();
-
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             Disconnect();
             return Task.CompletedTask;

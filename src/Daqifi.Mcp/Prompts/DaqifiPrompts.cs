@@ -42,9 +42,9 @@ public static class DaqifiPrompts
     [Description("Discover a DAQiFi device, configure channels and rate, and start on-device SD-card logging.")]
     public static string StartSdLog(
         [Description("Analog channels to log, e.g. '0-3' or '0,2,5'. Defaults to 0-3.")] string channels = "0-3",
-        [Description("Sample rate in Hz (default 1000).")] int rateHz = 1000)
+        [Description("Sample rate in Hz (default 1000).")] int sampleRateHz = 1000)
         => $"""
-            Discover my DAQiFi, connect, enable analog channels {channels} at {rateHz} Hz, and start logging to the SD card.
+            Discover my DAQiFi, connect, enable analog channels {channels} at {sampleRateHz} Hz, and start logging to the SD card.
 
             SD logging needs the USB/serial connection, not WiFi — the card and the radio share a bus — so
             connect over USB. Check the card has room before you start, and tell me the log file name the

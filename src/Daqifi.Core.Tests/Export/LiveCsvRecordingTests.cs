@@ -526,7 +526,7 @@ public class LiveCsvRecordingTests
         }
 
         IAsyncEnumerable<LiveSample> ILiveSampleSource.StreamSamplesAsync(
-            CancellationToken cancellationToken, int? bufferCapacity)
+            int? bufferCapacity, CancellationToken cancellationToken)
         {
             StreamRequested = true;
             RequestedBufferCapacity = bufferCapacity;

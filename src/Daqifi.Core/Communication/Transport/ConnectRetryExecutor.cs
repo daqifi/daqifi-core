@@ -37,18 +37,33 @@ internal static class ConnectRetryExecutor
     /// <see cref="OperationCanceledException"/> is surfaced to the caller, which is what lets an
     /// auto-reconnect loop be torn down promptly rather than after the remaining attempts.
     /// </param>
+    /// <param name="teardownToken">
+    /// Signalled when the transport is disconnected or disposed. It ends the whole operation, not
+    /// just the attempt in flight: a retry after it would reopen a connection the caller has
+    /// explicitly closed. Nothing more is reported through <paramref name="onStatusChanged"/> once
+    /// it is signalled, because the teardown reports itself and a later connect may already have.
+    /// </param>
+    /// <param name="createTornDownException">
+    /// Builds what a connect ended by <paramref name="teardownToken"/> throws, from whatever the
+    /// attempt failed with.
+    /// </param>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     public static async Task ExecuteAsync(
         ConnectionRetryOptions? retryOptions,
         Func<ConnectionRetryOptions, CancellationToken, Task> connectAttempt,
         Action onAttemptFailed,
         Action<bool, Exception?> onStatusChanged,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CancellationToken teardownToken = default,
+        Func<Exception, Exception>? createTornDownException = null)
     {
         var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
         var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, teardownToken);
+        var stopToken = stop.Token;
 
         // No loop condition on purpose: an iteration returns on success, throws on cancellation
         // or on the final failure, and continues only while attempt < maxAttempts, so the body
@@ -62,7 +77,7 @@ internal static class ConnectRetryExecutor
                 // Checked every iteration, not just before the delay: a retry policy configured
                 // with no backoff skips the delay entirely, and without this a cancellation that
                 // arrived during the previous attempt would be answered with another dial.
-                cancellationToken.ThrowIfCancellationRequested();
+                stopToken.ThrowIfCancellationRequested();
 
                 // Calculate delay for this attempt
                 if (attempt > 1)
@@ -70,15 +85,27 @@ internal static class ConnectRetryExecutor
                     var delay = options.CalculateDelay(attempt);
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(delay, stopToken).ConfigureAwait(false);
                     }
                 }
 
-                await connectAttempt(options, cancellationToken).ConfigureAwait(false);
+                await connectAttempt(options, stopToken).ConfigureAwait(false);
+
+                // A cancel that lands as the attempt completes is still a cancel: announcing a
+                // connection the caller has given up on would leave it open with no owner.
+                stopToken.ThrowIfCancellationRequested();
+
                 onStatusChanged(true, null);
                 return; // Success!
             }
-            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (teardownToken.IsCancellationRequested)
+            {
+                // Disconnected or disposed underneath this connect, whatever the attempt made of it.
+                onAttemptFailed();
+                cancellationToken.ThrowIfCancellationRequested();
+                throw createTornDownException?.Invoke(ex) ?? ex;
+            }
+            catch (OperationCanceledException ex) when (stopToken.IsCancellationRequested)
             {
                 // The caller gave up on this connect. Clean up the half-built handle exactly as a
                 // failed attempt would, report the transport as disconnected, and stop — retrying

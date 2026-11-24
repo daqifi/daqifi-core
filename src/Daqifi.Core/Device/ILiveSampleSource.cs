@@ -31,6 +31,6 @@ public interface ILiveSampleSource
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamSamplesAsync"/>
     IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-        CancellationToken cancellationToken = default,
-        int? bufferCapacity = null);
+        int? bufferCapacity = null,
+        CancellationToken cancellationToken = default);
 }

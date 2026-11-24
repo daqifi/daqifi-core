@@ -170,7 +170,7 @@ public class DiscoveryFanOutTests
         var result = await agent.DiscoverAsync(
             timeoutMs: 1000, wifi: false, serial: false, CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Devices);
     }
 
     // ------------------------------------------------------------------ cancellation

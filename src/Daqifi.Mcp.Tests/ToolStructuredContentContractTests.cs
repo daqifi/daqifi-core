@@ -10,13 +10,13 @@ namespace Daqifi.Mcp.Tests;
 /// Contract tests for the structured-content flag advertised to clients. SDK 2.2 serializes a
 /// POCO/list return as a single text <c>ContentBlock</c> unless
 /// <c>UseStructuredContent=true</c> is set on <see cref="McpServerToolAttribute"/>. Every tool
-/// here returns a record or list, so leaving the flag off means clients never see
+/// here returns a record, so leaving the flag off means clients never see
 /// <c>outputSchema</c> / <c>structuredContent</c>.
 /// </summary>
 public class ToolStructuredContentContractTests
 {
     /// <summary>
-    /// Every tool the server registers. All of them return records or lists, so all of them need
+    /// Every tool the server registers. All of them return records, so all of them need
     /// the flag — this is not a place to opt out. The names come from
     /// <see cref="AdvertisedMcpTools"/>, not a copied list, so a tool added through
     /// <c>WithDaqifiTools</c> is covered here without a second edit.
@@ -44,7 +44,10 @@ public class ToolStructuredContentContractTests
         Assert.True(
             schema.HasValue,
             $"{name} has no OutputSchema; set UseStructuredContent = true on [McpServerTool].");
-        Assert.Equal(JsonValueKind.Object, schema.Value.ValueKind);
+
+        // A named record, never a bare list or string: the SDK wraps those in an envelope for some
+        // clients and not others, and neither can gain a field later (issue #1042).
+        Assert.Equal("object", schema.Value.GetProperty("type").GetString());
     }
 
     [Fact]

@@ -383,8 +383,8 @@ public class ExportGuardCensusTests
         long ILiveSampleSource.DroppedLiveSampleCount => 0;
 
         IAsyncEnumerable<LiveSample> ILiveSampleSource.StreamSamplesAsync(
-            CancellationToken cancellationToken,
-            int? bufferCapacity) =>
+            int? bufferCapacity,
+            CancellationToken cancellationToken) =>
             throw new InvalidOperationException(
                 "The census only exercises argument guards; the stream must never be started.");
     }

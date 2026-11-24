@@ -276,12 +276,12 @@ public class DaqifiDeviceConcurrentInitializeTests
         // The error-queue drain.
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         }
@@ -289,8 +289,8 @@ public class DaqifiDeviceConcurrentInitializeTests
         // The setup block is the one exchange on the async overload (#667).
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             if (_gates.TryGetValue(Interlocked.Increment(ref _setupBlockCount), out var gate))

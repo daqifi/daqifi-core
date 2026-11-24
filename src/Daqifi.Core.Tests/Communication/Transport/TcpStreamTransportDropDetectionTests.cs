@@ -16,7 +16,7 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 public class TcpStreamTransportDropDetectionTests
 {
     [Fact]
-    public void WhenThePeerClosesTheConnection_TransportReportsTheDrop()
+    public async Task WhenThePeerClosesTheConnection_TransportReportsTheDrop()
     {
         using var listener = new LoopbackListener();
         using var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
@@ -38,7 +38,7 @@ public class TcpStreamTransportDropDetectionTests
             dropped.Set();
         };
 
-        transport.Connect();
+        await transport.ConnectAsync();
         using var server = listener.AcceptOne();
 
         using var consumer = new StreamMessageConsumer<string>(
@@ -63,7 +63,7 @@ public class TcpStreamTransportDropDetectionTests
     }
 
     [Fact]
-    public void WhenDisconnectedIntentionally_TransportReportsAnOrdinaryDisconnect()
+    public async Task WhenDisconnectedIntentionally_TransportReportsAnOrdinaryDisconnect()
     {
         using var listener = new LoopbackListener();
         using var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
@@ -82,7 +82,7 @@ public class TcpStreamTransportDropDetectionTests
             }
         };
 
-        transport.Connect();
+        await transport.ConnectAsync();
         using var server = listener.AcceptOne();
 
         using var consumer = new StreamMessageConsumer<string>(
@@ -91,7 +91,7 @@ public class TcpStreamTransportDropDetectionTests
         consumer.ErrorOccurred += (_, _) => Interlocked.Increment(ref readerFaults);
         consumer.Start();
 
-        transport.Disconnect();
+        await transport.DisconnectAsync();
 
         // Tearing down the socket makes the reader loop fail repeatedly; none of that may be
         // reported as a drop on top of the disconnect the caller asked for. Wait until the

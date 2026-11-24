@@ -84,12 +84,12 @@ public class GetLanChipInfoAsyncTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -117,8 +117,8 @@ public class GetLanChipInfoAsyncTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             await setupActionAsync(cancellationToken).ConfigureAwait(false);

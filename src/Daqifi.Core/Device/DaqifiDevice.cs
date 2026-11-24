@@ -795,7 +795,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// 250ms is about 250ms of the saving; see the PR for the A/B.
     /// </para>
     /// </remarks>
-    private const int InitScpiCompletionTimeoutMs = 500;
+    private static readonly TimeSpan InitScpiCompletionTimeout = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Owns THE device operation lock and the backlog of sends parked behind it. Every text
@@ -1488,9 +1488,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Opens the transport on the calling thread. <see cref="ConnectAsync"/> is the
+    /// Blocks the calling thread until the transport is open. <see cref="ConnectAsync"/> is the
     /// non-blocking, cancellable equivalent and is preferred on a UI thread; this overload is
-    /// kept for existing callers and behaves exactly as it always has.
+    /// kept for callers that are not async themselves.
     /// </para>
     /// <para>
     /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
@@ -1587,7 +1587,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         try
         {
             // Connect transport if available
-            _transport?.Connect();
+            BlockOnTransport(static transport => transport.ConnectAsync());
 
             CompleteConnect();
         }
@@ -1595,6 +1595,35 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         {
             FailConnect();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Runs a transport operation to completion on the calling thread, for <see cref="Connect"/>
+    /// and <see cref="Disconnect"/>. Does nothing on a device without a transport.
+    /// </summary>
+    /// <remarks>
+    /// The caller's <see cref="SynchronizationContext"/> is set aside for the duration. Core's own
+    /// transports never resume on it, but a transport is also a consumer's to implement, and one
+    /// plain <c>await</c> in it would otherwise post its continuation to the very thread blocked
+    /// here: a UI thread would hang for good (issue #495).
+    /// </remarks>
+    private void BlockOnTransport(Func<IStreamTransport, Task> operation)
+    {
+        if (_transport == null)
+        {
+            return;
+        }
+
+        var callerContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        try
+        {
+            operation(_transport).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(callerContext);
         }
     }
 
@@ -1644,7 +1673,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         {
             if (_transport != null)
             {
-                await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                await _transport.ConnectAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
                 transportConnected = true;
             }
 
@@ -1774,7 +1803,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         try
         {
-            _transport?.Disconnect();
+            BlockOnTransport(static transport => transport.DisconnectAsync());
         }
         catch (Exception ex)
         {
@@ -1820,12 +1849,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <remarks>
     /// Waits up to 10 seconds to acquire the device operation lock before
     /// tearing down the consumer / producer / transport. This prevents
-    /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
+    /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>
     /// is still collecting its reply (or a raw capture still holds the stream with the
     /// reader stopped) and Disconnect rips the transport out from under it. If the wait
     /// times out, Disconnect proceeds anyway — a stuck text exchange must not block
     /// teardown forever. The 10s budget covers the worst-case ExecuteTextCommandAsync
-    /// hold time with default timeouts (maxWait of responseTimeoutMs*5 = 5s by default
+    /// hold time with default timeouts (maxWait of responseTimeout*5 = 5s by default
     /// + safety margin) and
     /// most custom-timeout callers; on timeout the in-flight exchange
     /// sees the teardown via the post-acquisition
@@ -1927,7 +1956,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             StopMessagePumps();
 
             // Disconnect transport if available
-            _transport?.Disconnect();
+            BlockOnTransport(static transport => transport.DisconnectAsync());
         }
         finally
         {
@@ -2376,9 +2405,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// duration, and the stream frames can reach the reply as unreadable lines.
     /// </remarks>
     /// <param name="setupAction">An action that sends SCPI commands to the device while the reader frames text.</param>
-    /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
-    /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
-    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <param name="responseTimeout">How long to wait for the first text response after sending commands. <c>null</c> means one second.</param>
+    /// <param name="completionTimeout">How long the device must be quiet after the first response before the response is considered complete. <c>null</c> means 250 ms.</param>
     /// <param name="prepareAsync">
     /// Optional phase that puts the device into the state the commands require, for callers that
     /// need one — the SD card operations use it to switch the shared SPI bus over to the card and
@@ -2415,6 +2443,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// succeeded, a finalize failure is the only failure there is, and it propagates.
     /// </para>
     /// </param>
+    /// <param name="keepBlankLines">
+    /// When <c>true</c>, blank lines are returned instead of filtered out. Only the system-log
+    /// read wants this: <c>SYSTem:LOG?</c> terminates its dump with a blank line
+    /// unconditionally, so seeing it is what separates "the device answered and its log is
+    /// empty" from "the device never answered" (issue #543). Every other caller parses content
+    /// and has never seen a blank line, so the default is <c>false</c>.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
     /// A list of text lines received from the device. Lines that were already in flight when the
     /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
@@ -2428,51 +2464,39 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
     /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-    /// <param name="keepBlankLines">
-    /// When <c>true</c>, blank lines are returned instead of filtered out. Only the system-log
-    /// read wants this: <c>SYSTem:LOG?</c> terminates its dump with a blank line
-    /// unconditionally, so seeing it is what separates "the device answered and its log is
-    /// empty" from "the device never answered" (issue #543). Every other caller parses content
-    /// and has never seen a blank line, so the default is <c>false</c>.
-    /// </param>
-    // prepareAsync and finalizeAsync are added AFTER cancellationToken (technically violating
-    // CA1068 "CancellationToken should be last") to keep existing positional callers working,
-    // matching the convention established in IFirmwareUpdateService for the same reason. They
-    // are parameters on this seam rather than separate virtual methods deliberately: a parallel
-    // method would be bypassed silently by any subclass that overrides only this one, which for
-    // an instrumented device or a test double means the override quietly stops intercepting SD
-    // operations with nothing to indicate it. Overriders must widen their signature — a compile
-    // error, which is the point.
-#pragma warning disable CA1068
+    /// <exception cref="ArgumentOutOfRangeException">A timeout is not positive, or is longer than <see cref="int.MaxValue"/> milliseconds.</exception>
+    // prepareAsync and finalizeAsync are parameters on this seam rather than separate virtual
+    // methods deliberately: a parallel method would be bypassed silently by any subclass that
+    // overrides only this one, which for an instrumented device or a test double means the
+    // override quietly stops intercepting SD operations with nothing to indicate it.
     protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
         Action setupAction,
-        int responseTimeoutMs = 1000,
-        int completionTimeoutMs = 250,
-        CancellationToken cancellationToken = default,
+        TimeSpan? responseTimeout = null,
+        TimeSpan? completionTimeout = null,
         Func<CancellationToken, Task>? prepareAsync = null,
         Func<Task>? finalizeAsync = null,
-        bool keepBlankLines = false)
+        bool keepBlankLines = false,
+        CancellationToken cancellationToken = default)
     {
         return ExecuteTextCommandCoreAsync(
             prepareAsync,
             finalizeAsync,
             _ => { setupAction(); return Task.CompletedTask; },
-            responseTimeoutMs,
-            completionTimeoutMs,
-            cancellationToken,
-            keepBlankLines);
+            responseTimeout,
+            completionTimeout,
+            keepBlankLines,
+            cancellationToken);
     }
-#pragma warning restore CA1068
 
     /// <summary>
-    /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
+    /// Async overload of <see cref="ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>
     /// that accepts an async setup action so callers can <c>await</c> cancellable operations
     /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
     /// blocking the thread-pool thread.
     /// </summary>
     /// <param name="setupActionAsync">An async function that sends SCPI commands to the device while the reader frames text. Receives the operation's cancellation token.</param>
-    /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
-    /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
+    /// <param name="responseTimeout">How long to wait for the first text response after sending commands. <c>null</c> means one second.</param>
+    /// <param name="completionTimeout">How long the device must be quiet after the first response before the response is considered complete. <c>null</c> means 250 ms.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>A list of text lines received from the device.</returns>
     /// <exception cref="DeviceNotConnectedException">
@@ -2483,38 +2507,43 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
     /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A timeout is not positive, or is longer than <see cref="int.MaxValue"/> milliseconds.</exception>
     protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
         Func<CancellationToken, Task> setupActionAsync,
-        int responseTimeoutMs = 1000,
-        int completionTimeoutMs = 250,
-        CancellationToken cancellationToken = default)
+        TimeSpan? responseTimeout,
+        TimeSpan? completionTimeout,
+        CancellationToken cancellationToken)
     {
         return ExecuteTextCommandCoreAsync(
             prepareAsync: null,
             finalizeAsync: null,
             setupActionAsync,
-            responseTimeoutMs,
-            completionTimeoutMs,
+            responseTimeout,
+            completionTimeout,
+            keepBlankLines: false,
             cancellationToken);
     }
+
+    private static readonly TimeSpan DefaultTextResponseTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultTextCompletionTimeout = TimeSpan.FromMilliseconds(250);
 
     private Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
         Func<CancellationToken, Task>? prepareAsync,
         Func<Task>? finalizeAsync,
         Func<CancellationToken, Task> setupActionAsync,
-        int responseTimeoutMs,
-        int completionTimeoutMs,
-        CancellationToken cancellationToken,
-        bool keepBlankLines = false)
+        TimeSpan? responseTimeout,
+        TimeSpan? completionTimeout,
+        bool keepBlankLines,
+        CancellationToken cancellationToken)
     {
         return _textExchange.ExecuteAsync(
             prepareAsync,
             finalizeAsync,
             setupActionAsync,
-            responseTimeoutMs,
-            completionTimeoutMs,
-            cancellationToken,
-            keepBlankLines);
+            responseTimeout ?? DefaultTextResponseTimeout,
+            completionTimeout ?? DefaultTextCompletionTimeout,
+            keepBlankLines,
+            cancellationToken);
     }
 
     /// <summary>
@@ -2904,7 +2933,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// on hardware faults, or discard them if known-stale.
     /// </para>
     /// <para>
-    /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>, which
+    /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>, which
     /// stops decoding protobuf frames for the duration of the text exchange.
     /// Avoid calling this during active streaming or concurrently with
     /// other text commands.
@@ -3035,7 +3064,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private const int CapabilityQuerySpacingMs = 50;
 
     /// <summary>Time allowed for the first line of the capability response.</summary>
-    private const int CapabilityDocumentResponseTimeoutMs = 3000;
+    private static readonly TimeSpan CapabilityDocumentResponseTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Inactivity window that ends capability-document collection. The document is a single
@@ -3053,7 +3082,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// WiFi that was more than 250 ms in 5 of 27 bench reads (327 to 664 ms), and the read
     /// returned no document and released the device while the rest of it was still arriving.
     /// </remarks>
-    private const int CapabilityDocumentCompletionTimeoutMs = 250;
+    private static readonly TimeSpan CapabilityDocumentCompletionTimeout = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
     /// Reads the device's capability document (<c>CONFigure:CAPabilities:JSON?</c>) and
@@ -3134,8 +3163,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                     Send(ScpiMessageProducer.GetStoredStreamingRate);
                 }
             },
-            responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
-            completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
+            responseTimeout: CapabilityDocumentResponseTimeout,
+            completionTimeout: CapabilityDocumentCompletionTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // One parse anchors everything else: the version is looked for before this line and the
@@ -3201,8 +3230,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 Send(ScpiMessageProducer.GetCapabilitiesJson);
                 return Task.CompletedTask;
             },
-            responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
-            completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
+            responseTimeout: CapabilityDocumentResponseTimeout,
+            completionTimeout: CapabilityDocumentCompletionTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return CapabilityDocumentParser.TryParseLines(lines, out var document)
@@ -4031,8 +4060,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
                     Send(ScpiMessageProducer.GetSystemError);
                 },
-                responseTimeoutMs: 1000,
-                completionTimeoutMs: InitScpiCompletionTimeoutMs,
+                responseTimeout: TimeSpan.FromSeconds(1),
+                completionTimeout: InitScpiCompletionTimeout,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             }
 
