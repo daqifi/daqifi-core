@@ -95,9 +95,28 @@ When a release goes out, the `Unshipped` entries move into `Shipped` and `Unship
 
 Two things the tool will not do for you. The protoc-generated `DaqifiOutMessage.cs` is skipped
 by the code fix, so entries for it have to be added by hand from the RS0016 message (the symbol
-name in the message is already the exact line to add - those types sit in the global namespace).
+name in the message is already the exact line to add).
 And a *removal* is never automatic: deleting the entry is the deliberate act of declaring a
 breaking change, and ADR 0002 says what that costs.
+
+### Regenerating `DaqifiOutMessage`
+
+`src/Daqifi.Core/Communication/Messages/DaqifiOutMessage.cs` is protoc output; never change it by
+hand. Its source is `src/Daqifi.Core/Protos/DaqifiOutMessage.proto`, a copy of the firmware
+repository's file, whose header names the firmware commit it came from. The firmware owns the wire
+format: change it there first, then copy it here, update that commit, and keep the `option` lines.
+
+Use the protoc from the [Google.Protobuf.Tools](https://www.nuget.org/packages/Google.Protobuf.Tools)
+NuGet package at the same version as the `Google.Protobuf` reference in `Daqifi.Core.csproj` -
+generated code must not be newer than the runtime it links against. From the repository root:
+
+```
+protoc -I src/Daqifi.Core --csharp_out=src/Daqifi.Core/Communication/Messages Protos/DaqifiOutMessage.proto
+```
+
+The `-I` path matters: the file name protoc is given is embedded in the descriptor.
+`DaqifiOutMessageWireFormatTests` checks that the `.proto` and the generated code agree and that no
+existing field changed number or type; add a row there for each new field.
 
 ### The published package is the second opinion
 
