@@ -7,6 +7,84 @@
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.IsPwmEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.get -> bool
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.CompositeMessageParser
+*REMOVED*Daqifi.Core.Communication.Consumers.CompositeMessageParser.CompositeMessageParser(Daqifi.Core.Communication.Consumers.IMessageParser<string!>? textParser = null, Daqifi.Core.Communication.Consumers.IMessageParser<DaqifiOutMessage!>? protobufParser = null) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.CompositeMessageParser.ParseMessages(byte[]! data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<object!>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.ClearBuffer() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.ErrorOccurred -> System.EventHandler<Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs!>?
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.IsRunning.get -> bool
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.MessageReceived -> System.EventHandler<Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>!>?
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.QueuedMessageCount.get -> int
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.Start() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.Stop() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageConsumer<T>.StopSafely(int timeoutMs = 1000) -> bool
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageParser<T>
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageParser<T>.ParseMessages(System.ReadOnlySpan<byte> data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<T>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.IMessageParser<T>.ParseMessages(byte[]! data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<T>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.LineBasedMessageParser
+*REMOVED*Daqifi.Core.Communication.Consumers.LineBasedMessageParser.LineBasedMessageParser(string! lineEnding = "\r\n", System.Text.Encoding? encoding = null) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.LineBasedMessageParser.ParseMessages(System.ReadOnlySpan<byte> data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<string!>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.LineBasedMessageParser.ParseMessages(byte[]! data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<string!>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs.Error.get -> System.Exception!
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs.MessageConsumerErrorEventArgs(System.Exception! error, byte[]? rawData = null) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs.RawData.get -> byte[]?
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs.Timestamp.get -> System.DateTime
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>.Message.get -> Daqifi.Core.Communication.Messages.IInboundMessage<T>!
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>.MessageReceivedEventArgs(Daqifi.Core.Communication.Messages.IInboundMessage<T>! message, byte[]! rawData) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>.RawData.get -> byte[]!
+*REMOVED*Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>.Timestamp.get -> System.DateTime
+*REMOVED*Daqifi.Core.Communication.Consumers.ObjectInboundMessage
+*REMOVED*Daqifi.Core.Communication.Consumers.ObjectInboundMessage.Data.get -> object!
+*REMOVED*Daqifi.Core.Communication.Consumers.ObjectInboundMessage.ObjectInboundMessage(object! data) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.ProtobufMessageParser
+*REMOVED*Daqifi.Core.Communication.Consumers.ProtobufMessageParser.ParseMessages(System.ReadOnlySpan<byte> data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<DaqifiOutMessage!>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.ProtobufMessageParser.ParseMessages(byte[]! data, out int consumedBytes) -> System.Collections.Generic.IEnumerable<Daqifi.Core.Communication.Messages.IInboundMessage<DaqifiOutMessage!>!>!
+*REMOVED*Daqifi.Core.Communication.Consumers.ProtobufMessageParser.ProtobufMessageParser() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.ClearBuffer() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.Dispose() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.ErrorOccurred -> System.EventHandler<Daqifi.Core.Communication.Consumers.MessageConsumerErrorEventArgs!>?
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.IsRunning.get -> bool
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.MessageReceived -> System.EventHandler<Daqifi.Core.Communication.Consumers.MessageReceivedEventArgs<T>!>?
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.QueuedMessageCount.get -> int
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.Start() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.Stop() -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.StopSafely(int timeoutMs = 1000) -> bool
+*REMOVED*Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.StreamMessageConsumer(System.IO.Stream! stream, Daqifi.Core.Communication.Consumers.IMessageParser<T>! messageParser, int bufferSize = 4096, Daqifi.Core.Communication.Transport.ITransportHealthSink? healthSink = null) -> void
+*REMOVED*Daqifi.Core.Communication.Consumers.TextInboundMessage
+*REMOVED*Daqifi.Core.Communication.Consumers.TextInboundMessage.Data.get -> string!
+*REMOVED*Daqifi.Core.Communication.Consumers.TextInboundMessage.TextInboundMessage(string! data) -> void
+*REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>
+*REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>.Data.get -> T
+*REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>.GenericInboundMessage(T data) -> void
+*REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage
+*REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage.Data.get -> DaqifiOutMessage!
+*REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage.ProtobufMessage(DaqifiOutMessage! message) -> void
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.IsIdle.get -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.IsRunning.get -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.QueuedMessageCount.get -> int
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.Send(Daqifi.Core.Communication.Messages.IOutboundMessage<T>! message) -> void
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.SendFailed -> System.EventHandler<Daqifi.Core.Communication.Producers.MessageSendFailedEventArgs<T>!>?
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.Start() -> void
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.StartedWriteCount.get -> long?
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.Stop() -> void
+*REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.StopSafely(int timeoutMs = 1000) -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Dispose() -> void
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.IsIdle.get -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.IsRunning.get -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.MessageProducer(System.IO.Stream! stream, Microsoft.Extensions.Logging.ILogger<Daqifi.Core.Communication.Producers.MessageProducer<T>!>? logger = null, Daqifi.Core.Communication.Transport.ITransportHealthSink? healthSink = null) -> void
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.QueuedMessageCount.get -> int
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Send(Daqifi.Core.Communication.Messages.IOutboundMessage<T>! message) -> void
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.SendFailed -> System.EventHandler<Daqifi.Core.Communication.Producers.MessageSendFailedEventArgs<T>!>?
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Start() -> void
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StartedWriteCount.get -> long?
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Stop() -> void
+*REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StopSafely(int timeoutMs = 1000) -> bool
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Close() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
@@ -47,12 +125,35 @@
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler
+*REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.CanHandle(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> bool
+*REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.HandleAsync(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.Error = 4 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.Status = 1 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.Stream = 2 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.Unknown = 0 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.CanHandle(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> bool
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.Handle(DaqifiOutMessage! message) -> void
+*REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.HandleAsync(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
+*REMOVED*static Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnErrorOccurred(System.Exception! error, byte[]? rawData = null) -> void
+*REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnMessageReceived(Daqifi.Core.Communication.Messages.IInboundMessage<T>! message, byte[]! rawData) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
+Daqifi.Core.Communication.Messages.ProtobufMessageType
+Daqifi.Core.Communication.Messages.ProtobufMessageType.Error = 3 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+Daqifi.Core.Communication.Messages.ProtobufMessageType.Status = 1 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+Daqifi.Core.Communication.Messages.ProtobufMessageType.Stream = 2 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+Daqifi.Core.Communication.Messages.ProtobufMessageType.Unknown = 0 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+Daqifi.Core.Communication.Messages.ProtobufProtocolHandler
+Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.Handle(DaqifiOutMessage! message) -> void
+Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
@@ -60,4 +161,4 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTyp
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
-Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+static Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Communication.Messages.ProtobufMessageType

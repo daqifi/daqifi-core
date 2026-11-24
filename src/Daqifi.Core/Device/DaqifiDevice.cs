@@ -5,7 +5,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Internal;
-using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

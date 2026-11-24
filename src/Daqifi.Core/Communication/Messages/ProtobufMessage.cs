@@ -6,7 +6,7 @@ namespace Daqifi.Core.Communication.Messages;
 /// The name DaqifiOutMessage signifies data coming "out" from the device.
 /// Implements IInboundMessage.
 /// </summary>
-public class ProtobufMessage : IInboundMessage<DaqifiOutMessage>
+internal class ProtobufMessage : IInboundMessage<DaqifiOutMessage>
 {
     /// <summary>
     /// Gets the data associated with the message, which is a DaqifiOutMessage

@@ -1,7 +1,6 @@
 using System.Text;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
-using Daqifi.Core.Device.Protocol;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;

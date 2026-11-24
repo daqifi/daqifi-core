@@ -3,7 +3,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// <summary>
 /// Provides data for message consumer error events.
 /// </summary>
-public class MessageConsumerErrorEventArgs : EventArgs
+internal class MessageConsumerErrorEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the MessageConsumerErrorEventArgs class.
