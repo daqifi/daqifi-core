@@ -1489,9 +1489,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Opens the transport on the calling thread. <see cref="ConnectAsync"/> is the
+    /// Blocks the calling thread until the transport is open. <see cref="ConnectAsync"/> is the
     /// non-blocking, cancellable equivalent and is preferred on a UI thread; this overload is
-    /// kept for existing callers and behaves exactly as it always has.
+    /// kept for callers that are not async themselves.
     /// </para>
     /// <para>
     /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
@@ -1588,7 +1588,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         try
         {
             // Connect transport if available
-            _transport?.Connect();
+            BlockOnTransport(static transport => transport.ConnectAsync());
 
             CompleteConnect();
         }
@@ -1596,6 +1596,35 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         {
             FailConnect();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Runs a transport operation to completion on the calling thread, for <see cref="Connect"/>
+    /// and <see cref="Disconnect"/>. Does nothing on a device without a transport.
+    /// </summary>
+    /// <remarks>
+    /// The caller's <see cref="SynchronizationContext"/> is set aside for the duration. Core's own
+    /// transports never resume on it, but a transport is also a consumer's to implement, and one
+    /// plain <c>await</c> in it would otherwise post its continuation to the very thread blocked
+    /// here: a UI thread would hang for good (issue #495).
+    /// </remarks>
+    private void BlockOnTransport(Func<IStreamTransport, Task> operation)
+    {
+        if (_transport == null)
+        {
+            return;
+        }
+
+        var callerContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        try
+        {
+            operation(_transport).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(callerContext);
         }
     }
 
@@ -1645,7 +1674,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         {
             if (_transport != null)
             {
-                await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                await _transport.ConnectAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
                 transportConnected = true;
             }
 
@@ -1775,7 +1804,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         try
         {
-            _transport?.Disconnect();
+            BlockOnTransport(static transport => transport.DisconnectAsync());
         }
         catch (Exception ex)
         {
@@ -1928,7 +1957,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             StopMessagePumps();
 
             // Disconnect transport if available
-            _transport?.Disconnect();
+            BlockOnTransport(static transport => transport.DisconnectAsync());
         }
         finally
         {

@@ -184,31 +184,19 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
-        {
-            Connect();
-            return Task.CompletedTask;
-        }
-
-        public Task DisconnectAsync()
-        {
-            Disconnect();
-            return Task.CompletedTask;
-        }
-
-        public void Connect()
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
-        public void Disconnect()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
         public void Dispose()

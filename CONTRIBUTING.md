@@ -63,11 +63,12 @@ two protected-address constants are the worked example.
 
 ### Awaits in `Daqifi.Core` must be `ConfigureAwait(false)`
 
-`Daqifi.Core` ships synchronous facades (`DaqifiDevice.Connect()`,
-`DaqifiDeviceFactory.ConnectTcp`/`ConnectSerial`, `IStreamTransport.Connect`/`Disconnect`)
-that block on their own async work. An `await` that resumes on the caller's
-`SynchronizationContext` therefore deadlocks a WPF/WinForms app calling from the UI
-thread. CA2007 is enabled for the library project (see the `[src/Daqifi.Core/**.cs]` section of the root `.editorconfig`)
+`Daqifi.Core` keeps one pair of synchronous facades that block on its own async work:
+`DaqifiDevice.Connect()` and `DaqifiDevice.Disconnect()` (and `Dispose()` through the latter).
+Transports, HID and `DaqifiDeviceFactory` are async-only; don't add a sync twin to them. An
+`await` that resumes on the caller's `SynchronizationContext` would deadlock a WPF/WinForms app
+that blocks on the library from its UI thread, whether through those two or through its own
+`.GetAwaiter().GetResult()`. CA2007 is enabled for the library project (see the `[src/Daqifi.Core/**.cs]` section of the root `.editorconfig`)
 and warnings are errors, so a naked `await` fails the build. Test projects are exempt.
 
 ### Changing the public API means updating `PublicAPI.*.txt`

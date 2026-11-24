@@ -75,6 +75,11 @@ internal static class ConnectRetryExecutor
                 }
 
                 await connectAttempt(options, cancellationToken).ConfigureAwait(false);
+
+                // A cancel that lands as the attempt completes is still a cancel: announcing a
+                // connection the caller has given up on would leave it open with no owner.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 onStatusChanged(true, null);
                 return; // Success!
             }

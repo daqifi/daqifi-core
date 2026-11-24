@@ -44,17 +44,6 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
-    public void TcpStreamTransport_Connect_WithClosedPort_ShouldThrowException()
-    {
-        // Arrange - Use localhost port 1 (reserved, never listening)
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
-        
-        // Act & Assert
-        Assert.Throws<SocketException>(() => transport.Connect());
-        Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
     public async Task TcpStreamTransport_ConnectAsync_WithClosedPort_ShouldThrowException()
     {
         // Arrange - Use localhost port 1 (reserved, never listening)
@@ -77,7 +66,7 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
-    public void TcpStreamTransport_StatusChanged_ShouldFireOnConnectionFailure()
+    public async Task TcpStreamTransport_StatusChanged_ShouldFireOnConnectionFailure()
     {
         // Arrange - Use localhost port 1 (reserved, never listening)
         using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
@@ -88,7 +77,7 @@ public class TcpStreamTransportTests
         // Act
         try
         {
-            transport.Connect();
+            await transport.ConnectAsync();
         }
         catch (SocketException)
         {
@@ -103,7 +92,7 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
-    public void TcpStreamTransport_Dispose_ShouldCleanupResources()
+    public async Task TcpStreamTransport_Dispose_ShouldCleanupResources()
     {
         // Arrange
         var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
@@ -112,7 +101,7 @@ public class TcpStreamTransportTests
         transport.Dispose();
         
         // Assert - Should throw ObjectDisposedException for operations after disposal
-        Assert.Throws<ObjectDisposedException>(() => transport.Connect());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => transport.ConnectAsync());
         Assert.Throws<ObjectDisposedException>(() => transport.Stream);
     }
 
@@ -268,7 +257,7 @@ public class TcpStreamTransportTests
             using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
             transport.StatusChanged += (_, e) =>
             {
-                if (e.IsConnected) transport.Disconnect();
+                if (e.IsConnected) transport.DisconnectAsync().GetAwaiter().GetResult();
             };
 
             await transport.ConnectAsync();
@@ -392,7 +381,7 @@ public class TcpStreamTransportTests
         // TaskCanceledException (the WaitAsync cancellation token), which read like an app bug
         // to consumers (daqifi-desktop#517) — it must be a TimeoutException.
         using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 9760);
-        transport.ConnectTaskFactory = _ => Task.Delay(Timeout.Infinite);
+        transport.ConnectTaskFactory = (_, token) => Task.Delay(Timeout.Infinite, token);
         TransportStatusEventArgs? capturedArgs = null;
         transport.StatusChanged += (sender, args) => capturedArgs = args;
         var options = new ConnectionRetryOptions

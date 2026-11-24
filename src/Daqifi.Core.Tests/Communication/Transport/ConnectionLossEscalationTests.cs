@@ -230,9 +230,7 @@ public class ConnectionLossEscalationTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
@@ -240,7 +238,7 @@ public class ConnectionLossEscalationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             // Disarm before tearing anything down, exactly as the real transports do: closing the
             // handle makes in-flight reads fail, and none of that is a lost connection.
@@ -251,10 +249,6 @@ public class ConnectionLossEscalationTests
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void ReportIoFault(Exception error) => _watchdog.RecordFault(error);
 

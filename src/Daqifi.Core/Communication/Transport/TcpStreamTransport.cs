@@ -33,7 +33,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// </description></item>
 /// </list>
 /// <para>
-/// An intentional <see cref="Disconnect"/> disarms detection first, so it reports a normal
+/// An intentional <see cref="DisconnectAsync"/> disarms detection first, so it reports a normal
 /// disconnect and never a loss.
 /// </para>
 /// </remarks>
@@ -88,11 +88,11 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     private bool _disposed;
 
     /// <summary>
-    /// Test seam: substitutes the connect task so the timeout translation can be exercised
-    /// deterministically (e.g., with a never-completing task) instead of relying on real
-    /// network behavior. Never set in production code.
+    /// Test seam: substitutes the dial so cancellation and the timeout translation can be exercised
+    /// deterministically (e.g., with one that only ends when its token does) instead of relying on
+    /// real network behavior. Never set in production code.
     /// </summary>
-    internal Func<TcpClient, Task>? ConnectTaskFactory { get; set; }
+    internal Func<TcpClient, CancellationToken, Task>? ConnectTaskFactory { get; set; }
 
     /// <summary>
     /// Initializes a new instance of the TcpStreamTransport class.
@@ -237,44 +237,14 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-    /// <summary>
-    /// Establishes the TCP connection asynchronously.
-    /// </summary>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    /// <exception cref="TimeoutException">
-    /// Thrown when the connection attempt does not complete within the configured connection timeout.
-    /// </exception>
-    public async Task ConnectAsync()
-    {
-        await ConnectAsync(null).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Establishes the TCP connection asynchronously with retry support.
-    /// </summary>
-    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    /// <exception cref="TimeoutException">
-    /// Thrown when the final connection attempt does not complete within
-    /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
-    /// </exception>
-    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
-    {
-        await ConnectAsync(retryOptions, CancellationToken.None).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task ConnectAsync(CancellationToken cancellationToken)
-    {
-        await ConnectAsync(null, cancellationToken).ConfigureAwait(false);
-    }
-
     /// <inheritdoc />
     /// <exception cref="TimeoutException">
     /// Thrown when the final connection attempt does not complete within
     /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
     /// </exception>
-    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+    public async Task ConnectAsync(
+        ConnectionRetryOptions? retryOptions = null,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -290,33 +260,30 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
             {
+                ThrowIfDisposed();
+
                 // A dead socket still held from the previous session is released, not overwritten.
                 ReleaseSocket();
-                _tcpClient = _localInterface != null
+                var client = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
                     : new TcpClient();
+                _tcpClient = client;
 
                 // Set timeouts from retry options or use defaults
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
-                _tcpClient.ReceiveTimeout = timeout;
-                _tcpClient.SendTimeout = timeout;
+                client.ReceiveTimeout = timeout;
+                client.SendTimeout = timeout;
 
-                // Two independent reasons to stop waiting — the connect timeout and the caller's
-                // token — are linked into one source so a caller can abandon a dial that would
-                // otherwise sit here for the full timeout. Which one fired is disambiguated below,
-                // because the two mean very different things to the caller.
+                // Two independent reasons to give up — the connect timeout and the caller's
+                // token — are linked into one source so either ends the dial itself, not just the
+                // wait for it. Which one fired is disambiguated below, because the two mean very
+                // different things to the caller.
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
                 cts.CancelAfter(options.ConnectionTimeout);
 
-                var connectTask = ConnectTaskFactory != null
-                    ? ConnectTaskFactory(_tcpClient)
-                    : Hostname != null
-                        ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
-                        : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
-
                 try
                 {
-                    await connectTask.WaitAsync(cts.Token).ConfigureAwait(false);
+                    await DialAsync(client, cts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException oce)
                     when (cts.IsCancellationRequested && !attemptToken.IsCancellationRequested)
@@ -331,17 +298,17 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                         $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.", oce);
                 }
 
-                _networkStream = _tcpClient.GetStream();
-                _connectedAddress = PeerAddressOf(_tcpClient) ?? _connectedAddress;
+                _networkStream = client.GetStream();
+                _connectedAddress = PeerAddressOf(client) ?? _connectedAddress;
 
                 // After a successful connect, lower the receive timeout to a short operational
                 // value so consumer threads blocked in a synchronous read can always be stopped
                 // promptly (StopSafely). Only synchronous reads observe this; the async SD-card
                 // download path uses ReadAsync, which ignores SO_RCVTIMEO and keeps its own
                 // long timeout. See OperationalReceiveTimeoutMs.
-                _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
+                client.ReceiveTimeout = OperationalReceiveTimeoutMs;
 
-                EnableKeepAlive(_tcpClient);
+                EnableKeepAlive(client);
 
                 // Armed for this exact stream before the executor announces the connection: a
                 // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
@@ -359,6 +326,21 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             },
             onStatusChanged: OnStatusChanged,
             cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens the socket. The token aborts the dial, including the name lookup in front of it.
+    /// </summary>
+    private Task DialAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        if (ConnectTaskFactory != null)
+        {
+            return ConnectTaskFactory(client, cancellationToken);
+        }
+
+        return Hostname != null
+            ? client.ConnectAsync(Hostname, _endPoint.Port, cancellationToken).AsTask()
+            : client.ConnectAsync(_endPoint.Address, _endPoint.Port, cancellationToken).AsTask();
     }
 
     /// <summary>Whether drop detection is armed; for tests.</summary>
@@ -401,11 +383,24 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         }
     }
 
+    /// <inheritdoc />
+    public Task DisconnectAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            Close();
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
     /// <summary>
-    /// Closes the TCP connection asynchronously.
+    /// Closes the connection. Shared by <see cref="DisconnectAsync"/> and <see cref="Dispose"/>.
     /// </summary>
-    /// <returns>A task representing the asynchronous disconnect operation.</returns>
-    public async Task DisconnectAsync()
+    private void Close()
     {
         // Disarm before touching the socket: closing it makes any in-flight read fail, and a
         // still-armed watchdog would report an intentional disconnect as a lost connection.
@@ -432,24 +427,6 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             ReleaseSocket();
             OnStatusChanged(false, null);
         }
-
-        await Task.CompletedTask.ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Establishes the TCP connection synchronously.
-    /// </summary>
-    public void Connect()
-    {
-        ConnectAsync().GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// Closes the TCP connection synchronously.
-    /// </summary>
-    public void Disconnect()
-    {
-        DisconnectAsync().GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -508,7 +485,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         {
             // A subscriber that throws must not cost us the socket (issue #494). The references have
             // already been taken out of their fields, so if this unwound past the dispose below,
-            // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
+            // DisconnectAsync() and Dispose() would both find null and skip them too, leaking the socket
             // for the life of the process. Not rethrown, and traced best-effort because this
             // transport carries no logger: see SerialStreamTransport.HandleConnectionLost, which
             // also explains why the line is composed inside the lambda rather than eagerly.
@@ -557,7 +534,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         {
             try
             {
-                Disconnect();
+                Close();
             }
             catch
             {

@@ -2101,9 +2101,7 @@ public class DeviceReconnectTests
 
         private void ExitLifecycle() => Interlocked.Decrement(ref _lifecycleDepth);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _connectCount);
             EnterLifecycle();
@@ -2147,7 +2145,7 @@ public class DeviceReconnectTests
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             EnterLifecycle();
             try
@@ -2170,10 +2168,6 @@ public class DeviceReconnectTests
 
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void ReportIoFault(Exception error) => _watchdog?.RecordFault(error);
 

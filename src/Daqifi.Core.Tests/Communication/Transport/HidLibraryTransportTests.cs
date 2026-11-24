@@ -252,6 +252,32 @@ public class HidLibraryTransportTests
         Assert.Equal(1, device.CloseCount);
     }
 
+    [Fact]
+    public async Task DisconnectAsync_CanceledWhileAReadIsInFlight_LeavesTheDeviceConnected()
+    {
+        // Closing the device under a read is what the wait exists to avoid, so giving up the wait
+        // gives up the disconnect.
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A")
+        {
+            PendingRead = new TaskCompletionSource<HidTransportReadResult>(
+                TaskCreationOptions.RunContinuationsAsynchronously)
+        };
+        using var transport = new HidLibraryTransport(new FakeHidPlatform([device]));
+        await transport.ConnectAsync(0x04D8, 0x003C);
+        var read = transport.ReadAsync();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transport.DisconnectAsync(cts.Token));
+
+        Assert.True(transport.IsConnected);
+        Assert.Equal(0, device.CloseCount);
+
+        device.PendingRead.SetResult(HidTransportReadResult.Success([0xAA]));
+        Assert.Equal(new byte[] { 0xAA }, await read);
+        await transport.DisconnectAsync();
+        Assert.False(transport.IsConnected);
+    }
+
     private sealed class FakeHidPlatform : IHidPlatform
     {
         private readonly IReadOnlyList<IHidTransportDevice> _devices;
@@ -298,6 +324,9 @@ public class HidLibraryTransportTests
         public HidTransportReadResult NextReadResult { get; set; }
             = HidTransportReadResult.Success(Array.Empty<byte>());
 
+        /// <summary>When set, reads stay in flight until the test completes it.</summary>
+        public TaskCompletionSource<HidTransportReadResult>? PendingRead { get; init; }
+
         public void Open(bool exclusive)
         {
             OpenCount++;
@@ -332,7 +361,7 @@ public class HidLibraryTransportTests
         public Task<HidTransportReadResult> ReadAsync(int timeoutMs)
         {
             LastReadTimeoutMs = timeoutMs;
-            return Task.FromResult(NextReadResult);
+            return PendingRead?.Task ?? Task.FromResult(NextReadResult);
         }
     }
 }

@@ -2640,7 +2640,7 @@ public class FirmwareUpdateServiceTests
     {
         // The default is the behavior: a consumer that upgrades without touching options gets
         // the pacing on both the success restore and the failure bridge-exit. 100ms is not
-        // arbitrary — it is the same inter-command wait WifiBridgeActivator.Deactivate already
+        // arbitrary — it is the same inter-command wait WifiBridgeActivator.DeactivateAsync already
         // uses for this exact mode transition over a raw serial port, so the managed-connection
         // paths stay paced identically until a host overrides the option. Pinned so the default
         // cannot silently drift apart from that raw-serial pace.
@@ -3025,7 +3025,7 @@ public class FirmwareUpdateServiceTests
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
             Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
 
-            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.Deactivate
+            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.DeactivateAsync
             // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
             // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
             // configuration off the back of a flash that did not complete is not this step's job.
@@ -3460,7 +3460,11 @@ public class FirmwareUpdateServiceTests
 
         var bridgeActivations = 0;
         var options = CreateFastOptions();
-        options.WifiBridgeActivationCallback = () => bridgeActivations++;
+        options.WifiBridgeActivationCallback = _ =>
+        {
+            bridgeActivations++;
+            return Task.CompletedTask;
+        };
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),

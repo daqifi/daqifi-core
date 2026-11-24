@@ -554,7 +554,11 @@ public class WifiModuleUpdaterTests : IDisposable
     {
         var activations = 0;
         var options = CreateFastOptions();
-        options.WifiBridgeActivationCallback = () => activations++;
+        options.WifiBridgeActivationCallback = _ =>
+        {
+            activations++;
+            return Task.CompletedTask;
+        };
 
         var runner = new FakeExternalProcessRunner
         {
@@ -575,7 +579,11 @@ public class WifiModuleUpdaterTests : IDisposable
     {
         var activations = 0;
         var options = CreateFastOptions();
-        options.WifiBridgeActivationCallback = () => activations++;
+        options.WifiBridgeActivationCallback = _ =>
+        {
+            activations++;
+            return Task.CompletedTask;
+        };
 
         var runner = new FakeExternalProcessRunner
         {
@@ -624,7 +632,8 @@ public class WifiModuleUpdaterTests : IDisposable
     public async Task RunUpdate_WhenTheBridgeActivationCallbackThrows_StillFinishesTheFlash()
     {
         var options = CreateFastOptions();
-        options.WifiBridgeActivationCallback = () => throw new InvalidOperationException("no bridge here");
+        options.WifiBridgeActivationCallback =
+            _ => Task.FromException(new InvalidOperationException("no bridge here"));
 
         var runner = new FakeExternalProcessRunner
         {
@@ -638,6 +647,39 @@ public class WifiModuleUpdaterTests : IDisposable
         // not the callback — is the authority on the outcome.
         Assert.Equal(FirmwareUpdateState.Complete, context.CurrentState);
         Assert.Single(runner.PromptResponses);
+    }
+
+    [Fact]
+    public async Task RunUpdate_CanceledDuringTheBridgeActivationCallback_CancelsItAndSendsNoContinue()
+    {
+        using var cts = new CancellationTokenSource();
+        var options = CreateFastOptions();
+        var observedCancel = false;
+        options.WifiBridgeActivationCallback = async token =>
+        {
+            cts.Cancel();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException)
+            {
+                observedCancel = true;
+                throw;
+            }
+        };
+
+        var runner = new FakeExternalProcessRunner
+        {
+            NextResult = Result(exitCode: 0, stdout: [WincBootPrompt, SuccessMarker])
+        };
+        var (updater, _) = CreateUpdater(options, runner);
+
+        await Record.ExceptionAsync(() => RunUpdateAsync(
+            updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory(), cancellationToken: cts.Token));
+
+        Assert.True(observedCancel);
+        Assert.DoesNotContain(runner.PromptResponses, prompt => prompt.Response == string.Empty);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1106,14 +1148,15 @@ public class WifiModuleUpdaterTests : IDisposable
         WifiModuleUpdater updater,
         IStreamingDevice device,
         string firmwarePath,
-        IProgress<FirmwareUpdateProgress>? progress = null)
+        IProgress<FirmwareUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         return updater.RunUpdateAsync(
             device,
             firmwarePath,
             progress,
             skipVersionCheck: true,
-            CancellationToken.None);
+            cancellationToken);
     }
 
     /// <summary>

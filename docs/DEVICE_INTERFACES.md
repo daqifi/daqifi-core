@@ -145,12 +145,9 @@ Static factory class for simplified device connections:
 |--------|-------------|
 | `ConnectTcpAsync(host, port, options?, token?)` | Connect by hostname |
 | `ConnectTcpAsync(ipAddress, port, options?, token?)` | Connect by IP address |
-| `ConnectTcp(...)` | Synchronous versions |
 | `ConnectSerialAsync(portName, options?, token?)` | Connect over serial/USB at the default baud rate (9600) |
 | `ConnectSerialAsync(portName, baudRate, options?, token?)` | Connect over serial/USB at an explicit baud rate |
-| `ConnectSerial(...)` | Synchronous versions |
 | `ConnectFromDeviceInfoAsync(deviceInfo, options?, token?)` | Connect from discovery result |
-| `ConnectFromDeviceInfo(...)` | Synchronous version |
 
 ### DeviceConnectionOptions
 
@@ -549,7 +546,31 @@ in-flight command exchange and proceeds straight to teardown. It never aborts th
 never throws `OperationCanceledException`, because a teardown abandoned part-way would leave the
 device in an indeterminate state. On return the device is always disconnected.
 
-The synchronous `Connect`, `Disconnect` and `Dispose` remain, unchanged, for existing callers.
+The synchronous `Connect`, `Disconnect` and `Dispose` remain on the device for code that has no
+async caller. They are the only blocking connection members left: `IStreamTransport`,
+`IHidTransport` and `DaqifiDeviceFactory` are async-only.
+
+### Cancelling a transport connect
+
+`IStreamTransport` has one connect and one disconnect member:
+
+```csharp
+Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default);
+Task DisconnectAsync(CancellationToken cancellationToken = default);
+```
+
+Cancelling a connect aborts the attempt in flight, and the transport can be connected again
+afterwards:
+
+- **TCP** — the dial itself (including the name lookup) is aborted and its socket closed.
+- **Serial** — `SerialPort.Open` cannot be interrupted, so it runs on its own thread and is
+  abandoned: `ConnectAsync` throws at once and the port is closed when the open returns. The next
+  connect waits for that first, for at most `ConnectionRetryOptions.ConnectionTimeout`. An open that
+  had already begun may still pulse DTR.
+
+A custom transport must honour the token the same way. `DaqifiDevice.Connect()` and `Disconnect()`
+block on these members, with the caller's `SynchronizationContext` set aside, so an implementation
+must not need the thread it was called on in order to finish.
 
 `ConnectAsync` and `DisconnectAsync` are declared directly on `IDevice` (not default-interface-method
 shims over `Connect`/`Disconnect`), and `IDevice` extends `IAsyncDisposable`, so all three are reachable

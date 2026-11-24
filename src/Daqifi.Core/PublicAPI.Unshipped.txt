@@ -7,6 +7,25 @@
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.IsPwmEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.get -> bool
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Connect(int vendorId, int productId, string? serialNumber = null) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ConnectByPath(string! devicePath) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Disconnect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Read(System.TimeSpan? timeout = null) -> byte[]!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Write(byte[]! data) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.Connect(int vendorId, int productId, string? serialNumber = null) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.ConnectByPath(string! devicePath) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.Disconnect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.Read(System.TimeSpan? timeout = null) -> byte[]!
+*REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.Write(byte[]! data) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.Connect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.Disconnect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IStreamTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Close() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
@@ -19,6 +38,20 @@
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.SendBroadcastAsync(byte[]! data, int port) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.SendUnicastAsync(byte[]! data, System.Net.IPEndPoint! endPoint) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.StatusChanged -> System.EventHandler<Daqifi.Core.Communication.Transport.TransportStatusEventArgs!>?
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.Connect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.ConnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.ConnectAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.Disconnect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.SerialStreamTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.Connect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.Disconnect() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.TcpStreamTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.Close() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
@@ -49,15 +82,32 @@
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.WifiBridgeActivationCallback.get -> System.Action?
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
+*REMOVED*static Daqifi.Core.Device.DaqifiDeviceFactory.ConnectFromDeviceInfo(Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo, Daqifi.Core.Device.DeviceConnectionOptions? options = null) -> Daqifi.Core.Device.DaqifiStreamingDevice!
+*REMOVED*static Daqifi.Core.Device.DaqifiDeviceFactory.ConnectSerial(string! portName, Daqifi.Core.Device.DeviceConnectionOptions? options = null) -> Daqifi.Core.Device.DaqifiStreamingDevice!
+*REMOVED*static Daqifi.Core.Device.DaqifiDeviceFactory.ConnectSerial(string! portName, int baudRate, Daqifi.Core.Device.DeviceConnectionOptions? options = null) -> Daqifi.Core.Device.DaqifiStreamingDevice!
+*REMOVED*static Daqifi.Core.Device.DaqifiDeviceFactory.ConnectTcp(System.Net.IPAddress! ipAddress, int port, Daqifi.Core.Device.DeviceConnectionOptions? options = null) -> Daqifi.Core.Device.DaqifiStreamingDevice!
+*REMOVED*static Daqifi.Core.Device.DaqifiDeviceFactory.ConnectTcp(string! host, int port, Daqifi.Core.Device.DeviceConnectionOptions? options = null) -> Daqifi.Core.Device.DaqifiStreamingDevice!
+*REMOVED*static Daqifi.Core.Firmware.WifiBridgeActivator.Activate(string! portName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+*REMOVED*static Daqifi.Core.Firmware.WifiBridgeActivator.Deactivate(string! portName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
+Daqifi.Core.Communication.Transport.HidLibraryTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.IHidTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.IStreamTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Communication.Transport.SerialStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.SerialStreamTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.TcpStreamTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.WifiBridgeActivationCallback.get -> System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>?
