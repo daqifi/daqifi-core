@@ -1392,7 +1392,7 @@ public sealed class DaqifiAgent
             (int)delay.TotalMilliseconds,
             pulseWidth is { } width ? (int)width.TotalMilliseconds : null,
             stimulus!.EdgeIssuedAtMs,
-            stimulus.ReleasedAtMs,
+            stimulus.ReleaseIssuedAtMs,
             stimulus.IsAsserted ? high : !high,
             ToCaptureResult(deviceId, run));
     }
@@ -1586,6 +1586,14 @@ public sealed class DaqifiAgent
                         {
                             // The device went away mid-capture, which the capture itself is already
                             // throwing about. Nothing to stop, and that exception is the useful one.
+                        }
+                        catch when (stimulus is not null)
+                        {
+                            // The call is failing after all, on the last thing it does — so a step
+                            // that was rightly left in place a moment ago is now one nobody will be
+                            // told about. Put it back before the failure leaves.
+                            stimulus.RestoreAfterFailure();
+                            throw;
                         }
                     }
                 }

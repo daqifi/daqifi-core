@@ -511,20 +511,25 @@ public sealed record CaptureResult(
 /// <param name="DelayMs">The delay actually used, after clamping to the capture window.</param>
 /// <param name="PulseWidthMs">The pulse width actually used, or null for a step that was left in place.</param>
 /// <param name="EdgeIssuedAtMs">
-/// When the edge command was sent, in milliseconds after the capture's first sample arrived — add
-/// it to the first row's timestamp to find the edge in the rows. It is this machine's clock, in
-/// whole milliseconds, and it is when the command <i>left</i>: the pin moves a few milliseconds
-/// later, after the transport and the firmware have had it. Null when the capture ended (its
-/// duration or its row budget) before the edge was due, in which case the pin never left its
-/// baseline.
+/// When the edge command was issued, in milliseconds after the capture's first sample arrived —
+/// add it to the first row's timestamp to find the edge in the rows. It is this machine's clock,
+/// in whole milliseconds, and it is when the command was handed over, not when the pin moved:
+/// the command is queued, written, carried and acted on after that, so the pin moves a few
+/// milliseconds later. Null when the capture ended (its duration or its row budget) before the
+/// edge was due, in which case no edge was commanded.
 /// </param>
-/// <param name="ReleasedAtMs">
-/// When the pin was returned to its baseline, on the same clock. Null when it was not: a step, or
-/// an edge that never went out. Later than <paramref name="EdgeIssuedAtMs"/> +
-/// <paramref name="PulseWidthMs"/> when the capture ended mid-pulse and the release happened on
-/// the way out.
+/// <param name="ReleaseIssuedAtMs">
+/// When the command returning the pin to its baseline was issued, on the same clock. Null when
+/// none was: a step, or an edge that never went out. A capture that ends mid-pulse releases the
+/// pin on its way out, so this can be <i>earlier</i> than <paramref name="EdgeIssuedAtMs"/> +
+/// <paramref name="PulseWidthMs"/> — the pulse was cut short, not stretched.
 /// </param>
-/// <param name="LeftHigh">The level the pin was left at when the call returned.</param>
+/// <param name="LastCommandedHigh">
+/// The level this call last commanded on the pin. A command, not a reading: nothing here
+/// confirms the pin followed it, and a write that fails on the wire after it was queued is not
+/// reported. The pin's actual level is in the driven channel's <c>DIO</c> column when that
+/// channel is enabled.
+/// </param>
 /// <param name="Capture">The captured block, exactly as <c>capture_samples</c> returns one.</param>
 public sealed record DriveAndCaptureResult(
     int Channel,
@@ -532,8 +537,8 @@ public sealed record DriveAndCaptureResult(
     int DelayMs,
     int? PulseWidthMs,
     int? EdgeIssuedAtMs,
-    int? ReleasedAtMs,
-    bool LeftHigh,
+    int? ReleaseIssuedAtMs,
+    bool LastCommandedHigh,
     CaptureResult Capture);
 
 /// <summary>

@@ -67,7 +67,7 @@ public class DigitalStimulusTests
         // An active-low pulse: driven low, then back high. Released once, not again on the way out.
         Assert.Equal(new[] { false, true }, writes.Levels);
         Assert.False(stimulus.IsAsserted);
-        Assert.InRange(stimulus.ReleasedAtMs!.Value - stimulus.EdgeIssuedAtMs!.Value, 90, int.MaxValue);
+        Assert.InRange(stimulus.ReleaseIssuedAtMs!.Value - stimulus.EdgeIssuedAtMs!.Value, 90, int.MaxValue);
     }
 
     // The capture ended (its window, an error, a cancel) while the pulse was still high. Whatever
@@ -84,7 +84,7 @@ public class DigitalStimulusTests
         await stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound);
 
         Assert.Equal(new[] { true, false }, writes.Levels);
-        Assert.NotNull(stimulus.ReleasedAtMs);
+        Assert.NotNull(stimulus.ReleaseIssuedAtMs);
         Assert.False(stimulus.IsAsserted);
     }
 
@@ -119,25 +119,110 @@ public class DigitalStimulusTests
 
         Assert.Empty(writes.Levels);
         Assert.Null(stimulus.EdgeIssuedAtMs);
-        Assert.Null(stimulus.ReleasedAtMs);
+        Assert.Null(stimulus.ReleaseIssuedAtMs);
         Assert.False(stimulus.IsAsserted);
     }
 
-    // A write that throws may still have reached the device, so the release is attempted anyway —
-    // and the failure is not swallowed, or a pin that never moved would be reported as driven.
-    [Fact]
-    public async Task Finish_WhenTheEdgeWriteFailed_StillTriesToReleaseAndSurfacesTheFailure()
+    // A write that throws may still have reached the device, so the baseline is attempted anyway —
+    // for a step as much as for a pulse, because the call is now going to fail and nobody will be
+    // told the output is asserted. The failure is not swallowed, or a pin that never moved would
+    // be reported as driven.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Finish_WhenTheEdgeWriteFailed_StillPutsThePinBackAndSurfacesTheFailure(bool pulse)
     {
-        var writes = new Writes { FailOn = true };
-        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, TimeSpan.FromHours(1));
+        var writes = new Writes { Fails = (level, _) => level };
+        var stimulus = new DigitalStimulus(
+            writes.Drive, level: true, TimeSpan.Zero, pulse ? TimeSpan.FromHours(1) : null);
 
         stimulus.Start();
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
 
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+        // restoreStep: false, as it is when the capture itself completed — the schedule failing is
+        // what makes this a failed call.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+        Assert.Equal("write 0 failed", ex.Message);
         Assert.Equal(new[] { true, false }, writes.Levels);
+        Assert.False(stimulus.IsAsserted);
+    }
+
+    // The pulse's own release threw. It has not been released, so it must not read as released:
+    // the way out gets a second go at the pin, and a transient failure does not leave it driven.
+    [Fact]
+    public async Task AScheduledReleaseThatFails_IsRetriedOnTheWayOut()
+    {
+        var writes = new Writes { Fails = (level, attempt) => !level && attempt == 1 };
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
+
+        stimulus.Start();
+        stimulus.OnFirstSample();
+        await writes.WaitForCountAsync(2, Bound);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+
+        // The original failure is the one reported, and the retry went out.
+        Assert.Equal("write 1 failed", ex.Message);
+        Assert.Equal(new[] { true, false, false }, writes.Levels);
+        Assert.False(stimulus.IsAsserted);
+        Assert.NotNull(stimulus.ReleaseIssuedAtMs);
+    }
+
+    [Fact]
+    public async Task WhenThePinCannotBePutBackEither_TheFirstFailureIsTheOneReported()
+    {
+        var writes = new Writes { Fails = (_, _) => true };
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, pulseWidth: null);
+
+        stimulus.Start();
+        stimulus.OnFirstSample();
+        await writes.WaitForCountAsync(1, Bound);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+
+        Assert.Equal("write 0 failed", ex.Message);
+        Assert.Equal(new[] { true, false }, writes.Levels);
+        // Still the edge's level as far as anything here knows, and it says so.
+        Assert.True(stimulus.IsAsserted);
+    }
+
+    // The delay's timer fired just as the capture ended, so the schedule resumes normally rather
+    // than cancelled. Without a decision shared with the capture's end it would go on to drive the
+    // pin — after the rows it was meant to be in had been returned, and for a step, for good.
+    [Fact]
+    public async Task AnEdgeWhoseWaitCompletedAsTheCaptureEnded_IsNeverIssued()
+    {
+        var writes = new Writes();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // A wait that ignores cancellation, completing only when the test says: the timer that
+        // had already fired.
+        Task Wait(TimeSpan _, CancellationToken __)
+        {
+            waiting.TrySetResult();
+            return timer.Task;
+        }
+
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.FromHours(1), pulseWidth: null, Wait);
+
+        stimulus.Start();
+        stimulus.OnFirstSample();
+        await waiting.Task.WaitAsync(Bound);
+
+        // The capture ends first...
+        var finish = stimulus.FinishAsync(restoreStep: false);
+        // ...and only then does the schedule get to run past its wait.
+        timer.SetResult();
+        await finish.WaitAsync(Bound);
+
+        Assert.Empty(writes.Levels);
+        Assert.Null(stimulus.EdgeIssuedAtMs);
+        Assert.False(stimulus.IsAsserted);
     }
 
     [Fact]
@@ -181,8 +266,11 @@ public class DigitalStimulusTests
     {
         private readonly List<bool> _levels = new();
 
-        /// <summary>When set, driving the pin to this level throws — after it has been recorded.</summary>
-        internal bool? FailOn { get; init; }
+        /// <summary>
+        /// Decides, from the level and the write's position (0 for the first), whether that write
+        /// throws — after it has been recorded, since a write that throws may still have landed.
+        /// </summary>
+        internal Func<bool, int, bool>? Fails { get; init; }
 
         internal bool[] Levels
         {
@@ -197,14 +285,16 @@ public class DigitalStimulusTests
 
         internal void Drive(bool level)
         {
+            int attempt;
             lock (_levels)
             {
+                attempt = _levels.Count;
                 _levels.Add(level);
             }
 
-            if (level == FailOn)
+            if (Fails?.Invoke(level, attempt) == true)
             {
-                throw new DeviceNotConnectedException();
+                throw new InvalidOperationException($"write {attempt} failed");
             }
         }
 
@@ -255,7 +345,7 @@ public class DriveAndCaptureContractTests
     public async Task APulse_IsDrivenAndReleasedInsideTheCapture()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 4);
+        using var pump = new SamplePump(device, pourWhen: AfterPinWrites(device, 4));
 
         var result = await agent.DriveAndCaptureAsync(
             Id, Pin, high: true, delayMs: 50, pulseWidthMs: 50, NeverMs, RowBudget, CancellationToken.None)
@@ -277,8 +367,8 @@ public class DriveAndCaptureContractTests
         Assert.Equal(50, result.DelayMs);
         Assert.Equal(50, result.PulseWidthMs);
         Assert.InRange(result.EdgeIssuedAtMs!.Value, 40, int.MaxValue);
-        Assert.InRange(result.ReleasedAtMs!.Value - result.EdgeIssuedAtMs.Value, 40, int.MaxValue);
-        Assert.False(result.LeftHigh);
+        Assert.InRange(result.ReleaseIssuedAtMs!.Value - result.EdgeIssuedAtMs.Value, 40, int.MaxValue);
+        Assert.False(result.LastCommandedHigh);
 
         Assert.True(result.Capture.StartedStream);
         Assert.Equal(new[] { "AI0" }, result.Capture.Columns);
@@ -289,7 +379,7 @@ public class DriveAndCaptureContractTests
     public async Task AStep_IsLeftAtTheNewLevel_AndSaysSo()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 3);
+        using var pump = new SamplePump(device, pourWhen: AfterPinWrites(device, 3));
 
         // Active-low this time, so the baseline is high and the edge is the fall.
         var result = await agent.DriveAndCaptureAsync(
@@ -299,8 +389,8 @@ public class DriveAndCaptureContractTests
         Assert.Equal(new[] { Output, High, Low }, device.Sent.Where(IsPinCommand));
         Assert.Null(result.PulseWidthMs);
         Assert.NotNull(result.EdgeIssuedAtMs);
-        Assert.Null(result.ReleasedAtMs);
-        Assert.False(result.LeftHigh);
+        Assert.Null(result.ReleaseIssuedAtMs);
+        Assert.False(result.LastCommandedHigh);
     }
 
     // Core parks a Send made by any flow that does not own the device's operation lock until the
@@ -311,7 +401,7 @@ public class DriveAndCaptureContractTests
     public async Task EveryPinWrite_IsMadeByTheFlowHoldingTheDevice_SoCoreSendsItRatherThanParkingIt()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 4);
+        using var pump = new SamplePump(device, pourWhen: AfterPinWrites(device, 4));
 
         var heldTheDevice = new List<(string Command, bool Held)>();
         device.OnSend = command =>
@@ -359,6 +449,58 @@ public class DriveAndCaptureContractTests
         Assert.False(device.IsStreaming);
     }
 
+    // The step's own write failed. The capture around it completed, so nothing else would undo
+    // it — and a write that threw may have reached the pin. The call fails, and the pin goes back.
+    [Fact]
+    public async Task AStepWhoseWriteFails_FailsTheCall_AndPutsThePinBack()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        var attempted = false;
+        device.OnSend = command =>
+        {
+            if (command == High)
+            {
+                attempted = true;
+                throw new InvalidOperationException("the edge write failed");
+            }
+        };
+        using var pump = new SamplePump(device, pourWhen: () => Volatile.Read(ref attempted));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DriveAndCaptureAsync(
+                Id, Pin, high: true, delayMs: 20, pulseWidthMs: 0, NeverMs, RowBudget, CancellationToken.None)
+                .WaitAsync(Bound));
+
+        Assert.Equal("the edge write failed", ex.Message);
+        // The double records a command only once it was accepted, so the failed High is absent
+        // and the second Low is the pin being put back.
+        Assert.Equal(new[] { Output, Low, Low }, device.Sent.Where(IsPinCommand));
+    }
+
+    // The very last thing the call does — stopping the stream it started — failed, after a step
+    // that had rightly been left in place. The call now fails, so the step is undone after all.
+    [Fact]
+    public async Task AStepFollowedByAFailedStreamStop_FailsTheCall_AndPutsThePinBack()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        device.OnSend = command =>
+        {
+            if (command == StopStream)
+            {
+                throw new InvalidOperationException("the stream would not stop");
+            }
+        };
+        using var pump = new SamplePump(device, pourWhen: AfterPinWrites(device, 3));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DriveAndCaptureAsync(
+                Id, Pin, high: true, delayMs: 20, pulseWidthMs: 0, NeverMs, RowBudget, CancellationToken.None)
+                .WaitAsync(Bound));
+
+        Assert.Equal("the stream would not stop", ex.Message);
+        Assert.Equal(new[] { Output, Low, High, Low }, device.Sent.Where(IsPinCommand));
+    }
+
     // The row budget ran out during the baseline. The edge never went out, the pin never left its
     // baseline, and the result says both rather than reporting an edge that is not in the rows.
     [Fact]
@@ -373,8 +515,8 @@ public class DriveAndCaptureContractTests
 
         Assert.Equal(new[] { Output, Low }, device.Sent.Where(IsPinCommand));
         Assert.Null(result.EdgeIssuedAtMs);
-        Assert.Null(result.ReleasedAtMs);
-        Assert.False(result.LeftHigh);
+        Assert.Null(result.ReleaseIssuedAtMs);
+        Assert.False(result.LastCommandedHigh);
         Assert.True(result.Capture.RowLimitReached);
         Assert.Equal(5, result.Capture.RowCount);
     }
@@ -477,6 +619,10 @@ public class DriveAndCaptureContractTests
     private static bool IsStreamStart(string command) =>
         command.StartsWith(ScpiMessageProducer.StartStreaming(1).Data[..^1], StringComparison.Ordinal);
 
+    /// <summary>For <see cref="SamplePump"/>: true once the pin has been written this many times.</summary>
+    private static Func<bool> AfterPinWrites(FakeStreamingDevice device, int count) =>
+        () => device.Sent.Count(IsPinCommand) >= count;
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(Bound);
@@ -491,10 +637,19 @@ public class DriveAndCaptureContractTests
     /// so every one is a new row.
     /// </summary>
     /// <remarks>
-    /// It trickles a few rows — enough for a first sample and some baseline, far short of
-    /// <see cref="RowBudget"/> — and then waits. Only once the pin has been written
-    /// <c>fillTheBudgetAfterPinWrites</c> times does it pour, which fills the row budget and ends
-    /// the capture. Left at the default it never pours: for the captures that end some other way.
+    /// <para>
+    /// Nothing is raised until the capture has sent its stream-start command, which it does only
+    /// after subscribing. A sample raised before that reaches nobody, and the pump only has so
+    /// many to give before it waits: on a runner slow to get from building the pump to starting
+    /// the capture, it would spend them all on an empty room, and then the edge would wait for a
+    /// first sample while the pump waited for the edge.
+    /// </para>
+    /// <para>
+    /// It then trickles a few rows — enough for a first sample and some baseline, far short of
+    /// <see cref="RowBudget"/> — and waits. Only once <c>pourWhen</c> says the test has seen what
+    /// it is about does it pour, which fills the row budget and ends the capture. Left null it
+    /// never pours: for the captures that end some other way.
+    /// </para>
     /// </remarks>
     private sealed class SamplePump : IDisposable
     {
@@ -503,7 +658,7 @@ public class DriveAndCaptureContractTests
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _loop;
 
-        internal SamplePump(FakeStreamingDevice device, int fillTheBudgetAfterPinWrites = int.MaxValue)
+        internal SamplePump(FakeStreamingDevice device, Func<bool>? pourWhen = null)
         {
             var channel = device.GetChannelsSnapshot().Single(c => c is { Type: ChannelType.Analog, ChannelNumber: 0 });
             _loop = Task.Run(async () =>
@@ -515,9 +670,12 @@ public class DriveAndCaptureContractTests
                     timestamp = timestamp.AddMilliseconds(1);
                 }
 
-                for (var raised = 0; !_stop.IsCancellationRequested; raised++)
+                var streaming = false;
+                var trickled = 0;
+                while (!_stop.IsCancellationRequested)
                 {
-                    if (device.Sent.Count(IsPinCommand) >= fillTheBudgetAfterPinWrites)
+                    streaming = streaming || device.Sent.Any(IsStreamStart);
+                    if (streaming && pourWhen?.Invoke() == true)
                     {
                         // A batch at a time, so the capture's reader gets the core between them.
                         for (var i = 0; i < 100; i++)
@@ -525,9 +683,10 @@ public class DriveAndCaptureContractTests
                             Raise();
                         }
                     }
-                    else if (raised < Trickle)
+                    else if (streaming && trickled < Trickle)
                     {
                         Raise();
+                        trickled++;
                     }
 
                     await Task.Delay(2);
