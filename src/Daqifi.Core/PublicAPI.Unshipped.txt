@@ -114,8 +114,19 @@
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocument.MergeInto(Daqifi.Core.Device.DeviceCapabilities! capabilities) -> void
+*REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocumentParser
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.CreateFeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature) -> Daqifi.Core.Device.FeatureNotSupportedException!
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.SnapshotChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Channel.IChannel!>!
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock(System.Action! action) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock<T>(System.Func<T>! action) -> T
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
+*REMOVED*Daqifi.Core.Device.Diagnostics.CommandHistoryParser
+*REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelParser
+*REMOVED*Daqifi.Core.Device.Diagnostics.MemoryDiagnosticsParser
+*REMOVED*Daqifi.Core.Device.Diagnostics.StreamStatsParser
+*REMOVED*Daqifi.Core.Device.Diagnostics.SystemLogParser
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist1 = 1 -> Daqifi.Core.Device.Discovery.DeviceType
@@ -136,6 +147,7 @@
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.Network.NetworkAddressHelper
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.CanHandle(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> bool
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.HandleAsync(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> System.Threading.Tasks.Task!
@@ -227,13 +239,31 @@
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultBeginProtectedAddress = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416 -> uint
+*REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.CaptureSessionSnapshot() -> void
+*REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommands() -> void
+*REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.RestoreSessionSnapshotAsync(Daqifi.Core.Device.ReconnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.Equals(object? obj) -> bool
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.GetHashCode() -> int
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.ToString() -> string!
+*REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParse(string? json, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
+*REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseApiVersion(System.Collections.Generic.IEnumerable<string!>! lines, out int apiVersion) -> bool
+*REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
+*REMOVED*static Daqifi.Core.Device.Diagnostics.CommandHistoryParser.Parse(System.Collections.Generic.IEnumerable<string!>! lines) -> System.Collections.Generic.IReadOnlyList<string!>!
+*REMOVED*static Daqifi.Core.Device.Diagnostics.LogLevelParser.TryParse(string? line, out Daqifi.Core.Device.Diagnostics.LogLevelSetting? result) -> bool
+*REMOVED*static Daqifi.Core.Device.Diagnostics.LogLevelParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Diagnostics.LogLevelSetting? result) -> bool
+*REMOVED*static Daqifi.Core.Device.Diagnostics.MemoryDiagnosticsParser.TryParse(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Diagnostics.MemoryDiagnostics? result) -> bool
+*REMOVED*static Daqifi.Core.Device.Diagnostics.StreamStatsParser.TryParse(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Diagnostics.StreamStats? result) -> bool
+*REMOVED*static Daqifi.Core.Device.Diagnostics.SystemLogParser.Parse(System.Collections.Generic.IEnumerable<string!>! lines) -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Diagnostics.SystemLogEntry!>!
 *REMOVED*static Daqifi.Core.Device.Discovery.DaqifiUsbIds.IsDaqifiCdcDevice(Daqifi.Core.Device.Discovery.UsbPortDescriptor! descriptor) -> bool
 *REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator !=(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
 *REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator ==(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetGatewayString(DaqifiOutMessage! message) -> string!
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetIpAddressString(DaqifiOutMessage! message) -> string!
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetMacAddressString(DaqifiOutMessage! message) -> string!
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetPrimaryDnsString(DaqifiOutMessage! message) -> string!
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetSecondaryDnsString(DaqifiOutMessage! message) -> string!
+*REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetSubnetMaskString(DaqifiOutMessage! message) -> string!
 *REMOVED*static Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileListParser.GetListingStatus(System.Collections.Generic.IEnumerable<string!>! lines) -> Daqifi.Core.Device.SdCard.SdCardListingStatus
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileListParser.ParseFileList(System.Collections.Generic.IEnumerable<string!>! lines) -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.SdCard.SdCardFileInfo!>!
@@ -256,6 +286,10 @@
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnErrorOccurred(System.Exception! error, byte[]? rawData = null) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnMessageReceived(Daqifi.Core.Communication.Messages.IInboundMessage<T>! message, byte[]! rawData) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.CaptureSessionSnapshot() -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.OnSendingInitializationCommands() -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.RestoreSessionSnapshotAsync(Daqifi.Core.Device.ReconnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+*REMOVED*virtual Daqifi.Core.Device.DaqifiStreamingDevice.OnLowSdSpaceWarning(Daqifi.Core.Device.SdCard.LowSdSpaceWarningEventArgs! e) -> void
 Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Error = 3 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Status = 1 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
