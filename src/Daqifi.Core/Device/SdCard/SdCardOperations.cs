@@ -114,7 +114,7 @@ internal sealed class SdCardOperations
     /// the default, a merely-slow terminator would read as a missing one and fail a listing that
     /// was about to complete.
     /// </remarks>
-    private const int SD_LIST_COMPLETION_TIMEOUT_MS = 1000;
+    private static readonly TimeSpan SdListCompletionTimeout = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c> — the code the firmware returns for a
@@ -136,7 +136,7 @@ internal sealed class SdCardOperations
     /// waits for the SD driver to drop the card for re-initialization, and only then reports a
     /// change it could not apply; the rest is margin for a WiFi link.
     /// </summary>
-    private const int SD_PROTECT_RESPONSE_TIMEOUT_MS = 5000;
+    private static readonly TimeSpan SdProtectResponseTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// How long <see cref="SetSdCardCrcProtectionAsync"/> keeps trying to mount the card after the
@@ -539,8 +539,8 @@ internal sealed class SdCardOperations
                         // the same text exchange so the ordering guarantee holds.
                         _host.Send(ScpiMessageProducer.GetSystemError);
                     },
-                    responseTimeoutMs: 3000,
-                    completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                    responseTimeout: TimeSpan.FromSeconds(3),
+                    completionTimeout: SdListCompletionTimeout,
                     cancellationToken: cancellationToken,
                     prepareAsync: PrepareSdInterfaceAndSettleAsync,
                     finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -613,7 +613,7 @@ internal sealed class SdCardOperations
     /// </summary>
     /// <remarks>
     /// Passed as the <c>prepareAsync</c> phase of
-    /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
+    /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>
     /// rather than run
     /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
     /// LAN interface between the switch and the commands that depend on it would leave them
@@ -635,7 +635,7 @@ internal sealed class SdCardOperations
     /// </summary>
     /// <remarks>
     /// Passed as the <c>finalizeAsync</c> phase of
-    /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
+    /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>
     /// rather than run from the caller's own <c>finally</c>, so it holds the same lock
     /// acquisition the matching prepare phase does. Restoring from outside the lock leaves a
     /// window in which a competing exchange runs between this operation's commands and its
@@ -1062,7 +1062,7 @@ internal sealed class SdCardOperations
 
                 lines = await _host.ExecuteTextCommandAsync(
                     () => _host.Send(ScpiMessageProducer.GetSdSpace),
-                    responseTimeoutMs: 3000,
+                    responseTimeout: TimeSpan.FromSeconds(3),
                     cancellationToken: cancellationToken,
                     prepareAsync: PrepareSdInterfaceAndSettleAsync,
                     finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -1236,7 +1236,7 @@ internal sealed class SdCardOperations
                         _host.Send(ScpiMessageProducer.SetSdCrcProtection(enabled));
                         _host.Send(ScpiMessageProducer.GetSystemErrorCount);
                     },
-                    responseTimeoutMs: SD_PROTECT_RESPONSE_TIMEOUT_MS,
+                    responseTimeout: SdProtectResponseTimeout,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 await ClearOwnRefusalAsync(lines, cancellationToken).ConfigureAwait(false);
@@ -1304,7 +1304,7 @@ internal sealed class SdCardOperations
                     _host.Send(ScpiMessageProducer.GetSdSpace);
                     _host.Send(ScpiMessageProducer.GetSystemErrorCount);
                 },
-                responseTimeoutMs: 3000,
+                responseTimeout: TimeSpan.FromSeconds(3),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (SdCardSpaceParser.TryParseLines(lines, out _))
@@ -1873,7 +1873,7 @@ internal sealed class SdCardOperations
                     // rather than an assumption.
                     _host.Send(ScpiMessageProducer.GetSystemError);
                 },
-                responseTimeoutMs: 3000,
+                responseTimeout: TimeSpan.FromSeconds(3),
                 // Same completion window the read path uses for the same
                 // command. Without it this exchange takes the 250 ms default,
                 // and the firmware walks the directory tree between chunks --
@@ -1881,7 +1881,7 @@ internal sealed class SdCardOperations
                 // arrives. That reply is refused (NoTerminator), never cached,
                 // so too short a window would make a delete report an
                 // incomplete listing for a card that answered correctly.
-                completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                completionTimeout: SdListCompletionTimeout,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
                 finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -1901,12 +1901,12 @@ internal sealed class SdCardOperations
                             _host.Send(ScpiMessageProducer.GetSdFileList);
                             _host.Send(ScpiMessageProducer.GetSystemError);
                         },
-                        responseTimeoutMs: 3000,
+                        responseTimeout: TimeSpan.FromSeconds(3),
                         // The retry needs the window as much as the first
                         // attempt: it is the same listing, and a retry that
                         // truncates hands the same partial list to the same
                         // cache.
-                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        completionTimeout: SdListCompletionTimeout,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
                         finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -1956,8 +1956,8 @@ internal sealed class SdCardOperations
                             _host.Send(ScpiMessageProducer.GetSdFileList);
                             _host.Send(ScpiMessageProducer.GetSystemError);
                         },
-                        responseTimeoutMs: 3000,
-                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        responseTimeout: TimeSpan.FromSeconds(3),
+                        completionTimeout: SdListCompletionTimeout,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
                         finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);

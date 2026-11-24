@@ -1314,7 +1314,7 @@ public class DaqifiDeviceOperationSerializationTests
         internal override TimeSpan OutboundDrainWait => TimeSpan.FromSeconds(5);
 
         public Task<IReadOnlyList<string>> RunTextExchangeAsync(Action setupAction) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 300, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(300), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     // ── The inbound path stays clear ────────────────────────────────────────────────────────
@@ -1382,8 +1382,8 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
 
         /// <summary>
@@ -1395,8 +1395,8 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupActionAsync,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
     }
 

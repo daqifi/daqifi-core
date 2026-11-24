@@ -36,7 +36,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 {
     /// <summary>Time allowed for the first diagnostics response line. Generous because
     /// <c>SYSTem:LOG?</c> and the stats queries can emit dozens of lines.</summary>
-    private const int DIAGNOSTICS_RESPONSE_TIMEOUT_MS = 2000;
+    private static readonly TimeSpan DiagnosticsResponseTimeout = TimeSpan.FromSeconds(2);
 
     private readonly IDeviceOperationHost _host;
 
@@ -63,7 +63,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
         // reaching us -- blank or not -- means the device answered.
         var raw = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetSystemLog),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken,
             keepBlankLines: true).ConfigureAwait(false);
 
@@ -103,7 +103,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.ClearSystemLog),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // On success the device echoes a short ack ("Log cleared"); an error-only
@@ -123,7 +123,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(command),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (ScpiResponseClassifier.ContainsScpiError(lines))
@@ -155,7 +155,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetCommandHistory),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var commands = CommandHistoryParser.Parse(lines);
@@ -175,7 +175,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.TestSystemLog),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // On success the device echoes "Added test log messages"; an error-only
@@ -190,7 +190,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetSystemErrorCount),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         ThrowIfCorruptedByStreamData(lines, "the error-count query");
@@ -221,7 +221,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetStreamStats),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         ThrowIfCorruptedByStreamData(lines, "the streaming-stats query");
@@ -243,7 +243,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetMemoryDiagnostics),
-            responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+            responseTimeout: DiagnosticsResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         ThrowIfCorruptedByStreamData(lines, "the memory-diagnostics query");

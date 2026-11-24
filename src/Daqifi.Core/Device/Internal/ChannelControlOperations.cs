@@ -42,7 +42,7 @@ internal sealed class ChannelControlOperations
     /// How long to wait for the device's answer to an analog-output readback. The query reads
     /// a value already held in RAM, so this only needs to cover the round trip.
     /// </summary>
-    private const int AnalogOutputResponseTimeoutMs = 2000;
+    private static readonly TimeSpan AnalogOutputResponseTimeout = TimeSpan.FromSeconds(2);
 
     private readonly IDeviceOperationHost _host;
 
@@ -603,7 +603,7 @@ internal sealed class ChannelControlOperations
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(query),
-            responseTimeoutMs: AnalogOutputResponseTimeoutMs,
+            responseTimeout: AnalogOutputResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (ScpiResponseClassifier.ContainsScpiError(lines))

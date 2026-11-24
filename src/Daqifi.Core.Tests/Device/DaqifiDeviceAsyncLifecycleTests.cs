@@ -591,8 +591,8 @@ public class DaqifiDeviceAsyncLifecycleTests
         public Task HoldTextExchangeAsync(TaskCompletionSource entered, int responseTimeoutMs) =>
             ExecuteTextCommandAsync(
                 () => entered.TrySetResult(),
-                responseTimeoutMs: responseTimeoutMs,
-                completionTimeoutMs: 50);
+                responseTimeout: TimeSpan.FromMilliseconds(responseTimeoutMs),
+                completionTimeout: TimeSpan.FromMilliseconds(50));
     }
 
     /// <summary>

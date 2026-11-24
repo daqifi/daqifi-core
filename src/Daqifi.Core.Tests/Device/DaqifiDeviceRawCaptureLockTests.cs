@@ -537,8 +537,8 @@ public class DaqifiDeviceRawCaptureLockTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
     }
 

@@ -37,6 +37,7 @@
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType
@@ -46,18 +47,61 @@
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Unknown = 0 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress, string? targetDevicePath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress, string? targetDevicePath, string? targetLocationKey, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateService.UpdateWifiModuleAsync(Daqifi.Core.Device.IStreamingDevice! device, string! firmwarePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), bool skipVersionCheck = false) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress, string? targetDevicePath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress, string? targetDevicePath, string? targetLocationKey, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateWifiModuleAsync(Daqifi.Core.Device.IStreamingDevice! device, string! firmwarePath, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), bool skipVersionCheck = false) -> System.Threading.Tasks.Task!
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.ExecuteTextCommandAsync(System.Action! setupAction, int responseTimeoutMs = 1000, int completionTimeoutMs = 250, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>? prepareAsync = null, System.Func<System.Threading.Tasks.Task!>? finalizeAsync = null, bool keepBlankLines = false) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.ExecuteTextCommandAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! setupActionAsync, int responseTimeoutMs = 1000, int completionTimeoutMs = 250, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+Daqifi.Core.Firmware.FirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, Daqifi.Core.Firmware.FirmwareUpdateTarget? target = null, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Firmware.FirmwareUpdateService.UpdateWifiModuleAsync(Daqifi.Core.Device.IStreamingDevice! device, string! firmwarePath, Daqifi.Core.Firmware.WifiUpdateOptions? options = null, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Firmware.FirmwareUpdateTarget
+Daqifi.Core.Firmware.FirmwareUpdateTarget.<Clone>$() -> Daqifi.Core.Firmware.FirmwareUpdateTarget!
+Daqifi.Core.Firmware.FirmwareUpdateTarget.DevicePath.get -> string?
+Daqifi.Core.Firmware.FirmwareUpdateTarget.DevicePath.init -> void
+Daqifi.Core.Firmware.FirmwareUpdateTarget.Equals(Daqifi.Core.Firmware.FirmwareUpdateTarget? other) -> bool
+Daqifi.Core.Firmware.FirmwareUpdateTarget.FirmwareUpdateTarget() -> void
+Daqifi.Core.Firmware.FirmwareUpdateTarget.LocationKey.get -> string?
+Daqifi.Core.Firmware.FirmwareUpdateTarget.LocationKey.init -> void
+Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice! device, string! hexFilePath, Daqifi.Core.Firmware.FirmwareUpdateTarget? target = null, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateWifiModuleAsync(Daqifi.Core.Device.IStreamingDevice! device, string! firmwarePath, Daqifi.Core.Firmware.WifiUpdateOptions? options = null, System.IProgress<Daqifi.Core.Firmware.FirmwareUpdateProgress!>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Firmware.WifiUpdateOptions
+Daqifi.Core.Firmware.WifiUpdateOptions.<Clone>$() -> Daqifi.Core.Firmware.WifiUpdateOptions!
+Daqifi.Core.Firmware.WifiUpdateOptions.Equals(Daqifi.Core.Firmware.WifiUpdateOptions? other) -> bool
+Daqifi.Core.Firmware.WifiUpdateOptions.SkipVersionCheck.get -> bool
+Daqifi.Core.Firmware.WifiUpdateOptions.SkipVersionCheck.init -> void
+Daqifi.Core.Firmware.WifiUpdateOptions.WifiUpdateOptions() -> void
+override Daqifi.Core.Firmware.FirmwareUpdateTarget.Equals(object? obj) -> bool
+override Daqifi.Core.Firmware.FirmwareUpdateTarget.GetHashCode() -> int
+override Daqifi.Core.Firmware.FirmwareUpdateTarget.ToString() -> string!
+override Daqifi.Core.Firmware.WifiUpdateOptions.Equals(object? obj) -> bool
+override Daqifi.Core.Firmware.WifiUpdateOptions.GetHashCode() -> int
+override Daqifi.Core.Firmware.WifiUpdateOptions.ToString() -> string!
+static Daqifi.Core.Firmware.FirmwareUpdateTarget.operator !=(Daqifi.Core.Firmware.FirmwareUpdateTarget? left, Daqifi.Core.Firmware.FirmwareUpdateTarget? right) -> bool
+static Daqifi.Core.Firmware.FirmwareUpdateTarget.operator ==(Daqifi.Core.Firmware.FirmwareUpdateTarget? left, Daqifi.Core.Firmware.FirmwareUpdateTarget? right) -> bool
+static Daqifi.Core.Firmware.WifiUpdateOptions.operator !=(Daqifi.Core.Firmware.WifiUpdateOptions? left, Daqifi.Core.Firmware.WifiUpdateOptions? right) -> bool
+static Daqifi.Core.Firmware.WifiUpdateOptions.operator ==(Daqifi.Core.Firmware.WifiUpdateOptions? left, Daqifi.Core.Firmware.WifiUpdateOptions? right) -> bool
+virtual Daqifi.Core.Device.DaqifiDevice.ExecuteTextCommandAsync(System.Action! setupAction, System.TimeSpan? responseTimeout = null, System.TimeSpan? completionTimeout = null, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>? prepareAsync = null, System.Func<System.Threading.Tasks.Task!>? finalizeAsync = null, bool keepBlankLines = false, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
+virtual Daqifi.Core.Device.DaqifiDevice.ExecuteTextCommandAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! setupActionAsync, System.TimeSpan? responseTimeout, System.TimeSpan? completionTimeout, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!

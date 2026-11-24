@@ -418,7 +418,7 @@ public class DaqifiDeviceConsumerRestartTests
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
         {
-            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 100, completionTimeoutMs: 50);
+            return ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(100), completionTimeout: TimeSpan.FromMilliseconds(50));
         }
 
         public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)

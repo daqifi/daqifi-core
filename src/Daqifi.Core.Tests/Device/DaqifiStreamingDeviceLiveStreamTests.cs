@@ -29,7 +29,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
         ai0.IsEnabled = true;
         device.StartStreaming();
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync(); // runs the body: subscribes synchronously, then awaits
         device.InvokeStreamMessage(AnalogFrame(1000, 1.5f));
 
@@ -46,7 +46,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
         AnalogChannel(device, 0).IsEnabled = true;
         device.StartStreaming();
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var first = e.MoveNextAsync(); // subscribes synchronously before we inject
         device.InvokeStreamMessage(AnalogFrame(1000, 1f));
         device.InvokeStreamMessage(AnalogFrame(1010, 2f));
@@ -80,7 +80,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
         // is created per-test and reachable from nothing else, the leaked handler only writes
         // into a bounded drop-oldest buffer, and the whole graph is garbage once the test
         // returns. The happy path below disposes normally.
-        var e = device.StreamSamplesAsync(cts.Token).GetAsyncEnumerator();
+        var e = device.StreamSamplesAsync(cancellationToken: cts.Token).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         cts.Cancel();
 
@@ -101,7 +101,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
         AnalogChannel(device, 0).IsEnabled = true;
         device.StartStreaming();
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 2).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(bufferCapacity: 2, cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync(); // subscribes; reader is awaiting (not consuming synchronously)
 
         // Push far more than the buffer holds, synchronously, before the reader runs.
@@ -149,7 +149,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
 
         async Task ConsumeAsync()
         {
-            await foreach (var _ in device.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 0)) { }
+            await foreach (var _ in device.StreamSamplesAsync(bufferCapacity: 0, cancellationToken: CancellationToken.None)) { }
         }
     }
 
@@ -162,7 +162,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
 
         ILiveSampleSource live = device;
 
-        await using var e = live.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 2).GetAsyncEnumerator();
+        await using var e = live.StreamSamplesAsync(bufferCapacity: 2, cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         for (uint i = 0; i < 20; i++) device.InvokeStreamMessage(AnalogFrame(1000 + i * 10, i));
 
