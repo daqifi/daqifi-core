@@ -3,7 +3,7 @@
   "name": "io.github.daqifi/daqifi-mcp",
   "title": "DAQiFi",
   "description": "Discover, configure and read DAQiFi Nyquist data-acquisition hardware from an AI agent",
-  "version": "1.7.0",
+  "version": "0.0.0-placeholder",
   "websiteUrl": "https://daqifi.com/mcp/",
   "repository": {
     "url": "https://github.com/daqifi/daqifi-core",
@@ -15,7 +15,7 @@
       "registryType": "nuget",
       "registryBaseUrl": "https://api.nuget.org/v3/index.json",
       "identifier": "Daqifi.Mcp",
-      "version": "1.7.0",
+      "version": "0.0.0-placeholder",
       "runtimeHint": "dnx",
       "transport": {
         "type": "stdio"

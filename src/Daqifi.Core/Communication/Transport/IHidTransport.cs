@@ -63,14 +63,6 @@ public interface IHidTransport : IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Connects to a HID device synchronously.
-    /// </summary>
-    /// <param name="vendorId">Target USB vendor ID.</param>
-    /// <param name="productId">Target USB product ID.</param>
-    /// <param name="serialNumber">Optional serial number filter.</param>
-    void Connect(int vendorId, int productId, string? serialNumber = null);
-
-    /// <summary>
     /// Connects to the specific HID device at <paramref name="devicePath"/>. Use this to target one
     /// device among several identical ones (same VID/PID, and no serial to tell them apart), where
     /// <see cref="ConnectAsync(int,int,string?,CancellationToken)"/>'s first-match cannot distinguish
@@ -81,23 +73,11 @@ public interface IHidTransport : IDisposable
     Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Connects to the specific HID device at <paramref name="devicePath"/> synchronously.
-    /// </summary>
-    /// <param name="devicePath">Platform-specific HID device path to connect to.</param>
-    void ConnectByPath(string devicePath);
-
-    /// <summary>
     /// Writes a HID report payload asynchronously.
     /// </summary>
     /// <param name="data">The payload bytes to write.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task WriteAsync(byte[] data, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Writes a HID report payload synchronously.
-    /// </summary>
-    /// <param name="data">The payload bytes to write.</param>
-    void Write(byte[] data);
 
     /// <summary>
     /// Reads a HID report payload asynchronously.
@@ -108,19 +88,16 @@ public interface IHidTransport : IDisposable
     Task<byte[]> ReadAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads a HID report payload synchronously.
-    /// </summary>
-    /// <param name="timeout">Optional timeout override for this read.</param>
-    /// <returns>The raw bytes from the HID read operation.</returns>
-    byte[] Read(TimeSpan? timeout = null);
-
-    /// <summary>
     /// Disconnects from the HID device asynchronously.
     /// </summary>
-    Task DisconnectAsync();
-
-    /// <summary>
-    /// Disconnects from the HID device synchronously.
-    /// </summary>
-    void Disconnect();
+    /// <remarks>
+    /// A disconnect waits for a read or write in flight rather than closing the device underneath
+    /// it. Cancelling gives up that wait, and the device is then still connected. Once the close has
+    /// started it runs to completion.
+    /// </remarks>
+    /// <param name="cancellationToken">Gives up waiting for an operation in flight.</param>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when canceled before the close started. The device is still connected.
+    /// </exception>
+    Task DisconnectAsync(CancellationToken cancellationToken = default);
 }

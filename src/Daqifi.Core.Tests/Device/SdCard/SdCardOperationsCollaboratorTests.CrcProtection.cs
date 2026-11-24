@@ -133,7 +133,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         await ops.SetSdCardCrcProtectionAsync(true);
 
-        Assert.True(host.ResponseTimeouts[0] > 2000);
+        Assert.True(host.ResponseTimeouts[0] > TimeSpan.FromSeconds(2));
     }
 
     [Fact]

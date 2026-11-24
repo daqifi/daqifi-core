@@ -403,11 +403,6 @@ internal sealed class FakeHidTransport : IHidTransport
         return Task.CompletedTask;
     }
 
-    public void Connect(int vendorId, int productId, string? serialNumber = null)
-    {
-        ConnectAsync(vendorId, productId, serialNumber).GetAwaiter().GetResult();
-    }
-
     public int ConnectByPathAttempts { get; private set; }
     public string? LastConnectByPath { get; private set; }
 
@@ -426,11 +421,6 @@ internal sealed class FakeHidTransport : IHidTransport
         IsConnected = true;
         DevicePath = devicePath;
         return Task.CompletedTask;
-    }
-
-    public void ConnectByPath(string devicePath)
-    {
-        ConnectByPathAsync(devicePath).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -454,11 +444,6 @@ internal sealed class FakeHidTransport : IHidTransport
         }
 
         Writes.Add(data.ToArray());
-    }
-
-    public void Write(byte[] data)
-    {
-        WriteAsync(data).GetAwaiter().GetResult();
     }
 
     private bool _dropWhenReadQueueEmpty;
@@ -493,11 +478,6 @@ internal sealed class FakeHidTransport : IHidTransport
         return Task.FromResult(_readQueue.Dequeue());
     }
 
-    public byte[] Read(TimeSpan? timeout = null)
-    {
-        return ReadAsync(timeout).GetAwaiter().GetResult();
-    }
-
     /// <summary>
     /// Optional failure injected by <see cref="DisconnectAsync"/>. Real HID handles do throw on
     /// close (the device was yanked, the handle is already dead), and cleanup paths are supposed
@@ -506,7 +486,7 @@ internal sealed class FakeHidTransport : IHidTransport
     /// </summary>
     public Exception? DisconnectFailure { get; set; }
 
-    public Task DisconnectAsync()
+    public Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
         DisconnectCalls++;
         ClearConnectionState();
@@ -514,11 +494,6 @@ internal sealed class FakeHidTransport : IHidTransport
         return DisconnectFailure is { } failure
             ? Task.FromException(failure)
             : Task.CompletedTask;
-    }
-
-    public void Disconnect()
-    {
-        DisconnectAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()

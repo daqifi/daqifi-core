@@ -84,7 +84,7 @@ internal sealed class DeviceAdministrationOperations
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetIdentify),
-            responseTimeoutMs: IdentifyQueryResponseTimeoutMs,
+            responseTimeout: IdentifyQueryResponseTimeout,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (ScpiResponseClassifier.ContainsScpiError(lines))
@@ -135,7 +135,7 @@ internal sealed class DeviceAdministrationOperations
     /// How long to wait for the answer to <c>SYSTem:IDENtify?</c>. The firmware reads a flag held
     /// in RAM, so this only needs to cover the round trip.
     /// </summary>
-    private const int IdentifyQueryResponseTimeoutMs = 2000;
+    private static readonly TimeSpan IdentifyQueryResponseTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c>: the firmware's reply to a command it does not
@@ -259,8 +259,8 @@ internal sealed class DeviceAdministrationOperations
                         _host.Send(command);
                         _host.Send(ScpiMessageProducer.GetSystemError);
                     },
-                    responseTimeoutMs: ConfirmationResponseTimeoutMs,
-                    completionTimeoutMs: ConfirmationCompletionTimeoutMs,
+                    responseTimeout: ConfirmationResponseTimeout,
+                    completionTimeout: ConfirmationCompletionTimeout,
                     cancellationToken: ct).ConfigureAwait(false);
 
                 ThrowIfNotAccepted(command.Data, lines);
@@ -355,7 +355,7 @@ internal sealed class DeviceAdministrationOperations
     /// commands being confirmed include NVM writes (<c>SAVEcal</c>, <c>SAVEFcal</c>,
     /// <c>VOLTage:SAVE</c>), which the device does not answer until the write is done.
     /// </summary>
-    private const int ConfirmationResponseTimeoutMs = 3000;
+    private static readonly TimeSpan ConfirmationResponseTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Inactivity window that ends a confirming exchange, in milliseconds.
@@ -363,9 +363,9 @@ internal sealed class DeviceAdministrationOperations
     /// <remarks>
     /// <para>
     /// Deliberately longer than the 250ms default, and set for the same reason the SD listing
-    /// raises its own (<c>SD_LIST_COMPLETION_TIMEOUT_MS</c>): both exchanges are only complete once
+    /// raises its own (<c>SdListCompletionTimeout</c>): both exchanges are only complete once
     /// a trailing <c>SYSTem:ERRor?</c> reply has been seen, and the exchange switches from
-    /// <see cref="ConfirmationResponseTimeoutMs"/> to this window as soon as <i>any</i> line
+    /// <see cref="ConfirmationResponseTimeout"/> to this window as soon as <i>any</i> line
     /// arrives. On a device that echoes commands, that first line is the echo, so this window — not
     /// the response timeout — is what has to cover the gap between the echo and the verdict. With
     /// the 250ms default, a merely-slow verdict would read as a missing one and fail a command the
@@ -374,7 +374,7 @@ internal sealed class DeviceAdministrationOperations
     /// <para>
     /// It does not have to cover an NVM write on its own: a device that says nothing until the
     /// write finishes is still in the first phase, which
-    /// <see cref="ConfirmationResponseTimeoutMs"/> covers. Should a device ever both echo and then
+    /// <see cref="ConfirmationResponseTimeout"/> covers. Should a device ever both echo and then
     /// take longer than this to answer, the result is a spurious "not confirmed" — loud and
     /// retryable, which is the failure direction this whole surface is built to prefer over a
     /// silent false success.
@@ -391,7 +391,7 @@ internal sealed class DeviceAdministrationOperations
     /// <see cref="IConfirmingDeviceAdministration"/>.
     /// </para>
     /// </remarks>
-    private const int ConfirmationCompletionTimeoutMs = 1000;
+    private static readonly TimeSpan ConfirmationCompletionTimeout = TimeSpan.FromSeconds(1);
 
     #endregion
 

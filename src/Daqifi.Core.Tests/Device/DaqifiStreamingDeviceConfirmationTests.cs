@@ -338,7 +338,7 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         await device.StopStreamingAsync();
 
-        Assert.True(device.LastResponseTimeoutMs > 5700, $"waited only {device.LastResponseTimeoutMs} ms");
+        Assert.True(device.LastResponseTimeout > TimeSpan.FromMilliseconds(5700), $"waited only {device.LastResponseTimeout}");
     }
 
     [Fact]
@@ -600,7 +600,7 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         public int Exchanges { get; private set; }
 
-        public int LastResponseTimeoutMs { get; private set; }
+        public TimeSpan? LastResponseTimeout { get; private set; }
 
         public bool SendFrameOnStart { get; set; }
 
@@ -658,15 +658,15 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             Exchanges++;
-            LastResponseTimeoutMs = responseTimeoutMs;
+            LastResponseTimeout = responseTimeout;
             setupAction();
             DuringExchange?.Invoke();
             return Task.FromResult<IReadOnlyList<string>>(

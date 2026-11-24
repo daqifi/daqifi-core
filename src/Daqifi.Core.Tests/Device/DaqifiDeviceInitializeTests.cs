@@ -359,8 +359,8 @@ public class DaqifiDeviceInitializeTests
 
         await device.InitializeAsync();
 
-        Assert.Equal(500, device.LastCompletionTimeoutMs);
-        Assert.Equal(1000, device.LastResponseTimeoutMs);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), device.LastCompletionTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(1), device.LastResponseTimeout);
     }
 
     [Fact]
@@ -968,10 +968,10 @@ public class DaqifiDeviceInitializeTests
         /// sequence's completion window is what its saving comes out of (#667), so it is a
         /// deliberate value rather than an incidental one, and a test can check it.
         /// </summary>
-        public int LastResponseTimeoutMs { get; private set; }
+        public TimeSpan? LastResponseTimeout { get; private set; }
 
-        /// <inheritdoc cref="LastResponseTimeoutMs"/>
-        public int LastCompletionTimeoutMs { get; private set; }
+        /// <inheritdoc cref="LastResponseTimeout"/>
+        public TimeSpan? LastCompletionTimeout { get; private set; }
 
         /// <summary>
         /// When true, a GetDeviceInfo request synchronously populates channels (simulating
@@ -1137,15 +1137,15 @@ public class DaqifiDeviceInitializeTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
-            LastResponseTimeoutMs = responseTimeoutMs;
-            LastCompletionTimeoutMs = completionTimeoutMs;
+            LastResponseTimeout = responseTimeout;
+            LastCompletionTimeout = completionTimeout;
 
             var before = DirectSentMessages.Count;
             var lines = await RunTextExchangeAsync(
@@ -1200,12 +1200,12 @@ public class DaqifiDeviceInitializeTests
         // mirroring the production class, so the double keeps intercepting either one.
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
-            LastResponseTimeoutMs = responseTimeoutMs;
-            LastCompletionTimeoutMs = completionTimeoutMs;
+            LastResponseTimeout = responseTimeout;
+            LastCompletionTimeout = completionTimeout;
             return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
         }
 
@@ -1336,12 +1336,12 @@ public class DaqifiDeviceInitializeTests
 
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(
                 _ => { setupAction(); return Task.CompletedTask; },
@@ -1353,8 +1353,8 @@ public class DaqifiDeviceInitializeTests
         // The init SCPI setup sequence uses the async overload (#667); intercept both.
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
@@ -1465,12 +1465,12 @@ public class DaqifiDeviceInitializeTests
 
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(
                 _ => { setupAction(); return Task.CompletedTask; },
@@ -1484,8 +1484,8 @@ public class DaqifiDeviceInitializeTests
         // overloads would silently stop it parking anything.
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
@@ -1594,12 +1594,12 @@ public class DaqifiDeviceInitializeTests
 
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(
                 _ => { setupAction(); return Task.CompletedTask; },
@@ -1612,8 +1612,8 @@ public class DaqifiDeviceInitializeTests
         // MutateDuringInitialization hook and the USB-step classification below still run.
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);

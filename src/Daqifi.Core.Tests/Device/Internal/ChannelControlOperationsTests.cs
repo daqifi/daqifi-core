@@ -1265,12 +1265,12 @@ public class ChannelControlOperationsTests
 
         public Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             setupAction();

@@ -7,67 +7,11 @@ namespace Daqifi.Core.Tests.Firmware;
 public class WifiBridgeActivatorTests
 {
     [Fact]
-    public void Activate_AlreadyCancelled_ThrowsBeforeOpeningPort()
-    {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Use a bogus port name; if cancellation isn't honored up-front the test would
-        // surface a port-open failure instead of OperationCanceledException.
-        Assert.Throws<OperationCanceledException>(
-            () => WifiBridgeActivator.Activate("COM999", cts.Token));
-    }
-
-    [Fact]
-    public void Activate_InvalidPort_Throws()
-    {
-        var portName = AbsentSerialPorts.Create();
-
-        var ex = Assert.Throws<SerialPortConnectException>(() => WifiBridgeActivator.Activate(portName));
-
-        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
-        Assert.Equal(portName, ex.PortName);
-    }
-
-    [Fact]
-    public void Deactivate_AlreadyCancelled_ThrowsBeforeOpeningPort()
-    {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Use a bogus port name; if cancellation isn't honored up-front the test would
-        // surface a port-open failure instead of OperationCanceledException.
-        Assert.Throws<OperationCanceledException>(
-            () => WifiBridgeActivator.Deactivate("COM999", cts.Token));
-    }
-
-    [Fact]
-    public void Deactivate_InvalidPort_Throws()
-    {
-        var portName = AbsentSerialPorts.Create();
-
-        var ex = Assert.Throws<SerialPortConnectException>(() => WifiBridgeActivator.Deactivate(portName));
-
-        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
-        Assert.Equal(portName, ex.PortName);
-    }
-
-    // Activate and Deactivate share one private sequence method, so the null guard now fires
-    // one frame below the public parameter. Pin the reported parameter name for both directions
-    // so the shared guard keeps blaming the caller's argument rather than an internal one.
-    [Fact]
-    public void NullPortName_BothDirections_BlameThePortNameParameter()
-    {
-        Assert.Equal("portName", Assert.Throws<ArgumentNullException>(
-            () => WifiBridgeActivator.Activate(null!)).ParamName);
-        Assert.Equal("portName", Assert.Throws<ArgumentNullException>(
-            () => WifiBridgeActivator.Deactivate(null!)).ParamName);
-    }
-
-    [Fact]
     public async Task ActivateAsync_NullPortName_ThrowsArgumentNullException()
     {
-        await Assert.ThrowsAsync<ArgumentNullException>(() => WifiBridgeActivator.ActivateAsync(null!));
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(() => WifiBridgeActivator.ActivateAsync(null!));
+
+        Assert.Equal("portName", ex.ParamName);
     }
 
     [Fact]
@@ -97,7 +41,9 @@ public class WifiBridgeActivatorTests
     [Fact]
     public async Task DeactivateAsync_NullPortName_ThrowsArgumentNullException()
     {
-        await Assert.ThrowsAsync<ArgumentNullException>(() => WifiBridgeActivator.DeactivateAsync(null!));
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(() => WifiBridgeActivator.DeactivateAsync(null!));
+
+        Assert.Equal("portName", ex.ParamName);
     }
 
     [Fact]
@@ -175,6 +121,35 @@ public class WifiBridgeActivatorTests
             // UnobservedTaskException on GC, which the isolation pattern must avoid.
             released.Set();
             await Task.Delay(50);
+        }
+        finally
+        {
+            WifiBridgeActivator.HardTimeoutMs = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task RunWithHardTimeoutAsync_WorkerStopsOnTheHardTimeoutItself_StillThrowsTimeoutException()
+    {
+        // The worker's connect aborts on its token, so it stops at the same moment the hard timeout
+        // fires and can win the race against it. The caller cancelled nothing and must not be told
+        // that they did.
+        var originalTimeout = WifiBridgeActivator.HardTimeoutMs;
+        WifiBridgeActivator.HardTimeoutMs = 50;
+        try
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                await Assert.ThrowsAsync<TimeoutException>(() =>
+                    WifiBridgeActivator.RunWithHardTimeoutAsync(
+                        token =>
+                        {
+                            token.WaitHandle.WaitOne();
+                            token.ThrowIfCancellationRequested();
+                        },
+                        "TestOp",
+                        CancellationToken.None));
+            }
         }
         finally
         {

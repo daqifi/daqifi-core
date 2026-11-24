@@ -69,7 +69,7 @@ public class FirmwareUpdateServiceTests
         var hexPath = CreateTempFile();
         try
         {
-            await service.UpdateFirmwareAsync(device, hexPath, progress);
+            await service.UpdateFirmwareAsync(device, hexPath, progress: progress);
         }
         finally
         {
@@ -293,7 +293,7 @@ public class FirmwareUpdateServiceTests
         var hexPath = CreateTempFile();
         try
         {
-            await service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "path-2");
+            await service.UpdateFirmwareAsync(device, hexPath, new FirmwareUpdateTarget { DevicePath = "path-2" });
         }
         finally
         {
@@ -353,7 +353,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             await service.UpdateFirmwareAsync(
-                device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "Port_#0002.Hub_#0001");
+                device, hexPath, new FirmwareUpdateTarget { LocationKey = "Port_#0002.Hub_#0001" });
         }
         finally
         {
@@ -414,9 +414,7 @@ public class FirmwareUpdateServiceTests
             await service.UpdateFirmwareAsync(
                 device,
                 hexPath,
-                progress: null,
-                targetDevicePath: "path-1",
-                targetLocationKey: "Port_#0002.Hub_#0001");
+                new FirmwareUpdateTarget { DevicePath = "path-1", LocationKey = "Port_#0002.Hub_#0001" });
         }
         finally
         {
@@ -477,7 +475,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             await service.UpdateFirmwareAsync(
-                device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "Port_#0002.Hub_#0001");
+                device, hexPath, new FirmwareUpdateTarget { LocationKey = "Port_#0002.Hub_#0001" });
         }
         finally
         {
@@ -493,7 +491,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task UpdateFirmwareAsync_WithWhitespaceTargetLocationKey_ThrowsArgumentException()
     {
-        // Same fast-fail contract as targetDevicePath: whitespace can never match a resolved
+        // Same fast-fail contract as DevicePath: whitespace can never match a resolved
         // location key, so fail before polling until the WaitingForBootloader timeout.
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -508,9 +506,10 @@ public class FirmwareUpdateServiceTests
         var hexPath = CreateTempFile();
         try
         {
-            await Assert.ThrowsAsync<ArgumentException>(
+            var failure = await Assert.ThrowsAsync<ArgumentException>(
                 () => service.UpdateFirmwareAsync(
-                    device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "   "));
+                    device, hexPath, new FirmwareUpdateTarget { LocationKey = "   " }));
+            Assert.Equal("target", failure.ParamName);
         }
         finally
         {
@@ -536,8 +535,9 @@ public class FirmwareUpdateServiceTests
         var hexPath = CreateTempFile();
         try
         {
-            await Assert.ThrowsAsync<ArgumentException>(
-                () => service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "   "));
+            var failure = await Assert.ThrowsAsync<ArgumentException>(
+                () => service.UpdateFirmwareAsync(device, hexPath, new FirmwareUpdateTarget { DevicePath = "   " }));
+            Assert.Equal("target", failure.ParamName);
         }
         finally
         {
@@ -594,7 +594,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
-                () => service.UpdateFirmwareAsync(device, hexPath, progress));
+                () => service.UpdateFirmwareAsync(device, hexPath, progress: progress));
         }
         finally
         {
@@ -1526,7 +1526,7 @@ public class FirmwareUpdateServiceTests
                 () => service.UpdateFirmwareAsync(
                     new FakeStreamingDevice("COM3"),
                     hexPath,
-                    RecordingProgress(reports, throwOnFailed: fromProgressSink),
+                    progress: RecordingProgress(reports, throwOnFailed: fromProgressSink),
                     cancellationToken: cts.Token));
         }
         finally
@@ -1654,7 +1654,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             await service.UpdateFirmwareAsync(
-                new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false));
+                new FakeStreamingDevice("COM3"), hexPath, progress: RecordingProgress(reports, throwOnFailed: false));
         }
         finally
         {
@@ -1704,7 +1704,7 @@ public class FirmwareUpdateServiceTests
         {
             exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
                 () => service.UpdateFirmwareAsync(
-                    new FakeStreamingDevice("COM3"), hexPath, RecordingProgress(reports, throwOnFailed: false)));
+                    new FakeStreamingDevice("COM3"), hexPath, progress: RecordingProgress(reports, throwOnFailed: false)));
         }
         finally
         {
@@ -1752,7 +1752,7 @@ public class FirmwareUpdateServiceTests
                 () => service.UpdateWifiModuleAsync(
                     new FakeStreamingDevice("COM8"),
                     firmwareDir,
-                    RecordingProgress(reports, throwOnFailed: false)));
+                    progress: RecordingProgress(reports, throwOnFailed: false)));
         }
         finally
         {
@@ -1804,7 +1804,7 @@ public class FirmwareUpdateServiceTests
                 () => service.UpdateWifiModuleAsync(
                     new FakeStreamingDevice("COM8"),
                     firmwareDir,
-                    RecordingProgress(reports, throwOnFailed: fromProgressSink)));
+                    progress: RecordingProgress(reports, throwOnFailed: fromProgressSink)));
         }
         finally
         {
@@ -1862,8 +1862,8 @@ public class FirmwareUpdateServiceTests
                 () => service.UpdateWifiModuleAsync(
                     device,
                     firmwareDir,
-                    RecordingProgress(reports, throwOnFailed: fromProgressSink),
-                    cts.Token));
+                    progress: RecordingProgress(reports, throwOnFailed: fromProgressSink),
+                    cancellationToken: cts.Token));
         }
         finally
         {
@@ -1937,7 +1937,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
-                () => service.UpdateFirmwareAsync(new FakeStreamingDevice("COM3"), hexPath, progress));
+                () => service.UpdateFirmwareAsync(new FakeStreamingDevice("COM3"), hexPath, progress: progress));
             return (exception, service, events);
         }
         finally
@@ -2034,7 +2034,7 @@ public class FirmwareUpdateServiceTests
         {
             // Must not throw at all — neither the subscriber's exception nor a transition error.
             await service.UpdateFirmwareAsync(
-                new FakeStreamingDevice("COM3"), hexPath, new CapturingProgress<FirmwareUpdateProgress>(progressEvents));
+                new FakeStreamingDevice("COM3"), hexPath, progress: new CapturingProgress<FirmwareUpdateProgress>(progressEvents));
         }
         finally
         {
@@ -2089,7 +2089,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             await service.UpdateWifiModuleAsync(
-                device, firmwareDir, new CapturingProgress<FirmwareUpdateProgress>(progressEvents));
+                device, firmwareDir, progress: new CapturingProgress<FirmwareUpdateProgress>(progressEvents));
         }
         finally
         {
@@ -2395,7 +2395,7 @@ public class FirmwareUpdateServiceTests
 
         try
         {
-            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress: progress);
         }
         finally
         {
@@ -2640,7 +2640,7 @@ public class FirmwareUpdateServiceTests
     {
         // The default is the behavior: a consumer that upgrades without touching options gets
         // the pacing on both the success restore and the failure bridge-exit. 100ms is not
-        // arbitrary — it is the same inter-command wait WifiBridgeActivator.Deactivate already
+        // arbitrary — it is the same inter-command wait WifiBridgeActivator.DeactivateAsync already
         // uses for this exact mode transition over a raw serial port, so the managed-connection
         // paths stay paced identically until a host overrides the option. Pinned so the default
         // cannot silently drift apart from that raw-serial pace.
@@ -3025,7 +3025,7 @@ public class FirmwareUpdateServiceTests
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
             Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
 
-            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.Deactivate
+            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.DeactivateAsync
             // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
             // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
             // configuration off the back of a flash that did not complete is not this step's job.
@@ -3460,7 +3460,11 @@ public class FirmwareUpdateServiceTests
 
         var bridgeActivations = 0;
         var options = CreateFastOptions();
-        options.WifiBridgeActivationCallback = () => bridgeActivations++;
+        options.WifiBridgeActivationCallback = _ =>
+        {
+            bridgeActivations++;
+            return Task.CompletedTask;
+        };
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -3522,7 +3526,7 @@ public class FirmwareUpdateServiceTests
 
         try
         {
-            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress: progress);
         }
         finally
         {
@@ -3574,7 +3578,7 @@ public class FirmwareUpdateServiceTests
 
         try
         {
-            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress: progress);
         }
         finally
         {
@@ -4587,8 +4591,7 @@ public class FirmwareUpdateServiceTests
             await service.UpdateWifiModuleAsync(
                 device,
                 firmwareDir,
-                progress: null,
-                skipVersionCheck: true);
+                new WifiUpdateOptions { SkipVersionCheck = true });
         }
         finally
         {
@@ -4596,7 +4599,7 @@ public class FirmwareUpdateServiceTests
         }
 
         // Even though device version matched latest, flash ran because
-        // skipVersionCheck bypassed the probe.
+        // SkipVersionCheck bypassed the probe.
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
@@ -4675,7 +4678,7 @@ public class FirmwareUpdateServiceTests
         try
         {
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await service.UpdateWifiModuleAsync(device, firmwareDir, progress)
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress: progress)
                 .WaitAsync(timeoutCts.Token);
         }
         catch (OperationCanceledException) when (!reentryAttempted)
@@ -5687,7 +5690,7 @@ public class FirmwareUpdateServiceTests
             // ThrowsAny<Exception> would accept, so it is recorded and rejected by token.
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var outerFailure = await Record.ExceptionAsync(
-                () => Task.Run(() => service.UpdateFirmwareAsync(device, hexPath, progress))
+                () => Task.Run(() => service.UpdateFirmwareAsync(device, hexPath, progress: progress))
                     .WaitAsync(timeoutCts.Token));
 
             Assert.False(

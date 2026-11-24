@@ -133,7 +133,7 @@ transport to talk to.
 
 ```csharp
 await using var session = new BootloaderSessionDevice("DAQiFi Bootloader");
-await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress);
+await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress: progress);
 ```
 
 Three of its behaviours are load-bearing rather than incidental, because the PIC32 update flow
@@ -158,12 +158,9 @@ Static factory class for simplified device connections:
 |--------|-------------|
 | `ConnectTcpAsync(host, port, options?, token?)` | Connect by hostname |
 | `ConnectTcpAsync(ipAddress, port, options?, token?)` | Connect by IP address |
-| `ConnectTcp(...)` | Synchronous versions |
 | `ConnectSerialAsync(portName, options?, token?)` | Connect over serial/USB at the default baud rate (9600) |
 | `ConnectSerialAsync(portName, baudRate, options?, token?)` | Connect over serial/USB at an explicit baud rate |
-| `ConnectSerial(...)` | Synchronous versions |
 | `ConnectFromDeviceInfoAsync(deviceInfo, options?, token?)` | Connect from discovery result |
-| `ConnectFromDeviceInfo(...)` | Synchronous version |
 
 ### DeviceConnectionOptions
 
@@ -225,7 +222,7 @@ await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(de
 // ForceBootloader itself, then targets the bootloader that came from the SAME physical
 // port, even though its HID device path didn't exist until after the reboot.
 await firmwareUpdateService.UpdateFirmwareAsync(
-    device, hexFilePath, progress: null, targetDevicePath: null, targetLocationKey: targetLocation);
+    device, hexFilePath, new FirmwareUpdateTarget { LocationKey = targetLocation });
 ```
 
 Core resolves `LocationKey` from the USB topology during discovery. It is Windows-only in v1;
@@ -562,7 +559,31 @@ in-flight command exchange and proceeds straight to teardown. It never aborts th
 never throws `OperationCanceledException`, because a teardown abandoned part-way would leave the
 device in an indeterminate state. On return the device is always disconnected.
 
-The synchronous `Connect`, `Disconnect` and `Dispose` remain, unchanged, for existing callers.
+The synchronous `Connect`, `Disconnect` and `Dispose` remain on the device for code that has no
+async caller. They are the only blocking connection members left: `IStreamTransport`,
+`IHidTransport` and `DaqifiDeviceFactory` are async-only.
+
+### Cancelling a transport connect
+
+`IStreamTransport` has one connect and one disconnect member:
+
+```csharp
+Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default);
+Task DisconnectAsync(CancellationToken cancellationToken = default);
+```
+
+Cancelling a connect aborts the attempt in flight, and the transport can be connected again
+afterwards:
+
+- **TCP** — the dial itself (including the name lookup) is aborted and its socket closed.
+- **Serial** — `SerialPort.Open` cannot be interrupted, so it runs on its own thread and is
+  abandoned: `ConnectAsync` throws at once and the port is closed when the open returns. The next
+  connect waits for that first, for at most `ConnectionRetryOptions.ConnectionTimeout`. An open that
+  had already begun may still pulse DTR.
+
+A custom transport must honour the token the same way. `DaqifiDevice.Connect()` and `Disconnect()`
+block on these members, with the caller's `SynchronizationContext` set aside, so an implementation
+must not need the thread it was called on in order to finish.
 
 `ConnectAsync` and `DisconnectAsync` are declared directly on `IDevice` (not default-interface-method
 shims over `Connect`/`Disconnect`), and `IDevice` extends `IAsyncDisposable`, so all three are reachable
@@ -947,7 +968,7 @@ device.StreamingFrequency = 100; // Hz
 device.StartStreaming();
 
 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-await foreach (var s in device.StreamSamplesAsync(cts.Token))
+await foreach (var s in device.StreamSamplesAsync(cancellationToken: cts.Token))
 {
     Console.WriteLine($"{s.Channel.Name}: {s.Sample.Value} (tick {s.Sample.DeviceTimestamp})");
 }
@@ -994,7 +1015,7 @@ device.MessageReceived += (sender, e) =>
 };
 
 // Enable channels (decimal bitmask: each bit enables a channel)
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Channels 0 and 1 (bitmask 0b11 = 3)
+device.Send(ScpiMessageProducer.EnableAdcChannels(3)); // Channels 0 and 1 (bitmask 0b11 = 3)
 
 // Start streaming at 100 Hz
 device.Send(ScpiMessageProducer.StartStreaming(100));
@@ -1144,7 +1165,7 @@ device.Send(ScpiMessageProducer.StartStreaming(1000));  // Start at 1000 Hz
 device.Send(ScpiMessageProducer.StopStreaming);
 
 // Channel configuration
-device.Send(ScpiMessageProducer.EnableAdcChannels("255")); // Enable 8 channels (bitmask 0xFF = 255)
+device.Send(ScpiMessageProducer.EnableAdcChannels(255)); // Enable 8 channels (bitmask 0xFF = 255)
 device.Send(ScpiMessageProducer.DisableDeviceEcho);
 device.Send(ScpiMessageProducer.SetProtobufStreamFormat);
 ```

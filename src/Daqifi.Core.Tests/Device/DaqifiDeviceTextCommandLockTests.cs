@@ -36,6 +36,31 @@ public class DaqifiDeviceTextCommandLockTests
             () => device.CallExecuteTextCommandAsync(() => { }));
     }
 
+    public static TheoryData<TimeSpan> OutOfRangeTimeouts => new()
+    {
+        TimeSpan.Zero,
+        Timeout.InfiniteTimeSpan,
+        TimeSpan.FromMilliseconds((double)int.MaxValue + 1),
+        TimeSpan.MaxValue
+    };
+
+    [Theory]
+    [MemberData(nameof(OutOfRangeTimeouts))]
+    public async Task ExecuteTextCommandAsync_RefusesATimeoutItCannotWaitFor_BeforeSendingAnything(TimeSpan timeout)
+    {
+        var device = new TextCommandTestableDevice("TestDevice");
+        var setupRan = false;
+
+        var response = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => device.CallExecuteTextCommandAsync(() => setupRan = true, responseTimeout: timeout));
+        var completion = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => device.CallExecuteTextCommandAsync(() => setupRan = true, completionTimeout: timeout));
+
+        Assert.Equal("responseTimeout", response.ParamName);
+        Assert.Equal("completionTimeout", completion.ParamName);
+        Assert.False(setupRan);
+    }
+
     [Fact]
     public async Task ExecuteTextCommandAsync_AsyncLocalClearedAfterReturn()
     {
@@ -73,9 +98,14 @@ public class DaqifiDeviceTextCommandLockTests
         }
 
         public Task<System.Collections.Generic.IReadOnlyList<string>> CallExecuteTextCommandAsync(
-            Action setupAction)
+            Action setupAction,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null)
         {
-            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 100, completionTimeoutMs: 50);
+            return ExecuteTextCommandAsync(
+                setupAction,
+                responseTimeout ?? TimeSpan.FromMilliseconds(100),
+                completionTimeout ?? TimeSpan.FromMilliseconds(50));
         }
     }
 }

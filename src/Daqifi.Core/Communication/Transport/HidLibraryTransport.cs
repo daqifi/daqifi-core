@@ -109,14 +109,6 @@ public sealed class HidLibraryTransport : IHidTransport
     }
 
     /// <inheritdoc />
-    public void Connect(int vendorId, int productId, string? serialNumber = null)
-    {
-        ConnectAsync(vendorId, productId, serialNumber, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
-    }
-
-    /// <inheritdoc />
     public async Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -135,14 +127,6 @@ public sealed class HidLibraryTransport : IHidTransport
             candidate => string.Equals(candidate.DevicePath, devicePath, StringComparison.Ordinal),
             $"Path={devicePath}",
             cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public void ConnectByPath(string devicePath)
-    {
-        ConnectByPathAsync(devicePath, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
     }
 
     // Shared connect path: enumerate, pick the single device matching <paramref name="matches"/>
@@ -248,14 +232,6 @@ public sealed class HidLibraryTransport : IHidTransport
     }
 
     /// <inheritdoc />
-    public void Write(byte[] data)
-    {
-        WriteAsync(data, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
-    }
-
-    /// <inheritdoc />
     public async Task<byte[]> ReadAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -291,22 +267,14 @@ public sealed class HidLibraryTransport : IHidTransport
     }
 
     /// <inheritdoc />
-    public byte[] Read(TimeSpan? timeout = null)
-    {
-        return ReadAsync(timeout, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
-    }
-
-    /// <inheritdoc />
-    public async Task DisconnectAsync()
+    public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
         if (_disposed)
         {
             return;
         }
 
-        await _connectionLock.WaitAsync().ConfigureAwait(false);
+        await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_connectedDevice == null)
@@ -315,7 +283,7 @@ public sealed class HidLibraryTransport : IHidTransport
             }
 
             Exception? closeException = null;
-            await _ioLock.WaitAsync().ConfigureAwait(false);
+            await _ioLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 _connectedDevice.Close();
@@ -341,12 +309,6 @@ public sealed class HidLibraryTransport : IHidTransport
         {
             _connectionLock.Release();
         }
-    }
-
-    /// <inheritdoc />
-    public void Disconnect()
-    {
-        DisconnectAsync().GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />

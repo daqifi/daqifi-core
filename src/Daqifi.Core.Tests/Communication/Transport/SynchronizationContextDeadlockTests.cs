@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
@@ -8,12 +9,12 @@ using System.Net.Sockets;
 namespace Daqifi.Core.Tests.Communication.Transport;
 
 /// <summary>
-/// Pins the fix for issue #495: the library's synchronous facades block on their own async
-/// work (<c>ConnectAsync().GetAwaiter().GetResult()</c>), so every await underneath them must
-/// resume on the thread pool rather than on the caller's <see cref="SynchronizationContext"/>.
-/// A WPF/WinForms app that calls <see cref="DaqifiDeviceFactory.ConnectTcp(IPAddress,int,DeviceConnectionOptions?)"/>
-/// on the UI thread otherwise freezes permanently: the continuation is posted back to a context
-/// that is already blocked inside <c>GetResult()</c>, with no timeout and no exception.
+/// Pins the fix for issue #495: <see cref="DaqifiDevice.Connect"/> and
+/// <see cref="DaqifiDevice.Disconnect"/> block on their transport's async work, so nothing
+/// underneath them may resume on the caller's <see cref="SynchronizationContext"/>. A WPF/WinForms
+/// app that calls them on the UI thread otherwise freezes permanently: the continuation is posted
+/// back to a context that is already blocked inside <c>GetResult()</c>, with no timeout and no
+/// exception.
 ///
 /// Each test runs the blocking call on a dedicated thread that has a UI-like, single-threaded
 /// context installed and never pumps it. If a naked <c>await</c> survives anywhere on the path,
@@ -148,34 +149,6 @@ public class SynchronizationContextDeadlockTests
 
     #region Transports
 
-    [Fact]
-    public void TcpStreamTransport_ConnectAndDisconnect_UnderBlockedContext_Complete()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        // No explicit accept: the OS completes the handshake into the listen backlog, which is
-        // all the dial needs, and it keeps a blocking Task.Result out of the test body.
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-        try
-        {
-            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
-
-            var run = RunBlocking(() =>
-            {
-                transport.Connect();
-                transport.Disconnect();
-            });
-
-            Assert.True(run.Completed, "TcpStreamTransport.Connect()/Disconnect() deadlocked under a UI-like context.");
-            Assert.Null(run.Error);
-        }
-        finally
-        {
-            listener.Stop();
-        }
-    }
-
     /// <summary>
     /// The serial case named in #495: the first <c>Open()</c> after a re-plug fails, retry engages,
     /// and the connect path parks on <c>await Task.Delay(backoff)</c>. That delay's continuation is
@@ -246,38 +219,104 @@ public class SynchronizationContextDeadlockTests
 
     #endregion
 
-    #region Factory facades
+    #region Device facades
 
-    /// <summary>
-    /// The entry point the issue names: a WPF app calling the sync factory helper on its UI thread.
-    /// Device initialization is switched off because a bare loopback listener answers no SCPI —
-    /// the deadlock being pinned is in the connect path, which runs either way.
-    /// </summary>
     [Fact]
-    public void DaqifiDeviceFactory_ConnectTcp_UnderBlockedContext_Completes()
+    public void DaqifiDevice_ConnectAndDisconnectOverTcp_UnderBlockedContext_Complete()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
+        // No explicit accept: the OS completes the handshake into the listen backlog, which is
+        // all the dial needs, and it keeps a blocking Task.Result out of the test body.
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        DaqifiStreamingDevice? device = null;
 
         try
         {
-            var run = RunBlocking(() =>
-                device = DaqifiDeviceFactory.ConnectTcp(
-                    IPAddress.Loopback,
-                    port,
-                    new DeviceConnectionOptions { InitializeDevice = false }));
+            using var device = new DaqifiDevice("Blocked", new TcpStreamTransport(IPAddress.Loopback, port));
 
-            Assert.True(run.Completed, "DaqifiDeviceFactory.ConnectTcp deadlocked under a UI-like context.");
+            var run = RunBlocking(() =>
+            {
+                device.Connect();
+                device.Disconnect();
+            });
+
+            Assert.True(run.Completed, "DaqifiDevice.Connect()/Disconnect() deadlocked under a UI-like context.");
             Assert.Null(run.Error);
-            Assert.NotNull(device);
         }
         finally
         {
-            device?.Dispose();
             listener.Stop();
         }
+    }
+
+    [Fact]
+    public void DaqifiDevice_ConnectOverSerial_UnderBlockedContext_ThrowsTheTypedExceptionUnwrapped()
+    {
+        var portName = AbsentSerialPorts.Create();
+        using var device = new DaqifiDevice("Blocked", new SerialStreamTransport(portName));
+
+        var run = RunBlocking(device.Connect);
+
+        Assert.True(run.Completed, "DaqifiDevice.Connect() over serial deadlocked under a UI-like context.");
+        // The exact type proves the facade unwraps the failure rather than surfacing an
+        // AggregateException.
+        Assert.IsType<SerialPortConnectException>(run.Error);
+    }
+
+    /// <summary>
+    /// <see cref="IStreamTransport"/> is a consumer's to implement, and a consumer has no analyzer
+    /// insisting on <c>ConfigureAwait(false)</c>. Its one plain await must not hang the UI thread.
+    /// </summary>
+    [Fact]
+    public void DaqifiDevice_OverATransportWithNakedAwaits_UnderBlockedContext_Completes()
+    {
+        using var device = new DaqifiDevice("Blocked", new NakedAwaitTransport());
+        SynchronizationContext? afterwards = null;
+        SynchronizationContext? before = null;
+
+        var run = RunBlocking(() =>
+        {
+            before = SynchronizationContext.Current;
+            device.Connect();
+            device.Disconnect();
+            afterwards = SynchronizationContext.Current;
+        });
+
+        Assert.True(run.Completed, "A transport's naked await deadlocked DaqifiDevice.Connect()/Disconnect().");
+        Assert.Null(run.Error);
+        Assert.NotNull(before);
+        Assert.Same(before, afterwards);
+    }
+
+    private sealed class NakedAwaitTransport : IStreamTransport
+    {
+        public Stream Stream { get; } = new MemoryStream();
+
+        public bool IsConnected { get; private set; }
+
+        public string ConnectionInfo => "Naked";
+
+        public bool IsUsbConnection => false;
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public async Task ConnectAsync(
+            ConnectionRetryOptions? retryOptions = null,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(20, cancellationToken);
+            IsConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+        }
+
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(20, CancellationToken.None);
+            IsConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+        }
+
+        public void Dispose() => Stream.Dispose();
     }
 
     #endregion

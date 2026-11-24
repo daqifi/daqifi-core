@@ -57,7 +57,7 @@ public class ResourceAndPromptSurfaceTests
         // +, which every JSON reader decodes and no client displays, but which a substring
         // assertion would trip over.
         using var parsed = JsonDocument.Parse(contents.Text);
-        Assert.Equal("Nyquist3", parsed.RootElement.GetProperty("deviceType").GetString());
+        Assert.Equal("nyquist3", parsed.RootElement.GetProperty("deviceType").GetString());
 
         // The facts an agent cannot get from the device: how many bits, what range, and that this
         // is the board whose channels are sampled at one instant.

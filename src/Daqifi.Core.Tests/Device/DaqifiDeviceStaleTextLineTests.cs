@@ -126,7 +126,7 @@ public class DaqifiDeviceStaleTextLineTests
         // Regression for #592: the wait loop's hasReceivedAny flag only flipped on a line-count
         // increase OBSERVED INSIDE the loop, so a reply already sitting in collectedLines by the
         // time the loop took its first sample was invisible to it -- the exchange then sat out
-        // the full responseTimeoutMs instead of the short completionTimeoutMs, even though
+        // the full responseTimeout instead of the short completionTimeout, even though
         // nothing was actually missing. The content line is released at the stale-line boundary
         // (before the setup action even runs), and the setup action then blocks until the reader
         // has provably collected it, so the reply is guaranteed to already be in collectedLines by
@@ -155,11 +155,11 @@ public class DaqifiDeviceStaleTextLineTests
 
         Assert.Contains(lines, l => l.Contains("No error"));
         Assert.NotNull(sw);
-        // Well short of responseTimeoutMs (3000ms): without the fix this reliably took >=3000ms,
+        // Well short of responseTimeout (3000ms): without the fix this reliably took >=3000ms,
         // because hasReceivedAny never flipped and phase 1's full timeout ran out.
         Assert.True(
             sw.ElapsedMilliseconds < 2000,
-            $"Expected the exchange to finish near completionTimeoutMs (100ms), took {sw.ElapsedMilliseconds}ms.");
+            $"Expected the exchange to finish near completionTimeout (100ms), took {sw.ElapsedMilliseconds}ms.");
 
         device.Disconnect();
     }
@@ -191,7 +191,7 @@ public class DaqifiDeviceStaleTextLineTests
         // capture-to-send window (issue #553) and will be discarded as stale by the projection
         // below (index < sentBoundaryLineCount). A raw line-count comparison against
         // staleLineCount cannot tell that blank apart from real evidence, and would flip the wait
-        // loop into phase 2's short completionTimeoutMs immediately -- ending collection before
+        // loop into phase 2's short completionTimeout immediately -- ending collection before
         // the real response (released deliberately late here) has a chance to arrive, and
         // returning empty for a device that did, in fact, answer.
         //
@@ -336,7 +336,7 @@ public class DaqifiDeviceStaleTextLineTests
         // strictly after that boundary — a blank at or before it is a pre-send leftover by both
         // rules — and the exchange captures it microseconds after the setup action returns, which
         // no wall-clock delay can aim at. A delay only guesses, and on a loaded runner the guess
-        // races the exchange's own responseTimeoutMs and loses, which is issue #632. Releasing on
+        // races the exchange's own responseTimeout and loses, which is issue #632. Releasing on
         // the boundary makes the ordering the runtime's rather than the scheduler's. Nothing about
         // the window under test moves: the write is held from before the exchange until after it,
         // so the blank still lands with the command's write in progress — which is the whole point.
@@ -1064,8 +1064,8 @@ public class DaqifiDeviceStaleTextLineTests
 
             return await ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: responseTimeoutMs,
-                completionTimeoutMs: completionTimeoutMs,
+                responseTimeout: TimeSpan.FromMilliseconds(responseTimeoutMs),
+                completionTimeout: TimeSpan.FromMilliseconds(completionTimeoutMs),
                 keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
     }
@@ -1085,12 +1085,12 @@ public class DaqifiDeviceStaleTextLineTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -1150,8 +1150,8 @@ public class DaqifiDeviceStaleTextLineTests
 
             return await ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: responseTimeoutMs,
-                completionTimeoutMs: completionTimeoutMs,
+                responseTimeout: TimeSpan.FromMilliseconds(responseTimeoutMs),
+                completionTimeout: TimeSpan.FromMilliseconds(completionTimeoutMs),
                 keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
 
@@ -1161,8 +1161,8 @@ public class DaqifiDeviceStaleTextLineTests
         {
             return ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 500,
-                completionTimeoutMs: 150,
+                responseTimeout: TimeSpan.FromMilliseconds(500),
+                completionTimeout: TimeSpan.FromMilliseconds(150),
                 prepareAsync: prepareAsync);
         }
 
@@ -1173,8 +1173,8 @@ public class DaqifiDeviceStaleTextLineTests
         {
             return ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 500,
-                completionTimeoutMs: 150,
+                responseTimeout: TimeSpan.FromMilliseconds(500),
+                completionTimeout: TimeSpan.FromMilliseconds(150),
                 prepareAsync: prepareAsync,
                 finalizeAsync: finalizeAsync);
         }
@@ -1240,9 +1240,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="WithheldLineStream.WaitForLineCollected"/>.</summary>
         public bool WaitForLineCollected(TimeSpan timeout) => _stream.WaitForLineCollected(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(ReleaseOnStreamAccessMockTransport));
             _isConnected = true;
@@ -1250,16 +1248,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1385,9 +1379,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="TwoStageStream.WaitForContentConsumed"/>.</summary>
         public bool WaitForContentConsumed(TimeSpan timeout) => _stream.WaitForContentConsumed(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(TwoStageReleaseTransport));
             _isConnected = true;
@@ -1395,16 +1387,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1586,9 +1574,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="HoldableStream.WaitForLinesCollected"/>.</summary>
         public bool WaitForLinesCollected(TimeSpan timeout) => _stream.WaitForLinesCollected(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(QueuedWriteTransport));
             _isConnected = true;
@@ -1596,16 +1582,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

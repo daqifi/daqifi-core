@@ -220,8 +220,8 @@ public partial class SdCardOperationsCollaboratorTests
 
         await ops.GetSdCardFilesAsync();
 
-        Assert.Equal(3000, Assert.Single(host.ResponseTimeouts));
-        Assert.Equal(1000, Assert.Single(host.CompletionTimeouts));
+        Assert.Equal(TimeSpan.FromSeconds(3), Assert.Single(host.ResponseTimeouts));
+        Assert.Equal(TimeSpan.FromSeconds(1), Assert.Single(host.CompletionTimeouts));
     }
 
     [Fact]
@@ -937,6 +937,25 @@ public partial class SdCardOperationsCollaboratorTests
         var startIndex = calls.FindIndex(c => c.StartsWith("send:SYSTem:StartStreamData", StringComparison.Ordinal));
         Assert.True(maskIndex >= 0, "the channel mask was never sent");
         Assert.True(maskIndex < startIndex, "the channel mask must be enabled before streaming starts");
+    }
+
+    [Theory]
+    [InlineData("0,1")] // the firmware's two-argument form: one channel, not a mask
+    [InlineData("3;SYSTem:REboot")]
+    [InlineData("3\nSYSTem:REboot")]
+    [InlineData("0x3")]
+    [InlineData("-1")]
+    [InlineData("4294967296")]
+    public async Task StartSdCardLoggingSessionAsync_ChannelMaskNotADecimalBitmask_ThrowsBeforeSendingAnything(string channelMask)
+    {
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => ops.StartSdCardLoggingSessionAsync("data.bin", channelMask));
+
+        Assert.Equal("channelMask", ex.ParamName);
+        Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2552,10 +2571,10 @@ public partial class SdCardOperationsCollaboratorTests
         public List<LowSdSpaceWarningEventArgs> LowSpaceWarnings { get; } = new();
 
         /// <summary>The response timeout each exchange asked for, in order.</summary>
-        public List<int> ResponseTimeouts { get; } = new();
+        public List<TimeSpan?> ResponseTimeouts { get; } = new();
 
         /// <summary>The completion timeout each exchange asked for, in order.</summary>
-        public List<int> CompletionTimeouts { get; } = new();
+        public List<TimeSpan?> CompletionTimeouts { get; } = new();
 
         /// <summary>
         /// Runs after the setup action of the nth exchange (1-based) and before its response is
@@ -2677,16 +2696,16 @@ public partial class SdCardOperationsCollaboratorTests
 
         public async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             var index = ++ExchangeCount;
-            ResponseTimeouts.Add(responseTimeoutMs);
-            CompletionTimeouts.Add(completionTimeoutMs);
+            ResponseTimeouts.Add(responseTimeout);
+            CompletionTimeouts.Add(completionTimeout);
             Record("exchange:begin");
 
             try

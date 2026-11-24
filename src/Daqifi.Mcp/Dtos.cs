@@ -5,25 +5,40 @@ using Daqifi.Core.Device.SdCard;
 
 namespace Daqifi.Mcp;
 
-/// <summary>A device seen during discovery. <see cref="DeviceId"/> is the handle used by other tools.</summary>
+/// <summary>
+/// A device seen during discovery. <see cref="DeviceId"/> is the handle used by other tools; see
+/// <see cref="DaqifiAgent.MintIds"/> for what it is made of.
+/// </summary>
 public sealed record DiscoveredDevice(
     string DeviceId,
     string Name,
-    string ConnectionType,
+    WireConnectionType ConnectionType,
     string SerialNumber,
     string FirmwareVersion,
     string? Address,
-    string DeviceType)
+    WireDeviceType DeviceType)
 {
     public static DiscoveredDevice From(string id, IDeviceInfo info) => new(
         id,
         info.Name,
-        info.ConnectionType.ToString(),
+        info.ConnectionType.ToWire(),
         info.SerialNumber,
         info.FirmwareVersion,
-        info.ConnectionType == Daqifi.Core.Device.Discovery.ConnectionType.Serial ? info.PortName : info.IPAddress?.ToString(),
-        info.Type.ToString());
+        DaqifiAgent.Address(info),
+        info.Type.ToWire());
 }
+
+/// <summary>What a discovery pass found. Empty means nothing answered.</summary>
+public sealed record DiscoveryResult(IReadOnlyList<DiscoveredDevice> Devices);
+
+/// <summary>The devices this server is connected to.</summary>
+public sealed record ConnectedDevices(IReadOnlyList<ConnectedDeviceInfo> Devices);
+
+/// <summary>
+/// Result of disconnecting a device. <see cref="WasConnected"/> is <c>false</c> when there was no
+/// such connection to close, which is reported rather than thrown: either way it is not connected now.
+/// </summary>
+public sealed record DisconnectResult(string DeviceId, bool WasConnected);
 
 /// <summary>
 /// Summary of a currently-connected device. <see cref="AnalogOutputChannelCount"/> counts DAC
@@ -35,7 +50,7 @@ public sealed record DiscoveredDevice(
 public sealed record ConnectedDeviceInfo(
     string DeviceId,
     string Name,
-    bool Connected,
+    WireConnectionStatus ConnectionStatus,
     int AnalogChannelCount,
     int DigitalChannelCount,
     int AnalogOutputChannelCount)
@@ -51,7 +66,7 @@ public sealed record ConnectedDeviceInfo(
             else if (ch.Type == ChannelType.Digital) digital++;
             else if (ch.Type == ChannelType.AnalogOutput) analogOutput++;
         }
-        return new ConnectedDeviceInfo(id, device.Name, device.IsConnected, analog, digital, analogOutput);
+        return new ConnectedDeviceInfo(id, device.Name, device.Status.ToWire(), analog, digital, analogOutput);
     }
 }
 
@@ -59,7 +74,7 @@ public sealed record ConnectedDeviceInfo(
 public sealed record DeviceStatus(
     string DeviceId,
     string Name,
-    string ConnectionStatus,
+    WireConnectionStatus ConnectionStatus,
     bool Streaming,
     bool LoggingToSdCard,
     int SampleRateHz,
@@ -83,7 +98,7 @@ public sealed record DeviceStatus(
             .OrderBy(n => n)
             .ToList();
         return new DeviceStatus(
-            id, device.Name, device.Status.ToString(), streaming, logging, rate, enabledAnalog, enabledDigital);
+            id, device.Name, device.Status.ToWire(), streaming, logging, rate, enabledAnalog, enabledDigital);
     }
 }
 
@@ -95,7 +110,7 @@ public sealed record DeviceStatus(
 /// <c>null</c> until the capability document has been read.
 /// </summary>
 /// <remarks>
-/// <see cref="Resolution"/>, <see cref="ResolutionBits"/>, <see cref="ResolutionIsAssumed"/> and
+/// <see cref="MaxRawValue"/>, <see cref="ResolutionBits"/>, <see cref="ResolutionIsAssumed"/> and
 /// <see cref="PortRangeVolts"/> are the analog counterparts, and they are what tells an agent how
 /// to read a value: 2.47 V means something different from a 12-bit converter than from a 24-bit
 /// one. The device reports all of them in its capability document
@@ -103,15 +118,15 @@ public sealed record DeviceStatus(
 /// to scale a sample, so they describe the unit on the bench rather than its product page.
 /// </remarks>
 public sealed record ChannelInfo(
-    int ChannelNumber,
-    string Type,
+    int Channel,
+    WireChannelType Type,
     string Name,
     bool Enabled,
-    string Direction,
+    WireChannelDirection Direction,
     bool? PwmCapable,
     bool? PwmEnabled,
     string? Unit = null,
-    uint? Resolution = null,
+    uint? MaxRawValue = null,
     int? ResolutionBits = null,
     bool? ResolutionIsAssumed = null,
     double? PortRangeVolts = null)
@@ -122,10 +137,10 @@ public sealed record ChannelInfo(
         var analog = ch as IAnalogChannel;
         return new(
             ch.ChannelNumber,
-            ch.Type.ToString(),
+            ch.Type.ToWire(),
             ch.Name,
             ch.IsEnabled,
-            ch.Direction.ToString(),
+            ch.Direction.ToWire(),
             digital?.IsPwmCapable,
             digital?.IsPwmEnabled,
             (ch as IScaledChannel)?.Unit,
@@ -147,7 +162,7 @@ public sealed record ChannelInfo(
     /// actually uses; bit depth is the form a person and a model both think in. Derived rather
     /// than stored so the two can never disagree, and left null rather than rounded when the
     /// count is not 2^n - 1 — a device reporting something else is reporting something this
-    /// cannot describe honestly, and <see cref="Resolution"/> is still there to be read.
+    /// cannot describe honestly, and <see cref="MaxRawValue"/> is still there to be read.
     /// </remarks>
     internal static int? ResolutionToBits(uint resolution)
     {
@@ -162,6 +177,9 @@ public sealed record ChannelInfo(
         return System.Numerics.BitOperations.Log2(counts);
     }
 }
+
+/// <summary>Every channel on a device.</summary>
+public sealed record ChannelListing(string DeviceId, IReadOnlyList<ChannelInfo> Channels);
 
 /// <summary>
 /// Result of a channel-configuration change. <see cref="SampleRateAdjustedFromHz"/> is non-null
@@ -191,12 +209,12 @@ public sealed record ConfigureDigitalResult(
 /// operation. The pin's level is not echoed: Core keeps no local copy of a commanded level, and
 /// the streamed reading only reflects the write once the next sample arrives (#901).
 /// </summary>
-public sealed record DigitalPinResult(string DeviceId, int Channel, string Direction)
+public sealed record DigitalPinResult(string DeviceId, int Channel, WireChannelDirection Direction)
 {
     public static DigitalPinResult From(string deviceId, IChannel ch) => new(
         deviceId,
         ch.ChannelNumber,
-        ch.Direction.ToString());
+        ch.Direction.ToWire());
 }
 
 /// <summary>
@@ -207,7 +225,7 @@ public sealed record DigitalPinResult(string DeviceId, int Channel, string Direc
 /// "this is a constant Core made up" (#450). <see cref="FrequencyHz"/> is device-wide; all PWM
 /// channels share one frequency.
 /// </summary>
-public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int? DutyCyclePercent, int? FrequencyHz)
+public sealed record PwmResult(string DeviceId, int Channel, bool PwmEnabled, int? DutyCyclePercent, int? FrequencyHz)
 {
     public static PwmResult From(string deviceId, IStreamingDevice device, IChannel ch, bool dutyCommanded, bool frequencyCommanded)
     {
@@ -265,8 +283,14 @@ public sealed record AnalogOutputState(
 }
 
 /// <summary>
+/// The device's analog-output (DAC) channels. Empty when it has none, or described none.
+/// </summary>
+public sealed record AnalogOutputListing(string DeviceId, IReadOnlyList<AnalogOutputState> Outputs);
+
+/// <summary>
 /// Result of writing an analog-output voltage.
 /// </summary>
+/// <param name="Volts">The voltage that was asked for.</param>
 /// <param name="Applied">
 /// Whether the value is now on the pin. <c>false</c> means it was staged only and is waiting for
 /// latch_analog_outputs.
@@ -276,17 +300,17 @@ public sealed record AnalogOutputState(
 /// device described no analog outputs at all — the command was addressed by channel number and
 /// nothing here can vouch for it (see <see cref="DaqifiAgent.SetAnalogOutputAsync"/>).
 /// </param>
-/// <param name="State">
+/// <param name="Output">
 /// The channel afterwards, or <c>null</c> when the device described no analog outputs and there is
 /// therefore no modelled channel to report.
 /// </param>
 public sealed record AnalogOutputResult(
     string DeviceId,
     int Channel,
-    double RequestedVolts,
+    double Volts,
     bool Applied,
     bool RangeChecked,
-    AnalogOutputState? State);
+    AnalogOutputState? Output);
 
 /// <summary>
 /// Result of latching the staged analog outputs: every modelled analog-output channel afterwards,
@@ -311,15 +335,21 @@ public sealed record AnalogOutputReading(string DeviceId, int Channel, double Vo
 /// for its currently enabled channels, or a lower <c>--max-sample-rate-hz</c>) is rejected
 /// outright rather than clamped — see <see cref="DaqifiAgent.SetSampleRateAsync"/>.
 /// </summary>
-public sealed record SampleRateResult(string DeviceId, int RequestedRateHz);
+public sealed record SampleRateResult(string DeviceId, int SampleRateHz);
 
 /// <summary>Result of starting SD-card logging.</summary>
 public sealed record StartLoggingResult(
     string DeviceId,
     string FileName,
-    string Format,
+    WireSdLogFormat Format,
     int SampleRateHz,
     IReadOnlyList<int> EnabledAnalogChannels);
+
+/// <summary>
+/// Result of stopping SD-card logging: the same <c>loggingToSdCard</c> flag
+/// <see cref="DeviceStatus"/> reports, as it stands afterwards.
+/// </summary>
+public sealed record StopLoggingResult(string DeviceId, bool LoggingToSdCard);
 
 /// <summary>
 /// One file in the device's SD-card directory listing. <see cref="SizeBytes"/> and
@@ -339,11 +369,11 @@ public sealed record SdFileEntry(string FileName, long? SizeBytes, DateTime? Cre
 public sealed record SdFileListing(string DeviceId, int FileCount, IReadOnlyList<SdFileEntry> Files);
 
 /// <summary>
-/// Free/used/total space on the device's SD card. <see cref="PercentFree"/> is rounded to one
+/// Free/used/total space on the device's SD card. <see cref="FreePercent"/> is rounded to one
 /// decimal and is 0 when the device reports a total of 0 bytes.
 /// </summary>
 public sealed record SdStorageReport(
-    string DeviceId, long FreeBytes, long UsedBytes, long TotalBytes, double PercentFree)
+    string DeviceId, long FreeBytes, long UsedBytes, long TotalBytes, double FreePercent)
 {
     public static SdStorageReport From(string deviceId, SdCardStorageInfo info) => new(
         deviceId,
@@ -356,6 +386,7 @@ public sealed record SdStorageReport(
 /// <summary>
 /// Result of downloading an SD-card file to this machine.
 /// </summary>
+/// <param name="DurationMs">How long the transfer took.</param>
 /// <param name="FilePath">Where the raw file was written locally (a temporary file owned by this server).</param>
 /// <param name="CsvPath">Where the CSV was written, or null when CSV export was not requested or failed.</param>
 /// <param name="CsvRowCount">CSV lines written — one per distinct timestamp, not one per sample.</param>
@@ -370,7 +401,7 @@ public sealed record SdDownloadReport(
     string DeviceId,
     string FileName,
     long SizeBytes,
-    double DurationSeconds,
+    long DurationMs,
     string FilePath,
     string? CsvPath,
     long? CsvRowCount,
@@ -385,13 +416,13 @@ public sealed record SdDeleteResult(string DeviceId, string FileName);
 /// </summary>
 /// <param name="Column">The channel's label — <c>AI0</c>, <c>DIO3</c>.</param>
 /// <param name="Channel">The channel number, which repeats across types (AI0 and DIO0 both exist).</param>
-/// <param name="Type">Analog or Digital.</param>
+/// <param name="Type">Analog or digital.</param>
 /// <param name="Value">
 /// The decoded value — volts for an analog channel, 0/1 for a digital one — or <c>null</c> when this
 /// channel produced no sample inside the read window. Null is not zero: it means no data arrived.
 /// </param>
 /// <param name="Timestamp">When the sample was taken, reconstructed from the device clock.</param>
-/// <param name="DeviceTimestamp">The device's own clock ticks for the sample, verbatim.</param>
+/// <param name="DeviceTimestampTicks">The device's own clock ticks for the sample, verbatim.</param>
 /// <param name="RawValue">
 /// The raw device value the reading was decoded from: the raw ADC count for an analog channel, or
 /// the 0/1 bit for a digital one. Supported firmware streams raw counts on every transport, so an
@@ -402,10 +433,10 @@ public sealed record SdDeleteResult(string DeviceId, string FileName);
 public sealed record ChannelReading(
     string Column,
     int Channel,
-    string Type,
+    WireChannelType Type,
     double? Value,
     DateTime? Timestamp,
-    uint? DeviceTimestamp,
+    uint? DeviceTimestampTicks,
     int? RawValue);
 
 /// <summary>
@@ -417,7 +448,7 @@ public sealed record ChannelReading(
 /// means a stream was already running and was left running.
 /// </param>
 /// <param name="ChannelsReported">How many of the listed channels actually produced a value.</param>
-/// <param name="DurationSeconds">How long the read waited — well under the timeout once every channel has reported.</param>
+/// <param name="DurationMs">How long the read waited — well under the timeout once every channel has reported.</param>
 /// <param name="DroppedSampleCount">Samples the device produced faster than this server consumed them.</param>
 /// <param name="IgnoredSampleCount">
 /// Samples that arrived for a channel outside the enabled set this call snapshotted — someone
@@ -428,7 +459,7 @@ public sealed record ChannelReadings(
     int SampleRateHz,
     bool StartedStream,
     int ChannelsReported,
-    double DurationSeconds,
+    long DurationMs,
     long DroppedSampleCount,
     long IgnoredSampleCount,
     IReadOnlyList<ChannelReading> Channels);
@@ -438,14 +469,14 @@ public sealed record ChannelReadings(
 /// <see cref="CaptureResult.Columns"/> order.
 /// </summary>
 /// <param name="Timestamp">The tick's timestamp, reconstructed from the device clock.</param>
-/// <param name="DeviceTimestamp">The device's own clock ticks for the row, verbatim.</param>
+/// <param name="DeviceTimestampTicks">The device's own clock ticks for the row, verbatim.</param>
 /// <param name="Values">
 /// One value per column, in <see cref="CaptureResult.Columns"/> order. An entry is <c>null</c> when
 /// that channel had no value on this tick, which in practice happens only at the two ends: the
 /// device's first frame after a stream starts can carry the digital port without the analog
 /// readings, and a capture that runs out of time mid-tick keeps the part of the tick it got.
 /// </param>
-public sealed record CaptureRow(DateTime Timestamp, uint? DeviceTimestamp, IReadOnlyList<double?> Values);
+public sealed record CaptureRow(DateTime Timestamp, uint? DeviceTimestampTicks, IReadOnlyList<double?> Values);
 
 /// <summary>
 /// A bounded block of live data.
@@ -455,7 +486,7 @@ public sealed record CaptureRow(DateTime Timestamp, uint? DeviceTimestamp, IRead
 /// Whether this call started the device's stream (and stopped it again afterwards). <c>false</c>
 /// means it attached to a stream that was already running and left it running.
 /// </param>
-/// <param name="DurationSeconds">How long the capture actually ran.</param>
+/// <param name="DurationMs">How long the capture actually ran.</param>
 /// <param name="RowCount">Rows returned.</param>
 /// <param name="SampleCount">Individual channel samples those rows hold.</param>
 /// <param name="DroppedSampleCount">
@@ -488,7 +519,7 @@ public sealed record CaptureResult(
     string DeviceId,
     int SampleRateHz,
     bool StartedStream,
-    double DurationSeconds,
+    long DurationMs,
     int RowCount,
     long SampleCount,
     long DroppedSampleCount,
@@ -534,6 +565,7 @@ public sealed record CaptureResult(
 /// </param>
 /// <param name="Capture">The captured block, exactly as <c>capture_samples</c> returns one.</param>
 public sealed record DriveAndCaptureResult(
+    string DeviceId,
     int Channel,
     bool High,
     int DelayMs,
@@ -573,7 +605,7 @@ public sealed record ServerVersionInfo(
     string Version,
     string? LatestVersion,
     bool UpdateAvailable,
-    string VersionCheck,
+    WireVersionCheck VersionCheck,
     string Message)
 {
     internal static ServerVersionInfo Checked(string current, string latest)
@@ -585,7 +617,7 @@ public sealed record ServerVersionInfo(
               + $"Update with `{ServerVersion.UpdateCommand}`, then restart your MCP client."
             : $"{ServerVersion.PackageId} {current} is up to date ({latest} is the newest published version).";
 
-        return new ServerVersionInfo(ServerVersion.PackageId, current, latest, updateAvailable, "ok", message);
+        return new ServerVersionInfo(ServerVersion.PackageId, current, latest, updateAvailable, WireVersionCheck.Ok, message);
     }
 
     internal static ServerVersionInfo CheckDisabled(string current) => new(
@@ -593,7 +625,7 @@ public sealed record ServerVersionInfo(
         current,
         LatestVersion: null,
         UpdateAvailable: false,
-        VersionCheck: "disabled",
+        VersionCheck: WireVersionCheck.Disabled,
         Message: $"{ServerVersion.PackageId} {current} is running. The version check is disabled "
             + "(--no-version-check), so whether a newer release exists is unknown.");
 
@@ -602,7 +634,7 @@ public sealed record ServerVersionInfo(
         current,
         LatestVersion: null,
         UpdateAvailable: false,
-        VersionCheck: "unavailable",
+        VersionCheck: WireVersionCheck.Unavailable,
         Message: $"{ServerVersion.PackageId} {current} is running. nuget.org could not be reached, "
             + $"so whether a newer release exists is unknown; `{ServerVersion.UpdateCommand}` "
             + "updates it either way.");

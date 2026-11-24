@@ -125,8 +125,8 @@ internal sealed class LiveSampleStream
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamSamplesAsync"/>
     internal async IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken = default,
-        int? bufferCapacity = null)
+        int? bufferCapacity = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var capacity = bufferCapacity ?? DaqifiStreamingDevice.DefaultLiveSampleBufferCapacity;
         if (capacity < 1)

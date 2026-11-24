@@ -352,8 +352,8 @@ if (device.Supports(DeviceFeature.WifiLinkStatus))
 
 `IFirmwareUpdateService` orchestrates both PIC32 and WiFi-module flashing with explicit state transitions and `IProgress<FirmwareUpdateProgress>` for UI / CLI reporting.
 
-- `UpdateFirmwareAsync(...)` — PIC32 firmware flashing from a local Intel HEX file
-- `UpdateWifiModuleAsync(...)` — WiFi module flashing via an external tool runner. Automatically checks the device's current WiFi-chip firmware against the latest GitHub release and skips the flash if already up to date.
+- `UpdateFirmwareAsync(...)` — PIC32 firmware flashing from a local Intel HEX file. Pass a `FirmwareUpdateTarget` to name the board when more than one is in its bootloader.
+- `UpdateWifiModuleAsync(...)` — WiFi module flashing via an external tool runner. Automatically checks the device's current WiFi-chip firmware against the latest GitHub release and skips the flash if already up to date; `WifiUpdateOptions.SkipVersionCheck` flashes regardless.
 
 **Safe failure cleanup (PIC32).** If a PIC32 update fails — or is canceled — after the erase command has been sent (in `ErasingFlash`, `Programming`, or `Verifying`) and the HID bootloader is still connected, the service automatically re-erases the application flash so the device is never abandoned half-flashed: a half-flashed image would otherwise boot into garbage on the next power cycle, recoverable only by the physical button-hold procedure. A failure or cancel in `ErasingFlash` *before* the erase command is sent leaves the existing firmware untouched: nothing is re-erased, and the update ends in `Failed` with `Pic32FlashCondition.NotChanged`. The flow surfaces two extra states:
 
@@ -412,7 +412,7 @@ This library follows semantic versioning. Releases are automated via GitHub Acti
 3. Publishing to NuGet happens automatically on release
 4. After a stable release, run `python3 scripts/post-release.py X.Y.Z` and open a PR with the result ([CONTRIBUTING.md](https://github.com/daqifi/daqifi-core/blob/main/CONTRIBUTING.md#after-a-release))
 
-The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and, unless it is a pre-release, lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`.
+The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and, unless it is a pre-release, lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`, whose committed version is a placeholder that the release stamps from the tag.
 
 Semver here tracks **source** compatibility, not binary compatibility: appending a parameter
 to a public positional record (with a default) is not treated as a breaking change requiring

@@ -164,7 +164,7 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
     private sealed class SlowLinkDevice(IStreamTransport transport) : DaqifiDevice("Slow Link Device", transport)
     {
         public Task<IReadOnlyList<string>> QueryAsync(string command) =>
-            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeoutMs: 3000, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeout: TimeSpan.FromMilliseconds(3000), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     private sealed class SlowLinkTransport(bool complete) : IStreamTransport
@@ -184,31 +184,19 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
-        {
-            Connect();
-            return Task.CompletedTask;
-        }
-
-        public Task DisconnectAsync()
-        {
-            Disconnect();
-            return Task.CompletedTask;
-        }
-
-        public void Connect()
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
-        public void Disconnect()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
         public void Dispose()

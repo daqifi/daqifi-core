@@ -75,7 +75,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// How long to wait for the device to say whether it is streaming after a start. The firmware
     /// reads a flag held in RAM, so this only needs to cover the round trip.
     /// </summary>
-    private const int StartedStateResponseTimeoutMs = 2000;
+    private static readonly TimeSpan StartedStateResponseTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// How long to wait for the first answer after a stop. The firmware answers nothing until the
@@ -83,13 +83,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// 0.5 s to flush USB. Not shortened when no log is known to be open here: another connection
     /// may have opened one.
     /// </summary>
-    private const int StoppedStateResponseTimeoutMs = 7000;
+    private static readonly TimeSpan StoppedStateResponseTimeout = TimeSpan.FromSeconds(7);
 
     /// <summary>
     /// How long to wait for the acknowledgement of a reboot sent to an idle device. The firmware
     /// writes it before doing anything else; measured at 23 ms over USB (FW 3.9.1).
     /// </summary>
-    private const int RebootResponseTimeoutMs = 3000;
+    private static readonly TimeSpan RebootResponseTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// How long the reader is left decoding frames after a stop, before the device is asked
@@ -663,7 +663,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
 
         var (isStreaming, reply) = await QueryStreamingStateAsync(
-            StartedStateResponseTimeoutMs, cancellationToken).ConfigureAwait(false);
+            StartedStateResponseTimeout, cancellationToken).ConfigureAwait(false);
 
         // Stopped from another thread while the device was being asked: its "no" is that stop, not
         // a refused start.
@@ -759,14 +759,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// a lost reply is then worth one more question, and a device that is really silent is not
     /// made to look like it.
     /// </remarks>
-    /// <param name="responseTimeoutMs">How long to wait for the first line of each answer.</param>
+    /// <param name="responseTimeout">How long to wait for the first line of each answer.</param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>
     /// The device's answer and the line it was in; <c>null</c> and the last SCPI error the device
     /// reported, if any, when it gave none.
     /// </returns>
     private async Task<(bool? IsStreaming, string? Reply)> QueryStreamingStateAsync(
-        int responseTimeoutMs,
+        TimeSpan responseTimeout,
         CancellationToken cancellationToken)
     {
         string? error = null;
@@ -775,7 +775,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         {
             var lines = await ExecuteTextCommandAsync(
                 () => Send(ScpiMessageProducer.GetStreamingState),
-                responseTimeoutMs: responseTimeoutMs,
+                responseTimeout: responseTimeout,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             // The last one, because a reply to an earlier question can only precede this one's.
@@ -933,7 +933,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
                 await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
 
                 var (isStreaming, reply) = await QueryStreamingStateAsync(
-                    StoppedStateResponseTimeoutMs, ct).ConfigureAwait(false);
+                    StoppedStateResponseTimeout, ct).ConfigureAwait(false);
 
                 var command = ScpiMessageProducer.StopStreaming.Data;
                 if (isStreaming == null)
@@ -1096,10 +1096,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// still throws on the first <c>MoveNextAsync</c> rather than at the call.
     /// </para>
     /// </remarks>
-    /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
     /// <param name="bufferCapacity">
     /// Bounded buffer capacity; defaults to <see cref="DefaultLiveSampleBufferCapacity"/> when null.
     /// </param>
+    /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
     /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
     /// <exception cref="DeviceNotConnectedException">
@@ -1107,9 +1107,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// was running. Both are raised from <c>MoveNextAsync</c>, after any buffered samples.
     /// </exception>
     public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-        CancellationToken cancellationToken = default,
-        int? bufferCapacity = null)
-        => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
+        int? bufferCapacity = null,
+        CancellationToken cancellationToken = default)
+        => _liveSampleStream.StreamSamplesAsync(bufferCapacity, cancellationToken);
 
     /// <summary>
     /// Ends the live-sample enumerations when the device stops being connected (issue #496).
@@ -1470,14 +1470,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             await RunExclusiveAsync(
                 async ct =>
                 {
-                    var responseTimeoutMs = RebootResponseTimeoutMs;
+                    var responseTimeout = RebootResponseTimeout;
                     if (IsStreaming)
                     {
                         // Only the stop itself: the rest of what ends an SD log configures a
                         // device that is about to lose that configuration.
                         Send(ScpiMessageProducer.StopStreaming);
                         await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
-                        responseTimeoutMs = StoppedStateResponseTimeoutMs;
+                        responseTimeout = StoppedStateResponseTimeout;
                     }
 
                     var lines = await ExecuteTextCommandAsync(
@@ -1487,7 +1487,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
                             sent = true;
                             Send(ScpiMessageProducer.GetSystemError);
                         },
-                        responseTimeoutMs: responseTimeoutMs,
+                        responseTimeout: responseTimeout,
                         cancellationToken: ct).ConfigureAwait(false);
 
                     acknowledged = lines.Any(line =>
@@ -1870,19 +1870,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 
-#pragma warning disable CA1068 // Matches the seam it forwards to.
     Task<IReadOnlyList<string>> IDeviceOperationHost.ExecuteTextCommandAsync(
         Action setupAction,
-        int responseTimeoutMs,
-        int completionTimeoutMs,
-        CancellationToken cancellationToken,
+        TimeSpan? responseTimeout,
+        TimeSpan? completionTimeout,
         Func<CancellationToken, Task>? prepareAsync,
         Func<Task>? finalizeAsync,
-        bool keepBlankLines)
+        bool keepBlankLines,
+        CancellationToken cancellationToken)
         => ExecuteTextCommandAsync(
-            setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync,
-            finalizeAsync, keepBlankLines);
-#pragma warning restore CA1068
+            setupAction, responseTimeout, completionTimeout, prepareAsync, finalizeAsync,
+            keepBlankLines, cancellationToken);
 
     Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
         int maxIterations,

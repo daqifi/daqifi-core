@@ -295,13 +295,17 @@ public class TextExchangeSingleReaderTests
         }
 
         public Task<IReadOnlyList<string>> QueryAsync(string command) =>
-            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeoutMs: 1000, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeout: TimeSpan.FromMilliseconds(1000), completionTimeout: TimeSpan.FromMilliseconds(100));
 
         public Task<IReadOnlyList<string>> RunAsync(
             Action setupAction,
             int responseTimeoutMs = 300,
             CancellationToken cancellationToken = default) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs, completionTimeoutMs: 100, cancellationToken);
+            ExecuteTextCommandAsync(
+                setupAction,
+                TimeSpan.FromMilliseconds(responseTimeoutMs),
+                TimeSpan.FromMilliseconds(100),
+                cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -324,31 +328,19 @@ public class TextExchangeSingleReaderTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
-        {
-            Connect();
-            return Task.CompletedTask;
-        }
-
-        public Task DisconnectAsync()
-        {
-            Disconnect();
-            return Task.CompletedTask;
-        }
-
-        public void Connect()
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
-        public void Disconnect()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
         }
 
         public void Dispose()

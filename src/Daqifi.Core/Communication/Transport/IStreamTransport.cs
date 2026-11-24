@@ -59,81 +59,55 @@ public interface IStreamTransport : IDisposable
     /// Handlers run synchronously on whatever thread raised the change, and no particular thread
     /// is guaranteed. A drop is raised from the watchdog or reader thread that detected it. A
     /// connect is raised from a thread-pool thread when the dial actually suspends, or inline on
-    /// the calling thread when it does not — the connect path deliberately resumes off the
-    /// caller's <see cref="SynchronizationContext"/> so the synchronous <see cref="Connect"/> and
-    /// <see cref="Disconnect"/> facades cannot deadlock a UI thread (issue #495), but
-    /// <c>ConfigureAwait(false)</c> only declines the context, it does not force a thread hop.
-    /// Treat the thread as arbitrary: a UI consumer must marshal to its own dispatcher before
-    /// touching controls.
+    /// the calling thread when it does not. Treat the thread as arbitrary: a UI consumer must
+    /// marshal to its own dispatcher before touching controls, and should post rather than block
+    /// on it, because the UI thread may itself be blocked in
+    /// <see cref="Daqifi.Core.Device.DaqifiDevice.Connect"/>.
     /// </remarks>
     event EventHandler<TransportStatusEventArgs>? StatusChanged;
-
-    /// <summary>
-    /// Establishes the transport connection.
-    /// </summary>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    Task ConnectAsync();
-
-    /// <summary>
-    /// Establishes the transport connection with retry support.
-    /// </summary>
-    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    Task ConnectAsync(ConnectionRetryOptions? retryOptions);
 
     /// <summary>
     /// Establishes the transport connection, abandoning the attempt if
     /// <paramref name="cancellationToken"/> is signalled.
     /// </summary>
-    /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
-    Task ConnectAsync(CancellationToken cancellationToken) => ConnectAsync(null, cancellationToken);
-
-    /// <summary>
-    /// Establishes the transport connection with retry support, abandoning the attempt if
-    /// <paramref name="cancellationToken"/> is signalled — including while waiting out the
-    /// backoff delay between retries.
-    /// </summary>
     /// <remarks>
     /// <para>
-    /// This is the cancellable form of <see cref="ConnectAsync(ConnectionRetryOptions?)"/>. It has a
-    /// default implementation, so an existing <see cref="IStreamTransport"/> implementation keeps
-    /// compiling and working unchanged. That default honors the token only <i>before</i> the attempt
-    /// starts and then forwards to the uncancellable overload, which cannot be interrupted once it
-    /// is running.
+    /// Cancellation covers the whole call: before an attempt starts, while one is in flight, and
+    /// while waiting out the backoff delay between retries. Starting a connection the caller has
+    /// already given up on has real side effects (a serial open pulses DTR and resets the MCU), so
+    /// an implementation must not begin an attempt once the token is signalled.
     /// </para>
     /// <para>
-    /// The pre-check is not a formality: opening a connection the caller has already given up on has
-    /// real side effects — a serial open pulses DTR and resets the MCU — so refusing to start is the
-    /// one part of this contract every implementation can keep. Implementations that can also
-    /// abandon an attempt already in flight should override this member; the transports shipped in
-    /// daqifi-core do.
+    /// A canceled attempt leaves the transport disconnected and reusable: a later call may connect
+    /// it. An implementation over a native open that cannot be interrupted must still return
+    /// promptly, and must release the handle itself when that open finally completes.
+    /// </para>
+    /// <para>
+    /// <see cref="Daqifi.Core.Device.DaqifiDevice.Connect"/> blocks on this method, so an
+    /// implementation must not need the thread it was called on in order to finish.
     /// </para>
     /// </remarks>
-    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
+    /// <param name="retryOptions">Configuration for retry behavior. If null, makes a single attempt.</param>
     /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
     /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
-    Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ConnectAsync(retryOptions);
-    }
+    Task ConnectAsync(
+        ConnectionRetryOptions? retryOptions = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Closes the transport connection.
+    /// Closes the transport connection. A connect still in flight is ended too, retries included:
+    /// nothing reopens the connection after this returns until <see cref="ConnectAsync"/> is called
+    /// again.
     /// </summary>
+    /// <remarks>
+    /// Cancellation never leaves the connection open and never throws
+    /// <see cref="OperationCanceledException"/>: the token only cuts short anything an
+    /// implementation waits for before closing (a graceful shutdown handshake, say). This matches
+    /// <see cref="Daqifi.Core.Device.DaqifiDevice.DisconnectAsync"/>. The transports shipped in
+    /// daqifi-core wait for nothing, so the token has no effect on them.
+    /// </remarks>
+    /// <param name="cancellationToken">Cuts short any wait that precedes the close.</param>
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
-    Task DisconnectAsync();
-
-    /// <summary>
-    /// Establishes the transport connection synchronously.
-    /// </summary>
-    void Connect();
-
-    /// <summary>
-    /// Closes the transport connection synchronously.
-    /// </summary>
-    void Disconnect();
+    Task DisconnectAsync(CancellationToken cancellationToken = default);
 }
