@@ -29,7 +29,7 @@
          TimeProvider (issue #637): it makes a multi-second timeout a stepped clock rather than a
          slept-through one. Test-only; Daqifi.Core itself takes no new dependency, since
          TimeProvider is in-framework. -->
-    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="11.0.1" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />

@@ -5,7 +5,7 @@ namespace Daqifi.Core.Communication.Messages;
 /// This is a generic wrapper that can hold any type of data.
 /// </summary>
 /// <typeparam name="T">The type of the data payload.</typeparam>
-public class GenericInboundMessage<T> : IInboundMessage<T>
+internal class GenericInboundMessage<T> : IInboundMessage<T>
 {
     /// <summary>
     /// Gets the data associated with the message.

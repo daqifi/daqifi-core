@@ -3,7 +3,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// <summary>
 /// Enumerates HID devices for discovery and bootloader connection workflows.
 /// </summary>
-public interface IHidDeviceEnumerator
+internal interface IHidDeviceEnumerator
 {
     /// <summary>
     /// Enumerates HID devices, optionally filtered by vendor/product identifiers.

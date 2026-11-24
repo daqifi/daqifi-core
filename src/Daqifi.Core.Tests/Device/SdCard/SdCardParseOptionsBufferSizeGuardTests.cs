@@ -237,7 +237,9 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
 
     /// <summary>
     /// Discovers — rather than restates — the parse entry points: every public instance method on
-    /// <c>Daqifi.Core</c>'s exported surface that accepts an <see cref="Sd.SdCardParseOptions"/>.
+    /// any type in <c>Daqifi.Core</c> that accepts an <see cref="Sd.SdCardParseOptions"/>. The
+    /// parsers themselves are internal (issue #1029), so the search covers every type in the
+    /// assembly rather than only its exported ones.
     /// Nothing about the three current parsers is named here, so a fourth format's parser turns up
     /// without anyone remembering to edit this file. That is the point: #712 happened because two
     /// formats missed a check nobody had enumerated.
@@ -249,7 +251,7 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
     /// </remarks>
     private static MethodInfo[] DiscoverParseEntryPoints() =>
         typeof(Sd.SdCardParseOptions).Assembly
-            .GetExportedTypes()
+            .GetTypes()
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(m => Array.Exists(m.GetParameters(), p => p.ParameterType == typeof(Sd.SdCardParseOptions)))
             .ToArray();

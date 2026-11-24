@@ -68,6 +68,7 @@
     <AdditionalFiles Include="PublicAPI.Shipped.txt" />
     <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
+    <InternalsVisibleTo Include="Daqifi.Core.Benchmarks" />
   </ItemGroup>
 
   <!-- USB descriptor lookup uses WMI on Windows. The package itself is

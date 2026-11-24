@@ -7,7 +7,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Message parser for line-based text protocols (like SCPI responses).
 /// Splits messages on line endings and creates text-based inbound messages.
 /// </summary>
-public class LineBasedMessageParser : IMessageParser<string>
+internal class LineBasedMessageParser : IMessageParser<string>
 {
     private readonly byte[] _lineEnding;
     private readonly Encoding _encoding;
@@ -143,7 +143,7 @@ public class LineBasedMessageParser : IMessageParser<string>
 /// <summary>
 /// Simple implementation of IInboundMessage for text data.
 /// </summary>
-public class TextInboundMessage : IInboundMessage<string>
+internal class TextInboundMessage : IInboundMessage<string>
 {
     /// <summary>
     /// Initializes a new instance of the TextInboundMessage class.

@@ -38,7 +38,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// (<see cref="SdCardJsonObjectReader"/>).
 /// </para>
 /// </summary>
-public sealed class SdCardJsonFileParser
+internal sealed class SdCardJsonFileParser
 {
     /// <summary>
     /// Parses an SD card JSON log file from a <see cref="Stream"/>.

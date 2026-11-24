@@ -10,7 +10,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// The firmware returns a set of <c>Key=Value</c> lines (see <see cref="KeyValueResponseParser"/>).
 /// Parsing succeeds when at least one field is recognized.
 /// </remarks>
-public static class MemoryDiagnosticsParser
+internal static class MemoryDiagnosticsParser
 {
     /// <summary>
     /// Attempts to parse memory diagnostics from a sequence of response lines.

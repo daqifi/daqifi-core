@@ -137,7 +137,7 @@ public sealed class CapabilityDocument
     /// </remarks>
     /// <param name="capabilities">The board-derived capabilities to overlay onto.</param>
     /// <exception cref="ArgumentNullException"><paramref name="capabilities"/> is <c>null</c>.</exception>
-    public void MergeInto(DeviceCapabilities capabilities)
+    internal void MergeInto(DeviceCapabilities capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
 

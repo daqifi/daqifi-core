@@ -15,7 +15,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// strips the header and the numeric prefix, returning just the command text in the order the device
 /// reported it: oldest first.
 /// </remarks>
-public static class CommandHistoryParser
+internal static class CommandHistoryParser
 {
     private const string NoHistoryMarker = "No command history";
 
