@@ -10,7 +10,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// The firmware returns a set of <c>Key=Value</c> lines (see <see cref="KeyValueResponseParser"/>).
 /// Parsing succeeds when at least one counter is recognized.
 /// </remarks>
-public static class StreamStatsParser
+internal static class StreamStatsParser
 {
     /// <summary>
     /// Attempts to parse streaming stats from a sequence of response lines.

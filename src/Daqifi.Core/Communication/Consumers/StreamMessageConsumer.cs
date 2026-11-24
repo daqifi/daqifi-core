@@ -11,7 +11,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Handles line-based text protocols (like SCPI responses) and binary data parsing.
 /// </summary>
 /// <typeparam name="T">The type of message data to consume.</typeparam>
-public class StreamMessageConsumer<T> : IMessageConsumer<T>
+internal class StreamMessageConsumer<T> : IMessageConsumer<T>
 {
     private readonly Stream _stream;
     private readonly IMessageParser<T> _messageParser;
