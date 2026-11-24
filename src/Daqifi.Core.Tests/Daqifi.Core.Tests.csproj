@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
 
+    <!-- xUnit's conservative algorithm runs tests on the thread pool, and many tests here block
+         their thread on purpose. The pool starts with one thread per core and adds more only a
+         couple per second, so on a 4-core runner the blocked tests held every thread and work
+         other tests had queued waited seconds for one, which failed short real-time bounds
+         at random. This is how many threads the pool may create on demand before that throttle
+         applies; a run peaks at about 40. Copied to runtimeconfig.json, which testhost honours. -->
+    <ThreadPoolMinThreads>64</ThreadPoolMinThreads>
+
     <!-- Coverage is collected in-process by coverlet.collector, not by coverlet.msbuild's
          post-test MSBuild target (issue #689). That target ran after every test had already
          passed and could still fail the whole job on an intermittent truncated read of its own
