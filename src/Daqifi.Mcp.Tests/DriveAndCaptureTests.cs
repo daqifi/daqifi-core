@@ -416,9 +416,9 @@ public class DriveAndCaptureContractTests
     /// <summary>The row budget <see cref="SamplePump"/> fills to end a capture; well above what it trickles first.</summary>
     private const int RowBudget = 500;
 
-    private static readonly string Output = ScpiMessageProducer.SetDioPortDirection(Pin, 1).Data;
-    private static readonly string High = ScpiMessageProducer.SetDioPortState(Pin, 1).Data;
-    private static readonly string Low = ScpiMessageProducer.SetDioPortState(Pin, 0).Data;
+    private static readonly string Output = ScpiMessageProducer.SetDioPortDirection(Pin, ChannelDirection.Output).Data;
+    private static readonly string High = ScpiMessageProducer.SetDioPortState(Pin, true).Data;
+    private static readonly string Low = ScpiMessageProducer.SetDioPortState(Pin, false).Data;
     private static readonly string StopStream = ScpiMessageProducer.StopStreaming.Data;
 
     // The whole point of the tool: the edge is inside the stream, not before or after it. A

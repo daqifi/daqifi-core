@@ -135,7 +135,7 @@ public static class WifiBridgeActivator
 
         return RunWithHardTimeoutAsync(
             // Turn off transparent mode so the port goes back to the SCPI console.
-            token => RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(0), token),
+            token => RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(false), token),
             nameof(DeactivateAsync),
             cancellationToken);
     }

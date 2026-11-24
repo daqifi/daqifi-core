@@ -252,27 +252,41 @@ internal sealed class TextExchangeEngine
     }
 
     /// <summary>
+    /// The longest timeout an exchange accepts. The waits behind it take at most about 49 days, and
+    /// the overall ceiling is five response timeouts, so an unbounded value would fail part-way
+    /// through an exchange whose commands had already been sent.
+    /// </summary>
+    internal static readonly TimeSpan MaxTimeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
+    private static void ThrowIfTimeoutOutOfRange(TimeSpan timeout, string paramName)
+    {
+        if (timeout <= TimeSpan.Zero || timeout > MaxTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName, timeout, "Timeout must be positive and no more than int.MaxValue milliseconds.");
+        }
+    }
+
+    /// <summary>
     /// Executes a text-based command by switching the device's reader to framing reply lines,
     /// collecting the lines the device sends, then switching it back to protobuf.
     /// </summary>
     /// <remarks>
     /// The parameter contract — including what the prepare and finalize phases guarantee — is
-    /// documented on <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>,
+    /// documented on <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>,
     /// the seam callers actually use.
     /// </remarks>
     internal async Task<IReadOnlyList<string>> ExecuteAsync(
         Func<CancellationToken, Task>? prepareAsync,
         Func<Task>? finalizeAsync,
         Func<CancellationToken, Task> setupActionAsync,
-        int responseTimeoutMs,
-        int completionTimeoutMs,
-        CancellationToken cancellationToken,
-        bool keepBlankLines = false)
+        TimeSpan responseTimeout,
+        TimeSpan completionTimeout,
+        bool keepBlankLines,
+        CancellationToken cancellationToken)
     {
-        if (responseTimeoutMs <= 0)
-            throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
-        if (completionTimeoutMs <= 0)
-            throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
+        ThrowIfTimeoutOutOfRange(responseTimeout, nameof(responseTimeout));
+        ThrowIfTimeoutOutOfRange(completionTimeout, nameof(completionTimeout));
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -635,7 +649,7 @@ internal sealed class TextExchangeEngine
                 // The ~2-2.5x slowdown a drain also shows on the bench is the engine, not the
                 // device: the wait loop below infers "the device answered" from a count increase
                 // observed inside the loop, so a line that landed before its first poll is
-                // invisible to it and the exchange sits out the full responseTimeoutMs. That is
+                // invisible to it and the exchange sits out the full responseTimeout. That is
                 // #592, and with it fixed a drain costs nothing (1058ms vs 1056ms) — it is still
                 // wrong, for the reason above, just not slow.
                 sentBoundaryLineCount = CollectedLineCount();
@@ -731,8 +745,8 @@ internal sealed class TextExchangeEngine
                 }
 
                 // Wait for responses using a two-phase inactivity-based timeout:
-                // Phase 1: Wait up to responseTimeoutMs for the first response.
-                // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
+                // Phase 1: Wait up to responseTimeout for the first response.
+                // Phase 2: After receiving data, wait completionTimeout of inactivity to finish.
                 // "Inactivity" means no bytes at all: a complete line and more of an unfinished
                 // one both restart the window (the second since issue #977).
                 //
@@ -750,14 +764,14 @@ internal sealed class TextExchangeEngine
                 // flight. GetElapsedTime keeps that property for the fake clock too.
                 var waitStart = Elapsed();
                 var lastMessageAt = waitStart;
-                var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
+                var maxWait = responseTimeout * 5;
 
                 // A reply can land between sentBoundaryLineCount being captured just above and
                 // this loop's first poll -- single-digit milliseconds on a real device, but
                 // enough. Without this seed, hasReceivedAny only flips on a count *increase
                 // observed inside the loop*, so a reply that already arrived by the time the
                 // loop starts is invisible to it: the exchange then sits out the full
-                // responseTimeoutMs instead of the short completionTimeoutMs -- an ~8x stall on
+                // responseTimeout instead of the short completionTimeout -- an ~8x stall on
                 // some diagnostics reads, though never a wrong answer, since maxWait still
                 // bounds collection either way (issue #592).
                 //
@@ -814,7 +828,7 @@ internal sealed class TextExchangeEngine
                     // The inactivity window currently in force — the full first-response
                     // timeout until something arrives, the short completion timeout after.
                     var inactivityBudget =
-                        TimeSpan.FromMilliseconds(hasReceivedAny ? completionTimeoutMs : responseTimeoutMs)
+                        (hasReceivedAny ? completionTimeout : responseTimeout)
                         - (now - lastMessageAt);
                     if (inactivityBudget <= TimeSpan.Zero)
                     {

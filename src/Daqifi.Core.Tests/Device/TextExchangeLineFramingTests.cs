@@ -363,8 +363,8 @@ public class TextExchangeLineFramingTests
         {
             return ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: ResponseTimeoutMs,
-                completionTimeoutMs: completionTimeoutMs ?? CompletionTimeoutMs,
+                responseTimeout: TimeSpan.FromMilliseconds(ResponseTimeoutMs),
+                completionTimeout: TimeSpan.FromMilliseconds(completionTimeoutMs ?? CompletionTimeoutMs),
                 cancellationToken: cancellationToken);
         }
     }

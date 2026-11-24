@@ -302,7 +302,7 @@ public class DeviceNotConnectedExceptionTests
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync()
         {
-            return ExecuteTextCommandAsync(() => { }, responseTimeoutMs: 100, completionTimeoutMs: 50);
+            return ExecuteTextCommandAsync(() => { }, responseTimeout: TimeSpan.FromMilliseconds(100), completionTimeout: TimeSpan.FromMilliseconds(50));
         }
     }
 }

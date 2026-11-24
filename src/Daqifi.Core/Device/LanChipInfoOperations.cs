@@ -28,7 +28,7 @@ internal sealed class LanChipInfoOperations : ILanChipInfoProvider
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(ScpiMessageProducer.GetLanChipInfo),
-            responseTimeoutMs: 2000,
+            responseTimeout: TimeSpan.FromSeconds(2),
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (LanChipInfoParser.TryParseLines(lines, out var info))

@@ -120,7 +120,7 @@ transport to talk to.
 
 ```csharp
 await using var session = new BootloaderSessionDevice("DAQiFi Bootloader");
-await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress);
+await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress: progress);
 ```
 
 Three of its behaviours are load-bearing rather than incidental, because the PIC32 update flow
@@ -209,7 +209,7 @@ await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(de
 // ForceBootloader itself, then targets the bootloader that came from the SAME physical
 // port, even though its HID device path didn't exist until after the reboot.
 await firmwareUpdateService.UpdateFirmwareAsync(
-    device, hexFilePath, progress: null, targetDevicePath: null, targetLocationKey: targetLocation);
+    device, hexFilePath, new FirmwareUpdateTarget { LocationKey = targetLocation });
 ```
 
 Core resolves `LocationKey` from the USB topology during discovery. It is Windows-only in v1;
@@ -955,7 +955,7 @@ device.StreamingFrequency = 100; // Hz
 device.StartStreaming();
 
 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-await foreach (var s in device.StreamSamplesAsync(cts.Token))
+await foreach (var s in device.StreamSamplesAsync(cancellationToken: cts.Token))
 {
     Console.WriteLine($"{s.Channel.Name}: {s.Sample.Value} (tick {s.Sample.DeviceTimestamp})");
 }
@@ -1002,7 +1002,7 @@ device.MessageReceived += (sender, e) =>
 };
 
 // Enable channels (decimal bitmask: each bit enables a channel)
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Channels 0 and 1 (bitmask 0b11 = 3)
+device.Send(ScpiMessageProducer.EnableAdcChannels(3)); // Channels 0 and 1 (bitmask 0b11 = 3)
 
 // Start streaming at 100 Hz
 device.Send(ScpiMessageProducer.StartStreaming(100));
@@ -1159,7 +1159,7 @@ device.Send(ScpiMessageProducer.StartStreaming(1000));  // Start at 1000 Hz
 device.Send(ScpiMessageProducer.StopStreaming);
 
 // Channel configuration
-device.Send(ScpiMessageProducer.EnableAdcChannels("255")); // Enable 8 channels (bitmask 0xFF = 255)
+device.Send(ScpiMessageProducer.EnableAdcChannels(255)); // Enable 8 channels (bitmask 0xFF = 255)
 device.Send(ScpiMessageProducer.DisableDeviceEcho);
 device.Send(ScpiMessageProducer.SetProtobufStreamFormat);
 ```

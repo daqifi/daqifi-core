@@ -273,7 +273,7 @@ internal sealed class WifiModuleUpdater
                     // unconditionally: it is a no-op when the device is not in transparent mode,
                     // and restoring the pre-flash state is the entire job of this step. Completes
                     // the recovery half of daqifi-desktop's ResetLanAfterUpdate (part of #269).
-                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
 
                     // Leaving the bridge is a device-side mode transition, not an instantaneous
                     // one. Until the SCPI console path is back, bytes on the port are still
@@ -525,7 +525,7 @@ internal sealed class WifiModuleUpdater
                 // means the device version is unknown or unparseable, which leaves
                 // MeetsMinimumSupportedVersion null and still falls through to the
                 // flash. A caller that wants to reflash regardless already has
-                // skipVersionCheck: true.
+                // WifiUpdateOptions.SkipVersionCheck.
                 if (status.MeetsMinimumSupportedVersion == true)
                 {
                     var minimumMessage =
@@ -1029,7 +1029,7 @@ internal sealed class WifiModuleUpdater
                 // Harmless here (transparent mode is not on in this state) and sent first for the
                 // same reason the bridged path sends it first: if Core's view is somehow behind
                 // the device's, this is what hands the console back so the reboot is even read.
-                device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+                device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
                 device.Send(ScpiMessageProducer.RebootDevice);
 
                 Logger.LogInformation(
@@ -1073,7 +1073,7 @@ internal sealed class WifiModuleUpdater
             // transparent-mode exit settle plus two synchronous writes, so the helper stays
             // bounded either way. The caller token is already cancelled on this path and must not
             // abort the exit — the settle observes neither it nor the recovery budget.
-            device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+            device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
 
             // Same settle as the success path, including the zero escape hatch. Leaving the bridge
             // is a device-side mode transition: until the SCPI console path is back, bytes on the

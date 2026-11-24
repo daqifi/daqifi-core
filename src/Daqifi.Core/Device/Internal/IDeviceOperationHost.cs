@@ -116,17 +116,15 @@ internal interface IDeviceOperationHost
     /// </summary>
     void WithChannelsLock(Action action);
 
-    /// <inheritdoc cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
-#pragma warning disable CA1068 // Matches the seam it forwards to, which orders these for source compatibility.
+    /// <inheritdoc cref="DaqifiDevice.ExecuteTextCommandAsync(Action, TimeSpan?, TimeSpan?, Func{CancellationToken, Task}, Func{Task}, bool, CancellationToken)"/>
     Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
         Action setupAction,
-        int responseTimeoutMs = 1000,
-        int completionTimeoutMs = 250,
-        CancellationToken cancellationToken = default,
+        TimeSpan? responseTimeout = null,
+        TimeSpan? completionTimeout = null,
         Func<CancellationToken, Task>? prepareAsync = null,
         Func<Task>? finalizeAsync = null,
-        bool keepBlankLines = false);
-#pragma warning restore CA1068
+        bool keepBlankLines = false,
+        CancellationToken cancellationToken = default);
 
     /// <inheritdoc cref="DaqifiDevice.DrainErrorQueueAsync"/>
     /// <remarks>

@@ -49,7 +49,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0), new FakeChannel(1));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync(); // runs the body: subscribes synchronously, then awaits
 
         Assert.All(host.Channels, c => Assert.Equal(1, c.SubscriberCount));
@@ -67,7 +67,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0), new FakeChannel(1));
         var stream = new LiveSampleStream(host);
 
-        var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         host.Channels[0].RaiseSample(1.0);
         Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
@@ -86,7 +86,7 @@ public class LiveSampleStreamTests
         var stream = new LiveSampleStream(host);
 
         using var cts = new CancellationTokenSource();
-        var e = stream.StreamSamplesAsync(cts.Token).GetAsyncEnumerator();
+        var e = stream.StreamSamplesAsync(cancellationToken: cts.Token).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         cts.Cancel();
 
@@ -107,7 +107,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         Assert.Equal(1, host.SnapshotCalls);
@@ -132,8 +132,8 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var first = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
-        await using var second = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var first = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
+        await using var second = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var firstMove = first.MoveNextAsync();
         var secondMove = second.MoveNextAsync();
 
@@ -174,7 +174,7 @@ public class LiveSampleStreamTests
 
         // An async iterator defers its body, so nothing runs — and nothing is subscribed — until
         // the first MoveNextAsync. The device forwards this iterator as-is to keep that timing.
-        var enumerable = stream.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 0);
+        var enumerable = stream.StreamSamplesAsync(bufferCapacity: 0, cancellationToken: CancellationToken.None);
         Assert.Equal(0, host.SnapshotCalls);
 
         // Bounded on purpose: were the validation to stop throwing, this enumeration would block
@@ -203,7 +203,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0), new FakeChannel(1));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
@@ -222,7 +222,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         stream.OnConnectionStatusChanged(ConnectionStatus.Disconnected);
@@ -237,7 +237,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         host.Channels[0].RaiseSample(1.0);
         host.Channels[0].RaiseSample(2.0);
@@ -259,7 +259,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         // The real sequence after an unplug: Lost, then whatever teardown follows it — the reconnect
@@ -279,7 +279,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         // Disposing a device that is already disconnected moves it nowhere, so the status hook never
@@ -307,7 +307,7 @@ public class LiveSampleStreamTests
 
         async Task ConsumeAsync()
         {
-            await foreach (var _ in stream.StreamSamplesAsync(CancellationToken.None)) { }
+            await foreach (var _ in stream.StreamSamplesAsync(cancellationToken: CancellationToken.None)) { }
         }
     }
 
@@ -326,7 +326,7 @@ public class LiveSampleStreamTests
 
         async Task ConsumeAsync()
         {
-            await foreach (var _ in stream.StreamSamplesAsync(CancellationToken.None)) { }
+            await foreach (var _ in stream.StreamSamplesAsync(cancellationToken: CancellationToken.None)) { }
         }
     }
 
@@ -336,8 +336,8 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var first = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
-        await using var second = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var first = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
+        await using var second = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var firstMove = first.MoveNextAsync();
         var secondMove = second.MoveNextAsync();
 
@@ -356,7 +356,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         host.Channels[0].RaiseSample(1.0);
         Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
@@ -375,7 +375,7 @@ public class LiveSampleStreamTests
         var host = new FakeHost(new FakeChannel(0));
         var stream = new LiveSampleStream(host);
 
-        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         // The transition a reconnect ends on. Only leaving Connected ends an enumeration; arriving
@@ -395,7 +395,7 @@ public class LiveSampleStreamTests
     /// </summary>
     private static async Task<long> OverflowOnce(LiveSampleStream stream, FakeHost host)
     {
-        var e = stream.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 2).GetAsyncEnumerator();
+        var e = stream.StreamSamplesAsync(bufferCapacity: 2, cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync(); // subscribes; reader is awaiting, not consuming synchronously
         for (var i = 0; i < 20; i++)
         {
@@ -517,12 +517,12 @@ public class LiveSampleStreamTests
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
         public Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false) => throw new NotSupportedException();
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

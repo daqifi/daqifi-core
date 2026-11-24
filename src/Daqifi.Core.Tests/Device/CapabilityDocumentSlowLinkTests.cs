@@ -164,7 +164,7 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
     private sealed class SlowLinkDevice(IStreamTransport transport) : DaqifiDevice("Slow Link Device", transport)
     {
         public Task<IReadOnlyList<string>> QueryAsync(string command) =>
-            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeoutMs: 3000, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeout: TimeSpan.FromMilliseconds(3000), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     private sealed class SlowLinkTransport(bool complete) : IStreamTransport

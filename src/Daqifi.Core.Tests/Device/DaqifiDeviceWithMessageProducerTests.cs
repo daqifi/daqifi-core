@@ -12,7 +12,7 @@ public class DaqifiDeviceWithMessageProducerTests
 {
     private sealed class BinaryOutboundMessage : IOutboundMessage<byte[]>
     {
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
 
         public BinaryOutboundMessage(byte[] data)
         {

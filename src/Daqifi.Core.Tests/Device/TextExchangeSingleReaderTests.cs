@@ -295,13 +295,17 @@ public class TextExchangeSingleReaderTests
         }
 
         public Task<IReadOnlyList<string>> QueryAsync(string command) =>
-            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeoutMs: 1000, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(() => Send(new ScpiMessage(command)), responseTimeout: TimeSpan.FromMilliseconds(1000), completionTimeout: TimeSpan.FromMilliseconds(100));
 
         public Task<IReadOnlyList<string>> RunAsync(
             Action setupAction,
             int responseTimeoutMs = 300,
             CancellationToken cancellationToken = default) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs, completionTimeoutMs: 100, cancellationToken);
+            ExecuteTextCommandAsync(
+                setupAction,
+                TimeSpan.FromMilliseconds(responseTimeoutMs),
+                TimeSpan.FromMilliseconds(100),
+                cancellationToken: cancellationToken);
     }
 
     /// <summary>

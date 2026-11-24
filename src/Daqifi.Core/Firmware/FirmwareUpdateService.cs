@@ -130,29 +130,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
     }
 
     /// <inheritdoc />
-    public Task UpdateFirmwareAsync(
-        IStreamingDevice device,
-        string hexFilePath,
-        IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default)
-        => UpdateFirmwareAsync(device, hexFilePath, progress, null, cancellationToken);
-
-    /// <inheritdoc />
-    public Task UpdateFirmwareAsync(
-        IStreamingDevice device,
-        string hexFilePath,
-        IProgress<FirmwareUpdateProgress>? progress,
-        string? targetDevicePath,
-        CancellationToken cancellationToken = default)
-        => UpdateFirmwareAsync(device, hexFilePath, progress, targetDevicePath, null, cancellationToken);
-
-    /// <inheritdoc />
     public async Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
-        IProgress<FirmwareUpdateProgress>? progress,
-        string? targetDevicePath,
-        string? targetLocationKey,
+        FirmwareUpdateTarget? target = null,
+        IProgress<FirmwareUpdateProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
@@ -163,15 +145,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         }
 
         // Fast-fail an obviously-invalid target (whitespace) rather than polling until the
-        // WaitingForBootloader state timeout. Null means "no targeting" (first enumerated bootloader).
-        if (targetDevicePath != null && string.IsNullOrWhiteSpace(targetDevicePath))
+        // WaitingForBootloader state timeout. Null means "no targeting".
+        if (target?.DevicePath != null && string.IsNullOrWhiteSpace(target.DevicePath))
         {
-            throw new ArgumentException("Target device path cannot be whitespace.", nameof(targetDevicePath));
+            throw new ArgumentException("Target device path cannot be empty or whitespace.", nameof(target));
         }
 
-        if (targetLocationKey != null && string.IsNullOrWhiteSpace(targetLocationKey))
+        if (target?.LocationKey != null && string.IsNullOrWhiteSpace(target.LocationKey))
         {
-            throw new ArgumentException("Target location key cannot be whitespace.", nameof(targetLocationKey));
+            throw new ArgumentException("Target location key cannot be empty or whitespace.", nameof(target));
         }
 
         if (!File.Exists(hexFilePath))
@@ -184,19 +166,17 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
 
         await RunExclusiveAsync(
             ct => _pic32Updater.RunUpdateAsync(
-                device, hexRecords, crcRegions, totalBytes, progress, targetDevicePath, targetLocationKey, ct),
+                device, hexRecords, crcRegions, totalBytes, progress, target?.DevicePath, target?.LocationKey, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-#pragma warning disable CA1068
     public async Task UpdateWifiModuleAsync(
         IStreamingDevice device,
         string firmwarePath,
+        WifiUpdateOptions? options = null,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        bool skipVersionCheck = false)
-#pragma warning restore CA1068
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
 
@@ -212,7 +192,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         }
 
         await RunExclusiveAsync(
-            ct => _wifiUpdater.RunUpdateAsync(device, firmwarePath, progress, skipVersionCheck, ct),
+            ct => _wifiUpdater.RunUpdateAsync(device, firmwarePath, progress, options?.SkipVersionCheck ?? false, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
