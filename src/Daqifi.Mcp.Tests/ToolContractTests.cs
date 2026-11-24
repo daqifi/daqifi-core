@@ -662,6 +662,9 @@ public class ReadOnlyModeContractTests
         "set_analog_output",
         "latch_analog_outputs",
         "set_sample_rate",
+        // Unlike capture_samples, which --read-only allows on a stream that is already running:
+        // this one drives a pin, so it is refused outright.
+        "drive_and_capture",
     };
 
     [Theory]
@@ -702,6 +705,7 @@ public class ReadOnlyModeContractTests
         "set_analog_output" => agent.SetAnalogOutputAsync(deviceId, 0, 2.5, latch: true),
         "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(deviceId),
         "set_sample_rate" => agent.SetSampleRateAsync(deviceId, 100),
+        "drive_and_capture" => agent.DriveAndCaptureAsync(deviceId, 0, high: true, 50, 0, 250, 500, CancellationToken.None),
         _ => throw new ArgumentOutOfRangeException(nameof(tool), tool, "No call is wired up for this tool."),
     };
 

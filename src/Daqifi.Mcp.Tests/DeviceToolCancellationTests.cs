@@ -29,6 +29,7 @@ public class DeviceToolCancellationTests
         "set_analog_output",
         "latch_analog_outputs",
         "set_sample_rate",
+        "drive_and_capture",
     };
 
     [Fact]
@@ -114,6 +115,7 @@ public class DeviceToolCancellationTests
                 "disable_pwm" => DaqifiTools.DisablePwm(agent, id, 4, ct),
                 "set_analog_output" => DaqifiTools.SetAnalogOutput(agent, id, 0, 2.5, true, ct),
                 "latch_analog_outputs" => DaqifiTools.LatchAnalogOutputs(agent, id, ct),
+                "drive_and_capture" => DaqifiTools.DriveAndCapture(agent, id, 0, true, cancellationToken: ct),
                 _ => DaqifiTools.SetSampleRate(agent, id, 100, ct),
             };
 

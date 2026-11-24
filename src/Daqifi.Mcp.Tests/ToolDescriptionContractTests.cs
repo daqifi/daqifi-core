@@ -59,6 +59,9 @@ public class ToolDescriptionContractTests
     [InlineData(nameof(DaqifiTools.DiscoverDevices), "timeoutMs")]
     [InlineData(nameof(DaqifiTools.ReadChannelValues), "timeoutMs")]
     [InlineData(nameof(DaqifiTools.CaptureSamples), "durationMs")]
+    [InlineData(nameof(DaqifiTools.DriveAndCapture), "durationMs")]
+    [InlineData(nameof(DaqifiTools.DriveAndCapture), "delayMs")]
+    [InlineData(nameof(DaqifiTools.DriveAndCapture), "pulseWidthMs")]
     public void TimeoutParameters_StateTheirClampWithoutRetellingTheBench(string method, string parameter)
     {
         var description = ParameterDescription(method, parameter);

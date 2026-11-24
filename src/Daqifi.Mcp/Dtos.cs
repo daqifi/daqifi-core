@@ -500,6 +500,50 @@ public sealed record CaptureResult(
     IReadOnlyList<CaptureRow> Rows);
 
 /// <summary>
+/// A capture with a digital edge driven part-way through it: when the edge went out, and the rows
+/// it should be visible in.
+/// </summary>
+/// <param name="Channel">The digital channel that was driven.</param>
+/// <param name="High">
+/// The level the edge drove the pin to. It was put at the opposite level before the capture
+/// started, so the rows ahead of the edge are that baseline.
+/// </param>
+/// <param name="DelayMs">The delay actually used, after clamping to the capture window.</param>
+/// <param name="PulseWidthMs">The pulse width actually used, or null for a step that was left in place.</param>
+/// <param name="EdgeIssuedAtMs">
+/// Host scheduling information: when this server issued the edge command, in whole milliseconds
+/// after it read the capture's first sample. It is <b>not</b> a position in the rows. That first
+/// sample had already waited in the receive path before it was read, and the command still had
+/// to wait in the write queue, cross the transport and be acted on, so the transition sits later
+/// in the rows than this offset suggests, by an amount nothing here measures — using it as the
+/// edge would bias a response-time measurement. To locate the edge, enable the driven channel and
+/// find the transition in its <c>DIO</c> column. Null when sampling ended (the duration or the
+/// row budget) before the edge was due, in which case no edge was commanded.
+/// </param>
+/// <param name="ReleaseIssuedAtMs">
+/// When the command returning the pin to its baseline was issued, on the same clock. Null when
+/// none was: a step, or an edge that never went out. A capture that ends mid-pulse releases the
+/// pin on its way out, so this can be <i>earlier</i> than <paramref name="EdgeIssuedAtMs"/> +
+/// <paramref name="PulseWidthMs"/> — the pulse was cut short, not stretched.
+/// </param>
+/// <param name="LastCommandedHigh">
+/// The level this call last commanded on the pin. A command, not a reading: nothing here
+/// confirms the pin followed it, and a write that fails on the wire after it was queued is not
+/// reported. The pin's actual level is in the driven channel's <c>DIO</c> column when that
+/// channel is enabled.
+/// </param>
+/// <param name="Capture">The captured block, exactly as <c>capture_samples</c> returns one.</param>
+public sealed record DriveAndCaptureResult(
+    int Channel,
+    bool High,
+    int DelayMs,
+    int? PulseWidthMs,
+    int? EdgeIssuedAtMs,
+    int? ReleaseIssuedAtMs,
+    bool LastCommandedHigh,
+    CaptureResult Capture);
+
+/// <summary>
 /// What version of this MCP server is running and whether a newer one has been published
 /// (issue #727).
 /// </summary>
