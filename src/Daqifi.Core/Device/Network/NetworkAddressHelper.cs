@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Messages;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Device.Network;

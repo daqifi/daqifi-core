@@ -79,8 +79,13 @@ public class TcpStreamTransportTests
     [Fact]
     public void TcpStreamTransport_StatusChanged_ShouldFireOnConnectionFailure()
     {
-        // Arrange - Use localhost port 1 (reserved, never listening)
+        // Arrange - A scripted refusal: Windows retries a real one for ~2 s, against a 5 s timeout.
+        // The closed-port tests above cover the real socket.
         using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
+        transport.ConnectTaskFactory = delegate
+        {
+            return Task.FromException(new SocketException((int)SocketError.ConnectionRefused));
+        };
         TransportStatusEventArgs? capturedArgs = null;
         
         transport.StatusChanged += (sender, args) => capturedArgs = args;
