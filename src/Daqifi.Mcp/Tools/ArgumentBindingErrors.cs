@@ -42,17 +42,24 @@ internal static class ArgumentBindingErrors
     /// <summary>
     /// Adds the <c>tools/call</c> filter that explains a binding failure. An exception it cannot
     /// attribute to an argument is left alone, so a failure from anywhere else keeps whatever the
-    /// SDK does with it today.
+    /// SDK does with it today. A value outside a parameter's advertised <c>enum</c> is refused
+    /// before binding; see <see cref="EnumMismatch"/>.
     /// </summary>
     internal static IMcpServerBuilder ExplainArgumentBindingFailures(this IMcpServerBuilder builder) =>
         builder.WithRequestFilters(filters => filters.AddCallToolFilter(next => async (context, cancellationToken) =>
         {
+            var inputSchema = SchemaOf(context);
+            if (EnumMismatch(inputSchema, context.Params?.Arguments) is { } refusal)
+            {
+                throw new McpException(refusal);
+            }
+
             try
             {
                 return await next(context, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is ArgumentException or JsonException
-                && Explain(ex, SchemaOf(context), context.Params?.Arguments) is { } message)
+                && Explain(ex, inputSchema, context.Params?.Arguments) is { } message)
             {
                 throw new McpException(message, ex);
             }
@@ -67,9 +74,7 @@ internal static class ArgumentBindingErrors
         JsonElement inputSchema,
         IDictionary<string, JsonElement>? arguments)
     {
-        if (inputSchema.ValueKind != JsonValueKind.Object
-            || !inputSchema.TryGetProperty("properties", out var properties)
-            || properties.ValueKind != JsonValueKind.Object)
+        if (!TryGetProperties(inputSchema, out var properties))
         {
             return null;
         }
@@ -111,6 +116,50 @@ internal static class ArgumentBindingErrors
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The sentence to send back when an argument is not one of the values its schema lists, or
+    /// <see langword="null"/> when every one is.
+    /// </summary>
+    /// <remarks>
+    /// Checked against the schema up front rather than explained afterwards, because the marshaller
+    /// does not refuse everything the schema does: the enum converter reads a comma-separated list
+    /// as flags, so <c>"nyquist1, nyquist2"</c> binds, to <c>nyquist3</c>.
+    /// </remarks>
+    internal static string? EnumMismatch(JsonElement inputSchema, IDictionary<string, JsonElement>? arguments)
+    {
+        if (arguments is null || !TryGetProperties(inputSchema, out var properties))
+        {
+            return null;
+        }
+
+        foreach (var property in properties.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object
+                || !property.Value.TryGetProperty("enum", out var allowed)
+                || allowed.ValueKind != JsonValueKind.Array
+                || !arguments.TryGetValue(property.Name, out var value)
+                || allowed.EnumerateArray().Any(a => JsonElement.DeepEquals(a, value)))
+            {
+                continue;
+            }
+
+            var names = allowed.EnumerateArray()
+                .Where(a => a.ValueKind == JsonValueKind.String)
+                .Select(a => $"'{a.GetString()}'");
+            return $"{property.Name} must be one of {string.Join(", ", names)}.";
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProperties(JsonElement inputSchema, out JsonElement properties)
+    {
+        properties = default;
+        return inputSchema.ValueKind == JsonValueKind.Object
+            && inputSchema.TryGetProperty("properties", out properties)
+            && properties.ValueKind == JsonValueKind.Object;
     }
 
     /// <summary>
