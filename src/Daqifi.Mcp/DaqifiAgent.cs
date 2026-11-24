@@ -1456,6 +1456,7 @@ public sealed class DaqifiAgent
             .ConfigureAwait(false);
 
         return new DriveAndCaptureResult(
+            deviceId,
             ch.ChannelNumber,
             high,
             (int)delay.TotalMilliseconds,

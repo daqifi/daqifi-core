@@ -444,6 +444,7 @@ public class DriveAndCaptureContractTests
         Assert.Equal(new[] { High, Low }, sent.Skip(start).Take(stop - start).Where(IsPinCommand));
         Assert.DoesNotContain(sent.Skip(stop), IsPinCommand);
 
+        Assert.Equal(AgentHarness.DeviceId, result.DeviceId);
         Assert.Equal(Pin, result.Channel);
         Assert.True(result.High);
         Assert.Equal(50, result.DelayMs);
@@ -748,7 +749,7 @@ public class DriveAndCaptureContractTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.DriveAndCaptureAsync(Id, 4, high: true, 50, 0, 250, 500, CancellationToken.None));
 
-        Assert.Contains("disable_pwm", ex.Message);
+        Assert.Contains("disable_pwm_output", ex.Message);
         Assert.DoesNotContain("SetPwmEnabled", ex.Message);
         Assert.Empty(device.Sent);
         Assert.False(device.IsStreaming);

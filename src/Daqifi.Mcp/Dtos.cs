@@ -565,6 +565,7 @@ public sealed record CaptureResult(
 /// </param>
 /// <param name="Capture">The captured block, exactly as <c>capture_samples</c> returns one.</param>
 public sealed record DriveAndCaptureResult(
+    string DeviceId,
     int Channel,
     bool High,
     int DelayMs,

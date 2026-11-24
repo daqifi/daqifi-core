@@ -530,6 +530,184 @@
     }
   },
   {
+    "name": "drive_and_capture",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "high": {
+          "type": "boolean"
+        },
+        "delayMs": {
+          "type": "integer",
+          "default": 200
+        },
+        "pulseWidthMs": {
+          "type": "integer",
+          "default": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "default": 1000
+        },
+        "maxRows": {
+          "type": "integer",
+          "default": 500
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "high"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "high": {
+          "type": "boolean"
+        },
+        "delayMs": {
+          "type": "integer"
+        },
+        "pulseWidthMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "edgeIssuedAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "releaseIssuedAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastCommandedHigh": {
+          "type": "boolean"
+        },
+        "capture": {
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "type": "string"
+            },
+            "sampleRateHz": {
+              "type": "integer"
+            },
+            "startedStream": {
+              "type": "boolean"
+            },
+            "durationMs": {
+              "type": "integer"
+            },
+            "rowCount": {
+              "type": "integer"
+            },
+            "sampleCount": {
+              "type": "integer"
+            },
+            "droppedSampleCount": {
+              "type": "integer"
+            },
+            "ignoredSampleCount": {
+              "type": "integer"
+            },
+            "measuredRateHz": {
+              "type": "number"
+            },
+            "deviceClockRateHz": {
+              "type": "number"
+            },
+            "rowLimitReached": {
+              "type": "boolean"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "deviceTimestampTicks": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "values": {
+                    "type": "array",
+                    "items": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "timestamp",
+                  "deviceTimestampTicks",
+                  "values"
+                ]
+              }
+            }
+          },
+          "required": [
+            "deviceId",
+            "sampleRateHz",
+            "startedStream",
+            "durationMs",
+            "rowCount",
+            "sampleCount",
+            "droppedSampleCount",
+            "ignoredSampleCount",
+            "measuredRateHz",
+            "deviceClockRateHz",
+            "rowLimitReached",
+            "columns",
+            "rows"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "high",
+        "delayMs",
+        "pulseWidthMs",
+        "edgeIssuedAtMs",
+        "releaseIssuedAtMs",
+        "lastCommandedHigh",
+        "capture"
+      ]
+    }
+  },
+  {
     "name": "get_analog_output",
     "inputSchema": {
       "type": "object",

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Daqifi.Mcp.Prompts;
 using Daqifi.Mcp.Tools;
 using ModelContextProtocol.Server;
 
@@ -150,6 +151,15 @@ public class ToolDescriptionContractTests
                     yield return description.Description;
                 }
             }
+        }
+
+        // The prompts name tools and result fields too, in the text they hand the agent.
+        foreach (var method in new[] { typeof(DaqifiPrompts), typeof(ReadOnlyPrompts) }
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)))
+        {
+            yield return method.GetCustomAttribute<DescriptionAttribute>()!.Description;
+            yield return (string)method.Invoke(
+                null, [.. method.GetParameters().Select(p => p.DefaultValue)])!;
         }
     }
 

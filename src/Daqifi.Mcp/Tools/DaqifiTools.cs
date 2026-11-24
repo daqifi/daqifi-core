@@ -268,7 +268,7 @@ public static class DaqifiTools
     [Description("capture_samples with a digital edge inside it, to record what an output does to an input. Sets the pin to the opposite level, starts capturing, drives it to `high` after delayMs, and with pulseWidthMs returns it. Needs an analog channel enabled. Also enable the driven channel: its DIO column is where the edge is; edgeIssuedAtMs is only when this host issued the command. Refused while PWM runs on the pin.")]
     public static Task<DriveAndCaptureResult> DriveAndCapture(
         DaqifiAgent agent,
-        [Description("The device_id to drive and capture from.")] string deviceId,
+        [Description("The deviceId to drive and capture from.")] string deviceId,
         [Description("The digital channel to drive (e.g. 0-15 on Nyquist). Switched to output if needed.")] int channel,
         [Description("The level the edge drives the pin to: true for high. The pin is put at the opposite level before the capture starts.")] bool high,
         [Description("Baseline to record before the edge, in milliseconds from the first sample (default 200; clamped to 0..durationMs).")] int delayMs = 200,
