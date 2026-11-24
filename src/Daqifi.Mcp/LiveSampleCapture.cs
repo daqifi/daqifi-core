@@ -82,22 +82,55 @@ internal static class LiveSampleCapture
     /// <param name="window">How long to read for.</param>
     /// <param name="onSubscribed">Run once the enumeration is subscribed; null when nothing is needed.</param>
     /// <param name="cancellationToken">The caller's token.</param>
+    /// <param name="onSamplingEnded">
+    /// Run once, at the moment no further sample will be taken: when the sink has all it wants,
+    /// when the window or the caller's token fires (as it fires, not when the read notices), or
+    /// when the stream ends or fails. Whenever it is the capture that stops, this runs
+    /// <b>before</b> the enumeration is torn down, which can take a while — it is for whatever
+    /// must not act on a capture that is already over. (A stream that ends or fails by itself has
+    /// torn itself down already; this still runs, just not first.) May run on a timer thread, so
+    /// it has to be quick and must not throw.
+    /// </param>
     internal static async Task<LiveCaptureOutcome> DrainAsync(
         IAsyncEnumerable<LiveSample> samples,
         ILiveSampleSink sink,
         TimeSpan window,
         Action? onSubscribed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? onSamplingEnded = null)
     {
         var stopwatch = Stopwatch.StartNew();
 
-        using var windowCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        windowCts.CancelAfter(window);
+        // What ends the read. Deliberately not linked to the caller's token or given a timeout of
+        // its own: it is cancelled only through Stop below, so sampling is always said to have
+        // ended before the stream can see the cancel. Registering for that on a linked source
+        // would not do — a source runs its callbacks newest first, and the stream registers its
+        // own on every read, so it would hear about the cancel ahead of the listener.
+        using var windowCts = new CancellationTokenSource();
+        using var windowTimer = new CancellationTokenSource(window);
+
+        var ended = 0;
+        void SamplingEnded()
+        {
+            if (onSamplingEnded is not null && Interlocked.Exchange(ref ended, 1) == 0)
+            {
+                onSamplingEnded();
+            }
+        }
+
+        void Stop()
+        {
+            SamplingEnded();
+            windowCts.Cancel();
+        }
 
         long sampleCount = 0;
         TimeSpan firstSampleAt = TimeSpan.Zero;
         TimeSpan lastSampleAt = TimeSpan.Zero;
+
         await using var enumerator = samples.GetAsyncEnumerator(windowCts.Token);
+        using var onWindowElapsed = windowTimer.Token.Register(Stop);
+        using var onCallerCancelled = cancellationToken.Register(Stop);
 
         var pending = enumerator.MoveNextAsync();
 
@@ -111,7 +144,7 @@ internal static class LiveSampleCapture
             // enumerator can be disposed — disposing an async iterator with a MoveNextAsync
             // outstanding throws NotSupportedException, which would replace the failure the caller
             // actually needs to see with a meaningless one.
-            windowCts.Cancel();
+            Stop();
             try
             {
                 await pending.ConfigureAwait(false);
@@ -146,6 +179,12 @@ internal static class LiveSampleCapture
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // The capture window elapsed.
+        }
+        finally
+        {
+            // The row budget, the end of the stream, or a failure. The window and the caller's
+            // token have already said so, through Stop.
+            SamplingEnded();
         }
 
         return new LiveCaptureOutcome(sampleCount, stopwatch.Elapsed, lastSampleAt - firstSampleAt);
