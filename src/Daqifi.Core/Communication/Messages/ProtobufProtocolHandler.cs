@@ -1,13 +1,11 @@
-using Daqifi.Core.Communication.Messages;
 using System;
-using System.Threading.Tasks;
 
-namespace Daqifi.Core.Device.Protocol;
+namespace Daqifi.Core.Communication.Messages;
 
 /// <summary>
 /// Handles protobuf-based protocol messages from DAQiFi devices.
 /// </summary>
-public class ProtobufProtocolHandler : IProtocolHandler
+public sealed class ProtobufProtocolHandler
 {
     private readonly Action<DaqifiOutMessage>? _statusMessageHandler;
     private readonly Action<DaqifiOutMessage>? _streamMessageHandler;
@@ -30,39 +28,11 @@ public class ProtobufProtocolHandler : IProtocolHandler
     }
 
     /// <summary>
-    /// Determines whether this handler can process the specified message.
-    /// </summary>
-    /// <param name="message">The message to evaluate.</param>
-    /// <returns><c>true</c> if the message is a DaqifiOutMessage; otherwise, <c>false</c>.</returns>
-    public bool CanHandle(IInboundMessage<object> message)
-    {
-        return message.Data is DaqifiOutMessage;
-    }
-
-    /// <summary>
-    /// Processes the specified protobuf message and routes it to the appropriate handler.
-    /// </summary>
-    /// <param name="message">The message to process.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    public Task HandleAsync(IInboundMessage<object> message)
-    {
-        if (message.Data is not DaqifiOutMessage pbMessage)
-        {
-            return Task.CompletedTask;
-        }
-
-        Handle(pbMessage);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Classifies <paramref name="message"/> and routes it to the matching handler.
     /// </summary>
     /// <remarks>
-    /// The same work <see cref="HandleAsync"/> does, minus the unwrapping — routing is entirely
-    /// synchronous, so a caller that already holds a typed <see cref="DaqifiOutMessage"/> has no
-    /// reason to wrap it in an <see cref="IInboundMessage{T}"/> first. On a streaming device that
-    /// wrapper was allocated for every frame (issue #490).
+    /// Routing is entirely synchronous and takes the typed <see cref="DaqifiOutMessage"/>
+    /// directly, so a streaming device allocates no wrapper per frame (issue #490).
     /// </remarks>
     /// <param name="message">The protobuf message to route.</param>
     /// <exception cref="ArgumentNullException"><paramref name="message"/> is <c>null</c>.</exception>

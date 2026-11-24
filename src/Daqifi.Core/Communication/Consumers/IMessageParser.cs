@@ -6,7 +6,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Interface for parsing raw data into structured messages.
 /// </summary>
 /// <typeparam name="T">The type of message data to parse.</typeparam>
-public interface IMessageParser<T>
+internal interface IMessageParser<T>
 {
     /// <summary>
     /// Parses raw data into complete messages.

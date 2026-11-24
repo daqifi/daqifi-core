@@ -75,8 +75,8 @@ public interface IDeviceInfo
     /// could not be resolved. Stable for a given physical USB port across a device's
     /// transitions between transports (e.g. serial app mode ⇄ HID bootloader mode) and
     /// re-enumerations, so it can be used to correlate the same physical unit and disambiguate
-    /// multiple identical devices (same VID/PID, no serial number). Resolved via
-    /// <see cref="IUsbLocationProvider"/>; Windows-only in v1, always null elsewhere.
+    /// multiple identical devices (same VID/PID, no serial number). Core resolves it from the
+    /// USB topology during discovery; Windows-only in v1, always null elsewhere.
     /// </summary>
     /// <remarks>
     /// Implemented as a default interface property, so adding it did not break existing

@@ -10,7 +10,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// boundary or a stall-abort were byte-identical, so a client could never
 /// prove a file was ABSENT rather than merely unreached.
 /// </remarks>
-public enum SdCardListingStatus
+internal enum SdCardListingStatus
 {
     /// <summary>
     /// No marker was present. Either the firmware predates #794, or the reply

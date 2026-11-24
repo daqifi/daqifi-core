@@ -212,8 +212,8 @@ await firmwareUpdateService.UpdateFirmwareAsync(
     device, hexFilePath, progress: null, targetDevicePath: null, targetLocationKey: targetLocation);
 ```
 
-`LocationKey` is resolved via `IUsbLocationProvider` and is Windows-only in v1 (Linux/macOS
-resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallback pattern).
+Core resolves `LocationKey` from the USB topology during discovery. It is Windows-only in v1;
+on Linux and macOS it is `null`.
 
 Naming a board is required whenever more than one is in bootloader mode. An update that names
 neither a device path nor a location key stops with `AmbiguousBootloaderTargetException` — which

@@ -6,7 +6,7 @@ namespace Daqifi.Core.Communication.Producers;
 /// Interface for message producers that handle queuing and sending messages to devices.
 /// </summary>
 /// <typeparam name="T">The type of message data to produce.</typeparam>
-public interface IMessageProducer<T> : IDisposable
+internal interface IMessageProducer<T> : IDisposable
 {
     /// <summary>
     /// Starts the message producer, beginning background message processing.
