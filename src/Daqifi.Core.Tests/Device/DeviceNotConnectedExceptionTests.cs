@@ -91,7 +91,6 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("LoadVoltagePrecision", d => d.LoadVoltagePrecision());
         yield return Site("PrepareSdInterface", d => d.PrepareSdInterface());
         yield return Site("PrepareLanInterface", d => d.PrepareLanInterface());
-        yield return Site("SetSdCardMinimumFreeSpace", d => d.SetSdCardMinimumFreeSpace(52_428_800));
         yield return Site("Send", d => d.Send(new ScpiMessage("*IDN?")));
 
         static object[] Site(string name, Action<DaqifiStreamingDevice> call) => [name, call];
@@ -120,7 +119,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("GetSdCardStorageAsync", d => d.GetSdCardStorageAsync());
         yield return Site("CheckSdCardSpaceAsync", d => d.CheckSdCardSpaceAsync());
         yield return Site("StartSdCardLoggingAsync", d => d.StartSdCardLoggingAsync());
-        yield return Site("StartSdCardLoggingSessionAsync", d => d.StartSdCardLoggingSessionAsync());
+        yield return Site("SetSdCardMinimumFreeSpaceAsync", d => d.SetSdCardMinimumFreeSpaceAsync(52_428_800));
         yield return Site("StopSdCardLoggingAsync", d => d.StopSdCardLoggingAsync());
         yield return Site("DeleteSdCardFileAsync", d => d.DeleteSdCardFileAsync("test.bin"));
         yield return Site("FormatSdCardAsync", d => d.FormatSdCardAsync());

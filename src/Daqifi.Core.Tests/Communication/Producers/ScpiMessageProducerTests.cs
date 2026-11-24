@@ -139,6 +139,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
         // Zero disables the free-space gate, so it must not be rejected.
         { () => ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
+        { () => ScpiMessageProducer.GetSdMinFreeSpace, "SYSTem:STORage:SD:MINFree?" },
 
         // Streaming
         { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },

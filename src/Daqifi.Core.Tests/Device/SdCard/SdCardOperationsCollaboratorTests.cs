@@ -566,7 +566,7 @@ public partial class SdCardOperationsCollaboratorTests
         // mode to NONE, so no command order lists safely during a session.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StartSdCardLoggingAsync("session.bin");
         var callsBeforeTheListing = host.Calls;
 
         await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardFilesAsync());
@@ -584,7 +584,7 @@ public partial class SdCardOperationsCollaboratorTests
         // The other half of the guard: refusing during a session must not outlive it.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StartSdCardLoggingAsync("session.bin");
         await ops.StopSdCardLoggingAsync();
         host.EnqueueResponse("Daqifi/session.bin 512", NoErrorTerminator);
 
@@ -745,7 +745,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("busy.bin");
+        await ops.StartSdCardLoggingAsync("busy.bin");
 
         await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardStorageAsync());
         Assert.Equal(0, host.ExchangeCount);
@@ -839,10 +839,149 @@ public partial class SdCardOperationsCollaboratorTests
 
     #endregion
 
-    #region SetSdCardMinimumFreeSpace
+    #region SetSdCardMinimumFreeSpaceAsync
+
+    private const string MinFreeQuery = "SYSTem:STORage:SD:MINFree?";
 
     [Fact]
-    public void SetSdCardMinimumFreeSpace_NegativeOnADisconnectedDevice_ReportsTheArgument()
+    public async Task SetSdCardMinimumFreeSpaceAsync_SetsAndReadsTheFloorBackInOneExchange()
+    {
+        var host = new FakeHost();
+        host.EnqueueResponse("52428800");
+        var ops = new SdCardOperations(host);
+
+        await ops.SetSdCardMinimumFreeSpaceAsync(52_428_800);
+
+        // No bus switch and no stop: it is a config write, and the stop is device-wide.
+        Assert.Equal(
+            new[]
+            {
+                "exchange:begin",
+                "send:SYSTem:STORage:SD:MINFree 52428800",
+                "send:" + MinFreeQuery,
+                "exchange:end",
+            },
+            host.Calls);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_ConfirmsTheLargestValue()
+    {
+        var host = new FakeHost();
+        host.EnqueueResponse("9223372036854775807");
+
+        await new SdCardOperations(host).SetSdCardMinimumFreeSpaceAsync(long.MaxValue);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_AnErrorLineBesideTheRightFloor_IsNotItsOwn()
+    {
+        // The stop that pauses a live stream can be answered inside this exchange.
+        var host = new FakeHost();
+        host.EnqueueResponse("**ERROR: -200, \"Execution error\"", "1024");
+
+        await new SdCardOperations(host).SetSdCardMinimumFreeSpaceAsync(1024);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_NoAnswer_Throws()
+    {
+        var host = new FakeHost();
+        host.EnqueueResponse();
+
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+            () => new SdCardOperations(host).SetSdCardMinimumFreeSpaceAsync(1024));
+
+        Assert.Contains("did not answer", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_ADifferentFloor_Throws()
+    {
+        var host = new FakeHost();
+        host.EnqueueResponse("0");
+
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+            () => new SdCardOperations(host).SetSdCardMinimumFreeSpaceAsync(1024));
+
+        Assert.Contains("reports 0", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_Refused_CarriesTheScpiError()
+    {
+        const string refusal = "**ERROR: -113, \"Undefined header\"";
+        var host = new FakeHost();
+        host.EnqueueResponse(refusal, refusal);
+
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+            () => new SdCardOperations(host).SetSdCardMinimumFreeSpaceAsync(1024));
+
+        Assert.Equal(refusal, ex.LastScpiError);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SetSdCardMinimumFreeSpaceAsync_ALiveStream_IsPausedAndResumed(bool confirmed)
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse(confirmed ? "1024" : "0");
+        var ops = new SdCardOperations(host);
+
+        if (confirmed)
+        {
+            await ops.SetSdCardMinimumFreeSpaceAsync(1024);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<SdCardOperationException>(() => ops.SetSdCardMinimumFreeSpaceAsync(1024));
+        }
+
+        var calls = host.Calls;
+        Assert.Equal("send:SYSTem:StopStreamData", calls[0]);
+        Assert.Equal("exchange:begin", calls[1]);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_DuringALog_DoesNotStopIt()
+    {
+        var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingAsync("session.bin");
+        var before = host.Calls.Count;
+        host.EnqueueResponse("1024");
+
+        await ops.SetSdCardMinimumFreeSpaceAsync(1024);
+
+        Assert.DoesNotContain("send:SYSTem:StopStreamData", host.Calls.Skip(before));
+        Assert.True(host.IsLoggingToSdCard);
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_WhileALogIsStarting_DoesNotStopIt()
+    {
+        // The stream flag still describes the live stream the start is replacing, so it alone
+        // would have this call send a stop into the middle of the start sequence.
+        var clock = new FakeTimeProvider();
+        var host = new FakeHost { IsStreaming = true, TimeProvider = clock };
+        var ops = new SdCardOperations(host);
+        using var cts = new CancellationTokenSource();
+        var start = ops.StartSdCardLoggingAsync("session.bin", cancellationToken: cts.Token);
+        host.EnqueueResponse("1024");
+
+        await ops.SetSdCardMinimumFreeSpaceAsync(1024);
+
+        Assert.DoesNotContain("send:SYSTem:StopStreamData", host.Calls);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+    }
+
+    [Fact]
+    public async Task SetSdCardMinimumFreeSpaceAsync_NegativeOnADisconnectedDevice_ReportsTheArgument()
     {
         // Argument validation deliberately precedes the connection check, so misuse surfaces the
         // same exception type regardless of connection state. Which check wins is invisible unless
@@ -850,17 +989,17 @@ public partial class SdCardOperationsCollaboratorTests
         var host = new FakeHost { IsConnected = false };
         var ops = new SdCardOperations(host);
 
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => ops.SetSdCardMinimumFreeSpace(-1));
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ops.SetSdCardMinimumFreeSpaceAsync(-1));
         Assert.Equal("bytes", ex.ParamName);
     }
 
     [Fact]
-    public void SetSdCardMinimumFreeSpace_Disconnected_Throws()
+    public async Task SetSdCardMinimumFreeSpaceAsync_Disconnected_Throws()
     {
         var host = new FakeHost { IsConnected = false };
         var ops = new SdCardOperations(host);
 
-        Assert.Throws<DeviceNotConnectedException>(() => ops.SetSdCardMinimumFreeSpace(1024));
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => ops.SetSdCardMinimumFreeSpaceAsync(1024));
         Assert.Empty(host.Calls);
     }
 
@@ -869,12 +1008,12 @@ public partial class SdCardOperationsCollaboratorTests
     #region Logging sessions
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_OverWifi_RefusesRatherThanCuttingTheLink()
+    public async Task StartSdCardLoggingAsync_OverWifi_RefusesRatherThanCuttingTheLink()
     {
         var host = new FakeHost { IsUsbConnection = false };
         var ops = new SdCardOperations(host);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ops.StartSdCardLoggingSessionAsync());
+        await Assert.ThrowsAsync<SdCardRequiresUsbException>(() => ops.StartSdCardLoggingAsync());
         Assert.Empty(host.Calls);
     }
 
@@ -882,13 +1021,13 @@ public partial class SdCardOperationsCollaboratorTests
     [InlineData(SdCardLogFormat.Protobuf, ".bin")]
     [InlineData(SdCardLogFormat.Json, ".json")]
     [InlineData(SdCardLogFormat.Csv, ".csv")]
-    public async Task StartSdCardLoggingSessionAsync_AutoNamesWithTheFormatsExtension(
+    public async Task StartSdCardLoggingAsync_AutoNamesWithTheFormatsExtension(
         SdCardLogFormat format, string expectedExtension)
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
 
-        var session = await ops.StartSdCardLoggingSessionAsync(format: format);
+        var session = await ops.StartSdCardLoggingAsync(format: format);
 
         Assert.Equal(format, session.Format);
         Assert.StartsWith("log_", session.FileName, StringComparison.Ordinal);
@@ -897,12 +1036,12 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_NoChannelMask_LeavesTheCurrentConfigurationAlone()
+    public async Task StartSdCardLoggingAsync_LeavesTheEnabledChannelsAlone()
     {
         var host = new FakeHost { StreamingFrequency = 250 };
         var ops = new SdCardOperations(host);
 
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
 
         Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:ENAble:VOLTage:DC", StringComparison.Ordinal));
         Assert.Contains("send:SYSTem:StartStreamData 250", host.Calls);
@@ -910,33 +1049,18 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_SendsTheRateLeftByTheInheritedRateCheck()
+    public async Task StartSdCardLoggingAsync_SendsTheRateLeftByTheInheritedRateCheck()
     {
         // #960 review: a rate inherited from a faster USB stream is checked against the SD
         // configuration once, before the start, and the start carries whatever the check left.
         var host = new FakeHost { StreamingFrequency = 10000, InheritedRateLoweredTo = 7900 };
         var ops = new SdCardOperations(host);
 
-        await ops.StartSdCardLoggingSessionAsync("data.bin", channelMask: "1");
+        await ops.StartSdCardLoggingAsync("data.bin");
 
         Assert.Equal(new[] { 10000 }, host.InheritedRateChecks);
         Assert.Contains("send:SYSTem:StartStreamData 7900", host.Calls);
         Assert.DoesNotContain("send:SYSTem:StartStreamData 10000", host.Calls);
-    }
-
-    [Fact]
-    public async Task StartSdCardLoggingSessionAsync_ChannelMask_EnablesItBeforeStreamingStarts()
-    {
-        var host = new FakeHost();
-        var ops = new SdCardOperations(host);
-
-        await ops.StartSdCardLoggingSessionAsync("data.bin", channelMask: "3");
-
-        var calls = host.Calls.ToList();
-        var maskIndex = calls.IndexOf("send:ENAble:VOLTage:DC 3");
-        var startIndex = calls.FindIndex(c => c.StartsWith("send:SYSTem:StartStreamData", StringComparison.Ordinal));
-        Assert.True(maskIndex >= 0, "the channel mask was never sent");
-        Assert.True(maskIndex < startIndex, "the channel mask must be enabled before streaming starts");
     }
 
     [Fact]
@@ -961,7 +1085,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
         host.ThrowOnSend = (StopStreaming, new IOException("gone"));
 
         await Assert.ThrowsAsync<IOException>(() => ops.StopSdCardLoggingAsync());
@@ -977,7 +1101,7 @@ public partial class SdCardOperationsCollaboratorTests
         // StopSdCardLoggingAsync again still sends the whole sequence.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
         host.ThrowOnSend = (DisableSd, new IOException("gone"));
 
         await Assert.ThrowsAsync<IOException>(() => ops.StopSdCardLoggingAsync());
@@ -991,7 +1115,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
         Assert.True(host.IsLoggingToSdCard);
 
         await ops.StopSdCardLoggingAsync();
@@ -1012,7 +1136,7 @@ public partial class SdCardOperationsCollaboratorTests
         // it asked for, not the format the device is in.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data." + format, format: format);
+        await ops.StartSdCardLoggingAsync("data." + format, format: format);
         var callsBeforeTheStop = host.Calls;
 
         await ops.StopSdCardLoggingAsync();
@@ -1097,7 +1221,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("busy.bin");
+        await ops.StartSdCardLoggingAsync("busy.bin");
 
         await Assert.ThrowsAsync<SdCardBusyException>(() => ops.DeleteSdCardFileAsync("gone.bin"));
         Assert.Equal(0, host.ExchangeCount);
@@ -1172,10 +1296,10 @@ public partial class SdCardOperationsCollaboratorTests
     #region Start sequence cleanup and gating (#941)
 
     /// <summary>
-    /// The start sequence with a channel mask: six commands, each followed by a cancellable
+    /// The start sequence: five commands, each followed by a cancellable
     /// spacing delay, then the start itself.
     /// </summary>
-    private const int SpacedStartCommands = 6;
+    private const int SpacedStartCommands = 5;
 
     [Theory]
     [InlineData(1)]
@@ -1183,8 +1307,7 @@ public partial class SdCardOperationsCollaboratorTests
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    [InlineData(6)]
-    public async Task StartSdCardLoggingSessionAsync_CanceledAfterEachCommand_SendsTheStopSequenceAndThrows(
+    public async Task StartSdCardLoggingAsync_CanceledAfterEachCommand_SendsTheStopSequenceAndThrows(
         int commandsBeforeCancel)
     {
         // #941: the spacing delay after each command is where a cancellation lands. Whatever
@@ -1203,7 +1326,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.csv", channelMask: "3", format: SdCardLogFormat.Csv, cts.Token));
+            () => ops.StartSdCardLoggingAsync("data.csv", format: SdCardLogFormat.Csv, cts.Token));
 
         var calls = host.Calls;
         Assert.Equal(commandsBeforeCancel + StopSequence.Length, calls.Count);
@@ -1221,7 +1344,7 @@ public partial class SdCardOperationsCollaboratorTests
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
 
-        await ops.StartSdCardLoggingSessionAsync("data.bin", channelMask: "3");
+        await ops.StartSdCardLoggingAsync("data.bin");
 
         Assert.Equal(SpacedStartCommands + 1, host.Calls.Count);
     }
@@ -1232,7 +1355,7 @@ public partial class SdCardOperationsCollaboratorTests
     [InlineData("SYSTem:STReam:INTerface 2")]
     [InlineData("SYSTem:STReam:FORmat 1")]
     [InlineData("SYSTem:StartStreamData 100")]
-    public async Task StartSdCardLoggingSessionAsync_SendFails_SendsTheStopSequenceAndThrowsTheOriginal(
+    public async Task StartSdCardLoggingAsync_SendFails_SendsTheStopSequenceAndThrowsTheOriginal(
         string failingCommand)
     {
         var failure = new IOException("the write failed");
@@ -1245,7 +1368,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         var thrown = await Assert.ThrowsAsync<IOException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.json", format: SdCardLogFormat.Json));
+            () => ops.StartSdCardLoggingAsync("data.json", format: SdCardLogFormat.Json));
 
         Assert.Same(failure, thrown);
         var calls = host.Calls;
@@ -1254,7 +1377,7 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_SendFailsAndSoDoesTheCleanup_ThrowsTheOriginal()
+    public async Task StartSdCardLoggingAsync_SendFailsAndSoDoesTheCleanup_ThrowsTheOriginal()
     {
         // The link is what failed, so the stop sequence cannot go out either. The caller must
         // still see the start's own exception, and the card must not stay refused afterwards.
@@ -1268,7 +1391,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         var thrown = await Assert.ThrowsAsync<IOException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.bin"));
+            () => ops.StartSdCardLoggingAsync("data.bin"));
 
         Assert.Same(failure, thrown);
         Assert.Equal(new[] { "send:" + DisableLan }, host.Calls);
@@ -1290,7 +1413,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         // The clock never moves, so the start parks in the spacing delay after its first command.
-        var start = ops.StartSdCardLoggingSessionAsync("data.bin", cancellationToken: cts.Token);
+        var start = ops.StartSdCardLoggingAsync("data.bin", cancellationToken: cts.Token);
         Assert.False(start.IsCompleted);
         Assert.False(host.IsLoggingToSdCard);
         var sentByStart = host.Calls;
@@ -1327,7 +1450,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         // The clock has not moved, so the start parks in the spacing delay after its first command.
-        var start = ops.StartSdCardLoggingSessionAsync("data.bin");
+        var start = ops.StartSdCardLoggingAsync("data.bin");
         Assert.False(start.IsCompleted);
         var sentByStart = host.Calls;
 
@@ -1367,7 +1490,7 @@ public partial class SdCardOperationsCollaboratorTests
         // still had storage-off and USB-routing commands to send under it.
         var host = new FakeHost { IsUsbConnection = true, TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("first.bin");
+        await ops.StartSdCardLoggingAsync("first.bin");
 
         // The first stop is held at its first command while the overlapping callers run.
         Exception? overlappingStop = null;
@@ -1391,7 +1514,7 @@ public partial class SdCardOperationsCollaboratorTests
                 overlappingStop = ex;
             }
 
-            startDuringStop = ops.StartSdCardLoggingSessionAsync("second.bin");
+            startDuringStop = ops.StartSdCardLoggingAsync("second.bin");
             listDuringStop = ops.GetSdCardFilesAsync();
         };
 
@@ -1409,25 +1532,25 @@ public partial class SdCardOperationsCollaboratorTests
 
         // Once the first stop has finished, the bus is free for the next log.
         host.AfterSend = null;
-        var next = await ops.StartSdCardLoggingSessionAsync("third.bin");
+        var next = await ops.StartSdCardLoggingAsync("third.bin");
         Assert.Equal("third.bin", next.FileName);
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_DuringAnotherStart_IsRefusedAndLeavesTheFirstAlone()
+    public async Task StartSdCardLoggingAsync_DuringAnotherStart_IsRefusedAndLeavesTheFirstAlone()
     {
         // The start did not go through its own gate: a second start was admitted mid-sequence,
         // and when it was cancelled its cleanup sent the stop sequence under the first.
         var clock = new FakeTimeProvider();
         var host = new FakeHost { TimeProvider = clock };
         var ops = new SdCardOperations(host);
-        var first = ops.StartSdCardLoggingSessionAsync("first.bin");
+        var first = ops.StartSdCardLoggingAsync("first.bin");
         Assert.False(first.IsCompleted);
         var sentByFirst = host.Calls;
 
         using var cancelled = new CancellationTokenSource();
         await Assert.ThrowsAsync<SdCardBusyException>(
-            () => ops.StartSdCardLoggingSessionAsync("second.bin", cancellationToken: cancelled.Token)
+            () => ops.StartSdCardLoggingAsync("second.bin", cancellationToken: cancelled.Token)
                 .WaitAsync(ParkedTestBudget));
 
         // Refused before anything went out: no command of its own, and no stop sequence.
@@ -1448,47 +1571,47 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_WhileRecording_IsRefusedAndLeavesTheRecordingAlone()
+    public async Task StartSdCardLoggingAsync_WhileRecording_IsRefusedAndLeavesTheRecordingAlone()
     {
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("first.bin");
+        await ops.StartSdCardLoggingAsync("first.bin");
         var sentByFirst = host.Calls;
 
-        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.StartSdCardLoggingSessionAsync("second.bin"));
+        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.StartSdCardLoggingAsync("second.bin"));
 
         Assert.Equal(sentByFirst, host.Calls);
         Assert.True(host.IsLoggingToSdCard);
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_AfterTheLogWasStopped_StartsAgain()
+    public async Task StartSdCardLoggingAsync_AfterTheLogWasStopped_StartsAgain()
     {
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("first.bin");
+        await ops.StartSdCardLoggingAsync("first.bin");
         await ops.StopSdCardLoggingAsync();
 
-        await ops.StartSdCardLoggingSessionAsync("second.bin");
+        await ops.StartSdCardLoggingAsync("second.bin");
 
         Assert.True(host.IsLoggingToSdCard);
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_AfterTheLogWasEndedByARawStop_StartsAgain()
+    public async Task StartSdCardLoggingAsync_AfterTheLogWasEndedByARawStop_StartsAgain()
     {
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("first.bin");
+        await ops.StartSdCardLoggingAsync("first.bin");
         host.IsStreaming = false;
 
-        await ops.StartSdCardLoggingSessionAsync("second.bin");
+        await ops.StartSdCardLoggingAsync("second.bin");
 
         Assert.True(host.IsLoggingToSdCard);
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_CanceledWithALiveStreamRunning_ResumesTheStream()
+    public async Task StartSdCardLoggingAsync_CanceledWithALiveStreamRunning_ResumesTheStream()
     {
         // The cleanup is the stop sequence, and its StopStreamData also silences a live USB
         // stream that was running before the start. Its consumer must not go quiet for good.
@@ -1504,7 +1627,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.bin", cancellationToken: cts.Token));
+            () => ops.StartSdCardLoggingAsync("data.bin", cancellationToken: cts.Token));
 
         Assert.Equal(
             new[] { "send:" + DisableLan }.Concat(StopSequence).Append("send:SYSTem:StartStreamData 100"),
@@ -1515,7 +1638,7 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_SendFailsWithALiveStreamRunning_ResumesAndThrowsTheOriginal()
+    public async Task StartSdCardLoggingAsync_SendFailsWithALiveStreamRunning_ResumesAndThrowsTheOriginal()
     {
         var failure = new IOException("the write failed");
         var host = new FakeHost
@@ -1526,7 +1649,7 @@ public partial class SdCardOperationsCollaboratorTests
         };
         var ops = new SdCardOperations(host);
 
-        var thrown = await Assert.ThrowsAsync<IOException>(() => ops.StartSdCardLoggingSessionAsync("data.bin"));
+        var thrown = await Assert.ThrowsAsync<IOException>(() => ops.StartSdCardLoggingAsync("data.bin"));
 
         Assert.Same(failure, thrown);
         Assert.Equal(1, host.StartStreamingCallCount);
@@ -1534,7 +1657,7 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingSessionAsync_CanceledWithNoStreamRunning_StartsNone()
+    public async Task StartSdCardLoggingAsync_CanceledWithNoStreamRunning_StartsNone()
     {
         using var cts = new CancellationTokenSource();
         var host = new FakeHost { IsStreaming = false, TimeProvider = new NoWaitTimeProvider() };
@@ -1548,7 +1671,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.bin", cancellationToken: cts.Token));
+            () => ops.StartSdCardLoggingAsync("data.bin", cancellationToken: cts.Token));
 
         Assert.Equal(0, host.StartStreamingCallCount);
         Assert.False(host.IsStreaming);
@@ -1568,7 +1691,7 @@ public partial class SdCardOperationsCollaboratorTests
         };
         var ops = new SdCardOperations(host);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ops.StartSdCardLoggingSessionAsync("data.bin", cancellationToken: cts.Token));
+            () => ops.StartSdCardLoggingAsync("data.bin", cancellationToken: cts.Token));
         host.AfterSend = null;
 
         host.EnqueueResponse(NoErrorTerminator);
@@ -1583,7 +1706,7 @@ public partial class SdCardOperationsCollaboratorTests
         // session rather than refuse the card for the rest of the connection.
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
         await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardFilesAsync());
 
         host.IsStreaming = false;
@@ -1597,7 +1720,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost { TimeProvider = new NoWaitTimeProvider() };
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("data.bin");
+        await ops.StartSdCardLoggingAsync("data.bin");
         host.ThrowOnSend = (StopStreaming, new IOException("the write failed"));
 
         await Assert.ThrowsAsync<IOException>(() => ops.StopSdCardLoggingAsync());
@@ -1650,7 +1773,7 @@ public partial class SdCardOperationsCollaboratorTests
         host.EnqueueResponse(NoErrorTerminator);
         await ops.GetSdCardFilesAsync();
         await ops.FormatSdCardAsync();
-        await ops.StartSdCardLoggingSessionAsync("after-format.bin");
+        await ops.StartSdCardLoggingAsync("after-format.bin");
 
         Assert.True(host.IsLoggingToSdCard);
     }
@@ -2184,7 +2307,7 @@ public partial class SdCardOperationsCollaboratorTests
             // Bounded: the gate is supposed to answer immediately (it never blocks — it either
             // takes the semaphore or reports the state). A regression that made it wait instead
             // must fail this test, not hang the run.
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<SdCardBusyException>(
                 () => ops.DownloadSdCardFileAsync("other.bin", secondDestination).WaitAsync(ParkedTestBudget));
 
             Assert.Contains("still in flight", ex.Message, StringComparison.Ordinal);
@@ -2220,9 +2343,10 @@ public partial class SdCardOperationsCollaboratorTests
             IsStreaming = true,
             TimeProvider = clock,
             SdCardDownloadTimeout = TimeSpan.FromMinutes(30),
-            RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task),
+            RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task, new byte[256]),
         };
         var ops = new SdCardOperations(host);
+        var reported = 0L;
 
         // Deliberately not disposed: the worker is still running when the call returns and may
         // still touch this stream. A MemoryStream needs no disposal, and disposing it here would
@@ -2231,7 +2355,8 @@ public partial class SdCardOperationsCollaboratorTests
 
         using var guard = new CancellationTokenSource(ParkedTestBudget);
 
-        var download = ops.DownloadSdCardFileAsync("data.bin", destination);
+        var download = ops.DownloadSdCardFileAsync(
+            "data.bin", destination, new InlineProgress(p => reported = p.BytesReceived));
 
         try
         {
@@ -2257,7 +2382,14 @@ public partial class SdCardOperationsCollaboratorTests
                 "the hard deadline never fired, so the transfer was never abandoned.",
                 ParkedTestBudget);
 
-            await Assert.ThrowsAsync<TimeoutException>(() => download.WaitAsync(guard.Token));
+            var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(() => download.WaitAsync(guard.Token));
+            Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+            Assert.Equal("data.bin", ex.FileName);
+            Assert.Equal(TimeSpan.FromMinutes(30) + TimeSpan.FromSeconds(5), ex.Timeout);
+            Assert.True(reported > 0, "the caller's own progress reporter saw nothing.");
+            Assert.Equal(reported, ex.BytesReceived);
+            Assert.Contains("abandoned", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("reconnect", ex.Message, StringComparison.Ordinal);
 
             // Abandoned, not cleaned up after: the worker still owns the transport, so none of the
             // restore writes may go out (#399/#401/#533).
@@ -2305,7 +2437,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("busy.bin");
+        await ops.StartSdCardLoggingAsync("busy.bin");
         using var destination = new MemoryStream();
 
         await Assert.ThrowsAsync<SdCardBusyException>(
@@ -2391,12 +2523,17 @@ public partial class SdCardOperationsCollaboratorTests
     {
         private readonly TaskCompletionSource<bool> _entered;
         private readonly Task _release;
+        private byte[]? _beforeParking;
         private bool _delivered;
 
-        public ParkedStream(TaskCompletionSource<bool> entered, Task release)
+        /// <param name="entered">Set when a read parks.</param>
+        /// <param name="release">What the parked read waits for.</param>
+        /// <param name="beforeParking">Bytes the first read delivers, so it is the second that parks.</param>
+        public ParkedStream(TaskCompletionSource<bool> entered, Task release, byte[]? beforeParking = null)
         {
             _entered = entered;
             _release = release;
+            _beforeParking = beforeParking;
         }
 
         public override bool CanRead => true;
@@ -2415,6 +2552,13 @@ public partial class SdCardOperationsCollaboratorTests
         public override async Task<int> ReadAsync(
             byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
+            if (_beforeParking is { } first)
+            {
+                _beforeParking = null;
+                Buffer.BlockCopy(first, 0, buffer, offset, first.Length);
+                return first.Length;
+            }
+
             _entered.TrySetResult(true);
             await _release.ConfigureAwait(false);
 
@@ -2433,6 +2577,12 @@ public partial class SdCardOperationsCollaboratorTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Reports inline, unlike <see cref="Progress{T}"/>, which posts to the thread pool.</summary>
+    private sealed class InlineProgress(Action<SdCardTransferProgress> handler) : IProgress<SdCardTransferProgress>
+    {
+        public void Report(SdCardTransferProgress value) => handler(value);
     }
 
     /// <summary>

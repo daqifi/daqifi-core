@@ -406,9 +406,8 @@ public class SdCardFileNameResolutionTests
         public bool IsLoggingToSdCard => false;
         public Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(SdCardCaptureEstimate? plannedCapture = null, long minimumFreeBytes = SdCardSpaceCheck.DefaultMinimumFreeBytes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public void SetSdCardMinimumFreeSpace(long bytes) => throw new NotSupportedException();
-        public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task SetSdCardMinimumFreeSpaceAsync(long bytes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task FormatSdCardAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();

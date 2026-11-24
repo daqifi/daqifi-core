@@ -55,17 +55,55 @@ public class SdCardTransferStalledException : SdCardOperationException
         SdCardTransferStallReason reason,
         TimeSpan? timeout = null,
         Exception? innerException = null)
-        : base(
+        : this(
             BuildMessage(fileName, bytesReceived, reason, timeout),
-            Array.Empty<string>(),
-            lastScpiError: null,
-            innerException: innerException)
+            fileName,
+            bytesReceived,
+            reason,
+            timeout,
+            innerException)
+    {
+    }
+
+    private SdCardTransferStalledException(
+        string message,
+        string fileName,
+        long bytesReceived,
+        SdCardTransferStallReason reason,
+        TimeSpan? timeout,
+        Exception? innerException)
+        : base(message, Array.Empty<string>(), lastScpiError: null, innerException: innerException)
     {
         FileName = fileName ?? throw new ArgumentNullException(nameof(fileName));
         BytesReceived = bytesReceived;
         Reason = reason;
         Timeout = timeout;
     }
+
+    /// <summary>
+    /// The exception for a transfer that outlived its deadline while parked somewhere that does
+    /// not observe a token, so it was given up on while still running (#399). It carries the same
+    /// <see cref="Reason"/> as a timeout the transfer itself noticed, and a message that adds what
+    /// that case does not need: the transfer still holds the transport until a reconnect.
+    /// </summary>
+    internal static SdCardTransferStalledException ForAbandonedTransfer(
+        string fileName,
+        long bytesReceived,
+        TimeSpan deadline) =>
+        new(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "SD card download of '{0}' did not complete within {1:0.#}s and was abandoned after "
+                + "receiving {2} bytes. The device's SD subsystem is not responding; reconnect (or "
+                + "power-cycle) before retrying.",
+                fileName,
+                deadline.TotalSeconds,
+                bytesReceived),
+            fileName,
+            bytesReceived,
+            SdCardTransferStallReason.TransferTimeout,
+            deadline,
+            innerException: null);
 
     private static string BuildMessage(
         string fileName,

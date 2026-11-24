@@ -67,6 +67,19 @@ public class SdCardToolContractTests
     }
 
     [Fact]
+    public async Task ACardHeldByAnAbandonedDownload_KeepsCoresReconnectAdvice()
+    {
+        // Core raises the same type for this as for a running log, but only a reconnect clears it.
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.SdFailure = new SdCardBusyException("Reconnect the device before retrying.");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.ListSdFilesAsync(AgentHarness.DeviceId, CancellationToken.None));
+
+        Assert.Contains("Reconnect the device before retrying.", ex.Message);
+    }
+
+    [Fact]
     public async Task AnEmptyTransfer_ExplainsTheStreamingInteractionThatCausesIt()
     {
         // A live stream collapses the device's SD buffer, and the symptom (an empty transfer)
@@ -205,8 +218,8 @@ public class SdCardToolContractTests
         // that reached the card show up here.
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
         var card = (ISdCardOperations)device;
-        await card.StartSdCardLoggingSessionAsync(
-            "log.bin", channelMask: null, SdCardLogFormat.Protobuf, CancellationToken.None);
+        await card.StartSdCardLoggingAsync(
+            "log.bin", SdCardLogFormat.Protobuf, CancellationToken.None);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None));

@@ -37,6 +37,9 @@
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardMinimumFreeSpace(long bytes) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType
@@ -49,6 +52,18 @@
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*Daqifi.Core.Device.SdCard.ISdCardOperations.SetSdCardMinimumFreeSpace(long bytes) -> void
+*REMOVED*Daqifi.Core.Device.SdCard.ISdCardOperations.StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.SdCard.ISdCardOperations.StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Applied = 0 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Pending = 1 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.BufferSize.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.ConfigurationOverride.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.ConfigurationScanMessageLimit.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.FallbackTimestampFrequency.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.Progress.set -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardParseOptions.SessionStartTime.set -> void
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
@@ -56,8 +71,32 @@
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardMinimumFreeSpaceAsync(long bytes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+Daqifi.Core.Device.SdCard.ISdCardOperations.SetSdCardMinimumFreeSpaceAsync(long bytes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.SdCard.ISdCardOperations.StartSdCardLoggingAsync(string? fileName = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
+Daqifi.Core.Device.SdCard.SdCardBusyException.SdCardBusyException(string! message) -> void
+Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Applied = 1 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Pending = 0 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+Daqifi.Core.Device.SdCard.SdCardParseOptions.<Clone>$() -> Daqifi.Core.Device.SdCard.SdCardParseOptions!
+Daqifi.Core.Device.SdCard.SdCardParseOptions.BufferSize.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.ConfigurationOverride.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.ConfigurationScanMessageLimit.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.Equals(Daqifi.Core.Device.SdCard.SdCardParseOptions? other) -> bool
+Daqifi.Core.Device.SdCard.SdCardParseOptions.FallbackTimestampFrequency.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.Progress.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.SessionStartTime.init -> void
+Daqifi.Core.Device.SdCard.SdCardRequiresUsbException
+Daqifi.Core.Device.SdCard.SdCardRequiresUsbException.SdCardRequiresUsbException(string! message) -> void
+override Daqifi.Core.Device.SdCard.SdCardParseOptions.Equals(object? obj) -> bool
+override Daqifi.Core.Device.SdCard.SdCardParseOptions.GetHashCode() -> int
+override Daqifi.Core.Device.SdCard.SdCardParseOptions.ToString() -> string!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetSdMinFreeSpace.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Device.SdCard.SdCardParseOptions.operator !=(Daqifi.Core.Device.SdCard.SdCardParseOptions? left, Daqifi.Core.Device.SdCard.SdCardParseOptions? right) -> bool
+static Daqifi.Core.Device.SdCard.SdCardParseOptions.operator ==(Daqifi.Core.Device.SdCard.SdCardParseOptions? left, Daqifi.Core.Device.SdCard.SdCardParseOptions? right) -> bool

@@ -1503,7 +1503,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _sdCardOperations.CheckSdCardSpaceAsync(plannedCapture, minimumFreeBytes, cancellationToken);
 
     /// <inheritdoc />
-    public void SetSdCardMinimumFreeSpace(long bytes) => _sdCardOperations.SetSdCardMinimumFreeSpace(bytes);
+    /// <remarks>
+    /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>,
+    /// because it takes the same gate as <see cref="SetSdCardCrcProtectionAsync"/> and has to
+    /// take it in the same order relative to the operation lock.
+    /// </remarks>
+    public Task SetSdCardMinimumFreeSpaceAsync(long bytes, CancellationToken cancellationToken = default)
+        => RunExclusiveAsync(ct => _sdCardOperations.SetSdCardMinimumFreeSpaceAsync(bytes, ct), cancellationToken);
 
     /// <inheritdoc />
     /// <remarks>
@@ -1520,12 +1526,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _sdCardOperations.GetSdCardCrcProtectionAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
-        => _sdCardOperations.StartSdCardLoggingAsync(fileName, channelMask, format, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
-        => _sdCardOperations.StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
+    public Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+        => _sdCardOperations.StartSdCardLoggingAsync(fileName, format, cancellationToken);
 
     /// <inheritdoc />
     public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)

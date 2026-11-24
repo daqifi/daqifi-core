@@ -4,15 +4,11 @@ namespace Daqifi.Core.Device.SdCard;
 /// What became of a request to turn CRC-protected SD writes on or off
 /// (<see cref="ISdCardOperations.SetSdCardCrcProtectionAsync"/>).
 /// </summary>
+/// <remarks>
+/// The default value is <see cref="Pending"/>, so a result nobody set never reads as success.
+/// </remarks>
 public enum SdCardCrcProtectionResult
 {
-    /// <summary>
-    /// A card is in the slot, initialized in the requested mode, and mountable: Core mounted it
-    /// and read its mode back to check. Every write it takes from now on uses that mode, and the
-    /// next SD operation finds it ready.
-    /// </summary>
-    Applied = 0,
-
     /// <summary>
     /// The device stored the setting, but no card is ready with it yet.
     /// </summary>
@@ -46,5 +42,12 @@ public enum SdCardCrcProtectionResult
     /// new mode.
     /// </para>
     /// </remarks>
-    Pending = 1
+    Pending = 0,
+
+    /// <summary>
+    /// A card is in the slot, initialized in the requested mode, and mountable: Core mounted it
+    /// and read its mode back to check. Every write it takes from now on uses that mode, and the
+    /// next SD operation finds it ready.
+    /// </summary>
+    Applied = 1
 }
