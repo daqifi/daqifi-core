@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
@@ -27,7 +28,7 @@ namespace Daqifi.Mcp.Tests;
 /// would get to re-specify (and therefore never catch).
 /// </para>
 /// </remarks>
-internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperations
+internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperations, ILiveSampleSource
 {
     /// <summary>Board ceiling, high enough that the per-configuration cap is what binds.</summary>
     internal const int HardwareMaximumRateHz = 30_000;
@@ -187,6 +188,38 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
         }
 
         return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    }
+
+    // ----------------------------------------------------------------- live samples
+
+    /// <summary>
+    /// When set, awaited as a live-sample enumeration is torn down, before Core's own teardown
+    /// runs. Stands in for the time that teardown can really take, so a test can see what happens
+    /// in the gap between a capture taking its last row and the stream being let go of.
+    /// </summary>
+    internal Func<Task>? BeforeLiveStreamTeardown { get; set; }
+
+    // Re-implemented for the same reason as the SD members below: the base method is not
+    // virtual. The samples are Core's own; only the teardown is given somewhere to wait. Core
+    // subscribes in the synchronous prefix of its iterator, and awaiting it from here keeps that
+    // inside this iterator's own first MoveNextAsync, which the capture relies on.
+    async IAsyncEnumerable<LiveSample> ILiveSampleSource.StreamSamplesAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken, int? bufferCapacity)
+    {
+        try
+        {
+            await foreach (var sample in StreamSamplesAsync(cancellationToken, bufferCapacity).ConfigureAwait(false))
+            {
+                yield return sample;
+            }
+        }
+        finally
+        {
+            if (BeforeLiveStreamTeardown is { } hold)
+            {
+                await hold().ConfigureAwait(false);
+            }
+        }
     }
 
     // --------------------------------------------------------------------- SD card

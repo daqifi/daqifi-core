@@ -31,7 +31,7 @@ public class DigitalStimulusTests
 
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
-        await stimulus.FinishAsync(restoreStep: false);
+        await stimulus.FinishAsync(captureCompleted: true);
 
         Assert.Equal(new[] { true }, writes.Levels);
         Assert.NotNull(stimulus.EdgeIssuedAtMs);
@@ -46,7 +46,7 @@ public class DigitalStimulusTests
         stimulus.Start();
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
-        await stimulus.FinishAsync(restoreStep: false);
+        await stimulus.FinishAsync(captureCompleted: true);
 
         // A few milliseconds of slack: a timer may fire a tick early, and the report is rounded.
         Assert.InRange(stimulus.EdgeIssuedAtMs!.Value, 140, int.MaxValue);
@@ -62,7 +62,7 @@ public class DigitalStimulusTests
         stimulus.Start();
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(2, Bound);
-        await stimulus.FinishAsync(restoreStep: false);
+        await stimulus.FinishAsync(captureCompleted: true);
 
         // An active-low pulse: driven low, then back high. Released once, not again on the way out.
         Assert.Equal(new[] { false, true }, writes.Levels);
@@ -81,7 +81,7 @@ public class DigitalStimulusTests
         stimulus.Start();
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
-        await stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound);
+        await stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound);
 
         Assert.Equal(new[] { true, false }, writes.Levels);
         Assert.NotNull(stimulus.ReleaseIssuedAtMs);
@@ -101,7 +101,7 @@ public class DigitalStimulusTests
         stimulus.Start();
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
-        await stimulus.FinishAsync(restoreStep).WaitAsync(Bound);
+        await stimulus.FinishAsync(captureCompleted: !restoreStep).WaitAsync(Bound);
 
         Assert.Equal(expected, writes.Levels);
         Assert.Equal(!restoreStep, stimulus.IsAsserted);
@@ -115,7 +115,7 @@ public class DigitalStimulusTests
 
         stimulus.Start();
         stimulus.OnFirstSample();
-        await stimulus.FinishAsync(restoreStep: true).WaitAsync(Bound);
+        await stimulus.FinishAsync(captureCompleted: false).WaitAsync(Bound);
 
         Assert.Empty(writes.Levels);
         Assert.Null(stimulus.EdgeIssuedAtMs);
@@ -140,35 +140,60 @@ public class DigitalStimulusTests
         stimulus.OnFirstSample();
         await writes.WaitForCountAsync(1, Bound);
 
-        // restoreStep: false, as it is when the capture itself completed — the schedule failing is
-        // what makes this a failed call.
+        // The capture itself completed — the schedule failing is what makes this a failed call.
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+            () => stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound));
         Assert.Equal("write 0 failed", ex.Message);
         Assert.Equal(new[] { true, false }, writes.Levels);
         Assert.False(stimulus.IsAsserted);
     }
 
-    // The pulse's own release threw. It has not been released, so it must not read as released:
-    // the way out gets a second go at the pin, and a transient failure does not leave it driven.
+    // The pulse's own release threw. It has not been released, so it must not read as released —
+    // and the retry cannot wait for the capture to end, which with a full window is most of a
+    // minute with the pin driven. The baseline goes out again there and then, and the capture is
+    // told to stop so the failure reaches the caller.
     [Fact]
-    public async Task AScheduledReleaseThatFails_IsRetriedOnTheWayOut()
+    public async Task AScheduledReleaseThatFails_IsRetriedAtOnce_AndStopsTheCapture()
     {
         var writes = new Writes { Fails = (level, attempt) => !level && attempt == 1 };
         var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
+        var captureStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        stimulus.Start(onFailure: () => captureStopped.TrySetResult());
+        stimulus.OnFirstSample();
+
+        // Nothing has ended the capture: the retry and the stop are the schedule's own doing.
+        await captureStopped.Task.WaitAsync(Bound);
+        Assert.Equal(new[] { true, false, false }, writes.Levels);
+        Assert.False(stimulus.IsAsserted);
+
+        // The original failure is the one reported, and nothing more is written on the way out.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => stimulus.FinishAsync(captureCompleted: false).WaitAsync(Bound));
+        Assert.Equal("write 1 failed", ex.Message);
+        Assert.Equal(new[] { true, false, false }, writes.Levels);
+        Assert.NotNull(stimulus.ReleaseIssuedAtMs);
+    }
+
+    // The capture ended mid-pulse (its row budget, say), so the way out makes the release itself —
+    // and that write is the one that failed. One more go at the baseline before the stream is
+    // stopped; the first failure is still the one reported.
+    [Fact]
+    public async Task Finish_WhenItsOwnReleaseFails_TriesTheBaselineOnceMore()
+    {
+        var writes = new Writes { Fails = (level, attempt) => !level && attempt == 1 };
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, TimeSpan.FromHours(1));
 
         stimulus.Start();
         stimulus.OnFirstSample();
-        await writes.WaitForCountAsync(2, Bound);
+        await writes.WaitForCountAsync(1, Bound);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+            () => stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound));
 
-        // The original failure is the one reported, and the retry went out.
         Assert.Equal("write 1 failed", ex.Message);
         Assert.Equal(new[] { true, false, false }, writes.Levels);
         Assert.False(stimulus.IsAsserted);
-        Assert.NotNull(stimulus.ReleaseIssuedAtMs);
     }
 
     [Fact]
@@ -179,15 +204,72 @@ public class DigitalStimulusTests
 
         stimulus.Start();
         stimulus.OnFirstSample();
-        await writes.WaitForCountAsync(1, Bound);
+        await writes.WaitForCountAsync(2, Bound);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => stimulus.FinishAsync(restoreStep: false).WaitAsync(Bound));
+            () => stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound));
 
         Assert.Equal("write 0 failed", ex.Message);
-        Assert.Equal(new[] { true, false }, writes.Levels);
+        // The edge, the baseline attempted at once, and the baseline attempted on the way out.
+        Assert.Equal(new[] { true, false, false }, writes.Levels);
         // Still the edge's level as far as anything here knows, and it says so.
         Assert.True(stimulus.IsAsserted);
+    }
+
+    // Sampling has ended — the last row is in — but the stream is still being torn down and
+    // FinishAsync has not been reached. An edge whose timer fires in that gap would drive the pin
+    // after the rows were settled, and a step would then stay there. Once disarmed, it never goes.
+    [Fact]
+    public async Task OnceSamplingHasEnded_APendingEdgeIsNeverIssued()
+    {
+        var writes = new Writes();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var passedTheWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task Wait(TimeSpan _, CancellationToken __)
+        {
+            waiting.TrySetResult();
+            await timer.Task;
+            passedTheWait.TrySetResult();
+        }
+
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.FromHours(1), pulseWidth: null, Wait);
+
+        stimulus.Start();
+        stimulus.OnFirstSample();
+        await waiting.Task.WaitAsync(Bound);
+
+        stimulus.Disarm();
+        timer.SetResult();
+        await passedTheWait.Task.WaitAsync(Bound);
+
+        // The capture completed, so a step that had gone out would be left in place.
+        await stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound);
+
+        Assert.Empty(writes.Levels);
+        Assert.Null(stimulus.EdgeIssuedAtMs);
+        Assert.False(stimulus.IsAsserted);
+    }
+
+    // Disarming stops an edge that has not gone out. It must not stop the release of one that has:
+    // a pulse is owed its width even while the stream around it is being let go of.
+    [Fact]
+    public async Task APulseAlreadyUnderWayWhenSamplingEnds_IsStillReleasedByItsOwnTimer()
+    {
+        var writes = new Writes();
+        var stimulus = new DigitalStimulus(writes.Drive, level: true, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+
+        stimulus.Start();
+        stimulus.OnFirstSample();
+        await writes.WaitForCountAsync(1, Bound);
+
+        stimulus.Disarm();
+        await writes.WaitForCountAsync(2, Bound);
+
+        Assert.Equal(new[] { true, false }, writes.Levels);
+        await stimulus.FinishAsync(captureCompleted: true).WaitAsync(Bound);
+        Assert.Equal(new[] { true, false }, writes.Levels);
     }
 
     // The delay's timer fired just as the capture ended, so the schedule resumes normally rather
@@ -215,7 +297,7 @@ public class DigitalStimulusTests
         await waiting.Task.WaitAsync(Bound);
 
         // The capture ends first...
-        var finish = stimulus.FinishAsync(restoreStep: false);
+        var finish = stimulus.FinishAsync(captureCompleted: true);
         // ...and only then does the schedule get to run past its wait.
         timer.SetResult();
         await finish.WaitAsync(Bound);
@@ -501,6 +583,69 @@ public class DriveAndCaptureContractTests
         Assert.Equal(new[] { Output, Low, High, Low }, device.Sent.Where(IsPinCommand));
     }
 
+    // A pulse's release failed with the row budget and the window both wide open. Nothing else was
+    // going to end this capture for a minute; the pin goes back at once and the call fails now.
+    [Fact]
+    public async Task AFailedPulseRelease_IsRetriedAtOnce_AndEndsTheCapture()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        RejectTheFirstRelease(device, "the release failed");
+        using var pump = new SamplePump(device);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DriveAndCaptureAsync(
+                Id, Pin, high: true, delayMs: 20, pulseWidthMs: 20, NeverMs, RowBudget, CancellationToken.None)
+                .WaitAsync(Bound));
+
+        // The write's own failure — not the cancellation the capture was stopped with.
+        Assert.Equal("the release failed", ex.Message);
+        var sent = device.Sent.ToList();
+        Assert.Equal(new[] { Output, Low, High, Low }, sent.Where(IsPinCommand));
+        Assert.True(sent.LastIndexOf(Low) < sent.IndexOf(StopStream), "the stream was stopped before the pin was released");
+        Assert.False(device.IsStreaming);
+    }
+
+    // The row budget filled while the pulse was high, so the way out makes the release — and the
+    // device rejected it. Without a second go the stream stops with the pin's last accepted
+    // command still the edge.
+    [Fact]
+    public async Task ARowBudgetThatEndsAnActivePulse_RetriesAReleaseTheDeviceRejected()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        RejectTheFirstRelease(device, "the release failed");
+        using var pump = new SamplePump(device, pourWhen: AfterPinWrites(device, 3));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DriveAndCaptureAsync(
+                Id, Pin, high: true, delayMs: 20, pulseWidthMs: NeverMs, NeverMs, RowBudget, CancellationToken.None)
+                .WaitAsync(Bound));
+
+        Assert.Equal("the release failed", ex.Message);
+        var sent = device.Sent.ToList();
+        Assert.Equal(new[] { Output, Low, High, Low }, sent.Where(IsPinCommand));
+        Assert.True(sent.LastIndexOf(Low) < sent.IndexOf(StopStream), "the stream was stopped before the pin was released");
+    }
+
+    // One row was all that was asked for, and the stream took its time letting go. The edge's
+    // timer fires in that gap. The rows are already settled — baseline only — so the edge must
+    // not go out behind them and leave a step asserted that the capture never saw.
+    [Fact]
+    public async Task AnEdgeDueWhileTheStreamIsBeingTornDown_IsNotDriven()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        device.BeforeLiveStreamTeardown = () => Task.Delay(500);
+        using var pump = new SamplePump(device);
+
+        var result = await agent.DriveAndCaptureAsync(
+            Id, Pin, high: true, delayMs: 100, pulseWidthMs: 0, NeverMs, maxRows: 1, CancellationToken.None)
+            .WaitAsync(Bound);
+
+        Assert.Equal(new[] { Output, Low }, device.Sent.Where(IsPinCommand));
+        Assert.Null(result.EdgeIssuedAtMs);
+        Assert.False(result.LastCommandedHigh);
+        Assert.Equal(1, result.Capture.RowCount);
+    }
+
     // The row budget ran out during the baseline. The edge never went out, the pin never left its
     // baseline, and the result says both rather than reporting an edge that is not in the rows.
     [Fact]
@@ -619,6 +764,22 @@ public class DriveAndCaptureContractTests
     private static bool IsStreamStart(string command) =>
         command.StartsWith(ScpiMessageProducer.StartStreaming(1).Data[..^1], StringComparison.Ordinal);
 
+    /// <summary>
+    /// Makes the double refuse the first command that would return the pin to low after the edge,
+    /// and accept every one after it — a transient failure, which a retry gets past.
+    /// </summary>
+    private static void RejectTheFirstRelease(FakeStreamingDevice device, string message)
+    {
+        var rejected = 0;
+        device.OnSend = command =>
+        {
+            if (command == Low && device.Sent.Contains(High) && Interlocked.Exchange(ref rejected, 1) == 0)
+            {
+                throw new InvalidOperationException(message);
+            }
+        };
+    }
+
     /// <summary>For <see cref="SamplePump"/>: true once the pin has been written this many times.</summary>
     private static Func<bool> AfterPinWrites(FakeStreamingDevice device, int count) =>
         () => device.Sent.Count(IsPinCommand) >= count;
@@ -699,6 +860,87 @@ public class DriveAndCaptureContractTests
             _stop.Cancel();
             _loop.Wait(Bound);
             _stop.Dispose();
+        }
+    }
+}
+
+/// <summary>
+/// Tests for the one promise <c>DrainAsync</c> makes to a stimulus: whichever way the capture
+/// stops taking samples, it says so before it tears the stream down, and exactly once.
+/// </summary>
+/// <remarks>
+/// A stream that ends by itself is not among the cases: it has torn itself down before anyone
+/// could be told, and there is no capture-side teardown left for an edge to slip into.
+/// </remarks>
+public class SamplingEndedTests
+{
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
+
+    [Theory]
+    [InlineData("sink complete")]
+    [InlineData("window elapsed")]
+    [InlineData("caller cancelled")]
+    public async Task SamplingEnded_IsSaidOnce_BeforeTheStreamIsTornDown(string ending)
+    {
+        var order = new List<string>();
+        void Note(string what)
+        {
+            lock (order)
+            {
+                order.Add(what);
+            }
+        }
+
+        var samples = System.Threading.Channels.Channel.CreateUnbounded<LiveSample>();
+        var sink = new LatestValueSink(new[] { new ChannelKey(ChannelType.Analog, 0) });
+        using var cts = new CancellationTokenSource();
+
+        var drain = LiveSampleCapture.DrainAsync(
+            Stream(samples.Reader, () => Note("torn down")),
+            sink,
+            ending == "window elapsed" ? TimeSpan.FromMilliseconds(50) : TimeSpan.FromMinutes(5),
+            onSubscribed: null,
+            cts.Token,
+            onSamplingEnded: () => Note("ended"));
+
+        switch (ending)
+        {
+            case "sink complete":
+                samples.Writer.TryWrite(LiveSampleCaptureTests.Sample(ChannelType.Analog, 0, 1.0));
+                break;
+            case "caller cancelled":
+                await cts.CancelAsync();
+                break;
+        }
+
+        if (ending == "caller cancelled")
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain.WaitAsync(Bound));
+        }
+        else
+        {
+            await drain.WaitAsync(Bound);
+        }
+
+        Assert.Equal(new[] { "ended", "torn down" }, order);
+    }
+
+    /// <summary>A stream that says when its enumeration is torn down, as Core's does its unsubscribing there.</summary>
+    private static async IAsyncEnumerable<LiveSample> Stream(
+        System.Threading.Channels.ChannelReader<LiveSample> reader,
+        Action onTornDown,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await foreach (var sample in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return sample;
+            }
+        }
+        finally
+        {
+            onTornDown();
         }
     }
 }

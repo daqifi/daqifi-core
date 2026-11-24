@@ -511,12 +511,14 @@ public sealed record CaptureResult(
 /// <param name="DelayMs">The delay actually used, after clamping to the capture window.</param>
 /// <param name="PulseWidthMs">The pulse width actually used, or null for a step that was left in place.</param>
 /// <param name="EdgeIssuedAtMs">
-/// When the edge command was issued, in milliseconds after the capture's first sample arrived —
-/// add it to the first row's timestamp to find the edge in the rows. It is this machine's clock,
-/// in whole milliseconds, and it is when the command was handed over, not when the pin moved:
-/// the command is queued, written, carried and acted on after that, so the pin moves a few
-/// milliseconds later. Null when the capture ended (its duration or its row budget) before the
-/// edge was due, in which case no edge was commanded.
+/// Host scheduling information: when this server issued the edge command, in whole milliseconds
+/// after it read the capture's first sample. It is <b>not</b> a position in the rows. That first
+/// sample had already waited in the receive path before it was read, and the command still had
+/// to wait in the write queue, cross the transport and be acted on, so the transition sits later
+/// in the rows than this offset suggests, by an amount nothing here measures — using it as the
+/// edge would bias a response-time measurement. To locate the edge, enable the driven channel and
+/// find the transition in its <c>DIO</c> column. Null when sampling ended (the duration or the
+/// row budget) before the edge was due, in which case no edge was commanded.
 /// </param>
 /// <param name="ReleaseIssuedAtMs">
 /// When the command returning the pin to its baseline was issued, on the same clock. Null when

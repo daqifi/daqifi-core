@@ -75,9 +75,9 @@ public static class DaqifiPrompts
             Enable analog channel {analogChannel} and digital channel {digitalChannel}, set a sample rate fast enough to
             resolve the response, then use drive_and_capture: it starts the capture, drives the pin
             part-way through and returns the rows, so the edge and the response are in one capture. Tell
-            me the level before and after, and how long the response took. Read the edge itself off the
-            DIO{digitalChannel} column — edgeIssuedAtMs is only when the command was issued, a few milliseconds before
-            the pin moved, and does not confirm that it did. Drive the digital channel low again afterwards unless I say otherwise —
+            me the level before and after, and how long the response took, measured from the transition
+            in the DIO{digitalChannel} column — edgeIssuedAtMs is only when the command was issued by this machine, not
+            when the pin moved, so do not time the response from it. Drive the digital channel low again afterwards unless I say otherwise —
             leaving an output asserted is a surprise for whatever is wired to it.
             """;
 }

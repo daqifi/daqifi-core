@@ -1531,6 +1531,13 @@ public sealed class DaqifiAgent
             var sink = createSink(channels);
             var stimulus = armStimulus?.Invoke(channels);
 
+            // What a failed stimulus write stops the capture with. Its own token, so that ending
+            // can never be mistaken for the window elapsing — which would return a capture that
+            // looks complete — and the caller's token is left to mean what it says.
+            using var stimulusFailed = stimulus is null
+                ? null
+                : CancellationTokenSource.CreateLinkedTokenSource(ct);
+
             // A device-wide running total, so what this capture cost is the difference across it.
             var droppedBefore = live.DroppedLiveSampleCount;
             LiveCaptureOutcome outcome;
@@ -1544,14 +1551,15 @@ public sealed class DaqifiAgent
                 // the exclusive block ends, which for a stimulus is after the capture it was
                 // meant to appear in. The ownership is an AsyncLocal, so the schedule inherits it
                 // by being started inside the block.
-                stimulus?.Start();
+                stimulus?.Start(onFailure: stimulusFailed!.Cancel);
 
                 outcome = await LiveSampleCapture.DrainAsync(
                     live.StreamSamplesAsync(),
                     stimulus is null ? sink : new FirstSampleTap(sink, stimulus.OnFirstSample),
                     window,
                     startStream ? streaming.StartStreaming : null,
-                    ct).ConfigureAwait(false);
+                    stimulusFailed?.Token ?? ct,
+                    stimulus is null ? null : stimulus.Disarm).ConfigureAwait(false);
 
                 dropped = live.DroppedLiveSampleCount - droppedBefore;
                 sampleRateHz = streaming.StreamingFrequency;
@@ -1563,16 +1571,14 @@ public sealed class DaqifiAgent
                 {
                     // The pin first: an output left asserted reaches whatever is wired to it, and
                     // that outranks a stream left running. On every way out — the window ending,
-                    // an error, a cancel.
+                    // an error, a cancel. When the capture did not complete this never throws, so
+                    // whatever ended it is what the caller hears; when a stimulus write is what
+                    // ended it, that write's failure is thrown here and replaces the cancellation
+                    // it was stopped with.
                     if (stimulus is not null)
                     {
-                        await stimulus.FinishAsync(restoreStep: !completed).ConfigureAwait(false);
+                        await stimulus.FinishAsync(captureCompleted: completed).ConfigureAwait(false);
                     }
-                }
-                catch (DeviceNotConnectedException) when (!completed)
-                {
-                    // Same as the stop below: the device went away, the capture is already
-                    // throwing about it, and there is no pin left to release.
                 }
                 finally
                 {

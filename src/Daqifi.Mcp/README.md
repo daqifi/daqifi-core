@@ -67,15 +67,20 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 > sent: `edgeIssuedAtMs` comes back null and the pin stays at its baseline. A capture that ends
 > mid-pulse releases the pin on its way out, so the pulse can be shorter than you asked for.
 >
-> The edge is timed by this machine, not the device, so it is good to a few milliseconds and no
-> better. `edgeIssuedAtMs` and `releaseIssuedAtMs` are when each command was issued, measured from
-> the first sample's arrival — the earliest the pin can have moved, with the write queue, the
-> transport and the firmware still ahead of it. They are commands, not readings, and so is
-> `lastCommandedHigh`: nothing in the result confirms the pin followed. For that, enable the driven
-> channel with `configure_digital_channels`: the firmware reads the pin back, so its `DIO` column
-> shows the real transition, on the device's clock, in the same rows as the analog response. At
-> least one analog channel has to be enabled — the response is what the capture is for, and a
-> Nyquist streaming digital channels alone often does not start.
+> **Find the edge in the `DIO` column, not from the timestamps.** Enable the driven channel with
+> `configure_digital_channels`: the firmware reads the pin back, so its `DIO` column shows the real
+> transition, on the device's clock, in the same rows as the analog response. `edgeIssuedAtMs` and
+> `releaseIssuedAtMs` are only host scheduling information — when this server issued each command,
+> counted from when it read the first sample. That sample had already waited in the receive path
+> and the command still had to wait in the write queue and cross the transport, so the transition
+> sits later in the rows than the offset suggests, by an amount nothing measures; timing a response
+> from it would bias the result. They are commands, not readings, and so is `lastCommandedHigh`:
+> nothing in the result confirms the pin followed.
+>
+> A write that fails is answered at once: the baseline is attempted immediately and the capture
+> stops, rather than leaving the pin asserted until the window runs out. At least one analog
+> channel has to be enabled — the response is what the capture is for, and a Nyquist streaming
+> digital channels alone often does not start.
 >
 > **Retrieve before you stream**, unless `discover_devices` reports a `firmwareVersion` of 3.7.3 or
 > later (treat an empty or unknown version as older). On older firmware a live streaming session

@@ -21,22 +21,36 @@ namespace Daqifi.Mcp;
 /// </para>
 /// <para>
 /// Timing is this machine's, not the device's. The writes are scheduled with
-/// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> and travel to the pin over the same
-/// transport as everything else, so the edge lands a few milliseconds after it was asked for
-/// (more on a busy host, or on Windows, whose default timer tick is ~15 ms). What is reported is
-/// when each write was <b>issued</b>, in whole milliseconds — the earliest the pin can have
-/// moved, not when it did, and not proof that it did: Core queues a command for its writer
-/// thread and returns, so a write that later fails on the wire is not reported back here. A
-/// caller that needs the edge itself enables the driven channel and reads it off that column.
+/// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> and then queued by Core for its writer
+/// thread, carried by the transport and acted on by the firmware, so the pin moves some time
+/// after the write was asked for, by an amount nothing here measures. What is reported is when
+/// each write was <b>issued</b>, in whole milliseconds — the earliest the pin can have moved, not
+/// when it did, and not proof that it did: a write that later fails on the wire is not reported
+/// back here. A caller that needs the edge itself enables the driven channel and reads it off
+/// that column.
 /// </para>
 /// <para>
-/// The schedule is the only writer while it runs, and <see cref="FinishAsync"/> waits for it to
-/// stop before touching the pin itself. The one thing the two race for is whether the edge goes
-/// out at all, and that is settled under <see cref="_decision"/>: once the capture has ended, an
-/// edge that had not yet been issued never is. A timer that had already fired, or a first-sample
-/// wake-up still queued, would otherwise drive the pin after the rows it was meant to appear in
-/// had been returned.
+/// It runs on a timer of its own, not off the samples, on purpose: a pulse has to be released on
+/// time even when the stream it is being watched through stalls. That makes it concurrent with
+/// the capture, and three rules keep the two from leaving the pin somewhere nobody chose:
 /// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <b>No edge after sampling has ended.</b> <see cref="Disarm"/> and the decision to issue the
+/// edge share <see cref="_decision"/>, so the edge is either issued while rows were still being
+/// taken or never. A timer that had already fired, or a wake-up still queued, cannot drive the pin
+/// while the stream is being torn down.
+/// </description></item>
+/// <item><description>
+/// <b>A write that fails is answered at once.</b> The baseline is attempted there and then, and
+/// the capture is told to stop, rather than leaving the pin as it is until the capture's window
+/// runs out.
+/// </description></item>
+/// <item><description>
+/// <b>The way out always tries the baseline once more</b> if the pin still reads as asserted —
+/// see <see cref="FinishAsync"/>.
+/// </description></item>
+/// </list>
 /// </remarks>
 internal sealed class DigitalStimulus
 {
@@ -44,14 +58,15 @@ internal sealed class DigitalStimulus
     private readonly bool _level;
     private readonly TimeSpan _delay;
     private readonly TimeSpan? _pulseWidth;
+    private readonly Func<TimeSpan, CancellationToken, Task> _wait;
 
     private readonly TaskCompletionSource<long> _firstSampleAt =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private readonly Func<TimeSpan, CancellationToken, Task> _wait;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _decision = new();
-    private bool _captureEnded;
+    private bool _disarmed;
+    private Action? _onFailure;
     private Task _schedule = Task.CompletedTask;
 
     private long _origin;
@@ -102,30 +117,52 @@ internal sealed class DigitalStimulus
     /// Starts waiting for the first sample. Call it on the flow the writes must run on — see the
     /// caller for why that matters.
     /// </summary>
-    internal void Start() => _schedule = RunAsync(_stop.Token);
+    /// <param name="onFailure">
+    /// Run when a scheduled write throws, after the baseline has been attempted: how the capture
+    /// is told to stop reading. The failure itself is surfaced by <see cref="FinishAsync"/>.
+    /// </param>
+    internal void Start(Action? onFailure = null)
+    {
+        _onFailure = onFailure;
+        _schedule = RunAsync(_stop.Token);
+    }
 
     /// <summary>Marks the capture's first sample, which is what the delay is counted from.</summary>
     internal void OnFirstSample() => _firstSampleAt.TrySetResult(Stopwatch.GetTimestamp());
 
     /// <summary>
-    /// Ends the schedule and leaves the pin where the caller is owed it: a pulse is always
-    /// released, and a step is undone when <paramref name="restoreStep"/> says the capture did
-    /// not complete, or when the schedule itself failed — a call that is about to fail should not
-    /// leave an output asserted that nobody was told about.
+    /// Says sampling has ended: an edge not yet issued never will be. Called at the moment the
+    /// capture stops taking rows, which is before the stream is torn down and well before
+    /// <see cref="FinishAsync"/> — the gap in which a pending edge would otherwise still fire.
+    /// A pulse already under way is unaffected; it is still released on time.
     /// </summary>
-    /// <remarks>
-    /// An edge that has not been issued by the time this is called never is. A write the
-    /// schedule failed on is surfaced from here, after the release has been attempted: a write
-    /// that threw may have reached the device anyway. If that release fails too, the schedule's
-    /// failure is still the one reported, since it is the one that explains the other.
-    /// </remarks>
-    internal async Task FinishAsync(bool restoreStep)
+    internal void Disarm()
     {
         lock (_decision)
         {
-            _captureEnded = true;
+            _disarmed = true;
         }
+    }
 
+    /// <summary>
+    /// Ends the schedule and leaves the pin where the caller is owed it: a pulse is always
+    /// released, and a step is left in place only when the capture completed and nothing failed —
+    /// a call that is failing should not leave an output asserted that nobody was told about.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A write the schedule failed on is surfaced from here. So is a failure of the release this
+    /// makes itself, when the capture ended mid-pulse. Either way the baseline is attempted once
+    /// more first, best effort, and the first failure is the one reported.
+    /// </para>
+    /// <para>
+    /// When the capture did not complete, nothing is thrown from here at all: whatever ended the
+    /// capture is already on its way to the caller, and the baseline is best effort.
+    /// </para>
+    /// </remarks>
+    internal async Task FinishAsync(bool captureCompleted)
+    {
+        Disarm();
         await _stop.CancelAsync().ConfigureAwait(false);
 
         ExceptionDispatchInfo? failure = null;
@@ -151,9 +188,23 @@ internal sealed class DigitalStimulus
             failure.Throw();
         }
 
-        if (IsAsserted && (_pulseWidth is not null || restoreStep))
+        if (!captureCompleted)
         {
-            Release();
+            RestoreAfterFailure();
+            return;
+        }
+
+        if (IsAsserted && _pulseWidth is not null)
+        {
+            try
+            {
+                Release();
+            }
+            catch
+            {
+                RestoreAfterFailure();
+                throw;
+            }
         }
     }
 
@@ -183,35 +234,47 @@ internal sealed class DigitalStimulus
     {
         _origin = await _firstSampleAt.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        // Whatever is left of the delay once the wake-up for the first sample has been paid for.
-        var remaining = _delay - Stopwatch.GetElapsedTime(_origin);
-        if (remaining > TimeSpan.Zero)
+        try
         {
-            await _wait(remaining, cancellationToken).ConfigureAwait(false);
-        }
-
-        // Getting here does not mean the capture is still running: a wait that completed just
-        // ahead of the cancel resumes normally. Whether the edge goes out is decided against the
-        // capture's end under one lock, so it is either issued before the end or not at all.
-        lock (_decision)
-        {
-            if (_captureEnded)
+            // Whatever is left of the delay once the wake-up for the first sample has been paid for.
+            var remaining = _delay - Stopwatch.GetElapsedTime(_origin);
+            if (remaining > TimeSpan.Zero)
             {
-                return;
+                await _wait(remaining, cancellationToken).ConfigureAwait(false);
             }
 
-            // Stamped before the write, not after: the pin cannot have moved earlier than this,
-            // which is a claim that stays true however long the transport takes. It also means a
-            // write that throws still counts as asserted, so the release is attempted.
-            _edgeIssuedAt = Stopwatch.GetTimestamp();
+            // Getting here does not mean rows are still being taken: a wait that completed just
+            // ahead of the cancel resumes normally. Whether the edge goes out is decided against
+            // the end of sampling under one lock, so it is either issued before it or not at all.
+            lock (_decision)
+            {
+                if (_disarmed)
+                {
+                    return;
+                }
+
+                // Stamped before the write, not after: the pin cannot have moved earlier than
+                // this, which stays true however long the transport takes. It also means a write
+                // that throws still counts as asserted, so the baseline is attempted.
+                _edgeIssuedAt = Stopwatch.GetTimestamp();
+            }
+
+            _drive(_level);
+
+            if (_pulseWidth is { } width)
+            {
+                await _wait(width, cancellationToken).ConfigureAwait(false);
+                Release();
+            }
         }
-
-        _drive(_level);
-
-        if (_pulseWidth is { } width)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _wait(width, cancellationToken).ConfigureAwait(false);
-            Release();
+            // Now, not when the capture gets round to ending: its window can have most of a
+            // minute left, and the pin is asserted. Put it back, then stop the capture so the
+            // failure reaches the caller.
+            RestoreAfterFailure();
+            _onFailure?.Invoke();
+            throw;
         }
     }
 

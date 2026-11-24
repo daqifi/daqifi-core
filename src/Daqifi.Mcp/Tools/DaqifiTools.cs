@@ -265,7 +265,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.CaptureSamplesAsync(deviceId, durationMs, maxRows, cancellationToken));
 
     [McpServerTool(Name = "drive_and_capture", ReadOnly = false, Destructive = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("capture_samples with a digital edge inside it, to record what an output does to an input. Sets the pin to the opposite level, starts capturing, drives it to `high` after delayMs, and with pulseWidthMs returns it. Needs an analog channel enabled; enable the driven channel too and its DIO column shows the edge. Host-timed, unconfirmed: edgeIssuedAtMs is when the command was issued, a few ms before the pin moves. Refused while PWM runs on the pin.")]
+    [Description("capture_samples with a digital edge inside it, to record what an output does to an input. Sets the pin to the opposite level, starts capturing, drives it to `high` after delayMs, and with pulseWidthMs returns it. Needs an analog channel enabled. Also enable the driven channel: its DIO column is where the edge is; edgeIssuedAtMs is only when this host issued the command. Refused while PWM runs on the pin.")]
     public static Task<DriveAndCaptureResult> DriveAndCapture(
         DaqifiAgent agent,
         [Description("The device_id to drive and capture from.")] string deviceId,
