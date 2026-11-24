@@ -11,8 +11,8 @@ namespace Daqifi.Core.Device.Discovery;
 /// <see cref="SerialDeviceFinder"/> can break it: when
 /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/> fires mid-sweep it catches the
 /// cancellation and returns the port probes that already finished, so the ports it never reached
-/// are missing from a list that otherwise looks whole. <see cref="HidDeviceFinder"/> can too: its
-/// enumeration answers all at once or not at all, so a pass that times out in it returns nothing.
+/// are missing from a list that otherwise looks whole. <see cref="HidDeviceFinder"/> can too, when
+/// its time runs out during the enumeration or while it works through what that returned.
 /// </para>
 /// <para>
 /// This must be reported by the finder, because it cannot be inferred from the outside. In

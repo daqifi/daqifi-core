@@ -61,6 +61,58 @@ public class HidDeviceFinderTests
         Assert.Equal("path-2", discovered[1].DevicePath);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiscoverAsync_TokenFiresWhileADeviceIsHandled_AnnouncesNoMore(bool duringLookup)
+    {
+        // Fired by cancelling, so the test does not race a clock: HID sees one pass token either way.
+        using var cts = new CancellationTokenSource();
+        using var finder = new HidDeviceFinder(
+            new FakeHidDeviceEnumerator([Hid("path-1"), Hid("path-2")]),
+            new RecordingUsbLocationProvider(path =>
+            {
+                if (duringLookup && path == "path-2")
+                {
+                    cts.Cancel();
+                }
+
+                return null;
+            }));
+        var announced = new List<string?>();
+        finder.DeviceDiscovered += (_, e) =>
+        {
+            announced.Add(e.DeviceInfo.DevicePath);
+            if (!duringLookup)
+            {
+                cts.Cancel();
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
+
+        Assert.Equal(new[] { "path-1" }, announced);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_TimeoutWhileADeviceIsHandled_ReturnsThatDeviceAsPartial()
+    {
+        using var finder = new HidDeviceFinder(
+            new FakeHidDeviceEnumerator([Hid("path-1"), Hid("path-2")]),
+            new RecordingUsbLocationProvider(_ => null));
+
+        // Outlasts the timeout by far, and the timeout by far outlasts reaching this handler.
+        finder.DeviceDiscovered += (_, _) => Thread.Sleep(TimeSpan.FromSeconds(4));
+
+        var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("path-1", Assert.Single(devices).DevicePath);
+        Assert.True(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    private static HidDeviceInfo Hid(string path)
+        => new(HidDeviceFinder.DefaultVendorId, HidDeviceFinder.DefaultProductId, path);
+
     [Fact]
     public async Task DiscoverAsync_RaisesDiscoveryCompletedEvent()
     {

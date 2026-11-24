@@ -238,6 +238,24 @@ public class DeviceFinderBaseTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_TransportFailsOnCancellation_ThrowsTheCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        var broken = new IOException("socket closed under the pass");
+        using var finder = new ScriptedFinder(_ =>
+        {
+            cts.Cancel();
+            throw broken;
+        });
+
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => finder.DiscoverAsync(cancellationToken: cts.Token));
+
+        Assert.Equal(cts.Token, canceled.CancellationToken);
+        Assert.Same(broken, canceled.InnerException);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_InvalidTimeout_Throws()
     {
         using var finder = new TestFinder();

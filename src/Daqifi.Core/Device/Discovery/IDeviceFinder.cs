@@ -37,8 +37,9 @@ public interface IDeviceFinder : IDisposable
     /// through <see cref="DeviceDiscovered"/> stay announced. When the token is cancelled and the
     /// timeout has elapsed too, the cancellation wins.</description></item>
     /// <item><description><b>The transport cannot be scanned at all</b> — throws the transport's own
-    /// exception. A fault confined to one port or one network interface only skips that port or
-    /// interface.</description></item>
+    /// exception: the ports could not be enumerated, say, or no network interface could be queried. A
+    /// fault confined to one port or one network interface only skips that port or interface, and a
+    /// host with none to scan finds nothing.</description></item>
     /// </list>
     /// <para>
     /// An empty result means "nothing answered within the budget you gave", not

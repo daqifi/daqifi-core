@@ -76,6 +76,12 @@ public class HidDeviceFinder : DeviceFinderBase
 
         foreach (var hidDevice in hidDevices)
         {
+            if (passToken.IsCancellationRequested)
+            {
+                MarkPassPartial();
+                break;
+            }
+
             string? locationKey;
             try
             {
@@ -87,6 +93,13 @@ public class HidDeviceFinder : DeviceFinderBase
                 // enumeration — location is enrichment metadata, not identification.
                 // Mirrors SerialDeviceFinder's handling of a throwing provider.
                 locationKey = null;
+            }
+
+            // A location lookup can be slow (WMI), so the pass may have ended during it.
+            if (passToken.IsCancellationRequested)
+            {
+                MarkPassPartial();
+                break;
             }
 
             var deviceInfo = new DeviceInfo

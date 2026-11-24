@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using static Daqifi.Core.Internal.DiagnosticGuard;
@@ -81,6 +82,12 @@ public abstract class DeviceFinderBase : IDeviceFinder, IPartialResultReporter
             MarkPassPartial();
             return [];
         }
+        catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancelling a pass can also break the transport under it. The caller asked for the
+            // cancellation, so that is the answer.
+            throw new OperationCanceledException("The discovery pass was cancelled.", ex, cancellationToken);
+        }
         finally
         {
             try
@@ -126,6 +133,21 @@ public abstract class DeviceFinderBase : IDeviceFinder, IPartialResultReporter
     /// (<see cref="IPartialResultReporter"/>).
     /// </summary>
     private protected void MarkPassPartial() => Volatile.Write(ref _lastPassWasPartial, 1);
+
+    /// <summary>
+    /// Ends a pass whose transport failed as a whole: throws <paramref name="failure"/> when nothing
+    /// was found, because an empty list would read as "nothing is there", and otherwise records that
+    /// what was found is only part of the answer.
+    /// </summary>
+    private protected void EndFailedPass(Exception failure, int devicesFound)
+    {
+        if (devicesFound == 0)
+        {
+            ExceptionDispatchInfo.Throw(failure);
+        }
+
+        MarkPassPartial();
+    }
 
     /// <inheritdoc />
     bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()

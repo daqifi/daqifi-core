@@ -287,8 +287,8 @@ keep:
   (plus `SO_REUSEPORT` on Linux/macOS, which BSD-derived stacks require) and joins the group
   on every eligible NIC. Multicast datagrams are delivered to *every* socket joined to the
   group, so running alongside the host's own mDNS daemon (mDNSResponder, Avahi) takes no
-  traffic from it. If the port cannot be shared at all, the pass returns empty rather than
-  throwing.
+  traffic from it. If the port cannot be shared at all, the pass throws: an empty
+  list would read as "no devices" when nothing was asked.
 - **`LocalInterfaceAddress`** is resolved by matching the device's address against each local
   interface's subnet, rather than read off the socket as the broadcast finder does — a
   multicast listener has to be bound to the wildcard address to receive anything on Linux

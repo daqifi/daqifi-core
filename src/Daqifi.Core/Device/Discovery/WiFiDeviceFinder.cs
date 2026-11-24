@@ -32,7 +32,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
     /// <summary>
     /// Represents network interface information for discovery broadcasts.
     /// </summary>
-    private readonly struct NetworkInterfaceInfo
+    internal readonly struct NetworkInterfaceInfo
     {
         /// <summary>
         /// The broadcast endpoint to send discovery queries to.
@@ -51,6 +51,11 @@ public class WiFiDeviceFinder : DeviceFinderBase
 
     private readonly int _discoveryPort;
     private readonly byte[] _queryCommandBytes;
+
+    /// <summary>
+    /// Test seam: when set, supplies the interfaces to browse on in place of the host's own.
+    /// </summary>
+    internal Func<IReadOnlyList<NetworkInterfaceInfo>>? InterfaceProvider { get; init; }
 
     #endregion
 
@@ -209,7 +214,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
     protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
     {
         var discoveredDevices = new List<IDeviceInfo>();
-        var networkInterfaces = GetAllNetworkInterfaces(_discoveryPort);
+        var networkInterfaces = InterfaceProvider?.Invoke() ?? GetAllNetworkInterfaces(_discoveryPort);
 
         if (networkInterfaces.Count == 0)
         {
@@ -220,6 +225,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
         // and replies arrive on the socket whose bound IP is the actual local interface — avoiding
         // misrouting on hosts where virtual NICs (WSL2 mirrored, Hyper-V) share a subnet with the real one.
         var perNicClients = new List<(UdpClient Client, IPAddress LocalAddress)>();
+        Exception? setupFailure = null;
         try
         {
             foreach (var interfaceInfo in networkInterfaces)
@@ -253,10 +259,11 @@ public class WiFiDeviceFinder : DeviceFinderBase
                     perNicClients.Add((udp, interfaceInfo.LocalAddress));
                     added = true;
                 }
-                catch
+                catch (Exception ex)
                 {
                     // Skip this NIC; continue with others. Any setup or send failure is
-                    // recoverable at the discovery level.
+                    // recoverable at the discovery level, as long as one NIC carries the query.
+                    setupFailure ??= ex;
                 }
                 finally
                 {
@@ -269,14 +276,20 @@ public class WiFiDeviceFinder : DeviceFinderBase
 
             if (perNicClients.Count == 0)
             {
-                return discoveredDevices;
+                // Every NIC failed, so nothing was asked and an empty answer would mean nothing.
+                EndFailedPass(setupFailure!, devicesFound: 0);
             }
 
             var receiveTasks = perNicClients
                 .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, passToken))
                 .ToArray();
 
-            await Task.WhenAll(receiveTasks).ConfigureAwait(false);
+            var receiveFailures = await Task.WhenAll(receiveTasks).ConfigureAwait(false);
+            if (Array.TrueForAll(receiveFailures, failure => failure != null))
+            {
+                // No NIC was still listening when the pass ended.
+                EndFailedPass(receiveFailures[0]!, discoveredDevices.Count);
+            }
         }
         finally
         {
@@ -293,7 +306,8 @@ public class WiFiDeviceFinder : DeviceFinderBase
     /// Receives discovery responses on a single NIC-bound socket until cancellation.
     /// The socket's bound IP is the authoritative LocalInterfaceAddress for any reply it receives.
     /// </summary>
-    private async Task ReceiveLoopAsync(UdpClient udp, IPAddress localAddress, List<IDeviceInfo> discoveredDevices, CancellationToken cancellationToken)
+    /// <returns>What stopped the socket receiving before the pass ended, or null when the pass ended.</returns>
+    private async Task<Exception?> ReceiveLoopAsync(UdpClient udp, IPAddress localAddress, List<IDeviceInfo> discoveredDevices, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -306,19 +320,10 @@ public class WiFiDeviceFinder : DeviceFinderBase
             {
                 break;
             }
-            catch (SocketException)
+            catch (Exception ex)
             {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch
-            {
-                // Catch-all so an unexpected exception type cannot fault this receive task
-                // and hang DiscoverAsync via Task.WhenAll under an infinite timeout.
-                break;
+                // Returned rather than thrown: one NIC dying must not end the pass for the others.
+                return cancellationToken.IsCancellationRequested ? null : ex;
             }
 
             // Defense-in-depth: any unexpected exception in payload processing or subscriber
@@ -358,6 +363,8 @@ public class WiFiDeviceFinder : DeviceFinderBase
                 // Swallow malformed payloads and subscriber exceptions; keep receiving.
             }
         }
+
+        return null;
     }
 
     /// <summary>
@@ -439,9 +446,14 @@ public class WiFiDeviceFinder : DeviceFinderBase
                 continue;
             }
 
-            var ipProperties = networkInterface.GetIPProperties();
-            if (ipProperties == null)
+            IPInterfaceProperties ipProperties;
+            try
             {
+                ipProperties = networkInterface.GetIPProperties();
+            }
+            catch (NetworkInformationException)
+            {
+                // This adapter went away while it was being read; the others still work.
                 continue;
             }
 

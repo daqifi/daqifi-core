@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Device;
@@ -295,7 +296,68 @@ public class MDnsDeviceFinderTests
         Assert.Throws<ArgumentException>(() => new MDnsDeviceFinder(serviceType));
     }
 
+    private static readonly MDnsDeviceFinder.LocalInterface UnusableInterface = new()
+    {
+        // Reserved for documentation (RFC 5737), so no host has it to join a group on.
+        Address = IPAddress.Parse("192.0.2.1"),
+        Mask = IPAddress.Parse("255.255.255.0")
+    };
+
     [Fact]
+    public async Task DiscoverAsync_ListenerCannotBeCreated_ThrowsAndRaisesCompleted()
+    {
+        using var finder = new MDnsDeviceFinder
+        {
+            InterfaceProvider = () => [UnusableInterface],
+            ListenerFactory = () => throw new SocketException((int)SocketError.AddressAlreadyInUse)
+        };
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        var ex = await Assert.ThrowsAsync<SocketException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(SocketError.AddressAlreadyInUse, ex.SocketErrorCode);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_NoInterfaceCanJoinTheGroup_Throws()
+    {
+        using var finder = new MDnsDeviceFinder
+        {
+            InterfaceProvider = () => [UnusableInterface],
+            ListenerFactory = () => new UdpClient(new IPEndPoint(IPAddress.Any, 0))
+        };
+
+        await Assert.ThrowsAsync<SocketException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_ListenerDiesMidBrowse_ThrowsInsteadOfFindingNothing()
+    {
+        UdpClient? listener = null;
+        using var finder = new MDnsDeviceFinder
+        {
+            ListenerFactory = () => listener = new UdpClient(new IPEndPoint(IPAddress.Any, 0))
+        };
+
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan);
+        Assert.False(browse.IsCompleted);
+        listener!.Client.Dispose();
+
+        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(failure is SocketException or ObjectDisposedException, $"got {failure}");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_NoInterfaces_FindsNothing()
+    {
+        using var finder = new MDnsDeviceFinder { InterfaceProvider = () => [] };
+
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeoutAndRaisesCompleted()
     {
         using var finder = new MDnsDeviceFinder();
