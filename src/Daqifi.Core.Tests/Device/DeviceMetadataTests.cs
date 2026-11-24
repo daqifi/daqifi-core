@@ -1,4 +1,5 @@
 using System;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
 using Google.Protobuf;

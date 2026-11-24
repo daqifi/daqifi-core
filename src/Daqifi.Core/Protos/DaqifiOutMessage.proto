@@ -1,0 +1,113 @@
+// Wire format of every protobuf message a DAQiFi device sends. The firmware repository owns it:
+//
+//   https://github.com/daqifi/daqifi-nyquist-firmware
+//   firmware/src/services/DaqifiPB/DaqifiOutMessage.proto
+//   at commit c4a19596a0e56480d5fa0168490d3a9fdb4b5051 (shipped in firmware v3.5.0)
+//
+// This copy differs from that commit only by this header, the four options below, and the
+// spelling of one comment. Regenerate ../Communication/Messages/DaqifiOutMessage.cs after any
+// change; CONTRIBUTING.md ("Regenerating DaqifiOutMessage") has the command.
+
+syntax = "proto3";
+
+option csharp_namespace = "Daqifi.Core.Communication.Messages";
+
+// Part of the descriptor Core has always embedded. They have no effect on the C# output.
+option java_package = "com.daqifi.common.messages";
+option java_outer_classname = "ProtoMessageV2";
+option optimize_for = LITE_RUNTIME;
+
+message DaqifiOutMessage
+{
+	// Put repetitive information in first 15 fields to keep encoded data as short as possible
+
+	// Begin streaming data
+	uint32 msg_time_stamp = 1;						//  Incrementing timestamp for each streaming trigger (frequency=timestamp_freq)
+
+	repeated sint32 analog_in_data = 2; 					//  Analog in data int (maximum 24bit/ch) (available to user)
+	repeated float analog_in_data_float = 3; 				//  Analog in data float (after cal calcs)(available to user)
+	repeated uint32 analog_in_data_ts = 4; 					//  Analog in data timestamp offset (value should be added to msg_time_stamp for absolute timestamp)
+
+	bytes digital_data = 5;						//  Digital IO data (bitwise binary representation LSB=ch0)
+	repeated uint32 digital_data_ts = 6; 					//  Digital IO data timestamp offset (value should be added to msg_time_stamp for absolute timestamp)
+
+	repeated uint32 analog_out_data = 7; 					//  Analog out data int (maximum 12bit/ch)
+
+	uint32 device_status = 8;						//	Device status word
+	uint32 pwr_status = 9;							//  Power status
+	uint32 batt_status = 10;						//  Battery charge percent
+	sint32 temp_status = 11;						//  Board temperature in deg C
+
+	// End streaming data
+
+	uint32 timestamp_freq = 16;					//  Frequency of the timestamp counter
+
+	// Analog In Information
+	uint32 analog_in_port_num = 17;				//	Number of analog in ports (public)
+	uint32 analog_in_port_num_priv = 18;			//	Number of analog in ports (private)
+    bytes analog_in_port_type = 19;				//  Analog in port type
+	bytes analog_in_port_av_rse = 20;				//  Analog in port referenced single ended (RSE)
+    bytes analog_in_port_rse = 21;					//  Analog in port referenced single ended (RSE)
+	bytes analog_in_port_enabled = 22;				//  Analog in port enabled list
+	repeated float analog_in_port_av_range = 23;			//	Analog in port voltage range (volts span:RSE 0 to range, NON-RSE -(range/2) to (range/2))
+	repeated float analog_in_port_av_range_priv = 24;		//	Private analog in port voltage range (volts span:RSE 0 to range, NON-RSE -(range/2) to (range/2))
+	repeated float analog_in_port_range = 25;				//	Analog in port voltage range (volts span:RSE 0 to range, NON-RSE -(range/2) to (range/2))
+	repeated float analog_in_port_range_priv = 26;			//	Private analog in port voltage range (volts span:RSE 0 to range, NON-RSE -(range/2) to (range/2))
+	uint32 analog_in_res = 27;						//  Public analog in (ADC) resolution (bits used to convert from integer value to volts)
+	uint32 analog_in_res_priv = 28;				//  Private analog in (ADC) resolution (bits used to convert from integer value to volts)
+	repeated float analog_in_int_scale_m = 29;				//  Analog in port internal scale m value (should be applied to integer value before converting to volts)
+	repeated float analog_in_int_scale_m_priv = 30;			//  Private analog in port internal scale m value (should be applied to integer value before converting to volts)
+	repeated float analog_in_cal_m = 31;					//  Analog in port calibration m value (should be applied to integer value before converting to volts)
+	repeated float analog_in_cal_b = 32;					//  Analog in port calibration b value (should be applied to integer value before converting to volts)
+	repeated float analog_in_cal_m_priv = 33;				//  Private analog in port calibration m value (should be applied to integer value before converting to volts)
+	repeated float analog_in_cal_b_priv = 34;				//  Private analog in port calibration b value (should be applied to integer value before converting to volts)
+
+	// Digital I/O Information
+	uint32 digital_port_num = 35;					//	Number of digital IO ports (public)
+    bytes digital_port_type = 36;					//	Digital IP port type
+	bytes digital_port_dir = 37;					//	Digital IO port direction (bitwise binary representation LSB=ch0)
+
+	// Analog Out Information
+    uint32 analog_out_port_num = 38;				//  Number of analog out ports (DAC)
+    bytes analog_out_port_type = 39;				//  Type of analog out port (DAC)
+	uint32 analog_out_res = 40;					//  Analog out port (DAC) resolution (bits)
+    repeated float analog_out_port_av_range = 41;			//  Analog out port available range (volts span: 0 to range) (DAC)
+    float analog_out_port_range = 42;				//  Analog out port range (volts span: 0 to range) (DAC)
+
+	// IPv4 Device Information
+	bytes ip_addr = 43;							//  Device IP address
+	bytes net_mask = 44;							//  Network mask
+	bytes gateway = 45;							//  Default gateway
+	bytes primary_dns = 46;						//  Primary DNS
+	bytes secondary_dns = 47;						//  Secondary DNS
+	bytes mac_addr = 48;							//  Device MAC address
+
+	// IPv6 Device Information
+	bytes ip_addr_v6 = 49;							//  Device IP address v6
+	bytes sub_pre_length_v6 = 50;					//  Subnet prefix length v6
+	bytes gateway_v6 = 51;							//  Default gateway v6
+	bytes primary_dns_v6 = 52;						//  Primary DNS v6
+	bytes secondary_dns_v6 = 53;					//  Secondary DNS v6
+	bytes eui_64 = 54;								//  Device EUI-64 address
+
+	// Device Network Information
+	string host_name = 55;							//  Device HostName
+	uint32 device_port = 56;						//	Device port
+	string friendly_device_name = 57;				//	Device friendly name
+	string ssid = 58;								//  Current SSID device is to connect to
+    uint32 ssid_strength = 59;                     //  Current SSID strength out of 255
+	uint32 wifi_security_mode = 60;				//  Device WiFi security mode
+    uint32 wifi_inf_mode = 61;                     //  Current SSID infrastructure mode
+
+	// Available Network Information
+	repeated string av_ssid = 62;							//  Available SSIDs to connect to
+	repeated uint32 av_ssid_strength = 63;					//  Available SSID strength out of 255
+	repeated uint32 av_wifi_security_mode = 64;				//	Available WiFi network security mode
+    repeated uint32 av_wifi_inf_mode = 65;                  //  Available WiFi network infrastructure mode
+
+	// Device Hardware/Firmware Information
+	string device_pn = 66;							//  Alphanumeric device P/N
+	string device_hw_rev = 67;						//  Device hardware revision
+	string device_fw_rev = 68;						//  Device firmware revision
+    uint64 device_sn = 69;                         //  Device serial number
+}

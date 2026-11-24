@@ -9,6 +9,8 @@ using pb = global::Google.Protobuf;
 using pbc = global::Google.Protobuf.Collections;
 using pbr = global::Google.Protobuf.Reflection;
 using scg = global::System.Collections.Generic;
+namespace Daqifi.Core.Communication.Messages {
+
 /// <summary>Holder for reflection information generated from Protos/DaqifiOutMessage.proto</summary>
 public static partial class DaqifiOutMessageReflection
 {
@@ -62,12 +64,13 @@ public static partial class DaqifiOutMessageReflection
               "KAkSGAoQYXZfc3NpZF9zdHJlbmd0aBg/IAMoDRIdChVhdl93aWZpX3NlY3Vy",
               "aXR5X21vZGUYQCADKA0SGAoQYXZfd2lmaV9pbmZfbW9kZRhBIAMoDRIRCglk",
               "ZXZpY2VfcG4YQiABKAkSFQoNZGV2aWNlX2h3X3JldhhDIAEoCRIVCg1kZXZp",
-              "Y2VfZndfcmV2GEQgASgJEhEKCWRldmljZV9zbhhFIAEoBEIuChpjb20uZGFx",
-              "aWZpLmNvbW1vbi5tZXNzYWdlc0IOUHJvdG9NZXNzYWdlVjJIA2IGcHJvdG8z"));
+              "Y2VfZndfcmV2GEQgASgJEhEKCWRldmljZV9zbhhFIAEoBEJTChpjb20uZGFx",
+              "aWZpLmNvbW1vbi5tZXNzYWdlc0IOUHJvdG9NZXNzYWdlVjJIA6oCIkRhcWlm",
+              "aS5Db3JlLkNvbW11bmljYXRpb24uTWVzc2FnZXNiBnByb3RvMw=="));
         descriptor = pbr::FileDescriptor.FromGeneratedCode(descriptorData,
             new pbr::FileDescriptor[] { },
             new pbr::GeneratedClrTypeInfo(null, null, new pbr::GeneratedClrTypeInfo[] {
-          new pbr::GeneratedClrTypeInfo(typeof(global::DaqifiOutMessage), global::DaqifiOutMessage.Parser, new[]{ "MsgTimeStamp", "AnalogInData", "AnalogInDataFloat", "AnalogInDataTs", "DigitalData", "DigitalDataTs", "AnalogOutData", "DeviceStatus", "PwrStatus", "BattStatus", "TempStatus", "TimestampFreq", "AnalogInPortNum", "AnalogInPortNumPriv", "AnalogInPortType", "AnalogInPortAvRse", "AnalogInPortRse", "AnalogInPortEnabled", "AnalogInPortAvRange", "AnalogInPortAvRangePriv", "AnalogInPortRange", "AnalogInPortRangePriv", "AnalogInRes", "AnalogInResPriv", "AnalogInIntScaleM", "AnalogInIntScaleMPriv", "AnalogInCalM", "AnalogInCalB", "AnalogInCalMPriv", "AnalogInCalBPriv", "DigitalPortNum", "DigitalPortType", "DigitalPortDir", "AnalogOutPortNum", "AnalogOutPortType", "AnalogOutRes", "AnalogOutPortAvRange", "AnalogOutPortRange", "IpAddr", "NetMask", "Gateway", "PrimaryDns", "SecondaryDns", "MacAddr", "IpAddrV6", "SubPreLengthV6", "GatewayV6", "PrimaryDnsV6", "SecondaryDnsV6", "Eui64", "HostName", "DevicePort", "FriendlyDeviceName", "Ssid", "SsidStrength", "WifiSecurityMode", "WifiInfMode", "AvSsid", "AvSsidStrength", "AvWifiSecurityMode", "AvWifiInfMode", "DevicePn", "DeviceHwRev", "DeviceFwRev", "DeviceSn" }, null, null, null, null)
+          new pbr::GeneratedClrTypeInfo(typeof(global::Daqifi.Core.Communication.Messages.DaqifiOutMessage), global::Daqifi.Core.Communication.Messages.DaqifiOutMessage.Parser, new[]{ "MsgTimeStamp", "AnalogInData", "AnalogInDataFloat", "AnalogInDataTs", "DigitalData", "DigitalDataTs", "AnalogOutData", "DeviceStatus", "PwrStatus", "BattStatus", "TempStatus", "TimestampFreq", "AnalogInPortNum", "AnalogInPortNumPriv", "AnalogInPortType", "AnalogInPortAvRse", "AnalogInPortRse", "AnalogInPortEnabled", "AnalogInPortAvRange", "AnalogInPortAvRangePriv", "AnalogInPortRange", "AnalogInPortRangePriv", "AnalogInRes", "AnalogInResPriv", "AnalogInIntScaleM", "AnalogInIntScaleMPriv", "AnalogInCalM", "AnalogInCalB", "AnalogInCalMPriv", "AnalogInCalBPriv", "DigitalPortNum", "DigitalPortType", "DigitalPortDir", "AnalogOutPortNum", "AnalogOutPortType", "AnalogOutRes", "AnalogOutPortAvRange", "AnalogOutPortRange", "IpAddr", "NetMask", "Gateway", "PrimaryDns", "SecondaryDns", "MacAddr", "IpAddrV6", "SubPreLengthV6", "GatewayV6", "PrimaryDnsV6", "SecondaryDnsV6", "Eui64", "HostName", "DevicePort", "FriendlyDeviceName", "Ssid", "SsidStrength", "WifiSecurityMode", "WifiInfMode", "AvSsid", "AvSsidStrength", "AvWifiSecurityMode", "AvWifiInfMode", "DevicePn", "DeviceHwRev", "DeviceFwRev", "DeviceSn" }, null, null, null, null)
             }));
     }
     #endregion
@@ -93,7 +96,7 @@ public sealed partial class DaqifiOutMessage : pb::IMessage<DaqifiOutMessage>
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
     public static pbr::MessageDescriptor Descriptor
     {
-        get { return global::DaqifiOutMessageReflection.Descriptor.MessageTypes[0]; }
+        get { return global::Daqifi.Core.Communication.Messages.DaqifiOutMessageReflection.Descriptor.MessageTypes[0]; }
     }
 
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
@@ -2992,5 +2995,6 @@ public sealed partial class DaqifiOutMessage : pb::IMessage<DaqifiOutMessage>
 
 #endregion
 
+}
 
 #endregion Designer generated code

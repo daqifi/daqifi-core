@@ -123,9 +123,12 @@
 *REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocumentParser
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.CreateFeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature) -> Daqifi.Core.Device.FeatureNotSupportedException!
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.SnapshotChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Channel.IChannel!>!
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.StatusMessageReceived -> System.Action<DaqifiOutMessage!>?
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.StreamMessageReceived -> System.Action<DaqifiOutMessage!>?
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock(System.Action! action) -> void
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock<T>(System.Func<T>! action) -> T
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(DaqifiOutMessage! message) -> void
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.Diagnostics.CommandHistoryParser
 *REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelParser
@@ -242,16 +245,125 @@
 *REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.ParseHexFile(string![]! hexFileLines) -> System.Collections.Generic.List<byte[]!>!
 *REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.Pic32BootloaderProtocol() -> void
 *REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.Pic32BootloaderProtocol(uint beginProtectedAddress, uint endProtectedAddress) -> void
+*REMOVED*DaqifiOutMessage
+*REMOVED*DaqifiOutMessage.AnalogInPortNum.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogInPortNum.set -> void
+*REMOVED*DaqifiOutMessage.AnalogInPortNumPriv.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogInPortNumPriv.set -> void
+*REMOVED*DaqifiOutMessage.AnalogInRes.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogInRes.set -> void
+*REMOVED*DaqifiOutMessage.AnalogInResPriv.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogInResPriv.set -> void
+*REMOVED*DaqifiOutMessage.AnalogOutPortNum.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogOutPortNum.set -> void
+*REMOVED*DaqifiOutMessage.AnalogOutPortRange.get -> float
+*REMOVED*DaqifiOutMessage.AnalogOutPortRange.set -> void
+*REMOVED*DaqifiOutMessage.AnalogOutRes.get -> uint
+*REMOVED*DaqifiOutMessage.AnalogOutRes.set -> void
+*REMOVED*DaqifiOutMessage.BattStatus.get -> uint
+*REMOVED*DaqifiOutMessage.BattStatus.set -> void
+*REMOVED*DaqifiOutMessage.CalculateSize() -> int
+*REMOVED*DaqifiOutMessage.DaqifiOutMessage() -> void
+*REMOVED*DaqifiOutMessage.DevicePort.get -> uint
+*REMOVED*DaqifiOutMessage.DevicePort.set -> void
+*REMOVED*DaqifiOutMessage.DeviceSn.get -> ulong
+*REMOVED*DaqifiOutMessage.DeviceSn.set -> void
+*REMOVED*DaqifiOutMessage.DeviceStatus.get -> uint
+*REMOVED*DaqifiOutMessage.DeviceStatus.set -> void
+*REMOVED*DaqifiOutMessage.DigitalPortNum.get -> uint
+*REMOVED*DaqifiOutMessage.DigitalPortNum.set -> void
+*REMOVED*DaqifiOutMessage.MsgTimeStamp.get -> uint
+*REMOVED*DaqifiOutMessage.MsgTimeStamp.set -> void
+*REMOVED*DaqifiOutMessage.PwrStatus.get -> uint
+*REMOVED*DaqifiOutMessage.PwrStatus.set -> void
+*REMOVED*DaqifiOutMessage.SsidStrength.get -> uint
+*REMOVED*DaqifiOutMessage.SsidStrength.set -> void
+*REMOVED*DaqifiOutMessage.TempStatus.get -> int
+*REMOVED*DaqifiOutMessage.TempStatus.set -> void
+*REMOVED*DaqifiOutMessage.TimestampFreq.get -> uint
+*REMOVED*DaqifiOutMessage.TimestampFreq.set -> void
+*REMOVED*DaqifiOutMessage.WifiInfMode.get -> uint
+*REMOVED*DaqifiOutMessage.WifiInfMode.set -> void
+*REMOVED*DaqifiOutMessage.WifiSecurityMode.get -> uint
+*REMOVED*DaqifiOutMessage.WifiSecurityMode.set -> void
+*REMOVED*DaqifiOutMessageReflection
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultBeginProtectedAddress = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416 -> uint
+*REMOVED*const DaqifiOutMessage.AnalogInCalBFieldNumber = 32 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInCalBPrivFieldNumber = 34 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInCalMFieldNumber = 31 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInCalMPrivFieldNumber = 33 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInDataFieldNumber = 2 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInDataFloatFieldNumber = 3 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInDataTsFieldNumber = 4 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInIntScaleMFieldNumber = 29 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInIntScaleMPrivFieldNumber = 30 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortAvRangeFieldNumber = 23 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortAvRangePrivFieldNumber = 24 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortAvRseFieldNumber = 20 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortEnabledFieldNumber = 22 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortNumFieldNumber = 17 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortNumPrivFieldNumber = 18 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortRangeFieldNumber = 25 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortRangePrivFieldNumber = 26 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortRseFieldNumber = 21 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInPortTypeFieldNumber = 19 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInResFieldNumber = 27 -> int
+*REMOVED*const DaqifiOutMessage.AnalogInResPrivFieldNumber = 28 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutDataFieldNumber = 7 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutPortAvRangeFieldNumber = 41 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutPortNumFieldNumber = 38 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutPortRangeFieldNumber = 42 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutPortTypeFieldNumber = 39 -> int
+*REMOVED*const DaqifiOutMessage.AnalogOutResFieldNumber = 40 -> int
+*REMOVED*const DaqifiOutMessage.AvSsidFieldNumber = 62 -> int
+*REMOVED*const DaqifiOutMessage.AvSsidStrengthFieldNumber = 63 -> int
+*REMOVED*const DaqifiOutMessage.AvWifiInfModeFieldNumber = 65 -> int
+*REMOVED*const DaqifiOutMessage.AvWifiSecurityModeFieldNumber = 64 -> int
+*REMOVED*const DaqifiOutMessage.BattStatusFieldNumber = 10 -> int
+*REMOVED*const DaqifiOutMessage.DeviceFwRevFieldNumber = 68 -> int
+*REMOVED*const DaqifiOutMessage.DeviceHwRevFieldNumber = 67 -> int
+*REMOVED*const DaqifiOutMessage.DevicePnFieldNumber = 66 -> int
+*REMOVED*const DaqifiOutMessage.DevicePortFieldNumber = 56 -> int
+*REMOVED*const DaqifiOutMessage.DeviceSnFieldNumber = 69 -> int
+*REMOVED*const DaqifiOutMessage.DeviceStatusFieldNumber = 8 -> int
+*REMOVED*const DaqifiOutMessage.DigitalDataFieldNumber = 5 -> int
+*REMOVED*const DaqifiOutMessage.DigitalDataTsFieldNumber = 6 -> int
+*REMOVED*const DaqifiOutMessage.DigitalPortDirFieldNumber = 37 -> int
+*REMOVED*const DaqifiOutMessage.DigitalPortNumFieldNumber = 35 -> int
+*REMOVED*const DaqifiOutMessage.DigitalPortTypeFieldNumber = 36 -> int
+*REMOVED*const DaqifiOutMessage.Eui64FieldNumber = 54 -> int
+*REMOVED*const DaqifiOutMessage.FriendlyDeviceNameFieldNumber = 57 -> int
+*REMOVED*const DaqifiOutMessage.GatewayFieldNumber = 45 -> int
+*REMOVED*const DaqifiOutMessage.GatewayV6FieldNumber = 51 -> int
+*REMOVED*const DaqifiOutMessage.HostNameFieldNumber = 55 -> int
+*REMOVED*const DaqifiOutMessage.IpAddrFieldNumber = 43 -> int
+*REMOVED*const DaqifiOutMessage.IpAddrV6FieldNumber = 49 -> int
+*REMOVED*const DaqifiOutMessage.MacAddrFieldNumber = 48 -> int
+*REMOVED*const DaqifiOutMessage.MsgTimeStampFieldNumber = 1 -> int
+*REMOVED*const DaqifiOutMessage.NetMaskFieldNumber = 44 -> int
+*REMOVED*const DaqifiOutMessage.PrimaryDnsFieldNumber = 46 -> int
+*REMOVED*const DaqifiOutMessage.PrimaryDnsV6FieldNumber = 52 -> int
+*REMOVED*const DaqifiOutMessage.PwrStatusFieldNumber = 9 -> int
+*REMOVED*const DaqifiOutMessage.SecondaryDnsFieldNumber = 47 -> int
+*REMOVED*const DaqifiOutMessage.SecondaryDnsV6FieldNumber = 53 -> int
+*REMOVED*const DaqifiOutMessage.SsidFieldNumber = 58 -> int
+*REMOVED*const DaqifiOutMessage.SsidStrengthFieldNumber = 59 -> int
+*REMOVED*const DaqifiOutMessage.SubPreLengthV6FieldNumber = 50 -> int
+*REMOVED*const DaqifiOutMessage.TempStatusFieldNumber = 11 -> int
+*REMOVED*const DaqifiOutMessage.TimestampFreqFieldNumber = 16 -> int
+*REMOVED*const DaqifiOutMessage.WifiInfModeFieldNumber = 61 -> int
+*REMOVED*const DaqifiOutMessage.WifiSecurityModeFieldNumber = 60 -> int
 *REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.CaptureSessionSnapshot() -> void
 *REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommands() -> void
+*REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(DaqifiOutMessage! message) -> void
 *REMOVED*override Daqifi.Core.Device.DaqifiStreamingDevice.RestoreSessionSnapshotAsync(Daqifi.Core.Device.ReconnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.Equals(object? obj) -> bool
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.GetHashCode() -> int
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.ToString() -> string!
+*REMOVED*override DaqifiOutMessage.GetHashCode() -> int
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParse(string? json, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseApiVersion(System.Collections.Generic.IEnumerable<string!>! lines, out int apiVersion) -> bool
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
@@ -295,25 +407,309 @@
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
 *REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.CaptureSessionSnapshot() -> void
 *REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.OnSendingInitializationCommands() -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.OnStatusMessageReceived(DaqifiOutMessage! message) -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.OnStreamMessageReceived(DaqifiOutMessage! message) -> void
+*REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.PopulateChannelsFromStatus(DaqifiOutMessage! message) -> void
 *REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.RestoreSessionSnapshotAsync(Daqifi.Core.Device.ReconnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 *REMOVED*virtual Daqifi.Core.Device.DaqifiStreamingDevice.OnLowSdSpaceWarning(Daqifi.Core.Device.SdCard.LowSdSpaceWarningEventArgs! e) -> void
+*REMOVED*~DaqifiOutMessage.AnalogInCalB.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInCalBPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInCalM.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInCalMPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInData.get -> Google.Protobuf.Collections.RepeatedField<int>
+*REMOVED*~DaqifiOutMessage.AnalogInDataFloat.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInDataTs.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.AnalogInIntScaleM.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInIntScaleMPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInPortAvRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInPortAvRangePriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInPortAvRse.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.AnalogInPortAvRse.set -> void
+*REMOVED*~DaqifiOutMessage.AnalogInPortEnabled.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.AnalogInPortEnabled.set -> void
+*REMOVED*~DaqifiOutMessage.AnalogInPortRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInPortRangePriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogInPortRse.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.AnalogInPortRse.set -> void
+*REMOVED*~DaqifiOutMessage.AnalogInPortType.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.AnalogInPortType.set -> void
+*REMOVED*~DaqifiOutMessage.AnalogOutData.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.AnalogOutPortAvRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+*REMOVED*~DaqifiOutMessage.AnalogOutPortType.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.AnalogOutPortType.set -> void
+*REMOVED*~DaqifiOutMessage.AvSsid.get -> Google.Protobuf.Collections.RepeatedField<string>
+*REMOVED*~DaqifiOutMessage.AvSsidStrength.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.AvWifiInfMode.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.AvWifiSecurityMode.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.Clone() -> DaqifiOutMessage
+*REMOVED*~DaqifiOutMessage.DaqifiOutMessage(DaqifiOutMessage other) -> void
+*REMOVED*~DaqifiOutMessage.DeviceFwRev.get -> string
+*REMOVED*~DaqifiOutMessage.DeviceFwRev.set -> void
+*REMOVED*~DaqifiOutMessage.DeviceHwRev.get -> string
+*REMOVED*~DaqifiOutMessage.DeviceHwRev.set -> void
+*REMOVED*~DaqifiOutMessage.DevicePn.get -> string
+*REMOVED*~DaqifiOutMessage.DevicePn.set -> void
+*REMOVED*~DaqifiOutMessage.DigitalData.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.DigitalData.set -> void
+*REMOVED*~DaqifiOutMessage.DigitalDataTs.get -> Google.Protobuf.Collections.RepeatedField<uint>
+*REMOVED*~DaqifiOutMessage.DigitalPortDir.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.DigitalPortDir.set -> void
+*REMOVED*~DaqifiOutMessage.DigitalPortType.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.DigitalPortType.set -> void
+*REMOVED*~DaqifiOutMessage.Equals(DaqifiOutMessage other) -> bool
+*REMOVED*~DaqifiOutMessage.Eui64.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.Eui64.set -> void
+*REMOVED*~DaqifiOutMessage.FriendlyDeviceName.get -> string
+*REMOVED*~DaqifiOutMessage.FriendlyDeviceName.set -> void
+*REMOVED*~DaqifiOutMessage.Gateway.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.Gateway.set -> void
+*REMOVED*~DaqifiOutMessage.GatewayV6.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.GatewayV6.set -> void
+*REMOVED*~DaqifiOutMessage.HostName.get -> string
+*REMOVED*~DaqifiOutMessage.HostName.set -> void
+*REMOVED*~DaqifiOutMessage.IpAddr.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.IpAddr.set -> void
+*REMOVED*~DaqifiOutMessage.IpAddrV6.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.IpAddrV6.set -> void
+*REMOVED*~DaqifiOutMessage.MacAddr.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.MacAddr.set -> void
+*REMOVED*~DaqifiOutMessage.MergeFrom(DaqifiOutMessage other) -> void
+*REMOVED*~DaqifiOutMessage.MergeFrom(Google.Protobuf.CodedInputStream input) -> void
+*REMOVED*~DaqifiOutMessage.NetMask.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.NetMask.set -> void
+*REMOVED*~DaqifiOutMessage.PrimaryDns.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.PrimaryDns.set -> void
+*REMOVED*~DaqifiOutMessage.PrimaryDnsV6.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.PrimaryDnsV6.set -> void
+*REMOVED*~DaqifiOutMessage.SecondaryDns.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.SecondaryDns.set -> void
+*REMOVED*~DaqifiOutMessage.SecondaryDnsV6.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.SecondaryDnsV6.set -> void
+*REMOVED*~DaqifiOutMessage.Ssid.get -> string
+*REMOVED*~DaqifiOutMessage.Ssid.set -> void
+*REMOVED*~DaqifiOutMessage.SubPreLengthV6.get -> Google.Protobuf.ByteString
+*REMOVED*~DaqifiOutMessage.SubPreLengthV6.set -> void
+*REMOVED*~DaqifiOutMessage.WriteTo(Google.Protobuf.CodedOutputStream output) -> void
+*REMOVED*~override DaqifiOutMessage.Equals(object other) -> bool
+*REMOVED*~override DaqifiOutMessage.ToString() -> string
+*REMOVED*~static DaqifiOutMessage.Descriptor.get -> Google.Protobuf.Reflection.MessageDescriptor
+*REMOVED*~static DaqifiOutMessage.Parser.get -> Google.Protobuf.MessageParser<DaqifiOutMessage>
+*REMOVED*~static DaqifiOutMessageReflection.Descriptor.get -> Google.Protobuf.Reflection.FileDescriptor
+Daqifi.Core.Communication.Messages.DaqifiOutMessage
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNum.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNum.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNumPriv.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNumPriv.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInRes.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInRes.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInResPriv.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInResPriv.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortNum.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortNum.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortRange.get -> float
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortRange.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutRes.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutRes.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.BattStatus.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.BattStatus.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.CalculateSize() -> int
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DaqifiOutMessage() -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePort.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePort.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceSn.get -> ulong
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceSn.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceStatus.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceStatus.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortNum.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortNum.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.MsgTimeStamp.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.MsgTimeStamp.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.PwrStatus.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.PwrStatus.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.SsidStrength.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.SsidStrength.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.TempStatus.get -> int
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.TempStatus.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.TimestampFreq.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.TimestampFreq.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiInfMode.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiInfMode.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiSecurityMode.get -> uint
+Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiSecurityMode.set -> void
+Daqifi.Core.Communication.Messages.DaqifiOutMessageReflection
 Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Error = 3 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Status = 1 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Stream = 2 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufMessageType.Unknown = 0 -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 Daqifi.Core.Communication.Messages.ProtobufProtocolHandler
-Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.Handle(DaqifiOutMessage! message) -> void
-Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.Handle(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? statusMessageHandler = null, System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? streamMessageHandler = null, System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? errorMessageHandler = null) -> void
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.DaqifiDevice.StatusMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
+Daqifi.Core.Device.DaqifiDevice.StreamMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
+Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Firmware.FirmwareUpdateService.FirmwareUpdateService(Daqifi.Core.Communication.Transport.IHidTransport! hidTransport, Daqifi.Core.Firmware.IFirmwareDownloadService! firmwareDownloadService, Daqifi.Core.Firmware.IExternalProcessRunner! externalProcessRunner, Microsoft.Extensions.Logging.ILogger<Daqifi.Core.Firmware.FirmwareUpdateService!>? logger = null, Daqifi.Core.Firmware.FirmwareUpdateServiceOptions? options = null) -> void
-static Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalBFieldNumber = 32 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalBPrivFieldNumber = 34 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalMFieldNumber = 31 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalMPrivFieldNumber = 33 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInDataFieldNumber = 2 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInDataFloatFieldNumber = 3 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInDataTsFieldNumber = 4 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInIntScaleMFieldNumber = 29 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInIntScaleMPrivFieldNumber = 30 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRangeFieldNumber = 23 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRangePrivFieldNumber = 24 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRseFieldNumber = 20 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortEnabledFieldNumber = 22 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNumFieldNumber = 17 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortNumPrivFieldNumber = 18 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRangeFieldNumber = 25 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRangePrivFieldNumber = 26 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRseFieldNumber = 21 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortTypeFieldNumber = 19 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInResFieldNumber = 27 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInResPrivFieldNumber = 28 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutDataFieldNumber = 7 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortAvRangeFieldNumber = 41 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortNumFieldNumber = 38 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortRangeFieldNumber = 42 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortTypeFieldNumber = 39 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutResFieldNumber = 40 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvSsidFieldNumber = 62 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvSsidStrengthFieldNumber = 63 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvWifiInfModeFieldNumber = 65 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvWifiSecurityModeFieldNumber = 64 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.BattStatusFieldNumber = 10 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceFwRevFieldNumber = 68 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceHwRevFieldNumber = 67 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePnFieldNumber = 66 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePortFieldNumber = 56 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceSnFieldNumber = 69 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceStatusFieldNumber = 8 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalDataFieldNumber = 5 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalDataTsFieldNumber = 6 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortDirFieldNumber = 37 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortNumFieldNumber = 35 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortTypeFieldNumber = 36 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.Eui64FieldNumber = 54 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.FriendlyDeviceNameFieldNumber = 57 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.GatewayFieldNumber = 45 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.GatewayV6FieldNumber = 51 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.HostNameFieldNumber = 55 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddrFieldNumber = 43 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddrV6FieldNumber = 49 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.MacAddrFieldNumber = 48 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.MsgTimeStampFieldNumber = 1 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.NetMaskFieldNumber = 44 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDnsFieldNumber = 46 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDnsV6FieldNumber = 52 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.PwrStatusFieldNumber = 9 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDnsFieldNumber = 47 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDnsV6FieldNumber = 53 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.SsidFieldNumber = 58 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.SsidStrengthFieldNumber = 59 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.SubPreLengthV6FieldNumber = 50 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.TempStatusFieldNumber = 11 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.TimestampFreqFieldNumber = 16 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiInfModeFieldNumber = 61 -> int
+const Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiSecurityModeFieldNumber = 60 -> int
+override Daqifi.Core.Communication.Messages.DaqifiOutMessage.GetHashCode() -> int
+override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+static Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.DetectMessageType(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> Daqifi.Core.Communication.Messages.ProtobufMessageType
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+virtual Daqifi.Core.Device.DaqifiDevice.OnStatusMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+virtual Daqifi.Core.Device.DaqifiDevice.OnStreamMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+virtual Daqifi.Core.Device.DaqifiDevice.PopulateChannelsFromStatus(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalB.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalBPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalM.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInCalMPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInData.get -> Google.Protobuf.Collections.RepeatedField<int>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInDataFloat.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInDataTs.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInIntScaleM.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInIntScaleMPriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRangePriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRse.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortAvRse.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortEnabled.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortEnabled.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRangePriv.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRse.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortRse.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortType.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogInPortType.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutData.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortAvRange.get -> Google.Protobuf.Collections.RepeatedField<float>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortType.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AnalogOutPortType.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvSsid.get -> Google.Protobuf.Collections.RepeatedField<string>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvSsidStrength.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvWifiInfMode.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.AvWifiSecurityMode.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Clone() -> Daqifi.Core.Communication.Messages.DaqifiOutMessage
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DaqifiOutMessage(Daqifi.Core.Communication.Messages.DaqifiOutMessage other) -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceFwRev.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceFwRev.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceHwRev.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DeviceHwRev.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePn.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DevicePn.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalData.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalData.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalDataTs.get -> Google.Protobuf.Collections.RepeatedField<uint>
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortDir.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortDir.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortType.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.DigitalPortType.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Equals(Daqifi.Core.Communication.Messages.DaqifiOutMessage other) -> bool
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Eui64.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Eui64.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.FriendlyDeviceName.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.FriendlyDeviceName.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Gateway.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Gateway.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.GatewayV6.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.GatewayV6.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.HostName.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.HostName.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddr.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddr.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddrV6.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.IpAddrV6.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.MacAddr.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.MacAddr.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.MergeFrom(Daqifi.Core.Communication.Messages.DaqifiOutMessage other) -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.MergeFrom(Google.Protobuf.CodedInputStream input) -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.NetMask.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.NetMask.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDns.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDns.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDnsV6.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.PrimaryDnsV6.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDns.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDns.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDnsV6.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SecondaryDnsV6.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Ssid.get -> string
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.Ssid.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SubPreLengthV6.get -> Google.Protobuf.ByteString
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.SubPreLengthV6.set -> void
+~Daqifi.Core.Communication.Messages.DaqifiOutMessage.WriteTo(Google.Protobuf.CodedOutputStream output) -> void
+~override Daqifi.Core.Communication.Messages.DaqifiOutMessage.Equals(object other) -> bool
+~override Daqifi.Core.Communication.Messages.DaqifiOutMessage.ToString() -> string
+~static Daqifi.Core.Communication.Messages.DaqifiOutMessage.Descriptor.get -> Google.Protobuf.Reflection.MessageDescriptor
+~static Daqifi.Core.Communication.Messages.DaqifiOutMessage.Parser.get -> Google.Protobuf.MessageParser<Daqifi.Core.Communication.Messages.DaqifiOutMessage>
+~static Daqifi.Core.Communication.Messages.DaqifiOutMessageReflection.Descriptor.get -> Google.Protobuf.Reflection.FileDescriptor
