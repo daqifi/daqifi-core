@@ -15,7 +15,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// Parses SD card log <c>.bin</c> files containing varint32-prefixed
 /// <see cref="DaqifiOutMessage"/> protobuf payloads.
 /// </summary>
-public sealed class SdCardFileParser
+internal sealed class SdCardFileParser
 {
     /// <summary>
     /// Marker bytes written at the end of a USB-transferred file.

@@ -111,6 +111,12 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// </summary>
     internal Func<UdpClient>? ListenerFactory { get; init; }
 
+    /// <summary>
+    /// Test seam: when set, stands in for sending one query out of one interface, so a test does not
+    /// depend on the host having a multicast route.
+    /// </summary>
+    internal Func<LocalInterface, Task>? QuerySender { get; init; }
+
     #endregion
 
     #region Constructor
@@ -197,14 +203,19 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             EndFailedPass(joinFailure!, devicesFound: 0);
         }
 
+        // Either half failing ends the other: nothing is heard once the listener has died, and there
+        // is nothing to hear when not one query went out. Without this a pass with no timeout would
+        // listen on an unasked network until it was cancelled.
+        using var browseCts = CancellationTokenSource.CreateLinkedTokenSource(passToken);
         var failures = await Task.WhenAll(
-                ReceiveLoopAsync(udp, interfaces, discoveredDevices, passToken),
-                SendQueriesAsync(udp, joined, passToken))
+                EndBrowseOnFailureAsync(
+                    ReceiveLoopAsync(udp, interfaces, discoveredDevices, browseCts.Token), browseCts),
+                EndBrowseOnFailureAsync(
+                    SendQueriesAsync(udp, joined, browseCts.Token), browseCts))
             .ConfigureAwait(false);
 
         if ((failures[0] ?? failures[1]) is { } failure)
         {
-            // The listener died, or not one query went out.
             EndFailedPass(failure, discoveredDevices.Count);
         }
 
@@ -214,6 +225,20 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     #endregion
 
     #region Private Methods
+
+    /// <summary>
+    /// Ends the browse when <paramref name="half"/> of it reports a failure, and passes that on.
+    /// </summary>
+    private static async Task<Exception?> EndBrowseOnFailureAsync(Task<Exception?> half, CancellationTokenSource browseCts)
+    {
+        var failure = await half.ConfigureAwait(false);
+        if (failure != null)
+        {
+            await browseCts.CancelAsync().ConfigureAwait(false);
+        }
+
+        return failure;
+    }
 
     /// <summary>
     /// Creates the listening socket bound to the mDNS port. Throws when the port cannot be shared,
@@ -308,14 +333,22 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             {
                 try
                 {
-                    // Pick the egress NIC explicitly: the default multicast route sends out one
-                    // adapter only, which on a multi-homed host is regularly the wrong one.
-                    udp.Client.SetSocketOption(
-                        SocketOptionLevel.IP,
-                        SocketOptionName.MulticastInterface,
-                        localInterface.Address.GetAddressBytes());
+                    if (QuerySender != null)
+                    {
+                        await QuerySender(localInterface).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Pick the egress NIC explicitly: the default multicast route sends out one
+                        // adapter only, which on a multi-homed host is regularly the wrong one.
+                        udp.Client.SetSocketOption(
+                            SocketOptionLevel.IP,
+                            SocketOptionName.MulticastInterface,
+                            localInterface.Address.GetAddressBytes());
 
-                    await udp.SendAsync(_queryBytes, _queryBytes.Length, target).ConfigureAwait(false);
+                        await udp.SendAsync(_queryBytes, _queryBytes.Length, target).ConfigureAwait(false);
+                    }
+
                     anySent = true;
                 }
                 catch (SocketException ex)

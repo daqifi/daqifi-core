@@ -11,7 +11,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// The firmware returns a single line of the form <c>"free,total"</c> where
 /// both values are unsigned byte counts.
 /// </summary>
-public static class SdCardSpaceParser
+internal static class SdCardSpaceParser
 {
     /// <summary>
     /// Attempts to parse a single response line into a <see cref="SdCardStorageInfo"/>.

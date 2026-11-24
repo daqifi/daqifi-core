@@ -31,7 +31,7 @@ public interface IDeviceFinder : IDisposable
     /// <list type="bullet">
     /// <item><description><b>It finishes</b> — returns the devices found.</description></item>
     /// <item><description><b><paramref name="timeout"/> elapses</b> — a normal end, not an error.
-    /// Returns the devices found so far, which may be none. It never throws.</description></item>
+    /// Returns the devices found so far, which may be none. Running out of time is never itself a reason to throw.</description></item>
     /// <item><description><b><paramref name="cancellationToken"/> is cancelled</b> — throws
     /// <see cref="OperationCanceledException"/>, whatever had been found. Devices already announced
     /// through <see cref="DeviceDiscovered"/> stay announced. When the token is cancelled and the

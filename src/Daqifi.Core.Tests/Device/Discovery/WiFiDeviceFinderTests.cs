@@ -18,18 +18,10 @@ public class WiFiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DeviceTypeDetectorTests (issue #283).
-    [NetworkBrowseFact]
+    [Fact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
-        // Not port 0, for the reason given in DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException:
-        // on port 0 the pass ended at once on Linux, so the timeout was never what ended it.
-        int discoveryPort;
-        using (var probe = new UdpClient(0))
-        {
-            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
-        }
-
-        using var finder = new WiFiDeviceFinder(discoveryPort);
+        using var finder = FinderOn(Loopback());
         var timeout = TimeSpan.FromSeconds(2);
 
         var browse = finder.DiscoverAsync(timeout);
@@ -45,21 +37,11 @@ public class WiFiDeviceFinderTests
         Assert.NotNull(devices);
     }
 
-    [NetworkBrowseFact]
+    [Fact]
     public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
     {
         // A timeout ends a browse with what answered by then; a cancellation never does.
-        //
-        // Not port 0: the discovery port is also where the query is sent, Linux rejects a send to
-        // port 0, and a pass whose every send failed ends at once. Borrow a free port instead, so
-        // the query goes out and nothing answers it.
-        int discoveryPort;
-        using (var probe = new UdpClient(0))
-        {
-            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
-        }
-
-        using var finder = new WiFiDeviceFinder(discoveryPort);
+        using var finder = FinderOn(Loopback());
         using var cts = new CancellationTokenSource();
 
         var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);

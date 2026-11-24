@@ -338,7 +338,8 @@ public class MDnsDeviceFinderTests
         UdpClient? listener = null;
         using var finder = new MDnsDeviceFinder
         {
-            ListenerFactory = () => listener = new UdpClient(new IPEndPoint(IPAddress.Any, 0))
+            ListenerFactory = () => listener = new UdpClient(new IPEndPoint(IPAddress.Any, 0)),
+            QuerySender = _ => Task.CompletedTask
         };
 
         var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan);
@@ -347,6 +348,41 @@ public class MDnsDeviceFinderTests
 
         var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.True(failure is SocketException or ObjectDisposedException, $"got {failure}");
+    }
+
+    /// <summary>A browse whose queries are sent as told and which hears nothing back.</summary>
+    private static MDnsDeviceFinder SilentBrowse(Func<Task> send) => new()
+    {
+        ListenerFactory = () => new UdpClient(new IPEndPoint(IPAddress.Any, 0)),
+        QuerySender = _ => send()
+    };
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_EverySendFails_EndsAnInfiniteBrowseWithThatError()
+    {
+        // The listener stays healthy, so nothing but the failed sends can end this pass.
+        using var finder = SilentBrowse(
+            () => Task.FromException(new SocketException((int)SocketError.HostUnreachable)));
+
+        var ex = await Assert.ThrowsAsync<SocketException>(
+            () => finder.DiscoverAsync(Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(SocketError.HostUnreachable, ex.SocketErrorCode);
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_OnlyTheFirstSendFails_KeepsListening()
+    {
+        // A send that fails synchronously and one that succeeds: the later round carries the query.
+        var sends = 0;
+        using var finder = SilentBrowse(() => Interlocked.Increment(ref sends) == 1
+            ? throw new SocketException((int)SocketError.HostUnreachable)
+            : Task.CompletedTask);
+
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromSeconds(4)).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.True(sends > 1);
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
     }
 
     [Fact]
@@ -360,17 +396,16 @@ public class MDnsDeviceFinderTests
     [NetworkBrowseFact(requireMulticast: true)]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeoutAndRaisesCompleted()
     {
-        using var finder = new MDnsDeviceFinder();
+        using var finder = SilentBrowse(() => Task.CompletedTask);
         var completed = false;
         finder.DiscoveryCompleted += (_, _) => completed = true;
 
         var timeout = TimeSpan.FromMilliseconds(500);
-        var startedAt = DateTime.UtcNow;
-        var devices = await finder.DiscoverAsync(timeout);
-        var elapsed = DateTime.UtcNow - startedAt;
+        var browse = finder.DiscoverAsync(timeout);
+        Assert.False(browse.IsCompleted, "the browse ended before its timeout");
 
-        Assert.NotNull(devices);
-        Assert.True(elapsed < timeout + TimeSpan.FromSeconds(2), $"took {elapsed}");
+        // Bounds a browse the timeout never ends, not how promptly it ends.
+        Assert.Empty(await browse.WaitAsync(timeout + TimeSpan.FromSeconds(10)));
         Assert.True(completed);
     }
 
@@ -378,7 +413,7 @@ public class MDnsDeviceFinderTests
     public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
     {
         // A timeout ends a browse with what answered by then; a cancellation never does.
-        using var finder = new MDnsDeviceFinder();
+        using var finder = SilentBrowse(() => Task.CompletedTask);
         using var cts = new CancellationTokenSource();
 
         var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);

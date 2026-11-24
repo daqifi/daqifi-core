@@ -3,7 +3,7 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// Represents a parsed Intel HEX file record with its full linear address and data bytes.
 /// </summary>
-public class HexFileRecord
+internal class HexFileRecord
 {
     /// <summary>
     /// Gets the full 32-bit linear address for this record.
