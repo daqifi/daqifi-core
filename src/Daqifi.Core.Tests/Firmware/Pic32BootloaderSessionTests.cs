@@ -488,9 +488,9 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task Connect_WhenTheTransportCannotAddressByPath_FailsWithoutBurningTheRetryBudget()
     {
-        // IHidTransport.ConnectByPathAsync is a default interface method that throws
-        // NotSupportedException on transports without path addressing. That is a permanent
-        // capability answer, not a USB glitch — retrying it just delays a certain failure.
+        // A transport without path addressing answers ConnectByPathAsync with
+        // NotSupportedException. That is a permanent capability answer, not a USB glitch —
+        // retrying it just delays a certain failure.
         var transport = new FakeHidTransport();
         var options = CreateFastOptions();
         options.HidConnectRetryCount = 3;
