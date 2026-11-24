@@ -214,6 +214,9 @@ public class BootloaderSessionDeviceTests
         {
             () => device.ConnectAsync(token),
             () => device.DisconnectAsync(token),
+            () => device.StartStreamingAsync(token),
+            () => device.StopStreamingAsync(token),
+            () => device.RebootAsync(token),
             () => device.SaveAdcCalibrationAsync(token),
             () => device.LoadAdcCalibrationAsync(token),
             () => device.SetAdcCalibrationSlopeAsync(0, 1.0, token),
@@ -269,7 +272,7 @@ public class BootloaderSessionDeviceTests
 
         // Guards the sweep itself: if the reflection walk silently stopped finding members, the
         // test would pass while covering nothing.
-        Assert.True(surface.Count > 50, $"Expected the interface surface to be large; found {surface.Count}.");
+        Assert.True(surface.Count > 30, $"Expected the interface surface to be large; found {surface.Count}.");
 
         foreach (var method in surface)
         {

@@ -67,6 +67,44 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     private const int StartConfirmationErrorQueueReads = 4;
 
     /// <summary>
+    /// How often a device that gave no readable answer is asked whether it is streaming.
+    /// </summary>
+    private const int StreamingStateQueryAttempts = 2;
+
+    /// <summary>
+    /// How long to wait for the device to say whether it is streaming after a start. The firmware
+    /// reads a flag held in RAM, so this only needs to cover the round trip.
+    /// </summary>
+    private const int StartedStateResponseTimeoutMs = 2000;
+
+    /// <summary>
+    /// How long to wait for the first answer after a stop. The firmware answers nothing until the
+    /// stop has finished, and gives itself 5 s to close an SD log, plus 0.2 s for its encoder and
+    /// 0.5 s to flush USB. Not shortened when no log is known to be open here: another connection
+    /// may have opened one.
+    /// </summary>
+    private const int StoppedStateResponseTimeoutMs = 7000;
+
+    /// <summary>
+    /// How long to wait for the acknowledgement of a reboot sent to an idle device. The firmware
+    /// writes it before doing anything else; measured at 23 ms over USB (FW 3.9.1).
+    /// </summary>
+    private const int RebootResponseTimeoutMs = 3000;
+
+    /// <summary>
+    /// How long the reader is left decoding frames after a stop, before the device is asked
+    /// anything: frames already on their way would otherwise be read as reply lines. Measured over
+    /// USB (FW 3.9.1, 100 and 1000 Hz), the last one lands within 25 ms of the stop.
+    /// </summary>
+    private static readonly TimeSpan StoppedStreamSettleDelay = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// The line the firmware writes when it accepts <c>SYSTem:REboot</c> (<c>SCPI_Reset</c>),
+    /// before it begins the reset.
+    /// </summary>
+    private const string RebootAcknowledgement = "System reset initiated";
+
+    /// <summary>
     /// What <see cref="StartStreamingAsync"/>'s last capability read left behind: the document it
     /// put in <see cref="DeviceMetadata.CapabilityDocument"/> and how many analog inputs were
     /// enabled when it was read. <c>null</c> before the first read.
@@ -381,38 +419,33 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     public void StopStreaming() => _session.StopStreaming();
 
-    /// <summary>
-    /// Starts streaming data from the device without blocking the calling thread, and confirms
-    /// with the device that the stream actually started.
-    /// </summary>
+    /// <inheritdoc />
     /// <remarks>
     /// <para>
     /// Three steps, and the first two are what keep the third from ever firing. The capability
     /// document is re-read so <see cref="MaximumStreamingFrequencyHz"/> describes the channel
     /// set about to stream rather than the one enabled at the last read;
-    /// <see cref="StartStreaming"/> then lowers the rate to it. Only after that is the device's
-    /// error queue read, so a start the firmware refused for any other reason reaches the
-    /// caller as a <see cref="DeviceCommandFailedException"/> instead of being left on the
-    /// device for the next connect to trip over (issues #899 and #898).
+    /// <see cref="StartStreaming"/> then lowers the rate to it. Only after that is the device
+    /// asked anything, so a start the firmware refused for any other reason reaches the caller
+    /// as a <see cref="DeviceCommandFailedException"/> instead of being left on the device for
+    /// the next connect to trip over (issues #899 and #898).
     /// </para>
     /// <para>
-    /// Reading the error queue is a text exchange, which stops the reader decoding protobuf
-    /// frames for its duration — so it runs only once the device has had its chance to send a
-    /// frame and has sent none. A stream that is delivering data is never interrupted by it. See
-    /// <see cref="ConfirmStreamStartedAsync"/>.
+    /// Asking is a text exchange, which stops the reader decoding protobuf frames for its
+    /// duration, so it runs only once the device has had its chance to send a frame and has sent
+    /// none. A stream that is delivering data is never interrupted by it. When the device refused
+    /// the start, its error code is in the exception; when it accepted it but reports that it is
+    /// not streaming, <see cref="DeviceCommandFailedException.ErrorCode"/> is <c>null</c>.
+    /// </para>
+    /// <para>
+    /// A stream another caller stops while this is waiting is left stopped, and this ends as
+    /// cancelled: the device never confirmed it, and nothing failed.
     /// </para>
     /// </remarks>
-    /// <param name="cancellationToken">A cancellation token to observe.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">
     /// Thrown when the device's message reader is stopped and cannot start again; see
     /// <see cref="StartStreaming"/>.
     /// </exception>
-    /// <exception cref="DeviceCommandFailedException">
-    /// Thrown when the device sent no frame and its error queue holds a refusal of the start.
-    /// </exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public async Task StartStreamingAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -423,18 +456,28 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         StartStreaming();
 
-        if (!alreadyStreaming)
+        Exception? confirmationFailure = null;
+        try
         {
-            await ConfirmStreamStartedAsync(cancellationToken).ConfigureAwait(false);
+            await ConfirmStreamStartedAsync(startSent: !alreadyStreaming, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            confirmationFailure = ex;
+        }
 
-            // A start parked behind a raw capture on another flow is dropped, not sent, when the
-            // capture cannot restart the reader. The wait above then sees the session end and the
-            // error-queue read fails on the same stuck reader; neither is a refusal, so without
-            // this the call would report a start that never reached the device (issue #975).
-            if (_session.TakeParkedStartFailure() is { } notSent)
-            {
-                ExceptionDispatchInfo.Capture(notSent).Throw();
-            }
+        // A start parked behind a raw capture on another flow is dropped, not sent, when the
+        // capture cannot restart the reader. The wait then sees the session end, or the exchange
+        // that follows it fails on the same stuck reader; neither is a refusal, so the reason the
+        // start never reached the device goes out in place of either (issue #975).
+        if (!alreadyStreaming && _session.TakeParkedStartFailure() is { } notSent)
+        {
+            ExceptionDispatchInfo.Capture(notSent).Throw();
+        }
+
+        if (confirmationFailure != null)
+        {
+            ExceptionDispatchInfo.Capture(confirmationFailure).Throw();
         }
     }
 
@@ -528,8 +571,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// Waits for the device to prove the stream started, and reads its error queue when it does
-    /// not.
+    /// Waits for the device to prove it is streaming, and asks it when it does not.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -562,33 +604,100 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// above a few hertz is a handful of milliseconds.
     /// </para>
     /// <para>
-    /// Only a reply that parses as a non-zero SCPI error counts as a refusal. A device with no
-    /// analog channels enabled does not always start a stream and does not always say why, and
-    /// a queue read that comes back with nothing readable is not evidence of anything — neither
-    /// is turned into an exception.
+    /// Two questions, in this order. The error queue first, because it says why: only a reply
+    /// that parses as a non-zero SCPI error counts as a refusal. A clean queue, or one that could
+    /// not be read, says nothing either way, so then the device is asked outright whether it is
+    /// streaming. A slow stream answers yes here long before its first frame; a device with no
+    /// analog channels enabled, which does not always start and does not always say why, answers
+    /// no.
     /// </para>
     /// </remarks>
+    /// <param name="startSent">
+    /// Whether this call sent the start. When it did not, the error queue is not this call's to
+    /// judge: whatever it holds came from something else.
+    /// </param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
-    /// <exception cref="DeviceCommandFailedException">Thrown when the device refused the start.</exception>
-    private async Task ConfirmStreamStartedAsync(CancellationToken cancellationToken)
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device refused the start, reports that it is not streaming, or did not answer.
+    /// </exception>
+    private async Task ConfirmStreamStartedAsync(bool startSent, CancellationToken cancellationToken)
     {
-        // Without a transport there is no error queue to read: the device is being driven by a
-        // test double or an in-process stand-in, and there is nothing to confirm against.
-        if (Transport == null)
-        {
-            return;
-        }
-
         if (await WaitForFirstStreamFrameAsync(cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        IReadOnlyList<string> queued;
+        var command = ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim();
+
+        if (startSent && await ReadStartRefusalAsync(cancellationToken).ConfigureAwait(false) is { } refusal)
+        {
+            // The device is not streaming, whatever the flag says, so put the session back before
+            // the exception leaves: a device reported as streaming while it sits idle also makes
+            // the next StartStreaming() a silent no-op.
+            _session.MarkStartRefused();
+
+            throw ScpiResponseClassifier.TryParseSystemErrorReplyCode(refusal, out var code) && code != 0
+                ? new DeviceCommandFailedException(command, code, refusal)
+                : new DeviceCommandFailedException(command, refusal);
+        }
+
+        var (isStreaming, reply) = await QueryStreamingStateAsync(
+            StartedStateResponseTimeoutMs, cancellationToken).ConfigureAwait(false);
+
+        // Stopped from another thread while the device was being asked: its "no" is that stop, not
+        // a refused start.
+        ThrowIfStreamEnded();
+
+        if (isStreaming == true)
+        {
+            return;
+        }
+
+        if (isStreaming == null)
+        {
+            throw DeviceCommandFailedException.Unconfirmed(command, reply);
+        }
+
+        // An SD log the device has ended by itself still owns the card's bus on this side;
+        // StopSdCardLoggingAsync is what hands that back.
+        if (!IsLoggingToSdCard)
+        {
+            _session.MarkStartRefused();
+        }
+
+        throw DeviceCommandFailedException.Contradicted(
+            command, "reports that it is not streaming", reply!);
+    }
+
+    /// <summary>
+    /// Throws when the stream being confirmed is no longer this device's session.
+    /// </summary>
+    /// <exception cref="DeviceNotConnectedException">The connection ended, and the session with it.</exception>
+    /// <exception cref="OperationCanceledException">Another caller stopped the stream.</exception>
+    private void ThrowIfStreamEnded()
+    {
+        if (IsStreaming)
+        {
+            return;
+        }
+
+        EnsureConnected();
+
+        throw new OperationCanceledException(
+            "The stream was stopped before the device had confirmed that it started.");
+    }
+
+    /// <summary>
+    /// Reads the device's error queue for a refusal of the start that has just been sent.
+    /// </summary>
+    /// <returns>The refusal, or <c>null</c> when the queue holds none or could not be read.</returns>
+    private async Task<string?> ReadStartRefusalAsync(CancellationToken cancellationToken)
+    {
         try
         {
-            queued = await DrainErrorQueueAsync(StartConfirmationErrorQueueReads, cancellationToken)
-                .ConfigureAwait(false);
+            return LastScpiErrorReply(
+                await DrainErrorQueueAsync(StartConfirmationErrorQueueReads, cancellationToken)
+                    .ConfigureAwait(false));
         }
         catch (OperationCanceledException)
         {
@@ -596,29 +705,60 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
         catch (Exception ex)
         {
-            // A queue that cannot be read says nothing about the start. Report the silent
-            // stream through the trace and leave the session as the caller set it up.
+            // Says nothing about the start, and the device is about to be asked directly. If the
+            // link is the problem, that question reports it.
             SafeTrace(() =>
                 $"[{nameof(StartStreamingAsync)}] The device sent no stream frame and its error "
                 + $"queue could not be read: {ex.Message}");
-            return;
+            return null;
         }
+    }
 
-        var refusal = LastScpiErrorReply(queued);
-        if (refusal == null)
+    /// <summary>
+    /// Asks the device whether it is streaming (<c>SYSTem:StreamData?</c>).
+    /// </summary>
+    /// <remarks>
+    /// Asked again when no answer could be read. Stream frames that are still arriving are framed
+    /// as text during the exchange, and one that runs into the reply makes that reply unreadable;
+    /// a lost reply is then worth one more question, and a device that is really silent is not
+    /// made to look like it.
+    /// </remarks>
+    /// <param name="responseTimeoutMs">How long to wait for the first line of each answer.</param>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>
+    /// The device's answer and the line it was in; <c>null</c> and the last SCPI error the device
+    /// reported, if any, when it gave none.
+    /// </returns>
+    private async Task<(bool? IsStreaming, string? Reply)> QueryStreamingStateAsync(
+        int responseTimeoutMs,
+        CancellationToken cancellationToken)
+    {
+        string? error = null;
+
+        for (var attempt = 1; attempt <= StreamingStateQueryAttempts; attempt++)
         {
-            return;
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetStreamingState),
+                responseTimeoutMs: responseTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            // The last one, because a reply to an earlier question can only precede this one's.
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                // The firmware answers exactly 1 or 0 (SCPI_IsStreaming).
+                switch (lines[i].Trim())
+                {
+                    case "1":
+                        return (true, "1");
+                    case "0":
+                        return (false, "0");
+                }
+            }
+
+            error = ScpiResponseClassifier.GetLastScpiErrorLine(lines) ?? error;
         }
 
-        // The device is not streaming, whatever the flag says, so put the session back before
-        // the exception leaves: a device reported as streaming while it sits idle also makes
-        // the next StartStreaming() a silent no-op.
-        _session.MarkStartRefused();
-
-        var command = ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim();
-        throw ScpiResponseClassifier.TryParseSystemErrorReplyCode(refusal, out var code) && code != 0
-            ? new DeviceCommandFailedException(command, code, refusal)
-            : new DeviceCommandFailedException(command, refusal);
+        return (null, error);
     }
 
     /// <summary>
@@ -644,11 +784,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             }
 
             // A stream stopped from another thread while this waited is not a refused start, so
-            // stop asking the device about it.
-            if (!IsStreaming)
-            {
-                return true;
-            }
+            // there is nothing to ask the device about.
+            ThrowIfStreamEnded();
 
             if (Clock.GetElapsedTime(startedAt).TotalMilliseconds >= budgetMs)
             {
@@ -713,12 +850,62 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         return count;
     }
 
-    /// <inheritdoc cref="IStreamingDevice.StopStreamingAsync" />
-    public Task StopStreamingAsync(CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Sends what <see cref="StopStreaming"/> sends, including the whole of the sequence that ends
+    /// an SD card log, then asks the device whether it is streaming. The firmware runs commands
+    /// one at a time and answers the question only when the stop has finished, so the answer is
+    /// about the stop and not about a moment before it.
+    /// </para>
+    /// <para>
+    /// If the device says it is still streaming, which takes another connection restarting it,
+    /// <see cref="IsStreaming"/> goes back to what it was. If it does not answer, the stop was
+    /// sent and <see cref="IsStreaming"/> is <c>false</c>; call this again to ask again.
+    /// </para>
+    /// </remarks>
+    public async Task StopStreamingAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        StopStreaming();
-        return Task.CompletedTask;
+        EnsureConnected();
+
+        await RunExclusiveAsync(
+            async ct =>
+            {
+                var wasLiveStream = IsStreaming && !IsLoggingToSdCard;
+
+                if (IsStreaming)
+                {
+                    StopStreaming();
+                }
+                else
+                {
+                    Send(ScpiMessageProducer.StopStreaming);
+                }
+
+                await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
+
+                var (isStreaming, reply) = await QueryStreamingStateAsync(
+                    StoppedStateResponseTimeoutMs, ct).ConfigureAwait(false);
+
+                var command = ScpiMessageProducer.StopStreaming.Data;
+                if (isStreaming == null)
+                {
+                    throw DeviceCommandFailedException.Unconfirmed(command, reply);
+                }
+
+                if (isStreaming.Value)
+                {
+                    if (wasLiveStream)
+                    {
+                        _session.MarkStopNotTaken();
+                    }
+
+                    throw DeviceCommandFailedException.Contradicted(
+                        command, "reports that it is still streaming", reply!);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     #region Session state tracking for commands sent directly (issue #379)
@@ -981,69 +1168,21 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <inheritdoc />
     public void EnableChannel(IChannel channel) => _channelControl.EnableChannel(channel);
 
-    /// <inheritdoc cref="IStreamingDevice.EnableChannelAsync" />
-    public Task EnableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        EnableChannel(channel);
-        return Task.CompletedTask;
-    }
-
     /// <inheritdoc />
     public void EnableChannels(IEnumerable<IChannel> channels) => _channelControl.EnableChannels(channels);
-
-    /// <inheritdoc cref="IStreamingDevice.EnableChannelsAsync" />
-    public Task EnableChannelsAsync(IEnumerable<IChannel> channels, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        EnableChannels(channels);
-        return Task.CompletedTask;
-    }
 
     /// <inheritdoc />
     public void DisableChannel(IChannel channel) => _channelControl.DisableChannel(channel);
 
-    /// <inheritdoc cref="IStreamingDevice.DisableChannelAsync" />
-    public Task DisableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        DisableChannel(channel);
-        return Task.CompletedTask;
-    }
-
     /// <inheritdoc />
     public void DisableAllChannels() => _channelControl.DisableAllChannels();
-
-    /// <inheritdoc cref="IStreamingDevice.DisableAllChannelsAsync" />
-    public Task DisableAllChannelsAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        DisableAllChannels();
-        return Task.CompletedTask;
-    }
 
     /// <inheritdoc />
     public void SetDioDirection(IChannel channel, ChannelDirection direction)
         => _channelControl.SetDioDirection(channel, direction);
 
-    /// <inheritdoc cref="IStreamingDevice.SetDioDirectionAsync" />
-    public Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetDioDirection(channel, direction);
-        return Task.CompletedTask;
-    }
-
     /// <inheritdoc />
     public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
-
-    /// <inheritdoc cref="IStreamingDevice.SetDioValueAsync" />
-    public Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetDioValue(channel, value);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// The PWM frequency floor Core assumes when the device does not state a trustworthy one:
@@ -1094,36 +1233,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <inheritdoc />
     public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
-    /// <inheritdoc cref="IStreamingDevice.SetPwmEnabledAsync" />
-    public Task SetPwmEnabledAsync(IChannel channel, bool enabled, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmEnabled(channel, enabled);
-        return Task.CompletedTask;
-    }
-
     /// <inheritdoc />
     public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
         => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
-    /// <inheritdoc cref="IStreamingDevice.SetPwmDutyCycleAsync" />
-    public Task SetPwmDutyCycleAsync(IChannel channel, int dutyCyclePercent, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmDutyCycle(channel, dutyCyclePercent);
-        return Task.CompletedTask;
-    }
-
     /// <inheritdoc />
     public void SetPwmFrequency(int frequencyHz) => _channelControl.SetPwmFrequency(frequencyHz);
-
-    /// <inheritdoc cref="IStreamingDevice.SetPwmFrequencyAsync" />
-    public Task SetPwmFrequencyAsync(int frequencyHz, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmFrequency(frequencyHz);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
@@ -1220,14 +1335,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void SetAnalogOutput(int channelNumber, double voltage)
         => _channelControl.SetAnalogOutput(channelNumber, voltage);
 
-    /// <inheritdoc cref="IStreamingDevice.SetAnalogOutputAsync" />
-    public Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetAnalogOutput(channelNumber, voltage);
-        return Task.CompletedTask;
-    }
-
     /// <summary>
     /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
     /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
@@ -1289,19 +1396,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <inheritdoc />
     public void Reboot() => _administration.Reboot();
 
-    /// <summary>
-    /// Reboots the device and disconnects from it, without blocking the calling thread.
-    /// </summary>
+    /// <inheritdoc />
     /// <remarks>
-    /// Unlike <see cref="IStreamingDevice.RebootAsync"/>'s default implementation, this override
-    /// does not call the blocking <see cref="Reboot"/>: that path tears down through
-    /// <see cref="DaqifiDevice.Disconnect"/>, which can stall the caller for the full teardown
-    /// wait (up to <see cref="DaqifiDevice.TextExchangeTeardownWait"/>) — exactly the freeze the
-    /// async surface exists to avoid. This sends the same reboot command and then awaits
-    /// <see cref="DaqifiDevice.DisconnectAsync"/> instead, so the local teardown is genuinely
-    /// asynchronous.
+    /// The device writes its acknowledgement before it begins the reset and drops its link
+    /// 0.6 to 0.7 s later, so over USB the acknowledgement is read with time to spare. A device
+    /// that is asked anything after accepting a reboot never answers, so an answer to the error
+    /// queue query sent behind the reboot means the reboot did not happen.
     /// </remarks>
-    /// <inheritdoc cref="IStreamingDevice.RebootAsync" path="/param|/returns|/exception" />
     public async Task RebootAsync(CancellationToken cancellationToken = default)
     {
         // Cancellation is checked before validation, matching every other ...Async member on
@@ -1311,41 +1412,71 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         EnsureConnected();
 
-        Send(ScpiMessageProducer.RebootDevice);
+        var command = ScpiMessageProducer.RebootDevice;
+        var sent = false;
+        string? refusal = null;
+        string? answer = null;
+        var acknowledged = false;
+
+        try
+        {
+            await RunExclusiveAsync(
+                async ct =>
+                {
+                    var responseTimeoutMs = RebootResponseTimeoutMs;
+                    if (IsStreaming)
+                    {
+                        // Only the stop itself: the rest of what ends an SD log configures a
+                        // device that is about to lose that configuration.
+                        Send(ScpiMessageProducer.StopStreaming);
+                        await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
+                        responseTimeoutMs = StoppedStateResponseTimeoutMs;
+                    }
+
+                    var lines = await ExecuteTextCommandAsync(
+                        () =>
+                        {
+                            Send(command);
+                            sent = true;
+                            Send(ScpiMessageProducer.GetSystemError);
+                        },
+                        responseTimeoutMs: responseTimeoutMs,
+                        cancellationToken: ct).ConfigureAwait(false);
+
+                    acknowledged = lines.Any(line =>
+                        line.Contains(RebootAcknowledgement, StringComparison.OrdinalIgnoreCase));
+                    refusal = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+                    answer = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch when (sent)
+        {
+            // The command is out, so the device is most likely restarting, and what this object
+            // has is a connection to a device that will not be there.
+            await DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        if (!acknowledged && (refusal ?? answer) is { } stillThere)
+        {
+            // Only the complaint the device volunteers is about this command. The queue entry may
+            // be an older one's, so it says the device is still there and nothing about why.
+            throw refusal != null && ScpiResponseClassifier.TryExtractErrorCode(refusal, out var code) && code != 0
+                ? new DeviceCommandFailedException(command.Data, code, refusal)
+                : DeviceCommandFailedException.Contradicted(
+                    command.Data, "answered a query instead of restarting", stillThere);
+        }
 
         // The device drops its link while restarting, so tear down the local connection —
         // without blocking the caller, unlike Reboot()'s synchronous Disconnect().
         await DisconnectAsync(cancellationToken).ConfigureAwait(false);
+
+        if (!acknowledged)
+        {
+            throw DeviceCommandFailedException.Unconfirmed(command.Data, deviceResponse: null);
+        }
     }
-
-    /// <inheritdoc />
-    public void SaveAdcCalibration() => _administration.SaveAdcCalibration();
-
-    /// <inheritdoc />
-    public void LoadAdcCalibration() => _administration.LoadAdcCalibration();
-
-    /// <inheritdoc />
-    public void SetAdcCalibrationSlope(int channelNumber, double calM)
-        => _administration.SetAdcCalibrationSlope(channelNumber, calM);
-
-    /// <inheritdoc />
-    public void SetAdcCalibrationOffset(int channelNumber, double calB)
-        => _administration.SetAdcCalibrationOffset(channelNumber, calB);
-
-    /// <inheritdoc />
-    public void SaveFactoryAdcCalibration() => _administration.SaveFactoryAdcCalibration();
-
-    /// <inheritdoc />
-    public void LoadFactoryAdcCalibration() => _administration.LoadFactoryAdcCalibration();
-
-    /// <inheritdoc />
-    public void UseAdcCalibration(int bank) => _administration.UseAdcCalibration(bank);
-
-    /// <inheritdoc />
-    public void SaveVoltagePrecision() => _administration.SaveVoltagePrecision();
-
-    /// <inheritdoc />
-    public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
     /// <inheritdoc />
     public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)

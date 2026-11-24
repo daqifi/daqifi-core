@@ -89,6 +89,11 @@ internal sealed class StreamingSessionController
     internal void MarkStartRefused() => _kind = StreamingSessionKind.None;
 
     /// <summary>
+    /// Records that the live stream a stop was sent to is still running, because the device says so.
+    /// </summary>
+    internal void MarkStopNotTaken() => _kind = StreamingSessionKind.LiveStream;
+
+    /// <summary>
     /// Records that a live start parked behind a raw capture was never sent, because the reader
     /// could not start once the capture ended (issue #975).
     /// </summary>
