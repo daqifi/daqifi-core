@@ -286,9 +286,10 @@ device.SetDioValue(dio3, false);  // drive low
 device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
 ```
 
-Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
-has a cancellable `...Async` twin declared on the interface — see
-[IStreamingDevice](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
+These calls send and return; none of them waits for the device. Where the interface has an `...Async`
+member (`StartStreamingAsync`, `StopStreamingAsync`, `RebootAsync` and the calibration commands), it
+completes once the device has confirmed the command — see
+[IStreamingDevice](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#istreamingdevice).
 
 ### PWM output
 

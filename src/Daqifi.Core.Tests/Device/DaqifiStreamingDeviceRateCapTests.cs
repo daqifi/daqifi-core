@@ -192,20 +192,6 @@ public class DaqifiStreamingDeviceRateCapTests
     }
 
     [Fact]
-    public async Task StartStreamingAsync_SilentStartWithACleanQueue_IsNotTreatedAsAFailure()
-    {
-        // A device with no analog channels enabled does not always start a stream and does not
-        // always say why. Nothing readable is not evidence of a refusal.
-        var device = CreateTransportDevice(currentMaximumRateHz: null);
-        device.StreamingFrequency = 1000;
-
-        await device.StartStreamingAsync();
-
-        Assert.True(device.IsStreaming);
-        Assert.Equal(1, device.ErrorQueueReads);
-    }
-
-    [Fact]
     public async Task StartStreamingAsync_RereadsTheCapabilityDocumentBeforeApplyingTheCap()
     {
         // The device computes its cap for the set enabled when the document was read, so the
@@ -534,6 +520,20 @@ public class DaqifiStreamingDeviceRateCapTests
             var popped = QueuedErrors.ToList();
             QueuedErrors.Clear();
             return Task.FromResult<IReadOnlyList<string>>(popped);
+        }
+
+        /// <summary>The stops these tests make are incidental, so the device confirms each one.</summary>
+        protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            Action setupAction,
+            int responseTimeoutMs = 1000,
+            int completionTimeoutMs = 250,
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null,
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
+        {
+            setupAction();
+            return Task.FromResult<IReadOnlyList<string>>(["0"]);
         }
 
         public override Task<CapabilityDocument?> ReadCapabilityDocumentAsync(

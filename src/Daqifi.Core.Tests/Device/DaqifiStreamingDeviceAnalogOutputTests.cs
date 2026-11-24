@@ -536,9 +536,6 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         Assert.Equal(board, setError.Board);
         Assert.Empty(device.SentCommands);
 
-        await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.SetAnalogOutputAsync(0, 1.0));
-        Assert.Empty(device.SentCommands);
-
         Assert.Throws<FeatureNotSupportedException>(() => device.StageAnalogOutput(0, 1.0));
         Assert.Empty(device.SentCommands);
 
@@ -560,7 +557,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.CannedTextResponse.Add("1.25");
         device.SentCommands.Clear();
 
-        await device.SetAnalogOutputAsync(2, 1.25);
+        device.SetAnalogOutput(2, 1.25);
         Assert.Equal(1.25, await device.GetAnalogOutputAsync(2));
 
         Assert.Equal(

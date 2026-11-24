@@ -11,16 +11,16 @@ namespace Daqifi.Core.Device;
 /// Represents a device that supports data streaming.
 /// </summary>
 /// <remarks>
-/// Extends <see cref="IConfirmingDeviceAdministration"/> so the calibration operations are
-/// available with a <see cref="CancellationToken"/> directly on this interface, with no cast
-/// needed — see that interface for why the confirming calibration calls exist alongside the
-/// <c>void</c> ones declared here. The streaming/channel/DIO/PWM/output/reboot operations below
-/// each carry an <c>...Async</c> twin for the same reason. Most of them have no genuine async
-/// machinery underneath today, so the default implementation is a thin, cancellable wrapper over
-/// the synchronous call — see the remarks on <see cref="StartStreamingAsync"/>. Reboot is the
-/// exception: its teardown is a real, potentially-blocking wait, so
-/// <see cref="DaqifiStreamingDevice.RebootAsync"/> overrides the default to await
-/// <see cref="IDevice.DisconnectAsync"/> instead of calling <see cref="Reboot"/>.
+/// <para>
+/// The synchronous commands here are fire-and-forget: each sends and returns, and parses no reply.
+/// An <c>...Async</c> member of this interface means one thing: its task completes once the device
+/// has confirmed the command, and fails with <see cref="DeviceCommandFailedException"/> when the
+/// device refuses it or does not confirm it. What counts as confirmation is stated on each member.
+/// </para>
+/// <para>
+/// Extends <see cref="IConfirmingDeviceAdministration"/>, so the calibration commands, which exist
+/// only in confirming form, are available directly on this interface with no cast needed.
+/// </para>
 /// </remarks>
 public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
 {
@@ -94,42 +94,71 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void StartStreaming();
 
     /// <summary>
-    /// Starts streaming data from the device without blocking the calling thread.
+    /// Starts streaming, and completes once the device has confirmed that it is streaming.
     /// </summary>
     /// <remarks>
-    /// The default implementation is a thin, cancellable wrapper over <see cref="StartStreaming"/>:
-    /// it checks <paramref name="cancellationToken"/> once and then performs the same single,
-    /// fire-and-forget write — there is no underlying text exchange to await. Implementers whose
-    /// transport genuinely awaits (e.g. a confirming variant) should override it.
+    /// <para>
+    /// Confirmed means one of two things: a stream frame arrived, or, when none arrived in the
+    /// first few sample periods, the device was asked and answered that it is streaming. Use
+    /// <see cref="StartStreaming"/> to send the command without waiting for either.
+    /// </para>
+    /// <para>
+    /// When a stream is already running no start is sent; the running stream is confirmed the
+    /// same way.
+    /// </para>
     /// </remarks>
-    /// <param name="cancellationToken">A cancellation token to observe before starting.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task StartStreamingAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        StartStreaming();
-        return Task.CompletedTask;
-    }
+    /// <param name="cancellationToken">
+    /// A cancellation token to observe. Cancelling after the command was sent abandons the
+    /// confirmation, not the stream.
+    /// </param>
+    /// <returns>A task that completes once the device has confirmed the stream.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device refused the start, reports that it is not streaming, or did not answer.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when the operation is cancelled, or another caller stops the stream before it is confirmed.
+    /// </exception>
+    Task StartStreamingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stops streaming data from the device.
     /// </summary>
+    /// <remarks>
+    /// Does nothing when <see cref="IsStreaming"/> is <c>false</c>.
+    /// </remarks>
     void StopStreaming();
 
     /// <summary>
-    /// Stops streaming data from the device without blocking the calling thread.
+    /// Stops streaming, and completes once the device has confirmed that it is not streaming.
     /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="cancellationToken">A cancellation token to observe before stopping.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// <para>
+    /// Confirmed means the device was asked, after the stop, whether it is streaming and answered
+    /// that it is not. The stop is sent whether or not <see cref="IsStreaming"/> is set, so this
+    /// also ends a stream this object did not start, and can be called again after a failure. Use
+    /// <see cref="StopStreaming"/> to send the command without waiting.
+    /// </para>
+    /// <para>
+    /// The device answers only after it has closed an SD log the stop ended, or after its own
+    /// limit for that, so ending a log can take several seconds. A confirmed stop means sampling
+    /// has ended; it does not mean the log file reached the card intact.
+    /// </para>
+    /// <para>
+    /// It waits its turn behind another operation that has exclusive use of the device.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">
+    /// A cancellation token to observe. Cancelling after the command was sent abandons the
+    /// confirmation, not the stop.
+    /// </param>
+    /// <returns>A task that completes once the device has confirmed the stop.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device reports that it is still streaming, or did not answer.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task StopStreamingAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        StopStreaming();
-        return Task.CompletedTask;
-    }
+    Task StopStreamingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Enables a single channel and reconfigures the device accordingly.
@@ -143,22 +172,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void EnableChannel(IChannel channel);
 
     /// <summary>
-    /// Enables a single channel and reconfigures the device accordingly, without blocking the
-    /// calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The channel to enable. Must belong to this device's <c>Channels</c> collection.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task EnableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        EnableChannel(channel);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Enables multiple channels in a single operation, sending at most one command per channel type.
     /// </summary>
     /// <param name="channels">The channels to enable. Each must belong to this device's <c>Channels</c> collection.</param>
@@ -168,21 +181,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// analog channels and the global DIO enable for digital channels. The input is enumerated once.
     /// </remarks>
     void EnableChannels(IEnumerable<IChannel> channels);
-
-    /// <summary>
-    /// Enables multiple channels in a single operation, without blocking the calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channels">The channels to enable. Each must belong to this device's <c>Channels</c> collection.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task EnableChannelsAsync(IEnumerable<IChannel> channels, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        EnableChannels(channels);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Disables a single channel and reconfigures the device accordingly.
@@ -196,39 +194,9 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void DisableChannel(IChannel channel);
 
     /// <summary>
-    /// Disables a single channel and reconfigures the device accordingly, without blocking the
-    /// calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The channel to disable. Must belong to this device's <c>Channels</c> collection.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task DisableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        DisableChannel(channel);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Disables all channels on the device.
     /// </summary>
     void DisableAllChannels();
-
-    /// <summary>
-    /// Disables all channels on the device, without blocking the calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task DisableAllChannelsAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        DisableAllChannels();
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Sets the direction (input or output) of a digital I/O channel.
@@ -243,28 +211,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void SetDioDirection(IChannel channel, ChannelDirection direction);
 
     /// <summary>
-    /// Sets the direction (input or output) of a digital I/O channel, without blocking the
-    /// calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
-    /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
-    /// <see cref="SetPwmEnabled"/>.</param>
-    /// <param name="direction">The direction to apply. Must be <see cref="ChannelDirection.Input"/> or <see cref="ChannelDirection.Output"/>.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
-    /// firmware ignores direction writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
-    /// <c>enabled: false</c> first.</exception>
-    Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetDioDirection(channel, direction);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Sets the output state (high or low) of a digital I/O channel.
     /// </summary>
     /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
@@ -275,28 +221,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
     /// <c>enabled: false</c> first.</exception>
     void SetDioValue(IChannel channel, bool value);
-
-    /// <summary>
-    /// Sets the output state (high or low) of a digital I/O channel, without blocking the
-    /// calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
-    /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
-    /// <see cref="SetPwmEnabled"/>.</param>
-    /// <param name="value"><c>true</c> to drive the output high; <c>false</c> to drive it low.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
-    /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
-    /// <c>enabled: false</c> first.</exception>
-    Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetDioValue(channel, value);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Enables or disables PWM output on a PWM-capable digital channel.
@@ -322,25 +246,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void SetPwmEnabled(IChannel channel, bool enabled);
 
     /// <summary>
-    /// Enables or disables PWM output on a PWM-capable digital channel, without blocking the
-    /// calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
-    /// Enabling requires <see cref="Channel.IDigitalChannel.IsPwmCapable"/>; disabling is accepted on any
-    /// digital channel.</param>
-    /// <param name="enabled"><c>true</c> to start PWM output; <c>false</c> to stop it.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task SetPwmEnabledAsync(IChannel channel, bool enabled, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmEnabled(channel, enabled);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Sets the PWM duty cycle of a PWM-capable digital channel.
     /// </summary>
     /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection
@@ -349,25 +254,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
     /// with <see cref="SetPwmEnabled"/> instead.</param>
     void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent);
-
-    /// <summary>
-    /// Sets the PWM duty cycle of a PWM-capable digital channel, without blocking the calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection
-    /// and be <see cref="Channel.IDigitalChannel.IsPwmCapable"/>.</param>
-    /// <param name="dutyCyclePercent">The duty cycle in whole percent, 1-100. A duty of 0 is rejected
-    /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
-    /// with <see cref="SetPwmEnabled"/> instead.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task SetPwmDutyCycleAsync(IChannel channel, int dutyCyclePercent, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmDutyCycle(channel, dutyCyclePercent);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Sets the PWM frequency, in hertz, for the whole device.
@@ -383,22 +269,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// each enabled channel's duty cycle.
     /// </remarks>
     void SetPwmFrequency(int frequencyHz);
-
-    /// <summary>
-    /// Sets the PWM frequency, in hertz, for the whole device, without blocking the calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000; see
-    /// <see cref="SetPwmFrequency"/>.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task SetPwmFrequencyAsync(int frequencyHz, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetPwmFrequency(frequencyHz);
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// Gets the last PWM frequency commanded through <see cref="SetPwmFrequency"/> this
@@ -432,25 +302,6 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void SetAnalogOutput(int channelNumber, double voltage);
 
     /// <summary>
-    /// Sets the analog output (DAC) voltage of a channel and applies it immediately, without
-    /// blocking the calling thread.
-    /// </summary>
-    /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-    /// <param name="channelNumber">The analog output channel number. DAC channels are addressed by
-    /// number; they are not part of the <c>Channels</c> collection (which holds analog inputs).</param>
-    /// <param name="voltage">The output voltage, in volts. Must be a finite number.</param>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        SetAnalogOutput(channelNumber, voltage);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
     /// Reboots the device and disconnects from it.
     /// </summary>
     /// <remarks>
@@ -460,143 +311,35 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void Reboot();
 
     /// <summary>
-    /// Reboots the device and disconnects from it, without blocking the calling thread.
+    /// Reboots the device, and completes once the device has confirmed that it is restarting and
+    /// this side has disconnected from it.
     /// </summary>
     /// <remarks>
-    /// The default implementation is a thin, cancellable wrapper over <see cref="Reboot"/>: it
-    /// checks <paramref name="cancellationToken"/> once and then performs the same fire-and-forget
-    /// reboot command followed by a synchronous local teardown. Implementers whose disconnect is
-    /// itself genuinely asynchronous (see <see cref="IDevice.DisconnectAsync"/>) should override
-    /// this to await it instead.
+    /// <para>
+    /// Confirmed means the device acknowledged the command, which it does just before it resets.
+    /// It does not mean the device is back: reconnect once it is. Use <see cref="Reboot"/> to send
+    /// the command and disconnect without waiting.
+    /// </para>
+    /// <para>
+    /// A running stream is stopped first, because the acknowledgement cannot be read out of one.
+    /// </para>
+    /// <para>
+    /// Once the command has been sent the connection is closed, whether or not this throws, with
+    /// one exception: a device that answers with a refusal is still there, so it stays connected.
+    /// Without an acknowledgement the outcome is unknown and this throws. Over WiFi the device
+    /// shuts its network down immediately after acknowledging, so a lost acknowledgement does not
+    /// mean the reboot failed.
+    /// </para>
     /// </remarks>
-    /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <param name="cancellationToken">
+    /// A cancellation token to observe. Cancelling after the command was sent abandons the
+    /// confirmation, not the reboot.
+    /// </param>
+    /// <returns>A task that completes once the reboot is confirmed and the connection is closed.</returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device refused the reboot, or did not acknowledge it.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task RebootAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        Reboot();
-        return Task.CompletedTask;
-    }
-
-    // -----------------------------------------------------------------
-    // ADC calibration and voltage precision.
-    //
-    // Every command in this block exists in two shapes. The void one is
-    // fire-and-forget: it puts the SCPI primitive on the wire and parses no
-    // reply, so a device that refuses the command is indistinguishable from
-    // one that carried it out. That is not hypothetical — a Nyquist running
-    // firmware 3.7.2 answers CONFigure:ADC:LOADcal with -200,"Execution
-    // error" when its user bank was never written, and LoadAdcCalibration()
-    // returns as though the bank had loaded.
-    //
-    // The confirming twin, on IConfirmingDeviceAdministration, sends the same
-    // primitive and then reads the device's SCPI error queue, throwing
-    // DeviceCommandFailedException unless the device confirms it accepted
-    // the command. It costs text exchanges and the device's full attention;
-    // the void one costs a single write and stays usable mid-stream. Pick by
-    // whether a silent no-op is acceptable.
-    // -----------------------------------------------------------------
-
-    /// <summary>
-    /// Persists the device's current ADC calibration coefficients to the <b>user</b> NVM bank so they survive a reboot.
-    /// </summary>
-    /// <remarks>
-    /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
-    /// <see cref="LoadAdcCalibration"/> to restore them. Use <see cref="SaveFactoryAdcCalibration"/> to write the
-    /// <b>factory</b> bank instead, and <see cref="UseAdcCalibration"/> to choose which bank the device applies.
-    /// Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.SaveAdcCalibrationAsync"/> when that matters.
-    /// </remarks>
-    void SaveAdcCalibration();
-
-    /// <summary>
-    /// Restores the device's ADC calibration coefficients from the <b>user</b> NVM bank into its runtime.
-    /// </summary>
-    /// <remarks>
-    /// The inverse of <see cref="SaveAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADcal</c>).
-    /// Fire-and-forget: on a unit whose user bank was never written the device answers
-    /// <c>-200,"Execution error"</c> and this method still returns normally — use
-    /// <see cref="IConfirmingDeviceAdministration.LoadAdcCalibrationAsync"/> when that matters.
-    /// </remarks>
-    void LoadAdcCalibration();
-
-    /// <summary>
-    /// Sets a single channel's ADC calibration slope (CalM) in device RAM.
-    /// </summary>
-    /// <param name="channelNumber">The analog input channel number.</param>
-    /// <param name="calM">The calibration slope (gain) coefficient.</param>
-    /// <remarks>
-    /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALM</c>). The value is lost on reboot unless
-    /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
-    /// (factory bank). Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync"/> when that matters.
-    /// </remarks>
-    void SetAdcCalibrationSlope(int channelNumber, double calM);
-
-    /// <summary>
-    /// Sets a single channel's ADC calibration offset (CalB) in device RAM.
-    /// </summary>
-    /// <param name="channelNumber">The analog input channel number.</param>
-    /// <param name="calB">The calibration offset coefficient.</param>
-    /// <remarks>
-    /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALB</c>). The value is lost on reboot unless
-    /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
-    /// (factory bank). Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync"/> when that matters.
-    /// </remarks>
-    void SetAdcCalibrationOffset(int channelNumber, double calB);
-
-    /// <summary>
-    /// Persists the device's current ADC calibration coefficients to the <b>factory</b> NVM bank.
-    /// </summary>
-    /// <remarks>
-    /// Firmware primitive <c>CONFigure:ADC:SAVEFcal</c>. Contrast with <see cref="SaveAdcCalibration"/>, which
-    /// writes the user bank. Which bank the device applies is chosen with <see cref="UseAdcCalibration"/>.
-    /// Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.SaveFactoryAdcCalibrationAsync"/> when that matters.
-    /// </remarks>
-    void SaveFactoryAdcCalibration();
-
-    /// <summary>
-    /// Restores the device's ADC calibration coefficients from the <b>factory</b> NVM bank into its runtime.
-    /// </summary>
-    /// <remarks>
-    /// The inverse of <see cref="SaveFactoryAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADFcal</c>).
-    /// Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.LoadFactoryAdcCalibrationAsync"/> when that matters.
-    /// </remarks>
-    void LoadFactoryAdcCalibration();
-
-    /// <summary>
-    /// Selects which ADC calibration bank the device applies (<c>0</c> = factory, <c>1</c> = user).
-    /// </summary>
-    /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
-    /// <remarks>
-    /// <b>Persisted</b> (firmware primitive <c>CONFigure:ADC:USECal</c>). The choice is written to NVM, the
-    /// runtime coefficients are immediately reloaded from the selected bank, and that bank is loaded on every
-    /// subsequent boot. Values other than 0 or 1 are rejected. Fire-and-forget: a device that refuses this
-    /// reports nothing — use <see cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync"/> when that matters.
-    /// </remarks>
-    void UseAdcCalibration(int bank);
-
-    /// <summary>
-    /// Persists the device's current voltage precision setting to NVM so it survives a reboot.
-    /// </summary>
-    /// <remarks>
-    /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:VOLTage:SAVE</c>). Pair with
-    /// <see cref="LoadVoltagePrecision"/> to restore it. Fire-and-forget: a device that refuses this
-    /// reports nothing — use <see cref="IConfirmingDeviceAdministration.SaveVoltagePrecisionAsync"/> when that matters.
-    /// </remarks>
-    void SaveVoltagePrecision();
-
-    /// <summary>
-    /// Restores the device's voltage precision setting from NVM into its runtime.
-    /// </summary>
-    /// <remarks>
-    /// The inverse of <see cref="SaveVoltagePrecision"/> (firmware primitive <c>CONFigure:VOLTage:LOAD</c>).
-    /// Fire-and-forget: a device that refuses this reports nothing — use
-    /// <see cref="IConfirmingDeviceAdministration.LoadVoltagePrecisionAsync"/> when that matters.
-    /// </remarks>
-    void LoadVoltagePrecision();
+    Task RebootAsync(CancellationToken cancellationToken = default);
 }
