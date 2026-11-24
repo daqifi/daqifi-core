@@ -42,9 +42,10 @@ namespace Daqifi.Mcp;
 /// while the stream is being torn down.
 /// </description></item>
 /// <item><description>
-/// <b>A write that fails is answered at once.</b> The baseline is attempted there and then, and
+/// <b>A write that throws is answered at once.</b> The baseline is attempted there and then, and
 /// the capture is told to stop, rather than leaving the pin as it is until the capture's window
-/// runs out.
+/// runs out. That covers a write Core refuses to take. One it accepts and then fails to deliver
+/// is reported through <c>DaqifiDevice.SendFailed</c>, which nothing here listens to.
 /// </description></item>
 /// <item><description>
 /// <b>The way out always tries the baseline once more</b> if the pin still reads as asserted —

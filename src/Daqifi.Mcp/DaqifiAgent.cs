@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
@@ -1563,46 +1564,71 @@ public sealed class DaqifiAgent
 
                 dropped = live.DroppedLiveSampleCount - droppedBefore;
                 sampleRateHz = streaming.StreamingFrequency;
+
+                // The drain can return normally with the caller's cancel already in: the sample
+                // that fills the row budget ends the loop before another read could notice it.
+                // A cancelled call must not be counted a success — for a stimulus that is the
+                // difference between a step being rolled back and being left asserted for a
+                // caller who has stopped listening.
+                ct.ThrowIfCancellationRequested();
                 completed = true;
             }
             finally
             {
-                try
+                // The pin first: an output left asserted reaches whatever is wired to it, and that
+                // outranks a stream left running. On every way out — the window ending, an error,
+                // a cancel. When the capture did not complete this never throws, so whatever ended
+                // it is what the caller hears; when a stimulus write is what ended it, that
+                // write's failure is thrown from here and replaces the cancellation it was
+                // stopped with. Held rather than thrown straight away, so the stream is still
+                // stopped and a failure there cannot push this one out of sight.
+                ExceptionDispatchInfo? stimulusFailure = null;
+                if (stimulus is not null)
                 {
-                    // The pin first: an output left asserted reaches whatever is wired to it, and
-                    // that outranks a stream left running. On every way out — the window ending,
-                    // an error, a cancel. When the capture did not complete this never throws, so
-                    // whatever ended it is what the caller hears; when a stimulus write is what
-                    // ended it, that write's failure is thrown here and replaces the cancellation
-                    // it was stopped with.
-                    if (stimulus is not null)
+                    try
                     {
                         await stimulus.FinishAsync(captureCompleted: completed).ConfigureAwait(false);
                     }
-                }
-                finally
-                {
-                    if (startStream)
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            streaming.StopStreaming();
-                        }
-                        catch (DeviceNotConnectedException)
-                        {
-                            // The device went away mid-capture, which the capture itself is already
-                            // throwing about. Nothing to stop, and that exception is the useful one.
-                        }
-                        catch when (stimulus is not null)
-                        {
-                            // The call is failing after all, on the last thing it does — so a step
-                            // that was rightly left in place a moment ago is now one nobody will be
-                            // told about. Put it back before the failure leaves.
-                            stimulus.RestoreAfterFailure();
-                            throw;
-                        }
+                        stimulusFailure = ExceptionDispatchInfo.Capture(ex);
                     }
                 }
+
+                if (startStream)
+                {
+                    try
+                    {
+                        streaming.StopStreaming();
+                    }
+                    catch (DeviceNotConnectedException)
+                    {
+                        // The device went away mid-capture, which the capture itself is already
+                        // throwing about. Nothing to stop, and that exception is the useful one.
+                    }
+                    catch (Exception ex) when (stimulus is not null)
+                    {
+                        // The call is failing after all, on the last thing it does — so a step
+                        // that was rightly left in place a moment ago is now one nobody will be
+                        // told about. Put it back before the failure leaves.
+                        stimulus.RestoreAfterFailure();
+
+                        if (stimulusFailure is null)
+                        {
+                            throw;
+                        }
+
+                        // Two failures, and the pin is the one that matters more: it leads, and
+                        // the stream is named after it rather than instead of it.
+                        var pinFailure = stimulusFailure.SourceException;
+                        throw new InvalidOperationException(
+                            $"{pinFailure.Message} Stopping the stream afterwards also failed, so it may "
+                            + $"still be running: {ex.Message}",
+                            pinFailure);
+                    }
+                }
+
+                stimulusFailure?.Throw();
             }
 
             return new LiveRun<TSink>(

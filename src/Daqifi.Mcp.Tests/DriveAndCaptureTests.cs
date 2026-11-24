@@ -646,6 +646,65 @@ public class DriveAndCaptureContractTests
         Assert.Equal(1, result.Capture.RowCount);
     }
 
+    // The caller cancelled while the sink was taking the very sample that fills the row budget.
+    // The loop ends on the budget before any read could notice the cancel, so the drain returns
+    // normally — and a step would be left asserted for a caller who is no longer listening.
+    [Fact]
+    public async Task ACancelThatLandsInsideTheFinalRow_StillFailsTheCall_AndPutsThePinBack()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        var channel = device.GetChannelsSnapshot().Single(c => c is { Type: ChannelType.Analog, ChannelNumber: 0 });
+        var t0 = new DateTime(2026, 11, 24, 12, 0, 0, DateTimeKind.Local);
+        using var cts = new CancellationTokenSource();
+
+        var call = agent.DriveAndCaptureAsync(
+            Id, Pin, high: true, delayMs: 0, pulseWidthMs: 0, NeverMs, maxRows: 1, cts.Token);
+
+        // The only row opens, and the step goes out while it is still open.
+        await WaitUntilAsync(() => device.Sent.Any(IsStreamStart));
+        channel.SetActiveSample(new DataSample(t0, 1.25));
+        await WaitUntilAsync(() => device.Sent.Contains(High));
+
+        // The next tick closes that row and fills the budget — cancelling as the sink reads it.
+        channel.SetActiveSample(new SampleThatCancelsWhenRead(t0.AddMilliseconds(1), cts.Cancel));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call.WaitAsync(Bound));
+        Assert.Equal(new[] { Output, Low, High, Low }, device.Sent.Where(IsPinCommand));
+        Assert.False(device.IsStreaming);
+    }
+
+    // The pulse's release failed, and then so did stopping the stream. The second failure must not
+    // be all the caller hears: the pin is the one that reaches the outside world.
+    [Fact]
+    public async Task WhenThePulseReleaseAndTheStreamStopBothFail_TheCallerHearsBoth_PinFirst()
+    {
+        var (agent, device) = await ReadyDeviceAsync();
+        var rejected = 0;
+        device.OnSend = command =>
+        {
+            if (command == Low && device.Sent.Contains(High) && Interlocked.Exchange(ref rejected, 1) == 0)
+            {
+                throw new InvalidOperationException("the release failed.");
+            }
+
+            if (command == StopStream)
+            {
+                throw new InvalidOperationException("the stream would not stop.");
+            }
+        };
+        using var pump = new SamplePump(device);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.DriveAndCaptureAsync(
+                Id, Pin, high: true, delayMs: 20, pulseWidthMs: 20, NeverMs, RowBudget, CancellationToken.None)
+                .WaitAsync(Bound));
+
+        Assert.StartsWith("the release failed.", ex.Message);
+        Assert.Contains("the stream would not stop.", ex.Message);
+        Assert.Equal("the release failed.", ex.InnerException?.Message);
+        Assert.Equal(new[] { Output, Low, High, Low }, device.Sent.Where(IsPinCommand));
+    }
+
     // The row budget ran out during the baseline. The edge never went out, the pin never left its
     // baseline, and the result says both rather than reporting an edge that is not in the rows.
     [Fact]
@@ -763,6 +822,30 @@ public class DriveAndCaptureContractTests
 
     private static bool IsStreamStart(string command) =>
         command.StartsWith(ScpiMessageProducer.StartStreaming(1).Data[..^1], StringComparison.Ordinal);
+
+    /// <summary>
+    /// A sample that runs a callback the first time its timestamp is read, which is inside the
+    /// sink — the only way to act at the exact moment a capture is deciding its last row.
+    /// </summary>
+    private sealed class SampleThatCancelsWhenRead(DateTime timestamp, Action onFirstRead) : IDataSample
+    {
+        private Action? _onFirstRead = onFirstRead;
+
+        public DateTime Timestamp
+        {
+            get
+            {
+                Interlocked.Exchange(ref _onFirstRead, null)?.Invoke();
+                return timestamp;
+            }
+        }
+
+        public double Value { get; set; } = 1.25;
+
+        public int? RawValue => null;
+
+        public uint? DeviceTimestamp => null;
+    }
 
     /// <summary>
     /// Makes the double refuse the first command that would return the pin to low after the edge,
