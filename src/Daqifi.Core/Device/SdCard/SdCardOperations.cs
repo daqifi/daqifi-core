@@ -1587,6 +1587,7 @@ internal sealed class SdCardOperations
 
         // Before the first send: a bad name must not leave LAN switched off behind it.
         ScpiMessageProducer.ValidateSdFileName(logFileName);
+        var adcMask = ParseChannelMask(channelMask);
 
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
@@ -1631,9 +1632,9 @@ internal sealed class SdCardOperations
             _host.Send(formatCommand);
             await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
-            if (!string.IsNullOrWhiteSpace(channelMask))
+            if (adcMask is { } mask)
             {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(mask));
                 await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
             }
 
@@ -1677,6 +1678,18 @@ internal sealed class SdCardOperations
         }
 
         return new SdCardLoggingSession(logFileName, format);
+    }
+
+    private static uint? ParseChannelMask(string? channelMask)
+    {
+        if (string.IsNullOrWhiteSpace(channelMask))
+        {
+            return null;
+        }
+
+        return uint.TryParse(channelMask.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var mask)
+            ? mask
+            : throw new ArgumentException("Channel mask must be a decimal bitmask, such as \"3\".", nameof(channelMask));
     }
 
     /// <summary>

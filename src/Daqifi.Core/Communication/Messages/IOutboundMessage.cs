@@ -8,9 +8,9 @@ namespace Daqifi.Core.Communication.Messages;
 public interface IOutboundMessage<T>
 {
     /// <summary>
-    /// Gets or sets the payload data to be sent.
+    /// Gets the payload data to be sent.
     /// </summary>
-    T Data { get; set;}
+    T Data { get; }
 
     /// <summary>
     /// Converts the message data into a byte array suitable for transmission.

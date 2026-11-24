@@ -182,7 +182,7 @@ public class DaqifiDeviceRawCaptureLockTests
 
         await captureEntered.Task.WaitAsync(DeadlockBudget);
 
-        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, true)));
 
         await Task.Delay(WireSettleWait);
         Assert.DoesNotContain(transport.Writes, w => w.Text.Contains("DIO:PORt:STATe", StringComparison.Ordinal));
@@ -547,7 +547,7 @@ public class DaqifiDeviceRawCaptureLockTests
     {
         public TaggedBinaryMessage(string tag) => Data = Encoding.UTF8.GetBytes(tag);
 
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
 
         public byte[] GetBytes() => Data;
     }

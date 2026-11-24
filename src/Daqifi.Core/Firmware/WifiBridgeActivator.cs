@@ -85,7 +85,7 @@ public static class WifiBridgeActivator
     public static void Deactivate(string portName, CancellationToken cancellationToken = default)
     {
         // Turn off transparent mode so the port goes back to the SCPI console.
-        RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(0), cancellationToken);
+        RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(false), cancellationToken);
     }
 
     /// <summary>

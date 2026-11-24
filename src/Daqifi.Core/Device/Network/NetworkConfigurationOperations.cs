@@ -54,33 +54,16 @@ internal sealed class NetworkConfigurationOperations
         }
 
         // Set WiFi mode
-        switch (configuration.Mode)
-        {
-            case WifiMode.ExistingNetwork:
-                _host.Send(ScpiMessageProducer.SetNetworkWifiModeExisting);
-                break;
-            case WifiMode.SelfHosted:
-                _host.Send(ScpiMessageProducer.SetNetworkWifiModeSelfHosted);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(configuration), configuration.Mode, "Unsupported WiFi mode.");
-        }
+        _host.Send(ScpiMessageProducer.SetNetworkWifiMode(configuration.Mode));
 
         // Set SSID
         _host.Send(ScpiMessageProducer.SetNetworkWifiSsid(configuration.Ssid));
 
         // Set security type and password
-        switch (configuration.SecurityType)
+        _host.Send(ScpiMessageProducer.SetNetworkWifiSecurity(configuration.SecurityType));
+        if (configuration.SecurityType == WifiSecurityType.WpaPskPhrase)
         {
-            case WifiSecurityType.None:
-                _host.Send(ScpiMessageProducer.SetNetworkWifiSecurityOpen);
-                break;
-            case WifiSecurityType.WpaPskPhrase:
-                _host.Send(ScpiMessageProducer.SetNetworkWifiSecurityWpa);
-                _host.Send(ScpiMessageProducer.SetNetworkWifiPassword(configuration.Password));
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(configuration), configuration.SecurityType, "Unsupported WiFi security type.");
+            _host.Send(ScpiMessageProducer.SetNetworkWifiPassword(configuration.Password));
         }
 
         // Stage static IP fields (firmware writes these into the runtime
