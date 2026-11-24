@@ -416,9 +416,9 @@ public class DriveAndCaptureContractTests
     /// <summary>The row budget <see cref="SamplePump"/> fills to end a capture; well above what it trickles first.</summary>
     private const int RowBudget = 500;
 
-    private static readonly string Output = ScpiMessageProducer.SetDioPortDirection(Pin, 1).Data;
-    private static readonly string High = ScpiMessageProducer.SetDioPortState(Pin, 1).Data;
-    private static readonly string Low = ScpiMessageProducer.SetDioPortState(Pin, 0).Data;
+    private static readonly string Output = ScpiMessageProducer.SetDioPortDirection(Pin, ChannelDirection.Output).Data;
+    private static readonly string High = ScpiMessageProducer.SetDioPortState(Pin, true).Data;
+    private static readonly string Low = ScpiMessageProducer.SetDioPortState(Pin, false).Data;
     private static readonly string StopStream = ScpiMessageProducer.StopStreaming.Data;
 
     // The whole point of the tool: the edge is inside the stream, not before or after it. A
@@ -444,6 +444,7 @@ public class DriveAndCaptureContractTests
         Assert.Equal(new[] { High, Low }, sent.Skip(start).Take(stop - start).Where(IsPinCommand));
         Assert.DoesNotContain(sent.Skip(stop), IsPinCommand);
 
+        Assert.Equal(AgentHarness.DeviceId, result.DeviceId);
         Assert.Equal(Pin, result.Channel);
         Assert.True(result.High);
         Assert.Equal(50, result.DelayMs);
@@ -748,7 +749,7 @@ public class DriveAndCaptureContractTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.DriveAndCaptureAsync(Id, 4, high: true, 50, 0, 250, 500, CancellationToken.None));
 
-        Assert.Contains("disable_pwm", ex.Message);
+        Assert.Contains("disable_pwm_output", ex.Message);
         Assert.DoesNotContain("SetPwmEnabled", ex.Message);
         Assert.Empty(device.Sent);
         Assert.False(device.IsStreaming);

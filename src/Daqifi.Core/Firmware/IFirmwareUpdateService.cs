@@ -23,6 +23,9 @@ public interface IFirmwareUpdateService
     /// </summary>
     /// <param name="device">The connected streaming device to update.</param>
     /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
+    /// <param name="target">
+    /// The board to update, for when several bootloaders are present. Null names no board.
+    /// </param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
@@ -39,64 +42,20 @@ public interface IFirmwareUpdateService
     /// <see cref="FirmwareUpdateException.FailedState"/> always reports where the
     /// original failure occurred, regardless of cleanup outcome.
     /// <para>
-    /// This overload names no board. When more than one HID bootloader device is present, the
-    /// board to update is ambiguous and the update stops with an
-    /// <see cref="AmbiguousBootloaderTargetException"/> before any flash is erased (#837). Use one
-    /// of the targeted overloads to name the board.
+    /// When <paramref name="target"/> names no board and more than one HID bootloader device is
+    /// present, the board to update is ambiguous and the update stops with an
+    /// <see cref="AmbiguousBootloaderTargetException"/> before any flash is erased (#837).
     /// </para>
     /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="hexFilePath"/> is empty, or <paramref name="target"/> holds an identifier that
+    /// is empty or whitespace.
+    /// </exception>
     Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
+        FirmwareUpdateTarget? target = null,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Executes a PIC32 firmware update targeting one specific bootloader by device path, for when
-    /// several identical bootloaders (same VID/PID, and no serial to tell them apart) are present.
-    /// </summary>
-    /// <param name="device">The connected streaming device to update.</param>
-    /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
-    /// <param name="progress">Progress reporter (may be null).</param>
-    /// <param name="targetDevicePath">
-    /// HID device path identifying which bootloader to flash (from discovery's
-    /// <c>HidDeviceInfo.DevicePath</c>). Null behaves like the untargeted overload.
-    /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task UpdateFirmwareAsync(
-        IStreamingDevice device,
-        string hexFilePath,
-        IProgress<FirmwareUpdateProgress>? progress,
-        string? targetDevicePath,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Executes a PIC32 firmware update targeting one specific bootloader by USB physical-location
-    /// key, for callers that know the target device's location (e.g. from <c>IDeviceInfo.LocationKey</c>
-    /// in serial/app mode) but not its future bootloader device path — the path only exists once the
-    /// device has already rebooted into bootloader mode.
-    /// </summary>
-    /// <param name="device">The connected streaming device to update.</param>
-    /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
-    /// <param name="progress">Progress reporter (may be null).</param>
-    /// <param name="targetDevicePath">
-    /// HID device path identifying which bootloader to flash (from discovery's
-    /// <c>HidDeviceInfo.DevicePath</c>). Null behaves like the untargeted overload. Takes priority
-    /// over <paramref name="targetLocationKey"/> when both are supplied.
-    /// </param>
-    /// <param name="targetLocationKey">
-    /// USB physical-location key identifying which bootloader to flash (from discovery's
-    /// <c>IDeviceInfo.LocationKey</c>, resolved before the device rebooted into bootloader mode).
-    /// Ignored when <paramref name="targetDevicePath"/> is non-null. Null behaves like the
-    /// untargeted overload.
-    /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task UpdateFirmwareAsync(
-        IStreamingDevice device,
-        string hexFilePath,
-        IProgress<FirmwareUpdateProgress>? progress,
-        string? targetDevicePath,
-        string? targetLocationKey,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -104,34 +63,23 @@ public interface IFirmwareUpdateService
     /// </summary>
     /// <param name="device">The connected streaming device to update.</param>
     /// <param name="firmwarePath">Path to a WiFi tool executable/script or directory containing it.</param>
+    /// <param name="options">Options for the update. Null uses the defaults.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <param name="skipVersionCheck">
-    /// When true, bypass the internal version probe and always run the flash
-    /// flow. Use after a separate <see cref="CheckWifiFirmwareStatusAsync"/>
-    /// call so the device isn't queried twice — see issue #143 for the
-    /// motivating callsite.
-    /// </param>
-    // skipVersionCheck added AFTER cancellationToken (technically violates
-    // CA1068 "CancellationToken should be last") to avoid breaking source
-    // compat for any existing positional caller passing CancellationToken
-    // as the 4th argument. Additivity wins over strict style here.
-#pragma warning disable CA1068
     Task UpdateWifiModuleAsync(
         IStreamingDevice device,
         string firmwarePath,
+        WifiUpdateOptions? options = null,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        bool skipVersionCheck = false);
-#pragma warning restore CA1068
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Probes the device for its current WiFi chip info and looks up the
     /// latest WiFi firmware release, returning the comparison result without
     /// mutating service state. Lets callers (typically GUI/desktop integrations)
     /// surface their own logging, retry policy, or UI before deciding whether
-    /// to call <see cref="UpdateWifiModuleAsync"/>. Pass
-    /// <c>skipVersionCheck: true</c> to that call to avoid a second probe.
+    /// to call <see cref="UpdateWifiModuleAsync"/>. Set
+    /// <see cref="WifiUpdateOptions.SkipVersionCheck"/> on that call to avoid a second probe.
     /// </summary>
     /// <param name="device">The connected streaming device to inspect.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

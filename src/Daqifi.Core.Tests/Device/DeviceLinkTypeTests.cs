@@ -86,11 +86,8 @@ public class DeviceLinkTypeTests
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 #pragma warning restore CS0067
 
-        public Task ConnectAsync() => Task.CompletedTask;
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions) => Task.CompletedTask;
-        public Task DisconnectAsync() => Task.CompletedTask;
-        public void Connect() { }
-        public void Disconnect() { }
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DisconnectAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void Dispose() => Stream.Dispose();
     }
 }

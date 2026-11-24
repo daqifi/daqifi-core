@@ -3249,12 +3249,12 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -3287,8 +3287,8 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             var sentBefore = SentMessages.Count;
@@ -3434,12 +3434,12 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -3471,8 +3471,8 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             var sentBefore = SentMessages.Count;
@@ -3529,25 +3529,19 @@ public partial class SdCardOperationsTests
         public string ConnectionInfo => IsConnected ? "Mock: Connected" : "Mock: Disconnected";
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             IsConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             IsConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void Dispose()
         {
@@ -3572,12 +3566,12 @@ public partial class SdCardOperationsTests
 
         protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             if (finalizeAsync != null)
             {
@@ -3590,11 +3584,11 @@ public partial class SdCardOperationsTests
 
             return base.ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs,
-                completionTimeoutMs,
-                cancellationToken,
+                responseTimeout,
+                completionTimeout,
                 prepareAsync,
-                finalizeAsync: null);
+                finalizeAsync: null,
+                cancellationToken: cancellationToken);
         }
     }
 
@@ -3631,12 +3625,12 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -3663,8 +3657,8 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             await setupActionAsync(cancellationToken).ConfigureAwait(false);
@@ -3848,12 +3842,12 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -3898,8 +3892,8 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             var sentBefore = SentMessages.Count;
@@ -4186,12 +4180,12 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -4220,8 +4214,8 @@ public partial class SdCardOperationsTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             var sentBefore = SentMessages.Count;

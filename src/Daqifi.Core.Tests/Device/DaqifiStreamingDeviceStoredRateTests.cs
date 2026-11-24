@@ -564,8 +564,8 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             TextExchangeCount++;
@@ -594,8 +594,8 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             var before = SentCommands.Count;

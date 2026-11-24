@@ -33,7 +33,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// </description></item>
 /// </list>
 /// <para>
-/// An intentional <see cref="Disconnect"/> disarms detection first, so it reports a normal
+/// An intentional <see cref="DisconnectAsync"/> disarms detection first, so it reports a normal
 /// disconnect and never a loss.
 /// </para>
 /// </remarks>
@@ -85,14 +85,22 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
     private volatile IPAddress? _connectedAddress;
-    private bool _disposed;
+    private volatile bool _disposed;
+
+    // Signalled (and replaced) by every disconnect and dispose, to end the connects in flight. Never
+    // disposed: it holds no timer or wait handle, and a late Cancel must stay safe.
+    private CancellationTokenSource _teardown = new();
+
+    // Makes "is this connect still wanted?" and publishing its handle one step against a teardown
+    // taking that handle. Never held while anything blocking or any subscriber runs.
+    private readonly Lock _handleLock = new();
 
     /// <summary>
-    /// Test seam: substitutes the connect task so the timeout translation can be exercised
-    /// deterministically (e.g., with a never-completing task) instead of relying on real
-    /// network behavior. Never set in production code.
+    /// Test seam: substitutes the dial so cancellation and the timeout translation can be exercised
+    /// deterministically (e.g., with one that only ends when its token does) instead of relying on
+    /// real network behavior. Never set in production code.
     /// </summary>
-    internal Func<TcpClient, Task>? ConnectTaskFactory { get; set; }
+    internal Func<TcpClient, CancellationToken, Task>? ConnectTaskFactory { get; set; }
 
     /// <summary>
     /// Initializes a new instance of the TcpStreamTransport class.
@@ -237,45 +245,21 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-    /// <summary>
-    /// Establishes the TCP connection asynchronously.
-    /// </summary>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    /// <exception cref="TimeoutException">
-    /// Thrown when the connection attempt does not complete within the configured connection timeout.
-    /// </exception>
-    public async Task ConnectAsync()
-    {
-        await ConnectAsync(null).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Establishes the TCP connection asynchronously with retry support.
-    /// </summary>
-    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
-    /// <returns>A task representing the asynchronous connect operation.</returns>
-    /// <exception cref="TimeoutException">
-    /// Thrown when the final connection attempt does not complete within
-    /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
-    /// </exception>
-    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
-    {
-        await ConnectAsync(retryOptions, CancellationToken.None).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task ConnectAsync(CancellationToken cancellationToken)
-    {
-        await ConnectAsync(null, cancellationToken).ConfigureAwait(false);
-    }
-
     /// <inheritdoc />
     /// <exception cref="TimeoutException">
     /// Thrown when the final connection attempt does not complete within
     /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
     /// </exception>
-    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the transport was disconnected while it was connecting.
+    /// </exception>
+    public async Task ConnectAsync(
+        ConnectionRetryOptions? retryOptions = null,
+        CancellationToken cancellationToken = default)
     {
+        // Read before the disposed check, so a dispose that this check misses is one whose signal
+        // this connect sees.
+        var teardownToken = Volatile.Read(ref _teardown).Token;
         ThrowIfDisposed();
 
         if (IsConnected)
@@ -286,94 +270,164 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         // it armed. Arm() below starts the new session's detection once the connect succeeds.
         _watchdog.Disarm();
 
+        // The socket this connect published, so cleaning up after it can never take down the socket
+        // of a connect that has replaced it.
+        TcpClient? published = null;
+
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
             {
                 // A dead socket still held from the previous session is released, not overwritten.
-                ReleaseSocket();
-                _tcpClient = _localInterface != null
+                (TcpClient? Client, NetworkStream? Stream) dead;
+                lock (_handleLock)
+                {
+                    attemptToken.ThrowIfCancellationRequested();
+                    dead = TakeSocket();
+                }
+
+                Release(dead);
+
+                var client = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
                     : new TcpClient();
 
-                // Set timeouts from retry options or use defaults
-                var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
-                _tcpClient.ReceiveTimeout = timeout;
-                _tcpClient.SendTimeout = timeout;
-
-                // Two independent reasons to stop waiting — the connect timeout and the caller's
-                // token — are linked into one source so a caller can abandon a dial that would
-                // otherwise sit here for the full timeout. Which one fired is disambiguated below,
-                // because the two mean very different things to the caller.
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
-                cts.CancelAfter(options.ConnectionTimeout);
-
-                var connectTask = ConnectTaskFactory != null
-                    ? ConnectTaskFactory(_tcpClient)
-                    : Hostname != null
-                        ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
-                        : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
-
                 try
                 {
-                    await connectTask.WaitAsync(cts.Token).ConfigureAwait(false);
+                    // Set timeouts from retry options or use defaults
+                    var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
+                    client.ReceiveTimeout = timeout;
+                    client.SendTimeout = timeout;
+
+                    // Two independent reasons to give up — the connect timeout and the caller's
+                    // token — are linked into one source so either ends the dial itself, not just the
+                    // wait for it. Which one fired is disambiguated below, because the two mean very
+                    // different things to the caller.
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
+                    cts.CancelAfter(options.ConnectionTimeout);
+
+                    try
+                    {
+                        await DialAsync(client, cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException oce)
+                        when (cts.IsCancellationRequested && !attemptToken.IsCancellationRequested)
+                    {
+                        // The timeout — not the caller — ended the wait, so surface the failure as what
+                        // it actually is rather than a misleading TaskCanceledException
+                        // (daqifi-desktop#517). A caller-driven cancel falls through this filter and
+                        // propagates as OperationCanceledException, which is what callers expect from a
+                        // token they signalled themselves.
+                        throw new TimeoutException(
+                            $"TCP connect to {Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port} " +
+                            $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.", oce);
+                    }
+
+                    var stream = client.GetStream();
+
+                    // After a successful connect, lower the receive timeout to a short operational
+                    // value so consumer threads blocked in a synchronous read can always be stopped
+                    // promptly (StopSafely). Only synchronous reads observe this; the async SD-card
+                    // download path uses ReadAsync, which ignores SO_RCVTIMEO and keeps its own
+                    // long timeout. See OperationalReceiveTimeoutMs.
+                    client.ReceiveTimeout = OperationalReceiveTimeoutMs;
+
+                    EnableKeepAlive(client);
+                    var peer = PeerAddressOf(client);
+
+                    // Published and armed in one step, before the executor announces the connection:
+                    // a StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
+                    // (which arms its own session) synchronously, and arming afterwards would act on
+                    // whatever the fields hold by then.
+                    lock (_handleLock)
+                    {
+                        attemptToken.ThrowIfCancellationRequested();
+                        _tcpClient = published = client;
+                        _networkStream = stream;
+                        _connectedAddress = peer ?? _connectedAddress;
+                        _watchdog.Arm(stream);
+                    }
                 }
-                catch (OperationCanceledException oce)
-                    when (cts.IsCancellationRequested && !attemptToken.IsCancellationRequested)
+                catch
                 {
-                    // The timeout — not the caller — ended the wait, so surface the failure as what
-                    // it actually is rather than a misleading TaskCanceledException
-                    // (daqifi-desktop#517). A caller-driven cancel falls through this filter and
-                    // propagates as OperationCanceledException, which is what callers expect from a
-                    // token they signalled themselves.
-                    throw new TimeoutException(
-                        $"TCP connect to {Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port} " +
-                        $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.", oce);
+                    // Not published, so nothing else will close it.
+                    client.Dispose();
+                    throw;
                 }
-
-                _networkStream = _tcpClient.GetStream();
-                _connectedAddress = PeerAddressOf(_tcpClient) ?? _connectedAddress;
-
-                // After a successful connect, lower the receive timeout to a short operational
-                // value so consumer threads blocked in a synchronous read can always be stopped
-                // promptly (StopSafely). Only synchronous reads observe this; the async SD-card
-                // download path uses ReadAsync, which ignores SO_RCVTIMEO and keeps its own
-                // long timeout. See OperationalReceiveTimeoutMs.
-                _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
-
-                EnableKeepAlive(_tcpClient);
-
-                // Armed for this exact stream before the executor announces the connection: a
-                // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
-                // (which arms its own session) synchronously, and arming afterwards would act on
-                // whatever the fields hold by then.
-                _watchdog.Arm(_networkStream);
             },
             onAttemptFailed: () =>
             {
                 // An attempt can fail after it armed detection for its stream (a StatusChanged(true)
                 // subscriber that throws fails the attempt), so the failed attempt's detection is
                 // retired with its socket.
-                _watchdog.Disarm();
-                ReleaseSocket();
+                (TcpClient? Client, NetworkStream? Stream) failed = (published, null);
+                lock (_handleLock)
+                {
+                    if (published is not null && ReferenceEquals(_tcpClient, published))
+                    {
+                        _watchdog.Disarm();
+                        failed = TakeSocket();
+                    }
+                }
+
+                Release(failed);
+                published = null;
             },
             onStatusChanged: OnStatusChanged,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            teardownToken,
+            CreateTornDownException).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens the socket. The token aborts the dial, including the name lookup in front of it.
+    /// </summary>
+    private Task DialAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        if (ConnectTaskFactory != null)
+        {
+            return ConnectTaskFactory(client, cancellationToken);
+        }
+
+        return Hostname != null
+            ? client.ConnectAsync(Hostname, _endPoint.Port, cancellationToken).AsTask()
+            : client.ConnectAsync(_endPoint.Address, _endPoint.Port, cancellationToken).AsTask();
     }
 
     /// <summary>Whether drop detection is armed; for tests.</summary>
     internal bool IsDropDetectionArmed => _watchdog.IsArmed;
 
     /// <summary>
-    /// Disposes whatever socket is held and clears both references.
+    /// Clears both references and hands back what they held. Call with <see cref="_handleLock"/> held.
     /// </summary>
-    private void ReleaseSocket()
+    private (TcpClient? Client, NetworkStream? Stream) TakeSocket()
     {
-        _networkStream?.Dispose();
-        _tcpClient?.Dispose();
-        _networkStream = null;
+        var held = (_tcpClient, _networkStream);
         _tcpClient = null;
+        _networkStream = null;
+        return held;
     }
+
+    private static void Release((TcpClient? Client, NetworkStream? Stream) socket)
+    {
+        socket.Stream?.Dispose();
+        socket.Client?.Dispose();
+    }
+
+    /// <summary>
+    /// Ends every connect in flight, including one waiting out a backoff. Called first by every
+    /// teardown, so a connect cannot redial or publish a handle after the caller has closed the
+    /// transport; a connect started afterwards gets the fresh source and is unaffected.
+    /// </summary>
+    private void EndConnectsInFlight() =>
+        Interlocked.Exchange(ref _teardown, new CancellationTokenSource()).Cancel();
+
+    /// <summary>What a connect ended by a disconnect or a dispose throws.</summary>
+    private Exception CreateTornDownException(Exception cause) =>
+        _disposed
+            ? new ObjectDisposedException(nameof(TcpStreamTransport))
+            : new TransportNotConnectedException(
+                $"TCP transport was disconnected while it was connecting ({Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port}).", cause);
 
     /// <summary>
     /// Turns on TCP keep-alive so a silently severed link (device powered off, WiFi dropped) fails
@@ -401,26 +455,46 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         }
     }
 
-    /// <summary>
-    /// Closes the TCP connection asynchronously.
-    /// </summary>
-    /// <returns>A task representing the asynchronous disconnect operation.</returns>
-    public async Task DisconnectAsync()
+    /// <inheritdoc />
+    public Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
+        try
+        {
+            Close();
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    /// <summary>
+    /// Closes the connection. Shared by <see cref="DisconnectAsync"/> and <see cref="Dispose"/>.
+    /// </summary>
+    private void Close()
+    {
+        EndConnectsInFlight();
+
         // Disarm before touching the socket: closing it makes any in-flight read fail, and a
         // still-armed watchdog would report an intentional disconnect as a lost connection.
-        _watchdog.Disarm();
+        (TcpClient? Client, NetworkStream? Stream) held;
+        lock (_handleLock)
+        {
+            _watchdog.Disarm();
+            held = TakeSocket();
+        }
 
         // Gated on holding a socket, not on IsConnected: a socket whose last read was reset reports
         // Connected == false while it is still open, and returning early on it would leave the
         // socket held with the watchdog already disarmed, so nothing would ever close it.
-        if (_tcpClient is null && _networkStream is null)
+        if (held is (null, null))
             return;
 
         try
         {
-            _networkStream?.Close();
-            _tcpClient?.Close();
+            held.Stream?.Close();
+            held.Client?.Close();
         }
         catch (Exception ex)
         {
@@ -429,27 +503,9 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         }
         finally
         {
-            ReleaseSocket();
+            Release(held);
             OnStatusChanged(false, null);
         }
-
-        await Task.CompletedTask.ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Establishes the TCP connection synchronously.
-    /// </summary>
-    public void Connect()
-    {
-        ConnectAsync().GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// Closes the TCP connection synchronously.
-    /// </summary>
-    public void Disconnect()
-    {
-        DisconnectAsync().GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -508,7 +564,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         {
             // A subscriber that throws must not cost us the socket (issue #494). The references have
             // already been taken out of their fields, so if this unwound past the dispose below,
-            // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
+            // DisconnectAsync() and Dispose() would both find null and skip them too, leaking the socket
             // for the life of the process. Not rethrown, and traced best-effort because this
             // transport carries no logger: see SerialStreamTransport.HandleConnectionLost, which
             // also explains why the line is composed inside the lambda rather than eagerly.
@@ -555,9 +611,12 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     {
         if (!_disposed)
         {
+            // Set before connects in flight are ended, so they see why, and no connect can start after.
+            _disposed = true;
+
             try
             {
-                Disconnect();
+                Close();
             }
             catch
             {
@@ -565,8 +624,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             }
 
             _watchdog.Dispose();
-            ReleaseSocket();
-            _disposed = true;
+            Release((_tcpClient, _networkStream));
         }
     }
 }

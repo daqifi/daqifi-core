@@ -7,6 +7,7 @@ using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Logging.Export;
+using Daqifi.Mcp.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Mcp;
@@ -37,7 +38,7 @@ namespace Daqifi.Mcp;
 /// Read-only introspection takes neither: it snapshots the channel collection, so it never blocks
 /// and never folds the live <c>Channels</c> view while the device's consumer thread repopulates it.
 /// The live set of connections is owned by a <see cref="DaqifiDeviceRegistry"/> keyed by our own
-/// <c>device_id</c>, which also supplies stale-handle pruning, disposal, and cross-transport
+/// <c>deviceId</c>, which also supplies stale-handle pruning, disposal, and cross-transport
 /// duplicate detection (the same unit reached over both USB and WiFi).
 /// </remarks>
 public sealed class DaqifiAgent
@@ -167,7 +168,7 @@ public sealed class DaqifiAgent
     /// returns whatever answered (empty if nothing did), while cancelling the token throws
     /// <see cref="OperationCanceledException"/> without waiting out the window.
     /// </remarks>
-    public async Task<IReadOnlyList<DiscoveredDevice>> DiscoverAsync(
+    public async Task<DiscoveryResult> DiscoverAsync(
         int timeoutMs, bool wifi, bool serial, CancellationToken cancellationToken)
     {
         var timeout = ClampDiscoveryTimeout(timeoutMs);
@@ -175,14 +176,15 @@ public sealed class DaqifiAgent
         var infos = await DiscoverAcrossTransportsAsync(
             CreateTransportFinders(wifi, serial), timeout, cancellationToken).ConfigureAwait(false);
 
-        var result = new List<DiscoveredDevice>();
-        foreach (var info in infos)
+        var ids = MintIds(infos);
+        var devices = new List<DiscoveredDevice>(infos.Count);
+        for (var i = 0; i < infos.Count; i++)
         {
-            var id = MintId(info);
-            _discovered[id] = info;
-            result.Add(DiscoveredDevice.From(id, info));
+            _discovered[ids[i]] = infos[i];
+            devices.Add(DiscoveredDevice.From(ids[i], infos[i]));
         }
-        return result;
+
+        return new DiscoveryResult(devices);
     }
 
     /// <summary>
@@ -277,11 +279,11 @@ public sealed class DaqifiAgent
     // ------------------------------------------------------------- connection
 
     /// <summary>
-    /// Connects to a discovered device and files it in the registry under its <c>device_id</c>.
+    /// Connects to a discovered device and files it in the registry under its <c>deviceId</c>.
     /// Reconnecting an id that is already live (or connecting a second transport to a device that
     /// is already connected) is not an error: the registry's default duplicate policy hands back
     /// the existing connection, whose id is the one returned — so always use the returned
-    /// <c>device_id</c> for follow-up calls rather than assuming it is the one passed in.
+    /// <c>deviceId</c> for follow-up calls rather than assuming it is the one passed in.
     /// </summary>
     public async Task<ConnectedDeviceInfo> ConnectAsync(string deviceId, CancellationToken cancellationToken)
     {
@@ -291,7 +293,7 @@ public sealed class DaqifiAgent
             if (!_discovered.TryGetValue(deviceId, out var info))
             {
                 throw new InvalidOperationException(
-                    $"Unknown device_id '{deviceId}'. Call discover_devices first and use a device_id from its result.");
+                    $"Unknown deviceId '{deviceId}'. Call discover_devices first and use a deviceId from its result.");
             }
 
             // The registry prunes stale handles (device dropped since it was registered) before
@@ -300,13 +302,8 @@ public sealed class DaqifiAgent
                 .ConnectAsync(info, deviceId, options: null, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (result.Registration is null)
-            {
-                throw new InvalidOperationException(
-                    $"Connection to '{deviceId}' was canceled by the duplicate-device policy.");
-            }
-
-            return ConnectedDeviceInfo.From(result.Registration.Key, result.Registration.Device);
+            var registration = AcceptConnection(_registry, deviceId, info, result);
+            return ConnectedDeviceInfo.From(registration.Key, registration.Device);
         }
         finally
         {
@@ -314,15 +311,86 @@ public sealed class DaqifiAgent
         }
     }
 
-    public async Task<string> DisconnectAsync(string deviceId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Turns the registry's answer into the connection to report, refusing one that turned out to
+    /// be a different unit. Internal for testing.
+    /// </summary>
+    /// <remarks>
+    /// An id names a unit by serial number or MAC address, but a connection is opened to the
+    /// <i>address</i> that unit was last seen at, and another unit may have taken it since: a second
+    /// device on the same USB port, or a DHCP lease handed on. Returned under the requested id,
+    /// every later call would configure and drive the wrong hardware. An id made of a port or an IP
+    /// address names that address, so there is nothing to check it against.
+    /// </remarks>
+    internal static DeviceRegistration AcceptConnection(
+        DaqifiDeviceRegistry registry, string deviceId, IDeviceInfo requested, DeviceRegistrationResult result)
+    {
+        var registration = result.Registration
+            ?? throw new InvalidOperationException(
+                $"Connection to '{deviceId}' was canceled by the duplicate-device policy.");
+
+        if (FindMismatch(deviceId, requested, registration.Device.Metadata) is { } mismatch)
+        {
+            // Only a connection this call opened is closed again; one that was already live under
+            // its own id belongs to whoever opened it.
+            if (result.Outcome != DeviceRegistrationOutcome.DuplicateRejected)
+            {
+                registry.Remove(registration.Device);
+            }
+
+            throw new InvalidOperationException(
+                $"The device at {Address(requested) ?? "that address"} is now {mismatch.Actual}, not the "
+                + $"{mismatch.Wanted} that '{deviceId}' stands for, so it was not connected under that id. "
+                + "Call discover_devices again and connect to the deviceId it reports.");
+        }
+
+        return registration;
+    }
+
+    /// <summary>
+    /// How the connected device contradicts the one that was discovered, or <c>null</c> when nothing
+    /// both of them report says it is a different unit.
+    /// </summary>
+    /// <remarks>
+    /// Reads the device's own metadata, not the registration's identity, which fills in whatever
+    /// the device left out from the very discovery result being checked. The serial number decides
+    /// when both report one, except for an id made of the MAC address: that is what it stands for,
+    /// and it is also what tells apart two units reporting the same serial number.
+    /// </remarks>
+    private static (string Wanted, string Actual)? FindMismatch(
+        string deviceId, IDeviceInfo requested, DeviceMetadata connected)
+    {
+        var wantedMac = KnownMacAddress(requested.MacAddress);
+        var namedByMac = wantedMac is not null && deviceId == MintId(requested.ConnectionType, wantedMac);
+
+        if (KnownSerialNumber(requested.SerialNumber) is { } wanted
+            && KnownSerialNumber(connected.SerialNumber) is { } actual)
+        {
+            if (!DeviceIdentity.Create(wanted).Matches(DeviceIdentity.Create(actual)))
+            {
+                return ($"serial number {wanted}", $"serial number {actual}");
+            }
+
+            if (!namedByMac)
+            {
+                return null;
+            }
+        }
+
+        return wantedMac is not null
+            && KnownMacAddress(connected.MacAddress) is { } actualMac
+            && !DeviceIdentity.Create(null, wantedMac).Matches(DeviceIdentity.Create(null, actualMac))
+                ? ($"MAC address {wantedMac}", $"MAC address {actualMac}")
+                : null;
+    }
+
+    public async Task<DisconnectResult> DisconnectAsync(string deviceId, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // Remove owns the teardown: disconnect then dispose.
-            return _registry.Remove(deviceId)
-                ? $"Disconnected '{deviceId}'."
-                : $"Device '{deviceId}' was not connected.";
+            return new DisconnectResult(deviceId, WasConnected: _registry.Remove(deviceId));
         }
         finally
         {
@@ -330,15 +398,15 @@ public sealed class DaqifiAgent
         }
     }
 
-    public IReadOnlyList<ConnectedDeviceInfo> ListConnected() =>
-        _registry.Devices.Select(r => ConnectedDeviceInfo.From(r.Key, r.Device)).ToList();
+    public ConnectedDevices ListConnected() =>
+        new(_registry.Devices.Select(r => ConnectedDeviceInfo.From(r.Key, r.Device)).ToList());
 
     // ----------------------------------------------------------- introspection
 
     public DeviceStatus GetStatus(string deviceId) => DeviceStatus.From(deviceId, Require(deviceId));
 
-    public IReadOnlyList<ChannelInfo> ListChannels(string deviceId) =>
-        Snapshot(Require(deviceId)).Select(ChannelInfo.From).ToList();
+    public ChannelListing ListChannels(string deviceId) =>
+        new(deviceId, Snapshot(Require(deviceId)).Select(ChannelInfo.From).ToList());
 
     // ----------------------------------------------------------- configuration
 
@@ -444,9 +512,9 @@ public sealed class DaqifiAgent
     /// <see cref="IStreamingDevice.SetDioDirection"/>.
     /// </summary>
     public async Task<DigitalPinResult> SetDigitalDirectionAsync(
-        string deviceId, int channel, string direction, CancellationToken cancellationToken = default)
+        string deviceId, int channel, WireDigitalDirection direction, CancellationToken cancellationToken = default)
     {
-        var parsed = ParseDirection(direction);
+        var wanted = direction.ToCore();
 
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
@@ -460,7 +528,7 @@ public sealed class DaqifiAgent
         {
             ct.ThrowIfCancellationRequested();
             RequirePwmDisabled(ch);
-            streaming.SetDioDirection(ch, parsed);
+            streaming.SetDioDirection(ch, wanted);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
         }, cancellationToken).ConfigureAwait(false);
@@ -534,12 +602,12 @@ public sealed class DaqifiAgent
             catch (ArgumentOutOfRangeException ex) when (ex.ParamName == nameof(dutyCyclePercent))
             {
                 // Core's message names SetPwmEnabled(channel, false), an SDK method an MCP caller
-                // cannot invoke, so name disable_pwm instead (the goal RequirePwmDisabled serves
+                // cannot invoke, so name disable_pwm_output instead (the goal RequirePwmDisabled serves
                 // for direction/output) and keep Core's exception as the inner, as the SD-card
                 // Rewrite does. The filter keys on Core's parameter name, so any other
                 // out-of-range failure passes through with its own message.
                 throw new InvalidOperationException(
-                    "Duty cycle must be 1-100 percent. To stop the output, call disable_pwm.",
+                    "Duty cycle must be 1-100 percent. To stop the output, call disable_pwm_output.",
                     ex);
             }
 
@@ -568,7 +636,7 @@ public sealed class DaqifiAgent
     /// not read the device's error queue back, so this call still succeeds and neither throws nor
     /// reports the rejection in its <see cref="PwmResult"/> (#450).
     /// </summary>
-    public async Task<PwmResult> DisablePwmAsync(
+    public async Task<PwmResult> DisablePwmOutputAsync(
         string deviceId, int channel, CancellationToken cancellationToken = default)
     {
         RequireControl();
@@ -599,8 +667,8 @@ public sealed class DaqifiAgent
     /// entitled to the answer "nothing", and <see cref="SetAnalogOutputAsync"/> is where an attempt
     /// to drive one anyway is explained.
     /// </remarks>
-    public IReadOnlyList<AnalogOutputState> ListAnalogOutputs(string deviceId) =>
-        AnalogOutputs(Require(deviceId)).Select(AnalogOutputState.From).ToList();
+    public AnalogOutputListing ListAnalogOutputs(string deviceId) =>
+        new(deviceId, AnalogOutputs(Require(deviceId)).Select(AnalogOutputState.From).ToList());
 
     /// <summary>
     /// Writes a voltage to an analog-output (DAC) channel: staged, then latched immediately unless
@@ -650,7 +718,7 @@ public sealed class DaqifiAgent
                 volts,
                 Applied: latch,
                 RangeChecked: known,
-                State: FindAnalogOutput(device, channel) is { } state ? AnalogOutputState.From(state) : null));
+                Output: FindAnalogOutput(device, channel) is { } state ? AnalogOutputState.From(state) : null));
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -691,7 +759,7 @@ public sealed class DaqifiAgent
     /// so the readback would fail as "not a voltage" — a parse error that describes the collision
     /// rather than naming it.
     /// </remarks>
-    public async Task<AnalogOutputReading> ReadAnalogOutputAsync(
+    public async Task<AnalogOutputReading> GetAnalogOutputAsync(
         string deviceId, int channel, CancellationToken cancellationToken)
     {
         var (device, streaming) = RequireAnalogOutput(deviceId);
@@ -715,11 +783,11 @@ public sealed class DaqifiAgent
     }
 
     public async Task<SampleRateResult> SetSampleRateAsync(
-        string deviceId, int rateHz, CancellationToken cancellationToken = default)
+        string deviceId, int sampleRateHz, CancellationToken cancellationToken = default)
     {
-        if (rateHz < 1)
+        if (sampleRateHz < 1)
         {
-            throw new InvalidOperationException("rate_hz must be >= 1.");
+            throw new InvalidOperationException("sampleRateHz must be >= 1.");
         }
 
         RequireControl();
@@ -735,7 +803,7 @@ public sealed class DaqifiAgent
             // see Daqifi.Core's SampleRateCap. Called out with its own
             // message rather than falling into the generic "exceeds the maximum" rejection below:
             // that message reads as "you asked for too much", which points an agent at lowering
-            // rateHz when the actual remedy is enabling a channel first.
+            // sampleRateHz when the actual remedy is enabling a channel first.
             if (cap <= 0)
             {
                 throw new InvalidOperationException(
@@ -744,14 +812,14 @@ public sealed class DaqifiAgent
                     "sample rate; digital channels are sampled on the analog tick and add no capacity of their own.");
             }
 
-            if (rateHz > cap)
+            if (sampleRateHz > cap)
             {
                 throw new InvalidOperationException(
-                    $"Requested {rateHz} Hz exceeds the maximum {cap} Hz for the currently enabled channels.");
+                    $"Requested {sampleRateHz} Hz exceeds the maximum {cap} Hz for the currently enabled channels.");
             }
 
-            streaming.StreamingFrequency = rateHz;
-            return Task.FromResult(new SampleRateResult(deviceId, rateHz));
+            streaming.StreamingFrequency = sampleRateHz;
+            return Task.FromResult(new SampleRateResult(deviceId, sampleRateHz));
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -817,9 +885,9 @@ public sealed class DaqifiAgent
     // --------------------------------------------------------- SD card logging
 
     public async Task<StartLoggingResult> StartLoggingAsync(
-        string deviceId, string? fileName, string format, CancellationToken cancellationToken)
+        string deviceId, string? fileName, WireSdLogFormat format, CancellationToken cancellationToken)
     {
-        var fmt = ParseFormat(format);
+        var fmt = format.ToCore();
 
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
@@ -849,11 +917,11 @@ public sealed class DaqifiAgent
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
-                deviceId, session.FileName, session.Format.ToString(), streaming.StreamingFrequency, EnabledAnalog(device));
+                deviceId, session.FileName, session.Format.ToWire(), streaming.StreamingFrequency, EnabledAnalog(device));
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<string> StopLoggingAsync(string deviceId, CancellationToken cancellationToken)
+    public async Task<StopLoggingResult> StopLoggingAsync(string deviceId, CancellationToken cancellationToken)
     {
         RequireControl();
         var (device, _) = RequireStreaming(deviceId);
@@ -862,7 +930,7 @@ public sealed class DaqifiAgent
         return await device.RunExclusiveAsync(async ct =>
         {
             await sd.StopSdCardLoggingAsync(ct).ConfigureAwait(false);
-            return $"Stopped SD-card logging on '{deviceId}'.";
+            return new StopLoggingResult(deviceId, sd.IsLoggingToSdCard);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -985,7 +1053,7 @@ public sealed class DaqifiAgent
             deviceId,
             download.FileName,
             download.FileSize,
-            Math.Round(download.Duration.TotalSeconds, 3),
+            Milliseconds(download.Duration),
             localPath,
             csvPath,
             rowCount,
@@ -1303,7 +1371,7 @@ public sealed class DaqifiAgent
             return new ChannelReading(
                 key.Label,
                 key.Number,
-                key.Type.ToString(),
+                key.Type.ToWire(),
                 sample?.Value,
                 sample?.Timestamp,
                 sample?.DeviceTimestamp,
@@ -1315,7 +1383,7 @@ public sealed class DaqifiAgent
             run.SampleRateHz,
             run.StartedStream,
             run.Sink.ReportedChannelCount,
-            Math.Round(run.Outcome.Elapsed.TotalSeconds, 3),
+            Milliseconds(run.Outcome.Elapsed),
             run.DroppedSampleCount,
             run.Sink.UnexpectedSampleCount,
             readings);
@@ -1390,6 +1458,7 @@ public sealed class DaqifiAgent
             .ConfigureAwait(false);
 
         return new DriveAndCaptureResult(
+            deviceId,
             ch.ChannelNumber,
             high,
             (int)delay.TotalMilliseconds,
@@ -1462,7 +1531,7 @@ public sealed class DaqifiAgent
             deviceId,
             run.SampleRateHz,
             run.StartedStream,
-            Math.Round(run.Outcome.Elapsed.TotalSeconds, 3),
+            Milliseconds(run.Outcome.Elapsed),
             rows.Count,
             run.Sink.SampleCount,
             run.DroppedSampleCount,
@@ -1473,6 +1542,9 @@ public sealed class DaqifiAgent
             run.Channels.Select(c => c.Label).ToList(),
             rows);
     }
+
+    /// <summary>A duration as the whole milliseconds every duration on the wire is given in.</summary>
+    private static long Milliseconds(TimeSpan duration) => (long)Math.Round(duration.TotalMilliseconds);
 
     /// <summary>
     /// Rows per second over <paramref name="span"/>, which covers the gaps <i>between</i> the rows —
@@ -2011,34 +2083,74 @@ public sealed class DaqifiAgent
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; the firmware ignores digital direction/state " +
-                "commands while PWM is running. Call disable_pwm on this channel first.");
+                "commands while PWM is running. Call disable_pwm_output on this channel first.");
         }
     }
 
-    private static ChannelDirection ParseDirection(string? direction) => (direction ?? string.Empty).Trim().ToLowerInvariant() switch
+    /// <summary>
+    /// The ids for one discovery pass, index for index. Internal for testing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>&lt;connectionType&gt;:&lt;serial number&gt;</c>, so the id follows the unit rather than
+    /// the port or lease it happens to be at (issue #1042). The transport is part of it because
+    /// connecting is a choice of transport: SD-card work needs USB, and one unit reachable both
+    /// ways is two entries.
+    /// </para>
+    /// <para>
+    /// A device that did not report a serial number falls back to where it was found: the port for
+    /// USB; the MAC address, then the IP address, for WiFi. So does the second of two entries that
+    /// would otherwise share an id within a pass, because one id must not stand for two
+    /// connections. A fallback id is only as stable as that address. It stays valid for the
+    /// connection opened under it even once the serial number is known.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<string> MintIds(IReadOnlyList<IDeviceInfo> infos)
     {
-        "input" or "in" => ChannelDirection.Input,
-        "output" or "out" => ChannelDirection.Output,
-        _ => throw new InvalidOperationException($"Unknown direction '{direction}'. Use 'input' or 'output'."),
-    };
-
-    private static SdCardLogFormat ParseFormat(string? format) => (format ?? string.Empty).Trim().ToLowerInvariant() switch
-    {
-        "" or "protobuf" or "bin" or "binary" => SdCardLogFormat.Protobuf,
-        "json" => SdCardLogFormat.Json,
-        "csv" => SdCardLogFormat.Csv,
-        _ => throw new InvalidOperationException($"Unknown format '{format}'. Use 'protobuf', 'json', or 'csv'."),
-    };
-
-    private static string MintId(IDeviceInfo info)
-    {
-        var key = info.ConnectionType switch
+        var ids = new List<string>(infos.Count);
+        foreach (var info in infos)
         {
-            ConnectionType.Serial => info.PortName ?? info.SerialNumber,
-            ConnectionType.WiFi => info.IPAddress?.ToString() ?? info.SerialNumber,
-            _ => info.SerialNumber,
-        };
-        var connection = info.ConnectionType.ToString().ToLowerInvariant();
-        return $"{connection}:{key}";
+            var fallback = FallbackName(info) ?? info.Name;
+            var id = MintId(info.ConnectionType, KnownSerialNumber(info.SerialNumber) ?? fallback);
+            if (ids.Contains(id))
+            {
+                id = MintId(info.ConnectionType, fallback);
+            }
+
+            ids.Add(id);
+        }
+
+        return ids;
+
+        static string? FallbackName(IDeviceInfo info) => info.ConnectionType == ConnectionType.WiFi
+            ? KnownMacAddress(info.MacAddress) ?? Address(info)
+            : Address(info);
     }
+
+    private static string MintId(ConnectionType connectionType, string name) =>
+        $"{ToolRegistration.WireName(connectionType.ToWire())}:{name}";
+
+    /// <summary>
+    /// The MAC address in lowercase, or <c>null</c> when the device did not report one. All zeros is
+    /// the firmware's value for a radio it has not read yet, not an address.
+    /// </summary>
+    private static string? KnownMacAddress(string? macAddress) =>
+        macAddress?.Trim().ToLowerInvariant() is { Length: > 0 } mac && mac.Any(c => c is not ('0' or '-' or ':'))
+            ? mac
+            : null;
+
+    /// <summary>
+    /// The serial number, or <c>null</c> when the device did not report one. Core renders the
+    /// protobuf field as it is, so a status message that left it out reads as <c>"0"</c>.
+    /// </summary>
+    private static string? KnownSerialNumber(string? serialNumber) =>
+        serialNumber?.Trim() is { Length: > 0 } serial && serial != "0" ? serial : null;
+
+    /// <summary>Where a device was found: its port, or its IP address.</summary>
+    internal static string? Address(IDeviceInfo info) => info.ConnectionType switch
+    {
+        ConnectionType.Serial => info.PortName,
+        ConnectionType.WiFi => info.IPAddress?.ToString(),
+        _ => null,
+    };
 }

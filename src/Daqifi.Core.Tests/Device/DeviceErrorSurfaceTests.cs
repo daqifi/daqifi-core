@@ -348,7 +348,7 @@ public class DeviceErrorSurfaceTests
         }
 
         public Task<IReadOnlyList<string>> CallTextCommandAsync(Action setupAction) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 200, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(200), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     /// <summary>
@@ -377,25 +377,19 @@ public class DeviceErrorSurfaceTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void Dispose()
         {
@@ -481,25 +475,19 @@ public class DeviceErrorSurfaceTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void Dispose()
         {

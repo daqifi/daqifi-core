@@ -22,10 +22,10 @@ namespace Daqifi.Core.Tests.Build;
 /// end of it.
 /// </para>
 /// <para>
-/// The same goes for the version. The committed manifest names the last released version so it
-/// stays readable and valid on its own; what actually ships is stamped in from the tag during
-/// the release. Drop that stamping step and every release would re-publish a claim about an old
-/// version - which the registry would either reject or, worse, accept as the current listing.
+/// The same goes for the version. The committed manifest carries an obvious placeholder, because
+/// a real number there goes stale with the next release and reads as the current one (issue
+/// #1043); what actually ships is stamped in from the tag during the release. Drop that stamping
+/// step and the release would publish a listing for a version that does not exist.
 /// </para>
 /// <para>
 /// The repository root is captured at build time as an assembly-metadata attribute; see
@@ -205,9 +205,17 @@ public class McpRegistryManifestTests
     [Fact]
     public void Manifest_CarriesAVersionTheReleaseWorkflowWouldAccept()
     {
-        // Same shape release.yml enforces on the tag, so the committed placeholder is a version
-        // this repository could actually have released rather than a word like "dev".
+        // Same shape release.yml enforces on the tag, so the placeholder stays a version
+        // `mcp-publisher validate` accepts rather than a word like "dev".
         Assert.Matches(@"^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$", Manifest.GetProperty("version").GetString());
+    }
+
+    [Fact]
+    public void Manifest_CarriesAPlaceholderAndNotAVersionSomebodyCouldBelieve()
+    {
+        // Committed at a real version it says the wrong one after every release: it still read
+        // 1.7.0 when 1.10.0 was out (issue #1043). Only the stamping step knows the version.
+        Assert.Equal("0.0.0-placeholder", Manifest.GetProperty("version").GetString());
     }
 
     [Fact]
@@ -282,6 +290,14 @@ public class McpRegistryManifestTests
 
         Assert.Contains(".version = $v", filter, StringComparison.Ordinal);
         Assert.Contains(".packages[].version = $v", filter, StringComparison.Ordinal);
+
+        // And into the committed manifest, before it is published: the placeholder must never be
+        // what the registry is handed.
+        var stamp = ReleaseWorkflowText.IndexOf("> server.json.tmp", StringComparison.Ordinal);
+        var replace = ReleaseWorkflowText.IndexOf($"mv server.json.tmp {ManifestRelativePath}", StringComparison.Ordinal);
+        var publish = ReleaseWorkflowText.IndexOf("mcp-publisher publish", StringComparison.Ordinal);
+        Assert.True(stamp >= 0 && replace > stamp && publish > replace,
+            "release.yml must stamp the tag into the committed manifest before publishing it.");
     }
 
     [Fact]

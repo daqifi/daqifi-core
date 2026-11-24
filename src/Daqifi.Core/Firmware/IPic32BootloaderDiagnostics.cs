@@ -2,7 +2,7 @@ namespace Daqifi.Core.Firmware;
 
 /// <summary>
 /// Lightweight PIC32 HID-bootloader diagnostics that run <em>outside</em> the full
-/// <see cref="IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice, string, System.IProgress{FirmwareUpdateProgress}?, System.Threading.CancellationToken)"/>
+/// <see cref="IFirmwareUpdateService.UpdateFirmwareAsync"/>
 /// flow: a version health check and a <c>JMP_TO_APP</c> soft reset, neither of which
 /// erases or programs flash. Intended for consumers (e.g. a recovery/manual bootloader
 /// dialog) that want to probe or reset a bootloader session before committing to a flash.

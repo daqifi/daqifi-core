@@ -20,8 +20,8 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 |---|---|
 | `get_server_info` | This server's own version, and whether a newer `Daqifi.Mcp` is published. |
 | `get_hardware_info` | Published board specifications: rate ceiling, simultaneous sampling, analog outputs, nominal resolution and range. |
-| `discover_devices` | Find devices on USB/serial and WiFi. Call first; returns `device_id`s. |
-| `connect_device` | Connect to a discovered `device_id`. |
+| `discover_devices` | Find devices on USB/serial and WiFi. Call first; returns `deviceId`s. |
+| `connect_device` | Connect to a discovered `deviceId`. |
 | `list_connected_devices` | List currently-connected devices. |
 | `disconnect_device` | Disconnect and release a device. |
 | `get_device_status` | Connection state, streaming/logging flags, sample rate, enabled channels. |
@@ -31,11 +31,11 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `set_digital_direction` | Set a digital channel to `input` or `output`. |
 | `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
 | `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency from the device's minimum up to 50000 Hz. The minimum is 6 Hz, or on firmware 3.9.0+ the one the unit reports, which depends on its clock and can differ. A lower frequency is rejected with an error that names the minimum. |
-| `disable_pwm` | Stop PWM on a channel (pin is left high-impedance). |
+| `disable_pwm_output` | Stop PWM on a channel (pin is left high-impedance). |
 | `list_analog_outputs` | The DAC channels with the voltage range each accepts and the value it is driving. |
 | `set_analog_output` | Drive a DAC channel to a voltage (**Nyquist 3 only**); range-checked before it is sent. |
 | `latch_analog_outputs` | Apply the voltages staged with `set_analog_output latch=false`, together. |
-| `read_analog_output` | Ask the device what a DAC channel is holding. |
+| `get_analog_output` | Ask the device what a DAC channel is holding. |
 | `set_sample_rate` | Set sample rate in Hz (ceiling depends on the enabled channel count; over-cap requests are rejected). |
 | `read_channel_values` | Latest value on every enabled channel, with the timestamp it was sampled at. |
 | `capture_samples` | A block of live data as rows: one row per sample tick, one column per channel. |
@@ -94,9 +94,25 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 > outright, because the firmware would otherwise discard the command without saying so and the call
 > would look like a success. `set_analog_output` applies the voltage immediately unless you pass
 > `latch=false`, which stages it instead so several channels can be made to change together on one
-> `latch_analog_outputs`. Neither the staged value nor `read_analog_output` is a measurement of the
+> `latch_analog_outputs`. Neither the staged value nor `get_analog_output` is a measurement of the
 > pin — the DAC has no readback path, so the device answers with the value it was last told to
 > drive.
+
+### Names, ids and units
+
+Tool names are `snake_case`; every parameter and result field is `camelCase`. Every tool returns a
+named object, and a fixed set of values is listed as an `enum` in the tool's schema, in lowercase
+(`serial`, `nyquist1`, `analog_output`); a value outside it is refused. Durations are milliseconds
+(`…Ms`), rates hertz (`…Hz`), voltages volts, and `deviceTimestampTicks` is the device's own clock,
+verbatim.
+
+A `deviceId` is `<connectionType>:<serial number>`, for example `serial:9090539562…`, so it stays the
+same across a replug, a new COM port or a new IP address. One unit reachable over both USB and WiFi
+is listed twice, once per transport. A device that does not report a serial number falls back to
+where it was found — the port on USB; the MAC address, then the IP address, on WiFi — and that id is
+only as stable as the address. After a replug or a network change, call `discover_devices` again
+before `connect_device`: the id is the same, but the server has to learn the new address. If another
+unit has taken the old address, connecting is refused rather than handing back the wrong device.
 
 ## Resources
 
@@ -188,7 +204,7 @@ log for that line.
 `--read-only` blocks anything that changes the device or the card: channel/rate configuration,
 DIO/PWM output (`drive_and_capture` included), analog output (`set_analog_output`, `latch_analog_outputs`), start/stop logging, and
 `delete_sd_file`. Reading data back is still allowed — `list_sd_files`, `get_sd_storage`,
-`download_sd_file`, `list_analog_outputs` and `read_analog_output` all work, since they change
+`download_sd_file`, `list_analog_outputs` and `get_analog_output` all work, since they change
 nothing on the device (the download does write its two files into this machine's temp directory,
 which is the only way the data can reach the agent at all).
 

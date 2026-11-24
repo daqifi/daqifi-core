@@ -21,14 +21,14 @@ public class HardwareCatalogTests
     public void TheCatalog_CoversTheThreeNyquistBoards()
     {
         Assert.Equal(
-            new[] { "Nyquist1", "Nyquist2", "Nyquist3" },
+            new[] { WireDeviceType.Nyquist1, WireDeviceType.Nyquist2, WireDeviceType.Nyquist3 },
             HardwareCatalog.All.Select(p => p.DeviceType));
     }
 
     [Fact]
     public void Nyquist1_IsTwelveBitUnipolarWithAPublishedRateCeiling()
     {
-        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist1"));
+        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find(WireDeviceType.Nyquist1));
 
         Assert.Equal(16, board.AnalogInputs.ChannelCount);
         Assert.Equal(12, board.AnalogInputs.NominalResolutionBits);
@@ -37,13 +37,13 @@ public class HardwareCatalogTests
         // The ceiling with one channel enabled. The point of publishing it is that an agent can
         // plan a rate instead of discovering the limit from a set_sample_rate rejection.
         Assert.Equal(19250, board.AnalogInputs.MaxSampleRateHz);
-        Assert.Equal(16, board.DigitalIoChannelCount);
+        Assert.Equal(16, board.DigitalChannelCount);
     }
 
     [Fact]
     public void Nyquist2_IsTwentyFourBitAndItsDacsAreNotDrivenYet()
     {
-        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist2"));
+        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find(WireDeviceType.Nyquist2));
 
         Assert.Equal(16, board.AnalogInputs.ChannelCount);
         Assert.Equal(24, board.AnalogInputs.NominalResolutionBits);
@@ -59,7 +59,7 @@ public class HardwareCatalogTests
     [Fact]
     public void Nyquist3_IsTheBipolarSimultaneousBoardWithDrivableOutputs()
     {
-        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find("Nyquist3"));
+        var board = Assert.IsType<HardwareProfile>(HardwareCatalog.Find(WireDeviceType.Nyquist3));
 
         Assert.Equal(8, board.AnalogInputs.ChannelCount);
         Assert.Equal(18, board.AnalogInputs.NominalResolutionBits);
@@ -80,7 +80,7 @@ public class HardwareCatalogTests
             .Where(p => p.AnalogOutputs.DrivableFromThisServer)
             .Select(p => p.DeviceType);
 
-        Assert.Equal(new[] { "Nyquist3" }, drivable);
+        Assert.Equal(new[] { WireDeviceType.Nyquist3 }, drivable);
     }
 
     [Fact]
@@ -92,41 +92,21 @@ public class HardwareCatalogTests
             .Where(p => p.AnalogInputs.MaxSampleRateHz is not null)
             .Select(p => p.DeviceType);
 
-        Assert.Equal(new[] { "Nyquist1" }, withCeiling);
+        Assert.Equal(new[] { WireDeviceType.Nyquist1 }, withCeiling);
     }
 
-    [Theory]
-    [InlineData("Nyquist3")]
-    [InlineData("nyquist3")]
-    [InlineData("NYQUIST3")]
-    [InlineData("nyquist 3")]
-    [InlineData("nyquist-3")]
-    [InlineData("Nyquist_3")]
-    public void Find_MatchesTheWayAModelWillSpellTheBoard(string spelling)
+    [Fact]
+    public void Find_HasNothingForABoardDiscoveryCouldNotIdentify()
     {
-        // The name arrives through a model, which will type it the way the product page spells it
-        // as readily as the way discovery reports it.
-        Assert.Equal("Nyquist3", HardwareCatalog.Find(spelling)?.DeviceType);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData(null)]
-    [InlineData("Unknown")]
-    [InlineData("Nyquist4")]
-    [InlineData("nyquist")]
-    public void Find_HasNothingForABoardItDoesNotDescribe(string? spelling)
-    {
-        // "Unknown" especially: that is what discovery reports for a device whose type it could
-        // not establish, so it must not resolve to some default board.
-        Assert.Null(HardwareCatalog.Find(spelling));
+        // "unknown" is what discovery reports for a device whose type it could not establish, so
+        // it must not resolve to some default board.
+        Assert.Null(HardwareCatalog.Find(WireDeviceType.Unknown));
     }
 
     [Fact]
     public void GetHardwareInfo_WithNoArgument_ReportsEveryBoard()
     {
-        var reported = DaqifiTools.GetHardwareInfo();
+        var reported = DaqifiTools.GetHardwareInfo().Boards;
 
         Assert.Equal(HardwareCatalog.All.Count, reported.Count);
         Assert.Equal(HardwareCatalog.All.Select(p => p.DeviceType), reported.Select(p => p.DeviceType));
@@ -135,9 +115,9 @@ public class HardwareCatalogTests
     [Fact]
     public void GetHardwareInfo_WithABoard_ReportsJustThatOne()
     {
-        var reported = Assert.Single(DaqifiTools.GetHardwareInfo("nyquist 1"));
+        var reported = Assert.Single(DaqifiTools.GetHardwareInfo(WireDeviceType.Nyquist1).Boards);
 
-        Assert.Equal("Nyquist1", reported.DeviceType);
+        Assert.Equal(WireDeviceType.Nyquist1, reported.DeviceType);
     }
 
     [Fact]
@@ -145,10 +125,10 @@ public class HardwareCatalogTests
     {
         // An empty list would read as "this board has nothing to report" rather than "ask about a
         // different name", and the agent would have no way to find the name that works.
-        var ex = Assert.Throws<McpException>(() => DaqifiTools.GetHardwareInfo("Unknown"));
+        var ex = Assert.Throws<McpException>(() => DaqifiTools.GetHardwareInfo(WireDeviceType.Unknown));
 
-        Assert.Contains("Nyquist1", ex.Message);
-        Assert.Contains("Nyquist3", ex.Message);
+        Assert.Contains("nyquist1", ex.Message);
+        Assert.Contains("nyquist3", ex.Message);
         Assert.Contains("list_channels", ex.Message);
     }
 
@@ -164,7 +144,7 @@ public class HardwareCatalogTests
         Assert.All(
             HardwareCatalog.All,
             board => Assert.Contains(
-                $"daqifi://hardware/{board.DeviceType.ToLowerInvariant()}",
+                $"daqifi://hardware/{ToolRegistration.WireName(board.DeviceType)}",
                 uris));
     }
 
@@ -185,7 +165,7 @@ public class HardwareCatalogTests
         // The field names a client sees in a resource read have to be the ones it sees in
         // get_hardware_info's structuredContent, or the same fact is spelled two ways. Both go
         // through ToolRegistration.SerializerOptions, and this is what pins that.
-        var board = HardwareCatalog.All.Single(p => p.DeviceType == "Nyquist3");
+        var board = HardwareCatalog.All.Single(p => p.DeviceType == WireDeviceType.Nyquist3);
 
         var json = HardwareCatalog.ToJson(board);
         var round = JsonSerializer.Deserialize<HardwareProfile>(json, ToolRegistration.SerializerOptions);
@@ -198,7 +178,7 @@ public class HardwareCatalogTests
     {
         // Rather than omitting it: an absent key is indistinguishable from a key the reader
         // forgot to look for, while an explicit null says "nobody published this".
-        var json = HardwareCatalog.ToJson(HardwareCatalog.All.Single(p => p.DeviceType == "Nyquist2"));
+        var json = HardwareCatalog.ToJson(HardwareCatalog.All.Single(p => p.DeviceType == WireDeviceType.Nyquist2));
 
         using var parsed = JsonDocument.Parse(json);
         var inputs = parsed.RootElement.GetProperty("analogInputs");

@@ -451,8 +451,8 @@ public class DeviceAdministrationOperationsTests
 
         await new DeviceAdministrationOperations(host).SaveAdcCalibrationAsync();
 
-        Assert.Equal(3000, host.LastResponseTimeoutMs);
-        Assert.Equal(1000, host.LastCompletionTimeoutMs);
+        Assert.Equal(TimeSpan.FromSeconds(3), host.LastResponseTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(1), host.LastCompletionTimeout);
     }
 
     /// <summary>
@@ -730,10 +730,10 @@ public class DeviceAdministrationOperationsTests
         public IReadOnlyList<string> ExchangeResponse { get; set; } = Array.Empty<string>();
 
         /// <summary>The response timeout the last exchange asked for.</summary>
-        public int? LastResponseTimeoutMs { get; private set; }
+        public TimeSpan? LastResponseTimeout { get; private set; }
 
         /// <summary>The completion timeout the last exchange asked for.</summary>
-        public int? LastCompletionTimeoutMs { get; private set; }
+        public TimeSpan? LastCompletionTimeout { get; private set; }
 
         public void Send<T>(IOutboundMessage<T> message)
         {
@@ -764,18 +764,18 @@ public class DeviceAdministrationOperationsTests
         /// </summary>
         public Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             Assert.Null(prepareAsync);
             Assert.Null(finalizeAsync);
 
-            LastResponseTimeoutMs = responseTimeoutMs;
-            LastCompletionTimeoutMs = completionTimeoutMs;
+            LastResponseTimeout = responseTimeout;
+            LastCompletionTimeout = completionTimeout;
 
             Calls.Add("exchange");
             setupAction();

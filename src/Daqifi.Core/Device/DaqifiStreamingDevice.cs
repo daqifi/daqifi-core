@@ -862,10 +862,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// still throws on the first <c>MoveNextAsync</c> rather than at the call.
     /// </para>
     /// </remarks>
-    /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
     /// <param name="bufferCapacity">
     /// Bounded buffer capacity; defaults to <see cref="DefaultLiveSampleBufferCapacity"/> when null.
     /// </param>
+    /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
     /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
     /// <exception cref="DeviceNotConnectedException">
@@ -873,9 +873,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// was running. Both are raised from <c>MoveNextAsync</c>, after any buffered samples.
     /// </exception>
     public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-        CancellationToken cancellationToken = default,
-        int? bufferCapacity = null)
-        => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
+        int? bufferCapacity = null,
+        CancellationToken cancellationToken = default)
+        => _liveSampleStream.StreamSamplesAsync(bufferCapacity, cancellationToken);
 
     /// <summary>
     /// Ends the live-sample enumerations when the device stops being connected (issue #496).
@@ -1694,19 +1694,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 
-#pragma warning disable CA1068 // Matches the seam it forwards to.
     Task<IReadOnlyList<string>> IDeviceOperationHost.ExecuteTextCommandAsync(
         Action setupAction,
-        int responseTimeoutMs,
-        int completionTimeoutMs,
-        CancellationToken cancellationToken,
+        TimeSpan? responseTimeout,
+        TimeSpan? completionTimeout,
         Func<CancellationToken, Task>? prepareAsync,
         Func<Task>? finalizeAsync,
-        bool keepBlankLines)
+        bool keepBlankLines,
+        CancellationToken cancellationToken)
         => ExecuteTextCommandAsync(
-            setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync,
-            finalizeAsync, keepBlankLines);
-#pragma warning restore CA1068
+            setupAction, responseTimeout, completionTimeout, prepareAsync, finalizeAsync,
+            keepBlankLines, cancellationToken);
 
     Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
         int maxIterations,

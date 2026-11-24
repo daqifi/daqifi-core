@@ -184,21 +184,18 @@ public class DaqifiStreamingDevicePwmFrequencyTests
         public string ConnectionInfo => IsConnected ? "Mock: Connected" : "Mock: Disconnected";
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             IsConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             IsConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-        public void Connect() => ConnectAsync().Wait();
-        public void Disconnect() => DisconnectAsync().Wait();
 
         /// <summary>Raises an unexpected drop (StatusChanged(false) without an intentional Disconnect).</summary>
         public void SimulateLoss()

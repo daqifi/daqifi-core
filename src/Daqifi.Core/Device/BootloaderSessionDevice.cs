@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device;
 /// emit status messages. Every operation on this type is therefore a no-op, and every collection is
 /// empty. It exists purely so a recovery/update dialog has something satisfying
 /// <see cref="IStreamingDevice"/> to pass to
-/// <see cref="Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(IStreamingDevice, string, IProgress{Firmware.FirmwareUpdateProgress}?, string?, CancellationToken)"/>.
+/// <see cref="Firmware.IFirmwareUpdateService.UpdateFirmwareAsync"/>.
 /// </para>
 /// <para>
 /// Three of those behaviours are load-bearing rather than incidental, because the PIC32 update flow

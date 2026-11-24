@@ -178,7 +178,7 @@ internal sealed class WifiModuleUpdater
                     // the device stays in "requested" forever and the flash tool finds no bridge
                     // to talk to — the first half of #853. It is also the order the firmware's own
                     // utility script uses (POWer:STATe 1, LAN:FWUpdate, LAN:APPLY) and the order
-                    // WifiBridgeActivator.Activate already drives over a raw serial port.
+                    // WifiBridgeActivator.ActivateAsync already drives over a raw serial port.
                     device.Send(ScpiMessageProducer.ApplyNetworkLan);
 
                     // Same reasoning as above, one state further on — but only as far as the apply
@@ -273,14 +273,14 @@ internal sealed class WifiModuleUpdater
                     // unconditionally: it is a no-op when the device is not in transparent mode,
                     // and restoring the pre-flash state is the entire job of this step. Completes
                     // the recovery half of daqifi-desktop's ResetLanAfterUpdate (part of #269).
-                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
 
                     // Leaving the bridge is a device-side mode transition, not an instantaneous
                     // one. Until the SCPI console path is back, bytes on the port are still
                     // forwarded to the WINC as raw data, so a LAN command sent immediately after
                     // can be swallowed by the bridge and the restore silently does nothing —
                     // the same intermittent failure the exit itself exists to prevent.
-                    // WifiBridgeActivator.Deactivate already paces this exact transition by the
+                    // WifiBridgeActivator.DeactivateAsync already paces this exact transition by the
                     // same amount over a raw serial port; this is the managed-connection twin.
                     if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
                     {
@@ -525,7 +525,7 @@ internal sealed class WifiModuleUpdater
                 // means the device version is unknown or unparseable, which leaves
                 // MeetsMinimumSupportedVersion null and still falls through to the
                 // flash. A caller that wants to reflash regardless already has
-                // skipVersionCheck: true.
+                // WifiUpdateOptions.SkipVersionCheck.
                 if (status.MeetsMinimumSupportedVersion == true)
                 {
                     var minimumMessage =
@@ -655,8 +655,15 @@ internal sealed class WifiModuleUpdater
                     Logger.LogInformation("Activating WiFi bridge mode before WINC programming.");
                     try
                     {
-                        activate();
+                        // Blocking, like the wait below and for the same reason: the tool is
+                        // parked on stdin until this responder returns.
+                        activate(cancellationToken).GetAwaiter().GetResult();
                         Logger.LogInformation("Bridge activation callback completed; waiting for firmware bridge init.");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        Logger.LogDebug("WiFi bridge activation canceled; skipping the continue signal.");
+                        return null;
                     }
                     catch (Exception ex)
                     {
@@ -930,7 +937,7 @@ internal sealed class WifiModuleUpdater
     /// <item><description>
     /// <see cref="LanUpdateModeProgress.BridgeEntered"/> — the device may already be bridged, so
     /// the exit goes out as-is. This is the managed-connection twin of
-    /// <see cref="WifiBridgeActivator.Deactivate"/> and sends the same two commands in the same
+    /// <see cref="WifiBridgeActivator.DeactivateAsync"/> and sends the same two commands in the same
     /// order.
     /// </description></item>
     /// <item><description>
@@ -1022,7 +1029,7 @@ internal sealed class WifiModuleUpdater
                 // Harmless here (transparent mode is not on in this state) and sent first for the
                 // same reason the bridged path sends it first: if Core's view is somehow behind
                 // the device's, this is what hands the console back so the reboot is even read.
-                device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+                device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
                 device.Send(ScpiMessageProducer.RebootDevice);
 
                 Logger.LogInformation(
@@ -1066,7 +1073,7 @@ internal sealed class WifiModuleUpdater
             // transparent-mode exit settle plus two synchronous writes, so the helper stays
             // bounded either way. The caller token is already cancelled on this path and must not
             // abort the exit — the settle observes neither it nor the recovery budget.
-            device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+            device.Send(ScpiMessageProducer.SetUsbTransparencyMode(false));
 
             // Same settle as the success path, including the zero escape hatch. Leaving the bridge
             // is a device-side mode transition: until the SCPI console path is back, bytes on the
