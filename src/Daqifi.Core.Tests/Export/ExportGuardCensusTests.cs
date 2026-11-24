@@ -3,15 +3,15 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Daqifi.Core.Tests.TestSupport;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 /// <summary>
 /// The companion to <c>EveryValueRangedProducer_RejectsOutOfRangeArgumentIdentically</c> (in
 /// <c>ScpiMessageProducerTests</c>), for a second folder: every inline range guard in
-/// <c>Daqifi.Core/Logging/Export</c> is walked here and its observable shape compared against
+/// <c>Daqifi.Core/Export</c> is walked here and its observable shape compared against
 /// every other one.
 /// </summary>
 /// <remarks>
@@ -126,7 +126,7 @@ public class ExportGuardCensusTests
     }
 
     /// <summary>
-    /// The COMPLETE set of range guards in <c>Logging/Export</c>, not a sample. A guard added to
+    /// The COMPLETE set of range guards in <c>Export</c>, not a sample. A guard added to
     /// that folder without an entry here fails
     /// <see cref="ExportRangeGuardCensus_MatchesEveryThrowSiteInTheSource"/>, which reads the
     /// source files rather than trusting this list.
@@ -198,7 +198,7 @@ public class ExportGuardCensusTests
                 "The analog channel count cannot be negative.",
                 () =>
                 {
-                    _ = new SdCardLogSampleSource(NoEntries(), "SN", analogChannelCount: -1);
+                    _ = new SdCardLogSampleSource(NoEntries(), analogChannelCount: -1, deviceName: null, "SN");
                     return Task.CompletedTask;
                 }),
         ];
@@ -368,7 +368,7 @@ public class ExportGuardCensusTests
     }
 
     private static string ExportSourceDirectory =>
-        RangeGuardSourceScanner.SourceDirectory("Logging", "Export");
+        RangeGuardSourceScanner.SourceDirectory("Export");
 
     /// <summary>
     /// A live-sample device that exists only to get past the null and capability checks so the

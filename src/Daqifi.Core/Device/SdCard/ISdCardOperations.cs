@@ -246,7 +246,7 @@ public interface ISdCardOperations
     /// <remarks>
     /// To learn the effective on-card file name (especially when it was auto-generated), call
     /// <see cref="StartSdCardLoggingSessionAsync"/> instead, which returns an
-    /// <see cref="SdCardLoggingSession"/>.
+    /// <see cref="SdCardRecording"/>.
     /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
@@ -254,7 +254,7 @@ public interface ISdCardOperations
     /// <summary>
     /// Starts logging data to the SD card and returns the effective session details. Behaves
     /// exactly like <see cref="StartSdCardLoggingAsync"/> but resolves to an
-    /// <see cref="SdCardLoggingSession"/> carrying the effective on-card file name (supplied or
+    /// <see cref="SdCardRecording"/> carrying the effective on-card file name (supplied or
     /// auto-generated) and the logging format, so callers can report, download, or later delete
     /// the log without re-deriving Core's naming convention.
     /// </summary>
@@ -269,11 +269,11 @@ public interface ISdCardOperations
     /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// A task that resolves to an <see cref="SdCardLoggingSession"/> with the effective on-card
+    /// A task that resolves to an <see cref="SdCardRecording"/> with the effective on-card
     /// file name and logging format.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
+    Task<SdCardRecording> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stops logging data to the SD card and returns the device to the state a live stream

@@ -17,7 +17,7 @@ public sealed class SdCardLogSession
     /// Gets the file creation date, parsed from the filename pattern <c>log_YYYYMMDD_HHMMSS.bin</c>
     /// or provided via parse options.
     /// </summary>
-    public DateTime? FileCreatedDate { get; }
+    public DateTime? CreatedDate { get; }
 
     /// <summary>
     /// Gets the device configuration extracted from the first status message, if present.
@@ -65,7 +65,7 @@ public sealed class SdCardLogSession
     /// <remarks>
     /// <para>
     /// This is the width of the data, not a figure the file states. It is what
-    /// <see cref="Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource"/> reads
+    /// <see cref="Daqifi.Core.Export.SdCardLogSessionExtensions.AsSampleSource"/> reads
     /// the export's column count from when the log carries no configuration block to state
     /// <see cref="SdCardDeviceConfiguration.AnalogPortCount"/>. A protobuf log normally carries
     /// none, and taking the column count as zero there discarded every analog reading in the
@@ -80,7 +80,7 @@ public sealed class SdCardLogSession
     /// It is the widest entry seen while the configuration scan ran, so it is bounded by
     /// <see cref="SdCardParseOptions.ConfigurationScanMessageLimit"/> rather than by the file's
     /// length. A log whose first values appear beyond that window still exports short, and
-    /// <see cref="Daqifi.Core.Logging.Export.SdCardLogSampleSource.DroppedAnalogColumns"/> is
+    /// <see cref="Daqifi.Core.Export.SdCardLogSampleSource.DroppedAnalogColumns"/> is
     /// what reports it.
     /// </para>
     /// </remarks>
@@ -90,18 +90,18 @@ public sealed class SdCardLogSession
     /// Initializes a new instance of the <see cref="SdCardLogSession"/> class.
     /// </summary>
     /// <param name="fileName">The source file name.</param>
-    /// <param name="fileCreatedDate">The file creation date.</param>
+    /// <param name="createdDate">The file creation date.</param>
     /// <param name="deviceConfig">Device configuration from status message.</param>
     /// <param name="samples">Async enumerable of parsed sample entries.</param>
     public SdCardLogSession(
         string fileName,
-        DateTime? fileCreatedDate,
+        DateTime? createdDate,
         SdCardDeviceConfiguration? deviceConfig,
         IAsyncEnumerable<SdCardLogEntry> samples)
     {
         FileName = fileName ?? throw new ArgumentNullException(nameof(fileName));
         Samples = samples ?? throw new ArgumentNullException(nameof(samples));
-        FileCreatedDate = fileCreatedDate;
+        CreatedDate = createdDate;
         DeviceConfig = deviceConfig;
     }
 }

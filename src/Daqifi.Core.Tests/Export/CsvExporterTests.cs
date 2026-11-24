@@ -1,8 +1,8 @@
 using System.Globalization;
 using Daqifi.Core.Channel;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 public class CsvExporterTests
 {
@@ -334,7 +334,7 @@ public class CsvExporterTests
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T0, Ch2.Key, 2.0)]);
 
-        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, Delimiter = "\t" });
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, Delimiter = '\t' });
 
         Assert.Contains("\t", lines[0]);
         Assert.Contains("\t", lines[1]);
@@ -482,6 +482,44 @@ public class CsvExporterTests
         await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), report);
 
         Assert.Contains(100, report.Reports);
+    }
+
+    [Theory]
+    [InlineData(10_000L, new[] { 50, 99, 100 })]
+    // A count past int.MaxValue is a real total, not an overflow.
+    [InlineData(5_000_000_000L, new[] { 0, 0, 100 })]
+    // No total, no percentage: only completion is reported.
+    [InlineData(null, new[] { 100 })]
+    [InlineData(0L, new[] { 100 })]
+    public async Task Export_ProgressFollowsTheStatedCount(long? count, int[] expected)
+    {
+        var source = new CountedSource(count);
+        var report = new ListProgress<int>();
+
+        await new CsvExporter().ExportAsync(
+            source, new StringWriter(), new CsvExportOptions { AverageWindow = 5_000 }, report);
+
+        Assert.Equal(expected, report.Reports);
+    }
+
+    private sealed class CountedSource(long? count) : ISampleSource
+    {
+        public IReadOnlyList<ChannelDescriptor> Channels => [Ch1];
+
+        public string? ValueUnit => null;
+
+        public ValueTask<long?> GetSampleCountAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(count);
+
+        public async IAsyncEnumerable<SampleRow> StreamSamplesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            for (var i = 0; i < 10_000; i++)
+            {
+                yield return new SampleRow(T0 + i, Ch1.Key, 1.0);
+            }
+        }
     }
 
     [Fact]
@@ -645,7 +683,7 @@ public class CsvExporterTests
         // chosen as the delimiter, the timestamp field must be RFC 4180
         // quoted so it stays a single CSV field.
         var source = new InMemorySampleSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
-        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { Delimiter = ":" });
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { Delimiter = ':' });
         // Body row: "2024-...":1
         Assert.StartsWith("\"", lines[1]);
         Assert.Contains("\":", lines[1]);
@@ -658,7 +696,7 @@ public class CsvExporterTests
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 0.5), new SampleRow(T0 + TimeSpan.TicksPerSecond, Ch1.Key, 1.5)]);
         var (lines, _) = await ExportToLinesAsync(
-            source, new CsvExportOptions { Delimiter = ".", UseRelativeTime = true });
+            source, new CsvExportOptions { Delimiter = '.', UseRelativeTime = true });
         // Both relative timestamps and float values contain '.' so both
         // get quoted under the '.' delimiter.
         Assert.Equal("\"0.000\".\"0.5\"", lines[1]);
@@ -681,12 +719,10 @@ public class CsvExporterTests
     // ── #193 delimiter validation ────────────────────────────────────────────
 
     [Theory]
-    [InlineData("")]
-    [InlineData(",,")]
-    [InlineData("\n")]
-    [InlineData("\r")]
-    [InlineData("\"")]
-    public async Task Export_InvalidDelimiter_ThrowsArgumentException(string bad)
+    [InlineData('\n')]
+    [InlineData('\r')]
+    [InlineData('"')]
+    public async Task Export_InvalidDelimiter_ThrowsArgumentException(char bad)
     {
         var source = new InMemorySampleSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
         await Assert.ThrowsAsync<ArgumentException>(async () =>

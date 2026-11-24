@@ -233,7 +233,7 @@ public sealed class SdCardJsonFileParser
             TimestampFrequency: timestampFrequency,
             DeviceSerialNumber: serialNumber,
             DevicePartNumber: deviceName,
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: null);
 
         return new JsonHeader(sawAnyObject, config);
@@ -618,8 +618,9 @@ public sealed class SdCardJsonFileParser
             ? dev.GetString()
             : null;
 
+        // Firmware writes hex; every other path reports decimal (issue #915).
         var serialNumber = element.TryGetProperty("sn", out var sn) && sn.ValueKind == JsonValueKind.String
-            ? sn.GetString()
+            ? FirmwareSerialNumber.ToDecimal(sn.GetString()!)
             : null;
 
         var tickHz = element.TryGetProperty("tick_hz", out var tick)

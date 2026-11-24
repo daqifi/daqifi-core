@@ -5,7 +5,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Mcp;
@@ -956,7 +956,7 @@ public sealed class DaqifiAgent
             try
             {
                 (csvPath, rowCount, sampleCount, csvError) =
-                    await ExportCsvAsync(localPath, name, liveConfig, cancellationToken).ConfigureAwait(false);
+                    await ExportCsvAsync(localPath, name, liveConfig, device.Name, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -975,7 +975,7 @@ public sealed class DaqifiAgent
         return new SdDownloadReport(
             deviceId,
             download.FileName,
-            download.FileSize,
+            download.SizeInBytes,
             Math.Round(download.Duration.TotalSeconds, 3),
             localPath,
             csvPath,
@@ -1111,6 +1111,7 @@ public sealed class DaqifiAgent
         string localPath,
         string deviceFileName,
         SdCardDeviceConfiguration? liveConfig,
+        string? deviceName,
         CancellationToken cancellationToken)
     {
         // Format comes from the DEVICE-side name, not the local one: the local file is a temp file
@@ -1134,7 +1135,7 @@ public sealed class DaqifiAgent
             // device fills in when the log carries none, which is what AsSampleSource does. Zero
             // is the honest last resort — a device with no analog channels exports the digital
             // column alone rather than inventing width.
-            var source = session.AsSampleSource(liveConfig);
+            var source = session.AsSampleSource(liveConfig, deviceName);
 
             // Appended, not swapped: the firmware logs in CSV as well as protobuf and JSON, and
             // Core's temp file keeps the device-side extension — so Path.ChangeExtension(".csv")

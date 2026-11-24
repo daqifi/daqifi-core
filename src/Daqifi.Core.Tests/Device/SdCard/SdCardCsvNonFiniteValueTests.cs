@@ -327,7 +327,7 @@ public sealed class SdCardCsvNonFiniteValueTests
             TimestampFrequency: TickRate,
             DeviceSerialNumber: "7E2815916200E898",
             DevicePartNumber: "Nyquist 1",
-            FirmwareRevision: "3.8.0",
+            FirmwareVersion: "3.8.0",
             CalibrationValues: Repeat((1.0, 0.0), channelCount),
             Resolution: AdcResolution,
             PortRange: Repeat(PortRangeVolts, channelCount),

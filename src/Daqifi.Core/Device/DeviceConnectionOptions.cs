@@ -9,9 +9,15 @@ namespace Daqifi.Core.Device;
 public class DeviceConnectionOptions
 {
     /// <summary>
-    /// Gets or sets the device name. Default is "DAQiFi Device".
+    /// The name a device gets when the caller gives it none. An export whose source names no
+    /// device uses the same name, so a live recording and an SD-card export of one device agree.
     /// </summary>
-    public string DeviceName { get; set; } = "DAQiFi Device";
+    public const string DefaultDeviceName = "DAQiFi Device";
+
+    /// <summary>
+    /// Gets or sets the device name. Default is <see cref="DefaultDeviceName"/>.
+    /// </summary>
+    public string DeviceName { get; set; } = DefaultDeviceName;
 
     /// <summary>
     /// Gets or sets the connection retry options for transport-level retry behavior.

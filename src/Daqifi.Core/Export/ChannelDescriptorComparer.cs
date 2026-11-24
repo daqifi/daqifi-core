@@ -1,7 +1,7 @@
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
-/// The column order <see cref="CsvExporter"/> expects from <see cref="ISampleSource.GetChannels"/>:
+/// The column order <see cref="CsvExporter"/> expects from <see cref="ISampleSource.Channels"/>:
 /// by device name, then serial number, then channel name — the first two ordinally, the last with
 /// <see cref="ChannelNameComparer"/> so <c>AI2</c> comes before <c>AI10</c>.
 /// </summary>
@@ -63,9 +63,9 @@ public sealed class ChannelDescriptorComparer : IComparer<ChannelDescriptor>
             return device;
         }
 
-        var serial = string.CompareOrdinal(x.DeviceSerialNo, y.DeviceSerialNo);
+        var serial = string.CompareOrdinal(x.DeviceSerialNumber, y.DeviceSerialNumber);
         return serial != 0
             ? serial
-            : ChannelNameComparer.Instance.Compare(x.ChannelName, y.ChannelName);
+            : ChannelNameComparer.Default.Compare(x.ChannelName, y.ChannelName);
     }
 }

@@ -692,7 +692,7 @@ public sealed class SdCardFileParser
                 TimestampFrequency: _timestampFreq,
                 DeviceSerialNumber: _deviceSn != 0 ? _deviceSn.ToString() : null,
                 DevicePartNumber: _devicePn,
-                FirmwareRevision: _fwRev,
+                FirmwareVersion: _fwRev,
                 CalibrationValues: _calibration,
                 Resolution: _resolution,
                 PortRange: _portRange,
@@ -721,9 +721,9 @@ public sealed class SdCardFileParser
             DevicePartNumber: !string.IsNullOrEmpty(primary.DevicePartNumber)
                 ? primary.DevicePartNumber
                 : scanned.DevicePartNumber,
-            FirmwareRevision: !string.IsNullOrEmpty(primary.FirmwareRevision)
-                ? primary.FirmwareRevision
-                : scanned.FirmwareRevision,
+            FirmwareVersion: !string.IsNullOrEmpty(primary.FirmwareVersion)
+                ? primary.FirmwareVersion
+                : scanned.FirmwareVersion,
             CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues,
             Resolution: primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
             PortRange: primary.PortRange ?? scanned.PortRange,
@@ -763,7 +763,7 @@ public sealed class SdCardFileParser
             TimestampFrequency: statusMessage.TimestampFreq,
             DeviceSerialNumber: statusMessage.DeviceSn != 0 ? statusMessage.DeviceSn.ToString() : null,
             DevicePartNumber: statusMessage.DevicePn,
-            FirmwareRevision: statusMessage.DeviceFwRev,
+            FirmwareVersion: statusMessage.DeviceFwRev,
             CalibrationValues: calibration,
             Resolution: statusMessage.AnalogInRes,
             PortRange: portRange,
