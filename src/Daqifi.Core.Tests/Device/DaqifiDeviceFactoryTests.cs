@@ -448,16 +448,32 @@ public class DaqifiDeviceFactoryTests
     /// Runs <paramref name="connect"/> against a loopback listener that accepts the handshake and
     /// nothing else — all a connect with <c>InitializeDevice = false</c> needs.
     /// </summary>
+    /// <remarks>
+    /// Listens on both loopback addresses: "localhost" resolves to ::1 first, and Windows retries a
+    /// refused connect for ~2 s before moving on to 127.0.0.1.
+    /// </remarks>
     private static async Task WithLoopbackListenerAsync(Func<int, Task> connect)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var listenerV6 = new TcpListener(IPAddress.IPv6Loopback, port);
         try
         {
-            await connect(((IPEndPoint)listener.LocalEndpoint).Port);
+            try
+            {
+                listenerV6.Start();
+            }
+            catch (SocketException)
+            {
+                // No IPv6 here, or the port is taken on ::1: the IPv4 listener is enough.
+            }
+
+            await connect(port);
         }
         finally
         {
+            listenerV6.Stop();
             listener.Stop();
         }
     }

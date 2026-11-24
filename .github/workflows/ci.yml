@@ -134,7 +134,7 @@ jobs:
         if [ "$baseline" != "$latest" ]; then
           echo "::error::PackageValidationBaselineVersion is $baseline but Daqifi.Core $latest is published." \
                "Everything added since $baseline is outside the ApiCompat comparison." \
-               "Bump it in src/Daqifi.Core/Daqifi.Core.csproj."
+               "On a branch from main, run: python3 scripts/post-release.py $latest"
           exit 1
         fi
 

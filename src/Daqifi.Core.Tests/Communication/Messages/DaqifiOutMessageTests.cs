@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Tests.Communication.Messages;
