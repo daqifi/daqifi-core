@@ -181,14 +181,14 @@ internal sealed class ChannelControlOperations
             // Push the cleared state for whichever channel types this device actually has.
             if (adcMask.HasChannels)
             {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask));
             }
 
             if (dioState.HasChannels)
             {
                 _host.Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts()
-                    : ScpiMessageProducer.DisableDioPorts());
+                    ? ScpiMessageProducer.EnableDioPorts
+                    : ScpiMessageProducer.DisableDioPorts);
             }
         }
     }
@@ -242,9 +242,7 @@ internal sealed class ChannelControlOperations
         // call, and it is the value the device is now in. It also means a send that throws
         // leaves Core's view untouched rather than claiming a direction the pin never took —
         // the same principle as the PWM guard above (#449).
-        _host.Send(ScpiMessageProducer.SetDioPortDirection(
-            channel.ChannelNumber,
-            direction == ChannelDirection.Output ? 1 : 0));
+        _host.Send(ScpiMessageProducer.SetDioPortDirection(channel.ChannelNumber, direction));
 
         // Under the channels lock, which is the lock the status-frame resync of this property
         // writes under — the discipline SetChannelsEnabled already follows for analog
@@ -280,7 +278,7 @@ internal sealed class ChannelControlOperations
         lock (_commandGate)
         {
             EnsurePwmNotEnabled(channel);
-            _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
+            _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value));
         }
     }
 
@@ -720,14 +718,14 @@ internal sealed class ChannelControlOperations
 
             if (touchedAnalog && adcMask.HasChannels)
             {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
+                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask));
             }
 
             if (touchedDigital && dioState.HasChannels)
             {
                 _host.Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts()
-                    : ScpiMessageProducer.DisableDioPorts());
+                    ? ScpiMessageProducer.EnableDioPorts
+                    : ScpiMessageProducer.DisableDioPorts);
             }
         }
     }

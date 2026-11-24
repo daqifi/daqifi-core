@@ -60,9 +60,11 @@
 *REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>
 *REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>.Data.get -> T
 *REMOVED*Daqifi.Core.Communication.Messages.GenericInboundMessage<T>.GenericInboundMessage(T data) -> void
+*REMOVED*Daqifi.Core.Communication.Messages.IOutboundMessage<T>.Data.set -> void
 *REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage
 *REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage.Data.get -> DaqifiOutMessage!
 *REMOVED*Daqifi.Core.Communication.Messages.ProtobufMessage.ProtobufMessage(DaqifiOutMessage! message) -> void
+*REMOVED*Daqifi.Core.Communication.Messages.ScpiMessage.Data.set -> void
 *REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>
 *REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.IsIdle.get -> bool
 *REMOVED*Daqifi.Core.Communication.Producers.IMessageProducer<T>.IsRunning.get -> bool
@@ -85,6 +87,7 @@
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StartedWriteCount.get -> long?
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Stop() -> void
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StopSafely(int timeoutMs = 1000) -> bool
+*REMOVED*Daqifi.Core.Communication.Producers.ScpiMessageProducer.ScpiMessageProducer() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.HidLibraryDeviceEnumerator() -> void
@@ -364,6 +367,16 @@
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.GetHashCode() -> int
 *REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.ToString() -> string!
 *REMOVED*override DaqifiOutMessage.GetHashCode() -> int
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.DisableDioPorts() -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableAdcChannels(string! channelSetString) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts() -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, int direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, double value) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiModeExisting.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiModeSelfHosted.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurityOpen.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurityWpa.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(int mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParse(string? json, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseApiVersion(System.Collections.Generic.IEnumerable<string!>! lines, out int apiVersion) -> bool
 *REMOVED*static Daqifi.Core.Device.Capabilities.CapabilityDocumentParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.Capabilities.CapabilityDocument? document) -> bool
@@ -624,6 +637,14 @@ const Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiSecurityModeFieldN
 override Daqifi.Core.Communication.Messages.DaqifiOutMessage.GetHashCode() -> int
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
 static Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.DetectMessageType(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> Daqifi.Core.Communication.Messages.ProtobufMessageType
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.DisableDioPorts.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableAdcChannels(uint mask) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, Daqifi.Core.Channel.ChannelDirection direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, bool high) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiMode(Daqifi.Core.Device.Network.WifiMode mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurity(Daqifi.Core.Device.Network.WifiSecurityType securityType) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!

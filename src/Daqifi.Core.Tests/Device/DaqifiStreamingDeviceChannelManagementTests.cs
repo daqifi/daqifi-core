@@ -52,7 +52,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         Assert.True(channel.IsEnabled);
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(1).Data, sent.Data);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannel(AnalogChannelAt(device, 3)); // bit 3 = 8
 
         // The firmware mask is a set-replace, so the last command must carry the full set (2 + 8 = 10).
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("10").Data, device.SentMessages.Last().Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(10).Data, device.SentMessages.Last().Data);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         Assert.False(AnalogChannelAt(device, 1).IsEnabled);
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(5).Data, sent.Data);
     }
 
     [Fact]
@@ -91,8 +91,8 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannel(AnalogChannelAt(device, 0));
 
         Assert.DoesNotContain(device.SentMessages, m =>
-            m.Data == ScpiMessageProducer.EnableDioPorts().Data ||
-            m.Data == ScpiMessageProducer.DisableDioPorts().Data);
+            m.Data == ScpiMessageProducer.EnableDioPorts.Data ||
+            m.Data == ScpiMessageProducer.DisableDioPorts.Data);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannel(channel);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("2147483648").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(2147483648).Data, sent.Data);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannels(channels);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(5).Data, sent.Data);
     }
 
     [Fact]
@@ -143,8 +143,8 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannels(channels);
 
         Assert.Equal(2, device.SentMessages.Count);
-        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("1").Data);
-        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableDioPorts().Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels(1).Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableDioPorts.Data);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.EnableChannels(sequence);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(5).Data, sent.Data);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         // The mask is recomputed over the device's channel set, so duplicates are idempotent.
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("4").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(4).Data, sent.Data);
     }
 
     #endregion
@@ -210,7 +210,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         Assert.True(channel.IsEnabled);
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableDioPorts.Data, sent.Data);
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.DisableChannel(DigitalChannelAt(device, 0));
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableDioPorts.Data, sent.Data);
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.DisableChannel(DigitalChannelAt(device, 0));
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.DisableDioPorts.Data, sent.Data);
     }
 
     #endregion
@@ -295,7 +295,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
                 device.EnableChannel(channel0);
 
                 var sent = Assert.Single(device.SentMessages);
-                Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+                Assert.Equal(ScpiMessageProducer.EnableAdcChannels(1).Data, sent.Data);
             }
         }
         finally
@@ -333,8 +333,8 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.DisableAllChannels();
 
         Assert.All(device.Channels, c => Assert.False(c.IsEnabled));
-        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("0").Data);
-        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.DisableDioPorts().Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels(0).Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.DisableDioPorts.Data);
     }
 
     [Fact]
@@ -347,7 +347,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.DisableAllChannels();
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("0").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(0).Data, sent.Data);
     }
 
     [Fact]
@@ -360,7 +360,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.DisableAllChannels();
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.DisableDioPorts.Data, sent.Data);
     }
 
     #endregion
@@ -377,7 +377,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         Assert.Equal(ChannelDirection.Output, channel.Direction);
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(2, 1).Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(2, ChannelDirection.Output).Data, sent.Data);
     }
 
     [Fact]
@@ -389,7 +389,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.SetDioDirection(channel, ChannelDirection.Input);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(1, 0).Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(1, ChannelDirection.Input).Data, sent.Data);
     }
 
     [Fact]
@@ -447,7 +447,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.SetDioValue(channel, true);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.SetDioPortState(1, 1).Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(1, true).Data, sent.Data);
     }
 
     [Fact]
@@ -459,7 +459,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.SetDioValue(channel, false);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.SetDioPortState(3, 0).Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(3, false).Data, sent.Data);
     }
 
     [Fact]
@@ -693,7 +693,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         device.SetDioValue(channel, true);
 
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.SetDioPortState(4, 1).Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(4, true).Data, sent.Data);
     }
 
     [Theory]
@@ -856,7 +856,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         // Enabling another channel still yields the full set-replace mask (0,1,2 => 1+2+4 = 7),
         // not a mask that dropped the channels enabled before the refresh.
         device.EnableChannel(AnalogChannelAt(device, 2));
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("7").Data, device.SentMessages.Last().Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(7).Data, device.SentMessages.Last().Data);
     }
 
     #endregion

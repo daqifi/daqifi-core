@@ -56,7 +56,7 @@ public class SessionCommandInterpreterTests
         var stop = SessionCommandInterpreter.Interpret(
             ScpiMessageProducer.StopStreaming.Data, MaxSamplingRate);
         var enable = SessionCommandInterpreter.Interpret(
-            ScpiMessageProducer.EnableAdcChannels("10").Data, MaxSamplingRate);
+            ScpiMessageProducer.EnableAdcChannels(10).Data, MaxSamplingRate);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, start.Kind);
         Assert.Equal(250, start.StreamingFrequency);

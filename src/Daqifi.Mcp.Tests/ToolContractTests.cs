@@ -120,7 +120,7 @@ public class AnalogConfigurationToolContractTests
         Assert.Equal(new[] { 0, 2 }, result.EnabledAnalogChannels);
         // Bit 0 + bit 2 = 5. Asserted on the wire, because "enabled" that never reached the
         // device is the shape of an MCP escape.
-        Assert.Contains(ScpiMessageProducer.EnableAdcChannels("5").Data, device.Sent);
+        Assert.Contains(ScpiMessageProducer.EnableAdcChannels(5).Data, device.Sent);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class AnalogConfigurationToolContractTests
         var result = await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 1 });
 
         Assert.Equal(new[] { 1 }, result.EnabledAnalogChannels);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("2").Data, device.Sent.Last());
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(2).Data, device.Sent.Last());
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public class DigitalPinToolContractTests
 
         Assert.Equal(2, result.Channel);
         Assert.Equal(WireChannelDirection.Output, result.Direction);
-        Assert.Contains(ScpiMessageProducer.SetDioPortDirection(2, 1).Data, device.Sent);
+        Assert.Contains(ScpiMessageProducer.SetDioPortDirection(2, ChannelDirection.Output).Data, device.Sent);
     }
 
     [Fact]
@@ -349,8 +349,8 @@ public class DigitalPinToolContractTests
 
         Assert.Equal(WireChannelDirection.Output, result.Direction);
 
-        var direction = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortDirection(1, 1).Data);
-        var value = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortState(1, 1).Data);
+        var direction = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortDirection(1, ChannelDirection.Output).Data);
+        var value = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortState(1, true).Data);
         Assert.True(direction >= 0, "the direction command was never sent");
         Assert.True(value >= 0, "the value command was never sent");
         Assert.True(direction < value, "the value was driven before the pin was an output");
@@ -365,8 +365,8 @@ public class DigitalPinToolContractTests
 
         await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 1, high: false);
 
-        Assert.DoesNotContain(ScpiMessageProducer.SetDioPortDirection(1, 1).Data, device.Sent);
-        Assert.Contains(ScpiMessageProducer.SetDioPortState(1, 0).Data, device.Sent);
+        Assert.DoesNotContain(ScpiMessageProducer.SetDioPortDirection(1, ChannelDirection.Output).Data, device.Sent);
+        Assert.Contains(ScpiMessageProducer.SetDioPortState(1, false).Data, device.Sent);
     }
 
     [Theory]
@@ -404,7 +404,7 @@ public class DigitalPinToolContractTests
         var result = await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 4, high: true);
 
         Assert.Equal(WireChannelDirection.Output, result.Direction);
-        Assert.Contains(ScpiMessageProducer.SetDioPortState(4, 1).Data, device.Sent);
+        Assert.Contains(ScpiMessageProducer.SetDioPortState(4, true).Data, device.Sent);
     }
 }
 

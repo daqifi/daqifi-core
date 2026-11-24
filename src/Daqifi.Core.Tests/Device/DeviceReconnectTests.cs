@@ -182,7 +182,7 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
 
-        device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
+        device.Send(ScpiMessageProducer.EnableAdcChannels(1));
         device.Send(ScpiMessageProducer.StartStreaming(250));
 
         // Core's view tracks the commands regardless of which API sent them.
@@ -246,7 +246,7 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
 
-        device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
+        device.Send(ScpiMessageProducer.EnableAdcChannels(1));
         device.Send(ScpiMessageProducer.StartStreaming(250));
 
         device.StoredRateReportedOnInitialize = 1000;
