@@ -11,7 +11,7 @@ namespace Daqifi.Core.Firmware;
 /// The framing bytes and opcodes come from <see cref="Pic32BootloaderWireFormat"/>, shared with
 /// <see cref="Pic32BootloaderMessageConsumer"/> so the two sides cannot drift apart.
 /// </remarks>
-public static class Pic32BootloaderMessageProducer
+internal static class Pic32BootloaderMessageProducer
 {
     /// <summary>
     /// Creates a message to request the bootloader version.

@@ -7,7 +7,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Message parser for binary protobuf messages.
 /// Uses CodedInputStream to properly track consumed bytes and handle variable-length messages.
 /// </summary>
-public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
+internal class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 {
     private const int MaxVarint32Bytes = 5;
 

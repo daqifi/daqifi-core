@@ -8,7 +8,7 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// Parses the JSON response from the <c>SYSTem:COMMunicate:LAN:GETChipInfo?</c> SCPI command.
 /// </summary>
-public static class LanChipInfoParser
+internal static class LanChipInfoParser
 {
     /// <summary>
     /// Attempts to parse a single JSON response string into a <see cref="LanChipInfo"/>.

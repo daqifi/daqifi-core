@@ -5,7 +5,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// HidSharp on Windows and Linux, native IOKit on macOS (HidSharp enumerates no HID devices
 /// there — issue #262).
 /// </summary>
-public sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
+internal sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
 {
     private readonly IHidPlatform _hidPlatform;
 

@@ -27,7 +27,7 @@ public static class DaqifiUsbIds
     /// CDC serial-mode device (matches <see cref="VendorId"/> and one of
     /// the known product IDs).
     /// </summary>
-    public static bool IsDaqifiCdcDevice(UsbPortDescriptor descriptor)
+    internal static bool IsDaqifiCdcDevice(UsbPortDescriptor descriptor)
     {
         return descriptor.VendorId == VendorId
             && descriptor.ProductId == CdcProductId;

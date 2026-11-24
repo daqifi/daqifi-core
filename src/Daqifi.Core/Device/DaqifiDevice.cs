@@ -5,7 +5,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Internal;
-using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -415,7 +414,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
     /// </exception>
-    protected FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature) =>
+    private protected FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature) =>
         BuildFeatureNotSupportedException(feature, DeviceFeatureRequirements.For(feature).MinVersion);
 
     /// <summary>
@@ -464,7 +463,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <inheritdoc cref="GetChannelsSnapshot"/>
-    protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
+    private protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
     /// <summary>
     /// A counter that changes whenever this device's set of channels, or any of their enabled
@@ -535,7 +534,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// outside this method; the lock is reentrant, so calling <see cref="SnapshotChannels"/>
     /// from within <paramref name="action"/> is safe.
     /// </summary>
-    protected T WithChannelsLock<T>(Func<T> action)
+    private protected T WithChannelsLock<T>(Func<T> action)
     {
         lock (_channelsLock)
         {
@@ -544,7 +543,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <inheritdoc cref="WithChannelsLock{T}"/>
-    protected void WithChannelsLock(Action action)
+    private protected void WithChannelsLock(Action action)
     {
         lock (_channelsLock)
         {
@@ -3495,7 +3494,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <see cref="DaqifiStreamingDevice"/> overrides it to record which channels were enabled
     /// and whether a stream was running.
     /// </remarks>
-    protected virtual void CaptureSessionSnapshot()
+    private protected virtual void CaptureSessionSnapshot()
     {
     }
 
@@ -3507,7 +3506,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="options">The policy governing this reconnect.</param>
     /// <param name="cancellationToken">Cancelled if reconnection is cancelled.</param>
     /// <returns><c>true</c> if an interrupted stream was restarted.</returns>
-    protected virtual Task<bool> RestoreSessionSnapshotAsync(
+    private protected virtual Task<bool> RestoreSessionSnapshotAsync(
         ReconnectOptions options,
         CancellationToken cancellationToken) => Task.FromResult(false);
 
@@ -4179,7 +4178,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// block.
     /// </para>
     /// </remarks>
-    protected virtual void OnSendingInitializationCommands()
+    private protected virtual void OnSendingInitializationCommands()
     {
     }
 

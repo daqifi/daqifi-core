@@ -12,7 +12,7 @@ namespace Daqifi.Core.Firmware;
 /// mismatch means the flash does not match the firmware image (bit flip,
 /// partially-programmed record, etc.).
 /// </remarks>
-public sealed class FlashCrcRegion
+internal sealed class FlashCrcRegion
 {
     /// <summary>
     /// Gets the KSEG0 virtual flash address to send in the <c>READ_CRC</c>
