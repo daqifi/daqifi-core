@@ -12,7 +12,7 @@ namespace Daqifi.Core.Communication.Producers;
 /// Uses a background thread to process messages from a concurrent queue.
 /// </summary>
 /// <typeparam name="T">The type of message data to produce.</typeparam>
-public class MessageProducer<T> : IMessageProducer<T>
+internal class MessageProducer<T> : IMessageProducer<T>
 {
     /// <summary>
     /// How long <see cref="Stop"/> and <see cref="StopSafely"/> wait for the writer thread to exit.

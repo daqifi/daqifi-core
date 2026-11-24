@@ -6,7 +6,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Interface for message consumers that handle reading and processing inbound messages from devices.
 /// </summary>
 /// <typeparam name="T">The type of message data to consume.</typeparam>
-public interface IMessageConsumer<T> : IDisposable
+internal interface IMessageConsumer<T> : IDisposable
 {
     /// <summary>
     /// Gets a value indicating whether the consumer is currently running.

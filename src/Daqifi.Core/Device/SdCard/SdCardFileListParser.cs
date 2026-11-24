@@ -9,7 +9,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// <summary>
 /// Parses SD card file listing responses from the device into <see cref="SdCardFileInfo"/> objects.
 /// </summary>
-public static class SdCardFileListParser
+internal static class SdCardFileListParser
 {
     private const string DateFormat = "yyyyMMdd_HHmmss";
     private const string LogFilePrefix = "log_";

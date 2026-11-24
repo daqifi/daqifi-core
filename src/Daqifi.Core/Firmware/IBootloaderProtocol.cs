@@ -4,7 +4,7 @@ namespace Daqifi.Core.Firmware;
 /// Defines the PIC32 bootloader protocol operations.
 /// All operations are transport-agnostic, producing and consuming <c>byte[]</c>.
 /// </summary>
-public interface IBootloaderProtocol
+internal interface IBootloaderProtocol
 {
     /// <summary>
     /// Creates a message to request the bootloader version.

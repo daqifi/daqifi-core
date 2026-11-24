@@ -5,7 +5,7 @@ namespace Daqifi.Core.Firmware;
 /// message producer/consumer and HEX parser classes.
 /// All operations are transport-agnostic.
 /// </summary>
-public class Pic32BootloaderProtocol : IBootloaderProtocol
+internal class Pic32BootloaderProtocol : IBootloaderProtocol
 {
     private const byte DataRecordType = 0x00;
 

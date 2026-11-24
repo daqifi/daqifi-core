@@ -3,7 +3,7 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// Computes a CRC-16/XMODEM checksum using a 4-bit lookup table.
 /// </summary>
-public class Crc16
+internal class Crc16
 {
     private static readonly ushort[] TABLE =
     [

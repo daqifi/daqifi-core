@@ -6,7 +6,7 @@ namespace Daqifi.Core.Device.Network;
 /// <summary>
 /// Provides utility methods for decoding network address fields from <see cref="DaqifiOutMessage"/> protobuf messages.
 /// </summary>
-public static class NetworkAddressHelper
+internal static class NetworkAddressHelper
 {
     private const int Ipv4ByteLength = 4;
     private const int MacByteLength = 6;
