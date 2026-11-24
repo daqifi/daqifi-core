@@ -80,7 +80,32 @@ internal sealed class StreamingSessionController
     /// Also what the SD operations call after the stop they send defensively before they touch
     /// the card (issue #118).
     /// </remarks>
-    internal void EndSession() => _kind = StreamingSessionKind.None;
+    internal void EndSession()
+    {
+        _kind = StreamingSessionKind.None;
+        Volatile.Write(ref _stopSent, new StopSent(_host.Clock.GetTimestamp()));
+    }
+
+    /// <summary>When a stop was last sent, or <c>null</c> when none has been.</summary>
+    private StopSent? _stopSent;
+
+    /// <summary>A reference, so that it is published whole.</summary>
+    private sealed record StopSent(long Timestamp);
+
+    /// <summary>
+    /// How much longer frames of a stopped stream may still be arriving, given that they take up
+    /// to <paramref name="settleTime"/>; <see cref="TimeSpan.Zero"/> when that has passed.
+    /// </summary>
+    internal TimeSpan RemainingSettleTime(TimeSpan settleTime)
+    {
+        if (Volatile.Read(ref _stopSent) is not { } stop)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var remaining = settleTime - _host.Clock.GetElapsedTime(stop.Timestamp);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
 
     /// <summary>
     /// Records that a start did not take effect — the device refused it, or the command could

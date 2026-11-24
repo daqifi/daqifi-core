@@ -153,6 +153,77 @@ public class DaqifiStreamingDeviceConfirmationTests
     }
 
     [Fact]
+    public async Task Start_RunningStreamHasGoneQuiet_IsNotConfirmedByItsOldFrames()
+    {
+        var device = ConnectedDevice();
+        device.SendFrameOnStart = true;
+        await device.StartStreamingAsync();
+
+        // The device stops by itself, and says so when asked.
+        device.Replies.Enqueue(["0"]);
+
+        await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StartStreamingAsync());
+
+        Assert.False(device.IsStreaming);
+        Assert.Equal(1, device.Exchanges);
+    }
+
+    [Fact]
+    public async Task Start_RunningStreamStillDelivering_IsConfirmedByItsNextFrame()
+    {
+        var device = ConnectedDevice();
+        device.StreamingFrequency = 10;
+        device.SendFrameOnStart = true;
+        await device.StartStreamingAsync();
+
+        var again = device.StartStreamingAsync();
+        Assert.False(again.IsCompleted);
+        device.SendFrame();
+        await again;
+
+        Assert.Equal(0, device.Exchanges);
+    }
+
+    [Fact]
+    public async Task Start_OnlyFrameIsLeftOverFromThePreviousSession_IsNotConfirmedByIt()
+    {
+        // The frame the device latches at a stop and sends at the next start: one sample period past
+        // the last one seen, where a genuine first frame is a whole stop-to-start gap away.
+        var device = ConnectedDevice();
+        device.SendFrameOnStart = true;
+        await device.StartStreamingAsync();
+        device.StopStreaming();
+
+        device.SendFrameOnStart = false;
+        device.OnStartSent = () => device.SendFrame(ticksSinceLast: 50_000);
+        device.Replies.Enqueue(["0"]);
+
+        await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StartStreamingAsync());
+    }
+
+    [Fact]
+    public async Task Start_RightAfterAStop_LetsTheOldStreamsFramesArriveFirst()
+    {
+        // Frames already on their way when the stop went out must not pass for the new stream's.
+        var device = ConnectedDevice();
+        device.SendFrameOnStart = true;
+        await device.StartStreamingAsync();
+        device.StopStreaming();
+        device.Sent.Clear();
+
+        device.SendFrameOnStart = false;
+        device.Replies.Enqueue(["0"]);
+        var start = device.StartStreamingAsync();
+        Assert.Empty(device.Sent);
+        for (var i = 0; i < 20; i++)
+        {
+            device.SendFrame(ticksSinceLast: 50_000);
+        }
+
+        await Assert.ThrowsAsync<DeviceCommandFailedException>(() => start);
+    }
+
+    [Fact]
     public async Task Start_AfterASynchronousStartTheDeviceDidNotTake_Throws()
     {
         var device = StreamingDevice();
@@ -459,6 +530,18 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         public bool SendFrameOnStart { get; set; }
 
+        /// <summary>
+        /// Delivers a stream frame: by default one second of device clock after the last, which is
+        /// what a genuine first frame looks like.
+        /// </summary>
+        public void SendFrame(uint ticksSinceLast = 50_000_000) =>
+            OnStreamMessageReceived(new DaqifiOutMessage { MsgTimeStamp = _deviceTicks += ticksSinceLast });
+
+        private uint _deviceTicks;
+
+        /// <summary>Runs after a start command was sent.</summary>
+        public Action? OnStartSent { get; set; }
+
         /// <summary>Runs once the exchange has sent its commands, before its reply is read.</summary>
         public Action? DuringExchange { get; set; }
 
@@ -477,9 +560,14 @@ public class DaqifiStreamingDeviceConfirmationTests
                 ((Daqifi.Core.Device.Internal.IDeviceOperationHost)this).EndStreamingSession();
             }
 
+            if (command.Data.Contains("StartStreamData", StringComparison.Ordinal))
+            {
+                OnStartSent?.Invoke();
+            }
+
             if (SendFrameOnStart && command.Data.Contains("StartStreamData", StringComparison.Ordinal))
             {
-                OnStreamMessageReceived(new DaqifiOutMessage { MsgTimeStamp = 1000 });
+                SendFrame();
             }
         }
 

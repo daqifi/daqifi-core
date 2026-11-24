@@ -500,6 +500,8 @@ public class DaqifiStreamingDeviceRateCapTests
         /// </summary>
         public bool SendFrameOnStart { get; set; }
 
+        private uint _deviceTicks;
+
         public override void Send<T>(IOutboundMessage<T> message)
         {
             base.Send(message);
@@ -508,7 +510,9 @@ public class DaqifiStreamingDeviceRateCapTests
                 && message is IOutboundMessage<string> stringMessage
                 && stringMessage.Data.Contains("StartStreamData", StringComparison.Ordinal))
             {
-                OnStreamMessageReceived(new DaqifiOutMessage { MsgTimeStamp = 1000 });
+                // A device whose clock has moved on since the last session, so its first frame is
+                // not mistaken for one left over from it.
+                OnStreamMessageReceived(new DaqifiOutMessage { MsgTimeStamp = _deviceTicks += 50_000_000 });
             }
         }
 

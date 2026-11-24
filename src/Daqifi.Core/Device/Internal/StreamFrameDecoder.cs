@@ -134,9 +134,9 @@ internal sealed class StreamFrameDecoder
     private long _decodeFailureCount;
 
     /// <summary>
-    /// Backing counter for <see cref="ReceivedStreamFrameCount"/>.
+    /// Backing counter for <see cref="AdmittedStreamFrameCount"/>.
     /// </summary>
-    private long _receivedStreamFrameCount;
+    private long _admittedStreamFrameCount;
 
     /// <summary>
     /// The <see cref="IDeviceOperationHost.ChannelStateVersion"/> the two cached views below
@@ -175,19 +175,18 @@ internal sealed class StreamFrameDecoder
     internal long DecodeFailureCount => Interlocked.Read(ref _decodeFailureCount);
 
     /// <summary>
-    /// Every stream frame this session has seen arrive, counted before any screening — so it
-    /// answers one question only: has the device sent anything at all since the session began?
+    /// How many stream frames have been accepted as belonging to this session since it began:
+    /// is the device streaming it?
     /// </summary>
     /// <remarks>
-    /// Deliberately counted ahead of the gate and the warmup guard, which the other two
-    /// counters sit behind. A session that is refused by the firmware and a session whose every
-    /// frame is discarded both end with zero decoded samples, but only the first leaves this at
-    /// zero — and that is what
-    /// <see cref="DaqifiStreamingDevice.StartStreamingAsync"/> needs to know before it reads the
-    /// device's error queue, because reading it while frames are flowing would switch the
-    /// device's reader to framing text, and the frames arriving meanwhile would be lost.
+    /// Counted behind the gate, because a frame left over from the previous session says nothing
+    /// about the start of this one, and ahead of the warmup guard, because a leading frame whose
+    /// analog payload is unusable is still a frame of this session. This is what
+    /// <see cref="DaqifiStreamingDevice.StartStreamingAsync"/> takes as proof of a stream before it
+    /// asks the device anything, because asking while frames are flowing would switch the device's
+    /// reader to framing text, and the frames arriving meanwhile would be lost.
     /// </remarks>
-    internal long ReceivedStreamFrameCount => Interlocked.Read(ref _receivedStreamFrameCount);
+    internal long AdmittedStreamFrameCount => Interlocked.Read(ref _admittedStreamFrameCount);
 
     /// <summary>
     /// Resets everything that is scoped to one streaming session, so the frames that follow are
@@ -238,7 +237,7 @@ internal sealed class StreamFrameDecoder
             streamingFrequencyHz,
             validateFirstFramesWithoutReference: DeviceLatchesFramesAcrossSessions());
         Interlocked.Exchange(ref _discardedStreamFrameCount, 0);
-        Interlocked.Exchange(ref _receivedStreamFrameCount, 0);
+        Interlocked.Exchange(ref _admittedStreamFrameCount, 0);
     }
 
     /// <summary>
@@ -259,8 +258,6 @@ internal sealed class StreamFrameDecoder
     /// <param name="message">The streaming message from the device.</param>
     internal void ProcessFrame(DaqifiOutMessage message)
     {
-        Interlocked.Increment(ref _receivedStreamFrameCount);
-
         if (_host.IsStreaming && _frameGate.IsValidating && _frameGate.IsLeftoverFromPreviousSession(message))
         {
             RaiseStreamFrameDiscarded(
@@ -356,6 +353,8 @@ internal sealed class StreamFrameDecoder
     /// <param name="message">The frame to deliver.</param>
     private void EmitStreamFrame(DaqifiOutMessage message)
     {
+        Interlocked.Increment(ref _admittedStreamFrameCount);
+
         var suppressAnalog = false;
         var analogValueCount = 0;
         var enabledAnalogChannelCount = 0;

@@ -104,6 +104,8 @@ public class StreamingSessionFrequencySourceTests
 
         public bool PreserveActiveStream => false;
 
+        public TimeProvider Clock => TimeProvider.System;
+
         public void EnsureConnected()
         {
         }
