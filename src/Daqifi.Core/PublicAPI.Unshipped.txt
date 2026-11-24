@@ -123,6 +123,17 @@
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist3 = 3 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Unknown = 0 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider
+*REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider.GetDescriptor(string! portName) -> Daqifi.Core.Device.Discovery.UsbPortDescriptor?
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.<Clone>$() -> Daqifi.Core.Device.Discovery.UsbPortDescriptor!
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.Deconstruct(out int VendorId, out int ProductId) -> void
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.Equals(Daqifi.Core.Device.Discovery.UsbPortDescriptor? other) -> bool
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.ProductId.get -> int
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.ProductId.init -> void
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.UsbPortDescriptor(int VendorId, int ProductId) -> void
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.get -> int
+*REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler
@@ -139,10 +150,79 @@
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.Handle(DaqifiOutMessage! message) -> void
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.HandleAsync(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*Daqifi.Core.Firmware.Crc16
+*REMOVED*Daqifi.Core.Firmware.Crc16.Crc.get -> ushort
+*REMOVED*Daqifi.Core.Firmware.Crc16.Crc16(byte[]! data) -> void
+*REMOVED*Daqifi.Core.Firmware.Crc16.High.get -> byte
+*REMOVED*Daqifi.Core.Firmware.Crc16.Low.get -> byte
+*REMOVED*Daqifi.Core.Firmware.FirmwareUpdateService.FirmwareUpdateService(Daqifi.Core.Communication.Transport.IHidTransport! hidTransport, Daqifi.Core.Firmware.IFirmwareDownloadService! firmwareDownloadService, Daqifi.Core.Firmware.IExternalProcessRunner! externalProcessRunner, Microsoft.Extensions.Logging.ILogger<Daqifi.Core.Firmware.FirmwareUpdateService!>? logger = null, Daqifi.Core.Firmware.IBootloaderProtocol? bootloaderProtocol = null, Daqifi.Core.Communication.Transport.IHidDeviceEnumerator? hidDeviceEnumerator = null, Daqifi.Core.Firmware.FirmwareUpdateServiceOptions? options = null, Daqifi.Core.Device.Discovery.IUsbLocationProvider? usbLocationProvider = null) -> void
+*REMOVED*Daqifi.Core.Firmware.FlashCrcRegion
+*REMOVED*Daqifi.Core.Firmware.FlashCrcRegion.Address.get -> uint
+*REMOVED*Daqifi.Core.Firmware.FlashCrcRegion.ExpectedCrc.get -> ushort
+*REMOVED*Daqifi.Core.Firmware.FlashCrcRegion.FlashCrcRegion(uint address, uint length, ushort expectedCrc) -> void
+*REMOVED*Daqifi.Core.Firmware.FlashCrcRegion.Length.get -> uint
+*REMOVED*Daqifi.Core.Firmware.HexFileRecord
+*REMOVED*Daqifi.Core.Firmware.HexFileRecord.Address.get -> uint
+*REMOVED*Daqifi.Core.Firmware.HexFileRecord.Data.get -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.HexFileRecord.HexFileRecord(uint address, byte[]! data, byte recordType) -> void
+*REMOVED*Daqifi.Core.Firmware.HexFileRecord.RecordType.get -> byte
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.ComputeCrcRegions(string![]! hexFileLines) -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Firmware.FlashCrcRegion!>!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.CreateEraseFlashMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.CreateJumpToApplicationMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.CreateProgramFlashMessage(byte[]! hexRecord) -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.CreateReadCrcMessage(uint address, uint length) -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.CreateRequestVersionMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.DecodeEraseFlashResponse(byte[]! data) -> bool
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.DecodeProgramFlashResponse(byte[]! data) -> bool
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.DecodeReadCrcResponse(byte[]! data) -> ushort
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.DecodeVersionResponse(byte[]! data) -> string!
+*REMOVED*Daqifi.Core.Firmware.IBootloaderProtocol.ParseHexFile(string![]! hexFileLines) -> System.Collections.Generic.List<byte[]!>!
+*REMOVED*Daqifi.Core.Firmware.IntelHexParser
+*REMOVED*Daqifi.Core.Firmware.IntelHexParser.IntelHexParser() -> void
+*REMOVED*Daqifi.Core.Firmware.IntelHexParser.IntelHexParser(uint beginProtectedAddress, uint endProtectedAddress) -> void
+*REMOVED*Daqifi.Core.Firmware.IntelHexParser.ParseHexRecords(string![]! lines) -> System.Collections.Generic.List<byte[]!>!
+*REMOVED*Daqifi.Core.Firmware.IntelHexParser.ParseRecords(string![]! lines) -> System.Collections.Generic.List<Daqifi.Core.Firmware.HexFileRecord!>!
+*REMOVED*Daqifi.Core.Firmware.LanChipInfoParser
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderMessageConsumer
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderMessageProducer
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.ComputeCrcRegions(string![]! hexFileLines) -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Firmware.FlashCrcRegion!>!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.CreateEraseFlashMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.CreateJumpToApplicationMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.CreateProgramFlashMessage(byte[]! hexRecord) -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.CreateReadCrcMessage(uint address, uint length) -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.CreateRequestVersionMessage() -> byte[]!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.DecodeEraseFlashResponse(byte[]! data) -> bool
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.DecodeProgramFlashResponse(byte[]! data) -> bool
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.DecodeReadCrcResponse(byte[]! data) -> ushort
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.DecodeVersionResponse(byte[]! data) -> string!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.ParseHexFile(string![]! hexFileLines) -> System.Collections.Generic.List<byte[]!>!
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.Pic32BootloaderProtocol() -> void
+*REMOVED*Daqifi.Core.Firmware.Pic32BootloaderProtocol.Pic32BootloaderProtocol(uint beginProtectedAddress, uint endProtectedAddress) -> void
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
+*REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultBeginProtectedAddress = 488505344 -> uint
+*REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416 -> uint
+*REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.Equals(object? obj) -> bool
+*REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.GetHashCode() -> int
+*REMOVED*override Daqifi.Core.Device.Discovery.UsbPortDescriptor.ToString() -> string!
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
+*REMOVED*static Daqifi.Core.Device.Discovery.DaqifiUsbIds.IsDaqifiCdcDevice(Daqifi.Core.Device.Discovery.UsbPortDescriptor! descriptor) -> bool
+*REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator !=(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
+*REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator ==(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
 *REMOVED*static Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Device.Protocol.ProtobufMessageType
+*REMOVED*static Daqifi.Core.Firmware.LanChipInfoParser.TryParse(string? json, out Daqifi.Core.Firmware.LanChipInfo? result) -> bool
+*REMOVED*static Daqifi.Core.Firmware.LanChipInfoParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Firmware.LanChipInfo? result) -> bool
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(byte[]! data) -> bool
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(byte[]! data) -> bool
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(byte[]! data) -> ushort
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageConsumer.DecodeVersionResponse(byte[]! data) -> string!
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageProducer.CreateEraseFlashMessage() -> byte[]!
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageProducer.CreateJumpToApplicationMessage() -> byte[]!
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageProducer.CreateProgramFlashMessage(byte[]! hexRecord) -> byte[]!
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageProducer.CreateReadCrcMessage(uint address, uint length) -> byte[]!
+*REMOVED*static Daqifi.Core.Firmware.Pic32BootloaderMessageProducer.CreateRequestVersionMessage() -> byte[]!
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnErrorOccurred(System.Exception! error, byte[]? rawData = null) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnMessageReceived(Daqifi.Core.Communication.Messages.IInboundMessage<T>! message, byte[]! rawData) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
@@ -161,4 +241,5 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTyp
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
+Daqifi.Core.Firmware.FirmwareUpdateService.FirmwareUpdateService(Daqifi.Core.Communication.Transport.IHidTransport! hidTransport, Daqifi.Core.Firmware.IFirmwareDownloadService! firmwareDownloadService, Daqifi.Core.Firmware.IExternalProcessRunner! externalProcessRunner, Microsoft.Extensions.Logging.ILogger<Daqifi.Core.Firmware.FirmwareUpdateService!>? logger = null, Daqifi.Core.Firmware.FirmwareUpdateServiceOptions? options = null) -> void
 static Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Communication.Messages.ProtobufMessageType
