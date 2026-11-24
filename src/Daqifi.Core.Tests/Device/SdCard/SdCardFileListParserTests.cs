@@ -53,16 +53,17 @@ public class SdCardFileListParserTests
     }
 
     [Theory]
-    [InlineData("__END_OF_LIST__ OK", SdCardListingStatus.Complete)]
-    [InlineData("__END_OF_LIST__ INCOMPLETE", SdCardListingStatus.Incomplete)]
-    [InlineData("__END_OF_LIST__ FAILED", SdCardListingStatus.Failed)]
-    [InlineData("  __END_OF_LIST__ ok  ", SdCardListingStatus.Complete)]
-    public void GetListingStatus_ReadsTheMarker(string marker, SdCardListingStatus expected)
+    [InlineData("__END_OF_LIST__ OK", nameof(SdCardListingStatus.Complete))]
+    [InlineData("__END_OF_LIST__ INCOMPLETE", nameof(SdCardListingStatus.Incomplete))]
+    [InlineData("__END_OF_LIST__ FAILED", nameof(SdCardListingStatus.Failed))]
+    [InlineData("  __END_OF_LIST__ ok  ", nameof(SdCardListingStatus.Complete))]
+    public void GetListingStatus_ReadsTheMarker(string marker, string expected)
     {
+        // The expected status travels by name: the enum is internal and a public theory cannot take it.
         var status = SdCardFileListParser.GetListingStatus(
             new[] { "Daqifi/data.csv 1024", marker });
 
-        Assert.Equal(expected, status);
+        Assert.Equal(expected, status.ToString());
     }
 
     [Fact]

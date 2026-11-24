@@ -61,7 +61,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// it by position would report a wrong voltage and say nothing about it.
 /// </para>
 /// </summary>
-public sealed class SdCardCsvFileParser
+internal sealed class SdCardCsvFileParser
 {
     /// <summary>
     /// Parses an SD card CSV log file from a <see cref="Stream"/>.
