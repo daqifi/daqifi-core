@@ -10,7 +10,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// Parses the <c>MODULE: &lt;level&gt; (ceiling &lt;ceiling&gt;)</c> echo returned by the
 /// <c>SYSTem:LOG:LEVel module,level</c> command into a <see cref="LogLevelSetting"/>.
 /// </summary>
-public static partial class LogLevelParser
+internal static partial class LogLevelParser
 {
     // e.g. "STREAM: 2 (ceiling 3)". Tolerant of surrounding/internal whitespace.
     private static readonly Regex LevelRegex = BuildLevelRegex();

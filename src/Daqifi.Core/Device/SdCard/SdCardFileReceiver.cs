@@ -27,7 +27,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// stream however the device ends its reply, and the inactivity window never applies to it (#888).
 /// </para>
 /// </remarks>
-public sealed class SdCardFileReceiver
+internal sealed class SdCardFileReceiver
 {
     /// <summary>
     /// The ASCII marker appended by the firmware after all file data has been sent.

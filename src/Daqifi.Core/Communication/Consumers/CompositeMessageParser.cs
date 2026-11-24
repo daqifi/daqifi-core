@@ -18,7 +18,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// use <see cref="LineBasedMessageParser"/> or <see cref="ProtobufMessageParser"/>
 /// directly rather than paying for the guess.
 /// </remarks>
-public class CompositeMessageParser : IMessageParser<object>
+internal class CompositeMessageParser : IMessageParser<object>
 {
     private readonly IMessageParser<string> _textParser;
     private readonly IMessageParser<DaqifiOutMessage> _protobufParser;
@@ -259,7 +259,7 @@ public class CompositeMessageParser : IMessageParser<object>
 /// <summary>
 /// Simple implementation of IInboundMessage for generic object data.
 /// </summary>
-public class ObjectInboundMessage : IInboundMessage<object>
+internal class ObjectInboundMessage : IInboundMessage<object>
 {
     /// <summary>
     /// Initializes a new instance of the ObjectInboundMessage class.

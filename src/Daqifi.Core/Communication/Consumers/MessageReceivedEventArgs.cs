@@ -6,7 +6,7 @@ namespace Daqifi.Core.Communication.Consumers;
 /// Provides data for message received events.
 /// </summary>
 /// <typeparam name="T">The type of message data.</typeparam>
-public class MessageReceivedEventArgs<T> : EventArgs
+internal class MessageReceivedEventArgs<T> : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the MessageReceivedEventArgs class.

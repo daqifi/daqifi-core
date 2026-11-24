@@ -22,7 +22,7 @@ namespace Daqifi.Core.Firmware;
 /// and the same 4-bit-table CRC-16 the firmware's <c>APP_CalculateCrc</c> computes.
 /// </para>
 /// </remarks>
-public static class Pic32BootloaderMessageConsumer
+internal static class Pic32BootloaderMessageConsumer
 {
     /// <summary>
     /// Decodes a version response from the bootloader. The wire frame is
