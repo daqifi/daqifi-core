@@ -56,82 +56,56 @@ public class HidDeviceFinder : DeviceFinderBase
     }
 
     /// <summary>
-    /// Gets or sets the vendor ID filter used by <see cref="DiscoverAsync(CancellationToken)"/>.
+    /// Gets or sets the vendor ID filter used by <see cref="DeviceFinderBase.DiscoverAsync"/>.
     /// </summary>
     public int? VendorIdFilter { get; set; }
 
     /// <summary>
-    /// Gets or sets the product ID filter used by <see cref="DiscoverAsync(CancellationToken)"/>.
+    /// Gets or sets the product ID filter used by <see cref="DeviceFinderBase.DiscoverAsync"/>.
     /// </summary>
     public int? ProductIdFilter { get; set; }
 
     /// <inheritdoc />
-    public override Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
     {
-        return DiscoverAsync(VendorIdFilter, ProductIdFilter, cancellationToken);
-    }
+        var hidDevices = await _hidDeviceEnumerator
+            .EnumerateAsync(VendorIdFilter, ProductIdFilter, passToken)
+            .ConfigureAwait(false);
 
-    /// <summary>
-    /// Discovers HID devices asynchronously with explicit optional VID/PID filtering.
-    /// </summary>
-    /// <param name="vendorIdFilter">Optional vendor ID filter.</param>
-    /// <param name="productIdFilter">Optional product ID filter.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Discovered HID devices mapped to <see cref="IDeviceInfo"/>.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(
-        int? vendorIdFilter,
-        int? productIdFilter,
-        CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
+        var discoveredDevices = new List<IDeviceInfo>(hidDevices.Count);
 
-        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        foreach (var hidDevice in hidDevices)
         {
-            var hidDevices = await _hidDeviceEnumerator
-                .EnumerateAsync(vendorIdFilter, productIdFilter, cancellationToken)
-                .ConfigureAwait(false);
-
-            var discoveredDevices = new List<IDeviceInfo>(hidDevices.Count);
-
-            foreach (var hidDevice in hidDevices)
+            string? locationKey;
+            try
             {
-                string? locationKey;
-                try
-                {
-                    locationKey = _usbLocationProvider.GetLocationKey(hidDevice.DevicePath);
-                }
-                catch
-                {
-                    // A misbehaving custom IUsbLocationProvider must never abort the whole
-                    // enumeration — location is enrichment metadata, not identification.
-                    // Mirrors SerialDeviceFinder's handling of a throwing provider.
-                    locationKey = null;
-                }
-
-                var deviceInfo = new DeviceInfo
-                {
-                    Name = string.IsNullOrWhiteSpace(hidDevice.ProductName)
-                        ? "DAQiFi Bootloader"
-                        : hidDevice.ProductName,
-                    SerialNumber = hidDevice.SerialNumber ?? string.Empty,
-                    FirmwareVersion = string.Empty,
-                    ConnectionType = ConnectionType.Hid,
-                    Type = DeviceType.Unknown,
-                    DevicePath = hidDevice.DevicePath,
-                    LocationKey = locationKey
-                };
-
-                discoveredDevices.Add(deviceInfo);
-                OnDeviceDiscovered(deviceInfo);
+                locationKey = _usbLocationProvider.GetLocationKey(hidDevice.DevicePath);
+            }
+            catch
+            {
+                // A misbehaving custom IUsbLocationProvider must never abort the whole
+                // enumeration — location is enrichment metadata, not identification.
+                // Mirrors SerialDeviceFinder's handling of a throwing provider.
+                locationKey = null;
             }
 
-            OnDiscoveryCompleted();
-            return discoveredDevices;
+            var deviceInfo = new DeviceInfo
+            {
+                Name = string.IsNullOrWhiteSpace(hidDevice.ProductName)
+                    ? "DAQiFi Bootloader"
+                    : hidDevice.ProductName,
+                SerialNumber = hidDevice.SerialNumber ?? string.Empty,
+                FirmwareVersion = string.Empty,
+                ConnectionType = ConnectionType.Hid,
+                Type = DeviceType.Unknown,
+                DevicePath = hidDevice.DevicePath,
+                LocationKey = locationKey
+            };
+
+            discoveredDevices.Add(deviceInfo);
+            OnDeviceDiscovered(deviceInfo);
         }
-        finally
-        {
-            DiscoverySemaphore.Release();
-        }
+
+        return discoveredDevices;
     }
 }

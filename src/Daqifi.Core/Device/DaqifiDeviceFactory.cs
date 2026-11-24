@@ -312,19 +312,9 @@ public static class DaqifiDeviceFactory
         var actualFinder = finder ?? Discovery.AllTransportsDeviceFinder.CreateDefault();
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(timeout ?? TimeSpan.FromSeconds(5));
-
-            IEnumerable<IDeviceInfo> devices;
-            try
-            {
-                devices = await actualFinder.DiscoverAsync(cts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // The discovery timeout elapsed — treat as "nothing found" rather than an error.
-                devices = Enumerable.Empty<IDeviceInfo>();
-            }
+            var devices = await actualFinder
+                .DiscoverAsync(timeout ?? TimeSpan.FromSeconds(5), cancellationToken)
+                .ConfigureAwait(false);
 
             var selected = (filter != null ? devices.Where(filter) : devices).FirstOrDefault();
             if (selected == null)
@@ -337,9 +327,9 @@ public static class DaqifiDeviceFactory
         }
         finally
         {
-            if (ownsFinder && actualFinder is IDisposable disposable)
+            if (ownsFinder)
             {
-                disposable.Dispose();
+                actualFinder.Dispose();
             }
         }
     }

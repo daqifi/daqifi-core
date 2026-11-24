@@ -123,7 +123,7 @@ public class AllTransportsDeviceFinderTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class AllTransportsDeviceFinderTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
     }
 
     [Fact]
@@ -198,8 +198,9 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_Timeout_FinderThrowsCancellation_ReturnsOthersAndCompletes()
     {
-        // A finder that throws OperationCanceledException on its timeout overload must be treated
-        // as a normal (empty) end-of-pass, not propagate out and skip DiscoveryCompleted.
+        // A finder that breaks the contract by throwing OperationCanceledException on its timeout
+        // must not take the other transports' results with it. What it would have found is missing
+        // from the list, so continuous discovery must not read that list as a census.
         var throwsOce = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) }, throwOnDiscover: new OperationCanceledException());
         var ok = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { throwsOce, ok });
@@ -212,6 +213,45 @@ public class AllTransportsDeviceFinderTests
         Assert.Single(result);
         Assert.Equal("B", result[0].SerialNumber);
         Assert.Equal(1, completed);
+        Assert.True(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_CancelledWhileATransportFails_ThrowsCancellationAndRaisesCompleted()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var finder = new AllTransportsDeviceFinder(new IDeviceFinder[]
+        {
+            new ListDeviceFinder([], throwOnDiscover: new InvalidOperationException("socket closed")),
+            new ListDeviceFinder([Info("B", ConnectionType.Serial)])
+        });
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => finder.DiscoverAsync(TimeSpan.FromSeconds(1), cts.Token));
+
+        Assert.Equal(cts.Token, canceled.CancellationToken);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_PassesTimeoutThrough_AndRejectsAnInvalidOne()
+    {
+        var inner = new ListDeviceFinder([]);
+        var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { inner });
+
+        await finder.DiscoverAsync();
+        Assert.Null(inner.LastTimeout);
+
+        await finder.DiscoverAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(TimeSpan.FromSeconds(2), inner.LastTimeout);
+
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => finder.DiscoverAsync(TimeSpan.FromSeconds(-5)));
+        Assert.Equal("timeout", ex.ParamName);
     }
 
     // The isolation catches write the caught exception into a trace line. Composed eagerly, an
@@ -371,11 +411,12 @@ public class AllTransportsDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
+        public Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<IDeviceInfo>>([]);
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
+        public void Dispose()
+        {
+        }
 
         // Re-armed by nothing: this stub always reports, which is what makes it a stub. The
         // single-use semantics of the real ledger are pinned in BusyPortLedgerTests.
@@ -384,7 +425,7 @@ public class AllTransportsDeviceFinderTests
 
     #endregion
 
-    private sealed class ListDeviceFinder : IDeviceFinder, IDisposable
+    private sealed class ListDeviceFinder : IDeviceFinder
     {
         private readonly IReadOnlyList<IDeviceInfo> _devices;
         private readonly Exception? _throw;
@@ -399,13 +440,16 @@ public class AllTransportsDeviceFinderTests
 
         public bool Disposed { get; private set; }
 
+        public TimeSpan? LastTimeout { get; private set; }
+
 #pragma warning disable CS0067 // interface events unused by this fake
         public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
+            LastTimeout = timeout;
             if (_observeCancellation)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -416,10 +460,8 @@ public class AllTransportsDeviceFinderTests
                 throw _throw;
             }
 
-            return Task.FromResult<IEnumerable<IDeviceInfo>>(_devices);
+            return Task.FromResult(_devices);
         }
-
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout) => DiscoverAsync(CancellationToken.None);
 
         public void Dispose() => Disposed = true;
     }
@@ -447,6 +489,7 @@ public class AllTransportsDeviceFinderTests
         public ConnectionType ConnectionType { get; set; } = ConnectionType.Unknown;
         public string? PortName { get; set; }
         public string? DevicePath { get; set; }
+        public string? LocationKey { get; set; }
     }
 
     #endregion

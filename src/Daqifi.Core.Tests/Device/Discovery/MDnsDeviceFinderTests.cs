@@ -313,14 +313,13 @@ public class MDnsDeviceFinderTests
     }
 
     [NetworkBrowseFact(requireMulticast: true)]
-    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
+    public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
     {
-        // A browse runs until cancelled, and every response received before cancellation is the
-        // result (see the class remarks), not an OperationCanceledException.
+        // A timeout ends a browse with what answered by then; a cancellation never does.
         using var finder = new MDnsDeviceFinder();
         using var cts = new CancellationTokenSource();
 
-        var browse = finder.DiscoverAsync(cts.Token);
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);
 
         // A pass that finds nothing to browse on returns at once. Still running after a moment
         // means it is waiting on replies, so what ends it below is the cancellation.
@@ -330,8 +329,7 @@ public class MDnsDeviceFinderTests
         cts.Cancel();
 
         // Bounded, so a browse that ignored the token fails instead of hanging the run.
-        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
-        Assert.Null(failure);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
@@ -342,7 +340,7 @@ public class MDnsDeviceFinderTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
     }
 
     [Fact]
@@ -351,7 +349,7 @@ public class MDnsDeviceFinderTests
         var finder = new MDnsDeviceFinder();
         finder.Dispose();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync());
     }
 
     #endregion

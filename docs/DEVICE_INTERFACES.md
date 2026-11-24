@@ -299,7 +299,20 @@ keep:
 
 ### Continuous Discovery (Live Device Set)
 
-`IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
+`IDeviceFinder.DiscoverAsync` is a single pass, and every finder ends one the same way:
+
+| The pass… | `DiscoverAsync` |
+|---|---|
+| finishes | returns the devices found |
+| reaches its `timeout` | returns the devices found so far, which may be none; never throws |
+| is cancelled | throws `OperationCanceledException`, whatever had been found |
+| cannot scan the transport at all | throws the transport's own exception |
+
+With no timeout, the serial and HID finders run to their natural end and the two that only listen
+(`WiFiDeviceFinder`, `MDnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
+pass, whichever way it ended.
+
+For a UI that shows a live, self-updating
 list of devices, wrap a finder in a `ContinuousDeviceFinder`. It owns the scan cadence,
 keeps a deduplicated set across passes, raises `DeviceDiscovered` the first time each device
 appears, raises `DeviceUpdated` when a device it already holds comes back with different
@@ -327,9 +340,13 @@ continuous.ScanError += (_, e) => logger.LogWarning(e.Exception, "Discovery pass
 
 continuous.Start();
 // ... later, when the view closes:
-await continuous.StopAsync();
-continuous.Dispose(); // also disposes the wrapped finder unless LeaveInnerFinderOpen is set
+await continuous.DisposeAsync(); // also disposes the wrapped finder unless LeaveInnerFinderOpen is set
 ```
+
+Prefer `DisposeAsync` on a UI thread: `Dispose` blocks the caller for up to `PassTimeout` while the
+in-flight pass ends. To pause without disposing, use `StopAsync`; its cancellation token abandons the
+wait, not the stop. `DeviceInfo` is an immutable record, so the instances handed out by the events and
+by `Devices` cannot be used to change the finder's own set.
 
 One instance wraps one finder, so it represents a single transport's cadence and live set.
 To track WiFi, Serial, and HID together, prefer wrapping an `AllTransportsDeviceFinder` (above)

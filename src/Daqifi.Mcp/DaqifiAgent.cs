@@ -162,8 +162,7 @@ public sealed class DaqifiAgent
     /// rather than the sum of both (#488). That matters because <see cref="WiFiDeviceFinder"/>
     /// listens for its whole budget by design, so running it before serial used to add its full
     /// timeout to every pass — on the first tool call of every session.
-    /// The listen budget is linked with <paramref name="cancellationToken"/>: a timeout still
-    /// returns whatever answered (empty if nothing did), while cancelling the token throws
+    /// A timeout returns whatever answered (empty if nothing did), while cancelling the token throws
     /// <see cref="OperationCanceledException"/> without waiting out the window.
     /// </remarks>
     public async Task<IReadOnlyList<DiscoveredDevice>> DiscoverAsync(
@@ -235,32 +234,8 @@ public sealed class DaqifiAgent
                 return Array.Empty<IDeviceInfo>();
             }
 
-            // Link the listen budget to the caller token and pass Core's CT overload, not the
-            // timeout overload. The timeout overload cannot see the caller token, so a cancelled
-            // discover_devices used to sit in WiFiDeviceFinder's receive loop until the window
-            // ended and only then ThrowIfCancellationRequested(). Timeout still means "return
-            // whatever answered" (empty if nothing did); caller cancel still means
-            // OperationCanceledException. Same split DaqifiDeviceFactory.DiscoverAndConnectAsync
-            // already implements.
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
-            try
-            {
-                using var allTransports = new AllTransportsDeviceFinder(finders);
-                var found = (await allTransports.DiscoverAsync(timeoutCts.Token).ConfigureAwait(false))
-                    .ToList();
-                cancellationToken.ThrowIfCancellationRequested();
-                return found;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Reached only if a finder rethrows the budget token instead of ending its pass
-                // on it. WiFiDeviceFinder and SerialDeviceFinder both end the pass and hand back
-                // what they already had, so the normal timeout returns through the block above
-                // with the other transport's devices intact — see
-                // DiscoverAcrossTransports_Timeout_KeepsWhatTheOtherTransportFound.
-                return Array.Empty<IDeviceInfo>();
-            }
+            using var allTransports = new AllTransportsDeviceFinder(finders);
+            return await allTransports.DiscoverAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -268,7 +243,7 @@ public sealed class DaqifiAgent
             // constructed above are ours to release — including when the pass throws.
             foreach (var finder in finders)
             {
-                (finder as IDisposable)?.Dispose();
+                finder.Dispose();
             }
         }
     }

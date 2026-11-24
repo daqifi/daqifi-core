@@ -190,10 +190,9 @@ public class SerialDeviceFinderTests
             9600,
             fakeProvider,
             portNameProvider: () => new[] { "COM1", "COM2", "COM3" });
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await finder.DiscoverAsync(cts.Token);
+        var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(2));
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -364,7 +363,7 @@ public class SerialDeviceFinderTests
             // CreateFinderWithProbes.
             hardTimeoutMs: 2000);
 
-        var devices = (await finder.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard)).ToList();
+        var devices = (await finder.DiscoverAsync().WaitAsync(SweepGuard)).ToList();
 
         Assert.True(hungProbeStarted.Task.IsCompleted,
             "COM_HUNG was never probed, so the sweep settled with no hung probe to abandon.");
@@ -393,7 +392,7 @@ public class SerialDeviceFinderTests
             hardTimeoutMs: 60_000);
         finder.DeviceDiscovered += (_, args) => discovered.TrySetResult(args.DeviceInfo);
 
-        var sweep = finder.DiscoverAsync(CancellationToken.None);
+        var sweep = finder.DiscoverAsync();
 
         try
         {
@@ -415,8 +414,7 @@ public class SerialDeviceFinderTests
     public async Task DiscoverAsync_HungPort_CallerCancellationStillPropagates()
     {
         SerialDeviceFinder.ResetPortQuarantineForTests();
-        // Cancelling the caller token during a hung probe must cancel the sweep
-        // (OCE surfaces as the documented "settle for finished probes" path),
+        // Cancelling the caller token during a hung probe must cancel the sweep,
         // not wait out the hard timeout.
         var hungForever = new TaskCompletionSource<IDeviceInfo?>();
         using var finder = CreateFinderWithProbes(
@@ -426,12 +424,28 @@ public class SerialDeviceFinderTests
         using var cts = new CancellationTokenSource(200);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await finder.DiscoverAsync(cts.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => finder.DiscoverAsync(cancellationToken: cts.Token));
         stopwatch.Stop();
 
-        Assert.Empty(devices);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10),
             $"Cancellation did not short-circuit the hung probe ({stopwatch.ElapsedMilliseconds}ms).");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_TimeoutWithAHungPort_ReturnsTheProbesThatFinishedAsPartial()
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) => port == "COM_OK" ? Task.FromResult<IDeviceInfo?>(FakeDevice(port)) : hungForever.Task,
+            hardTimeoutMs: 60_000);
+
+        var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(2)).WaitAsync(SweepGuard);
+
+        Assert.Equal("COM_OK", Assert.Single(devices).PortName);
+        Assert.True(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
     }
 
     [Fact]
@@ -461,8 +475,8 @@ public class SerialDeviceFinderTests
             // finds the port quarantined and skips it.
             hardTimeoutMs: 2000);
 
-        var firstSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
-        var secondSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+        var firstSweep = (await finder.DiscoverAsync()).ToList();
+        var secondSweep = (await finder.DiscoverAsync()).ToList();
 
         Assert.Equal("COM_OK", Assert.Single(firstSweep).PortName);
         Assert.Equal("COM_OK", Assert.Single(secondSweep).PortName);
@@ -500,13 +514,13 @@ public class SerialDeviceFinderTests
         // COM_HUNG_X quarantined and skips it.
         using (var first = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 2000))
         {
-            Assert.Equal("COM_OK_X", Assert.Single(await first.DiscoverAsync(CancellationToken.None)).PortName);
+            Assert.Equal("COM_OK_X", Assert.Single(await first.DiscoverAsync()).PortName);
         }
 
         // Fresh instance, same process: the wedged port must stay quarantined.
         using (var second = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 2000))
         {
-            Assert.Equal("COM_OK_X", Assert.Single(await second.DiscoverAsync(CancellationToken.None)).PortName);
+            Assert.Equal("COM_OK_X", Assert.Single(await second.DiscoverAsync()).PortName);
         }
 
         // <= 1 for the same no-pile-up reason as the cross-sweep test (Qodo pass 4 #2).
@@ -547,11 +561,11 @@ public class SerialDeviceFinderTests
                 },
                 hardTimeoutMs: 100);
 
-            await finder.DiscoverAsync(CancellationToken.None);
+            await finder.DiscoverAsync();
             await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)); // first attempt definitely ran
             await Task.Delay(300); // let the TTL window lapse
 
-            await finder.DiscoverAsync(CancellationToken.None);
+            await finder.DiscoverAsync();
 
             // The re-probe is dispatched with Task.Run and then races
             // Task.Delay(PortProbeHardTimeoutMs) — the same hazard documented on
@@ -603,8 +617,8 @@ public class SerialDeviceFinderTests
         using var finderB = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 2000);
 
         var results = await Task.WhenAll(
-            Task.Run(() => finderA.DiscoverAsync(CancellationToken.None)),
-            Task.Run(() => finderB.DiscoverAsync(CancellationToken.None)));
+            Task.Run(() => finderA.DiscoverAsync()),
+            Task.Run(() => finderB.DiscoverAsync()));
 
         // Both sweeps complete; at most one probe ever touched the wedged port.
         Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
@@ -674,7 +688,7 @@ public class SerialDeviceFinderTests
 
         using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 150))
         {
-            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
+            Assert.Empty(await first.DiscoverAsync().WaitAsync(SweepGuard));
         }
 
         // The claim is only interesting if the probe really started and is stuck.
@@ -694,7 +708,7 @@ public class SerialDeviceFinderTests
 
         // The abandoned probe unwinds partway through the second pass's drain wait,
         // mirroring the measured ~490ms claim hold.
-        var sweep = second.DiscoverAsync(CancellationToken.None);
+        var sweep = second.DiscoverAsync();
         await Task.Delay(150);
         drainProbe.ReleaseFirstProbe();
 
@@ -717,7 +731,8 @@ public class SerialDeviceFinderTests
         using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 60_000))
         using (var cts = new CancellationTokenSource(150))
         {
-            Assert.Empty(await first.DiscoverAsync(cts.Token).WaitAsync(SweepGuard));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => first.DiscoverAsync(cancellationToken: cts.Token).WaitAsync(SweepGuard));
         }
 
         await drainProbe.FirstProbeStarted.WaitAsync(TimeSpan.FromSeconds(10));
@@ -725,7 +740,7 @@ public class SerialDeviceFinderTests
         using var second = CreateFinderWithProbes(
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 2000);
 
-        var sweep = second.DiscoverAsync(CancellationToken.None);
+        var sweep = second.DiscoverAsync();
         await Task.Delay(150);
         drainProbe.ReleaseFirstProbe();
 
@@ -745,7 +760,7 @@ public class SerialDeviceFinderTests
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 0);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
+        var devices = await second.DiscoverAsync().WaitAsync(SweepGuard);
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -770,7 +785,7 @@ public class SerialDeviceFinderTests
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 300);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
+        var devices = await second.DiscoverAsync().WaitAsync(SweepGuard);
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -831,7 +846,7 @@ public class SerialDeviceFinderTests
             }
         };
 
-        var sweep = second.DiscoverAsync(CancellationToken.None);
+        var sweep = second.DiscoverAsync();
         var winner = await Task.WhenAny(reported.Task, Task.Delay(2000));
         Assert.Same(reported.Task, winner);
 
@@ -888,7 +903,7 @@ public class SerialDeviceFinderTests
         // Pass 1: every drain port hangs and is abandoned by the hard timeout.
         using (var first = CreateFinderWithProbes(drainPorts, probes.Probe, hardTimeoutMs: 200))
         {
-            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
+            Assert.Empty(await first.DiscoverAsync().WaitAsync(SweepGuard));
         }
 
         // Pass 2: all five are inside a deliberately long drain window, and the
@@ -905,7 +920,7 @@ public class SerialDeviceFinderTests
             }
         };
 
-        var sweep = second.DiscoverAsync(CancellationToken.None);
+        var sweep = second.DiscoverAsync();
 
         // Pre-fix this waited out the 10s drain window; now it needs only a slot.
         var winner = await Task.WhenAny(reported.Task, Task.Delay(3000));

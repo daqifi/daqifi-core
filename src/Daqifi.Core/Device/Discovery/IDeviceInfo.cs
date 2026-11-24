@@ -18,7 +18,8 @@ public interface IDeviceInfo
     string SerialNumber { get; }
 
     /// <summary>
-    /// Gets the firmware version.
+    /// Gets the firmware version exactly as the device reported it, or an empty string when it
+    /// reported none. Parse it with <see cref="Firmware.FirmwareVersion.TryParse"/> to compare versions.
     /// </summary>
     string FirmwareVersion { get; }
 
@@ -78,13 +79,7 @@ public interface IDeviceInfo
     /// multiple identical devices (same VID/PID, no serial number). Resolved via
     /// <see cref="IUsbLocationProvider"/>; Windows-only in v1, always null elsewhere.
     /// </summary>
-    /// <remarks>
-    /// Implemented as a default interface property, so adding it did not break existing
-    /// implementers: an external <c>IDeviceInfo</c> implementation compiled before this member existed
-    /// inherits this default (null, meaning "not resolved") without recompiling.
-    /// <see cref="DeviceInfo"/> overrides it with a real stored value.
-    /// </remarks>
-    string? LocationKey => null;
+    string? LocationKey { get; }
 }
 
 /// <summary>

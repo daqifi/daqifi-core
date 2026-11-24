@@ -5,14 +5,14 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 /// <summary>
 /// Exercises the shared lifecycle scaffolding hoisted into <see cref="DeviceFinderBase"/>
 /// (issue #343) directly, via a minimal test finder — coverage the per-finder copies
-/// never had as a unit (event raisers, the timeout overload's token routing, dispose
-/// idempotency, and the disposed guard).
+/// never had as a unit (event raisers, the one failure contract every finder shares,
+/// dispose idempotency, and the disposed guard).
 /// </summary>
 public class DeviceFinderBaseTests
 {
     /// <summary>
-    /// Minimal concrete finder that records the token it was invoked with and raises
-    /// the base events, so the base plumbing can be observed without real hardware.
+    /// Minimal concrete finder that announces a fixed set of devices, so the base plumbing can be
+    /// observed without real hardware.
     /// </summary>
     private sealed class TestFinder : DeviceFinderBase
     {
@@ -20,30 +20,14 @@ public class DeviceFinderBaseTests
 
         public TestFinder(params IDeviceInfo[] result) => _result = result;
 
-        public CancellationToken LastToken { get; private set; }
-        public int DiscoverCallCount { get; private set; }
-
-        public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        protected override Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
         {
-            ThrowIfDisposed();
-            DiscoverCallCount++;
-            LastToken = cancellationToken;
-
-            await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            foreach (var device in _result)
             {
-                foreach (var device in _result)
-                {
-                    OnDeviceDiscovered(device);
-                }
+                OnDeviceDiscovered(device);
+            }
 
-                OnDiscoveryCompleted();
-                return _result;
-            }
-            finally
-            {
-                DiscoverySemaphore.Release();
-            }
+            return Task.FromResult(_result);
         }
 
         // Expose the protected guard so a test can assert it flips on dispose.
@@ -51,9 +35,8 @@ public class DeviceFinderBaseTests
     }
 
     /// <summary>
-    /// A finder that acquires the discovery semaphore (as WiFi/Serial/Hid do) and then
-    /// parks until released, so a second, timed discovery contends for the semaphore and
-    /// its timeout can elapse while awaiting the token-bound <c>WaitAsync</c>.
+    /// A finder whose pass parks until released, so a second, timed discovery contends for the semaphore and
+    /// its timeout can elapse while it is queued.
     /// </summary>
     private sealed class BlockingFinder : DeviceFinderBase
     {
@@ -64,22 +47,37 @@ public class DeviceFinderBaseTests
 
         public void ReleaseGate() => _gate.TrySetResult();
 
-        public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
         {
-            ThrowIfDisposed();
-            await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                Acquired.TrySetResult();
-                await _gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                OnDiscoveryCompleted();
-                return Array.Empty<IDeviceInfo>();
-            }
-            finally
-            {
-                DiscoverySemaphore.Release();
-            }
+            Acquired.TrySetResult();
+            await _gate.Task.WaitAsync(passToken).ConfigureAwait(false);
+            return [];
         }
+    }
+
+    /// <summary>
+    /// A finder that announces its devices and then behaves as scripted, so each way a pass can end
+    /// is reproduced on the real base implementation.
+    /// </summary>
+    private sealed class ScriptedFinder(
+        Func<CancellationToken, Task<IReadOnlyList<IDeviceInfo>>> runPass) : DeviceFinderBase
+    {
+        /// <summary>Collects one device, then listens until the pass ends, as WiFi and mDNS do.</summary>
+        public static ScriptedFinder Listening() => new(async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            return [new DeviceInfo { SerialNumber = "SN1" }];
+        });
+
+        /// <summary>Cannot return part of an answer, as HID cannot.</summary>
+        public static ScriptedFinder AllOrNothing() => new(async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+            return [new DeviceInfo { SerialNumber = "SN1" }];
+        });
+
+        protected override Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
+            => runPass(passToken);
     }
 
     /// <summary>
@@ -160,16 +158,118 @@ public class DeviceFinderBaseTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_Timeout_RoutesThroughCancellationTokenOverload()
+    public async Task DiscoverAsync_TimeoutElapses_ReturnsWhatWasFound()
+    {
+        using var finder = ScriptedFinder.Listening();
+
+        var devices = await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("SN1", Assert.Single(devices).SerialNumber);
+
+        // Listening to the deadline is a complete answer, so it must still age devices out.
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_TimeoutElapsesBeforeThePassCanAnswer_ReturnsEmptyAndIsPartial()
+    {
+        using var finder = ScriptedFinder.AllOrNothing();
+
+        var devices = await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Empty(devices);
+        Assert.True(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DiscoverAsync_Cancelled_ThrowsWhetherOrNotThePassCanAnswerInPart(bool listening)
+    {
+        using var finder = listening ? ScriptedFinder.Listening() : ScriptedFinder.AllOrNothing();
+        using var cts = new CancellationTokenSource();
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => Interlocked.Increment(ref completed);
+
+        var pass = finder.DiscoverAsync(TimeSpan.FromMinutes(5), cts.Token);
+        Assert.False(pass.IsCompleted);
+        cts.Cancel();
+
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pass.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(cts.Token, canceled.CancellationToken);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_CancelledWhileQueuedBehindAnotherPass_ThrowsAndLeavesThatPassAlone()
+    {
+        using var finder = new BlockingFinder();
+        var first = finder.DiscoverAsync();
+        await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using var cts = new CancellationTokenSource();
+        var queued = finder.DiscoverAsync(cancellationToken: cts.Token);
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(TimeSpan.FromSeconds(5)));
+        finder.ReleaseGate();
+        Assert.Empty(await first.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // The queued call never held the pass lock, so it must not have released it either.
+        Assert.Empty(await finder.DiscoverAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_TransportFails_ThrowsThatRaisesCompletedAndFreesTheFinder()
+    {
+        var fail = true;
+        using var finder = new ScriptedFinder(_ => fail
+            ? throw new IOException("enumerating ports failed")
+            : Task.FromResult<IReadOnlyList<IDeviceInfo>>([]));
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        await Assert.ThrowsAsync<IOException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(1, completed);
+
+        fail = false;
+        Assert.Empty(await finder.DiscoverAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_InvalidTimeout_Throws()
     {
         using var finder = new TestFinder();
 
-        await finder.DiscoverAsync(TimeSpan.FromSeconds(30));
+        foreach (var timeout in new[] { TimeSpan.FromMilliseconds(-2), TimeSpan.MaxValue })
+        {
+            var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => finder.DiscoverAsync(timeout));
+            Assert.Equal("timeout", ex.ParamName);
+        }
 
-        // The timeout overload must delegate to the token overload with a real,
-        // cancelable token wired to the timeout (not CancellationToken.None).
-        Assert.Equal(1, finder.DiscoverCallCount);
-        Assert.True(finder.LastToken.CanBeCanceled);
+        Assert.Empty(await finder.DiscoverAsync(Timeout.InfiniteTimeSpan));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_PartialFlag_DescribesOnlyTheLastPass()
+    {
+        var truncate = true;
+        using var finder = new ScriptedFinder(async token =>
+        {
+            if (truncate)
+            {
+                await Task.Delay(Timeout.Infinite, token);
+            }
+
+            return [];
+        });
+
+        await finder.DiscoverAsync(TimeSpan.FromMilliseconds(20));
+        truncate = false;
+        await finder.DiscoverAsync();
+
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
     }
 
     [Fact]
@@ -178,7 +278,7 @@ public class DeviceFinderBaseTests
         using var finder = new BlockingFinder();
 
         // First pass acquires the discovery semaphore and parks (uncancelable token).
-        var first = finder.DiscoverAsync(CancellationToken.None);
+        var first = finder.DiscoverAsync();
         // Bounded wait: if the first pass faults before signaling acquisition, fail fast
         // instead of hanging until the runner-level timeout.
         await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5)); // the semaphore is now held
@@ -204,7 +304,7 @@ public class DeviceFinderBaseTests
         finder.DiscoveryCompleted += (_, _) => Interlocked.Increment(ref completedCount);
 
         // First pass acquires the semaphore and parks; it has NOT completed yet.
-        var first = finder.DiscoverAsync(CancellationToken.None);
+        var first = finder.DiscoverAsync();
         await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // A timed pass whose timeout elapses while awaiting the held semaphore must

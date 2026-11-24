@@ -139,81 +139,65 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
     #region Public Methods
 
+    /// <inheritdoc />
+    private protected override TimeSpan DefaultTimeout => DefaultListenWindow;
+
     /// <summary>
-    /// Browses for devices asynchronously until the token is cancelled.
+    /// Browses for devices until the pass ends. Like <see cref="WiFiDeviceFinder"/>, a browse has
+    /// no natural end, so every pass ends with its token.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token to end the browse.</param>
-    /// <returns>A task containing the devices that answered.</returns>
-    /// <remarks>
-    /// Like <see cref="WiFiDeviceFinder"/>, this overload runs until cancelled — a browse has
-    /// no natural end. Prefer <see cref="DeviceFinderBase.DiscoverAsync(TimeSpan)"/>, or pass a
-    /// token that will actually fire.
-    /// </remarks>
-    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
     {
-        ThrowIfDisposed();
+        var discoveredDevices = new List<IDeviceInfo>();
+        var interfaces = GetMulticastInterfaces();
 
-        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (interfaces.Count == 0)
         {
-            var discoveredDevices = new List<IDeviceInfo>();
-            var interfaces = GetMulticastInterfaces();
-
-            if (interfaces.Count == 0)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            // One socket bound to the wildcard address, not one per NIC as the broadcast finder
-            // uses: responders answer to the multicast group, and on Linux/macOS a socket bound
-            // to a unicast address never sees a datagram addressed to 224.0.0.251. The receiving
-            // NIC is therefore recovered per reply (see ResolveLocalInterfaceAddress) instead of
-            // being read off the socket.
-            using var udp = TryCreateListener();
-            if (udp is null)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            var joined = new List<LocalInterface>();
-            foreach (var localInterface in interfaces)
-            {
-                try
-                {
-                    udp.JoinMulticastGroup(MulticastGroup, localInterface.Address);
-                    joined.Add(localInterface);
-                }
-                catch (SocketException)
-                {
-                    // This NIC cannot join the group (no multicast route, adapter going down).
-                    // Others still work, so skip it rather than failing the pass.
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-            }
-
-            if (joined.Count == 0)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            await Task.WhenAll(
-                    ReceiveLoopAsync(udp, interfaces, discoveredDevices, cancellationToken),
-                    SendQueriesAsync(udp, joined, cancellationToken))
-                .ConfigureAwait(false);
-
-            OnDiscoveryCompleted();
             return discoveredDevices;
         }
-        finally
+
+        // One socket bound to the wildcard address, not one per NIC as the broadcast finder
+        // uses: responders answer to the multicast group, and on Linux/macOS a socket bound
+        // to a unicast address never sees a datagram addressed to 224.0.0.251. The receiving
+        // NIC is therefore recovered per reply (see ResolveLocalInterfaceAddress) instead of
+        // being read off the socket.
+        using var udp = TryCreateListener();
+        if (udp is null)
         {
-            DiscoverySemaphore.Release();
+            return discoveredDevices;
         }
+
+        var joined = new List<LocalInterface>();
+        foreach (var localInterface in interfaces)
+        {
+            try
+            {
+                udp.JoinMulticastGroup(MulticastGroup, localInterface.Address);
+                joined.Add(localInterface);
+            }
+            catch (SocketException)
+            {
+                // This NIC cannot join the group (no multicast route, adapter going down).
+                // Others still work, so skip it rather than failing the pass.
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+        }
+
+        if (joined.Count == 0)
+        {
+            return discoveredDevices;
+        }
+
+        await Task.WhenAll(
+                ReceiveLoopAsync(udp, interfaces, discoveredDevices, passToken),
+                SendQueriesAsync(udp, joined, passToken))
+            .ConfigureAwait(false);
+
+        return discoveredDevices;
     }
 
     #endregion

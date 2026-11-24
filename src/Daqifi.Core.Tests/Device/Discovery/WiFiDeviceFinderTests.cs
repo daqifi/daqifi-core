@@ -21,7 +21,7 @@ public class WiFiDeviceFinderTests
     [NetworkBrowseFact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
-        // Not port 0, for the reason given in DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing:
+        // Not port 0, for the reason given in DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException:
         // on port 0 the pass ended at once on Linux, so the timeout was never what ended it.
         int discoveryPort;
         using (var probe = new UdpClient(0))
@@ -46,10 +46,9 @@ public class WiFiDeviceFinderTests
     }
 
     [NetworkBrowseFact]
-    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
+    public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
     {
-        // This overload has no timeout of its own, so cancelling is how a caller ends the browse:
-        // what answered by then is the result, not an OperationCanceledException.
+        // A timeout ends a browse with what answered by then; a cancellation never does.
         //
         // Not port 0: the discovery port is also where the query is sent, Linux rejects a send to
         // port 0, and a pass whose every send failed ends at once. Borrow a free port instead, so
@@ -63,7 +62,7 @@ public class WiFiDeviceFinderTests
         using var finder = new WiFiDeviceFinder(discoveryPort);
         using var cts = new CancellationTokenSource();
 
-        var browse = finder.DiscoverAsync(cts.Token);
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);
 
         // A pass that finds nothing to browse on returns at once. Still running after a moment
         // means it is waiting on replies, so what ends it below is the cancellation.
@@ -73,8 +72,7 @@ public class WiFiDeviceFinderTests
         cts.Cancel();
 
         // Bounded, so a browse that ignored the token fails instead of hanging the run.
-        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
-        Assert.Null(failure);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
@@ -85,7 +83,7 @@ public class WiFiDeviceFinderTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
     }
 
     [Fact]

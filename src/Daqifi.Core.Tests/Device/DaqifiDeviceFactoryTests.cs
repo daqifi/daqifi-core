@@ -686,9 +686,7 @@ public class DaqifiDeviceFactoryTests
         public ConnectionType ConnectionType { get; set; } = ConnectionType.Unknown;
         public string? PortName { get; set; }
         public string? DevicePath { get; set; }
-        // LocationKey deliberately NOT implemented here: it's a default interface property on
-        // IDeviceInfo (defaults to null), so this pre-existing implementer compiles and works
-        // unmodified — proving the default-interface-method approach avoids a breaking change.
+        public string? LocationKey { get; set; }
     }
 
     #endregion

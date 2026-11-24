@@ -78,16 +78,6 @@ public class WiFiDeviceFinder : DeviceFinderBase
     #region Public Methods
 
     /// <summary>
-    /// Discovers devices asynchronously with a cancellation token.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
-    /// <returns>A task containing the collection of discovered devices.</returns>
-    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
-    {
-        return await DiscoverAsync(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
     /// Resolves a single host's TCP data port by unicasting the discovery query directly to it and
     /// reading the <c>DevicePort</c> from its reply. Use this for a manually-entered IP address that
     /// never answered the broadcast sweep, so its data port need not be assumed.
@@ -208,110 +198,95 @@ public class WiFiDeviceFinder : DeviceFinderBase
 
     #region Private Methods
 
-    /// <summary>
-    /// Internal implementation of discovery with timeout and cancellation.
-    /// </summary>
-    private async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout, CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
+    /// <inheritdoc />
+    private protected override TimeSpan DefaultTimeout => DefaultListenWindow;
 
-        // Prevent concurrent discovery operations
-        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+    /// <summary>
+    /// Broadcasts the discovery query on every eligible interface and collects replies until the
+    /// pass ends. Listening has no natural end, so every pass ends with its token.
+    /// </summary>
+    /// <inheritdoc />
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
+    {
+        var discoveredDevices = new List<IDeviceInfo>();
+        var networkInterfaces = GetAllNetworkInterfaces(_discoveryPort);
+
+        if (networkInterfaces.Count == 0)
+        {
+            return discoveredDevices;
+        }
+
+        // Bind a separate UdpClient per NIC so the OS routes each broadcast out the intended adapter
+        // and replies arrive on the socket whose bound IP is the actual local interface — avoiding
+        // misrouting on hosts where virtual NICs (WSL2 mirrored, Hyper-V) share a subnet with the real one.
+        var perNicClients = new List<(UdpClient Client, IPAddress LocalAddress)>();
         try
         {
-            var discoveredDevices = new List<IDeviceInfo>();
-            var networkInterfaces = GetAllNetworkInterfaces(_discoveryPort);
-
-            if (networkInterfaces.Count == 0)
+            foreach (var interfaceInfo in networkInterfaces)
             {
-                OnDiscoveryCompleted();
+                UdpClient? udp = null;
+                var added = false;
+                try
+                {
+                    // Bind to the discovery port (with ReuseAddress) rather than an ephemeral
+                    // port so devices that target the well-known port for replies still reach
+                    // us. Per-NIC sockets coexist on the same port via distinct (LocalAddress,
+                    // port) tuples + SO_REUSEADDR.
+                    udp = new UdpClient
+                    {
+                        EnableBroadcast = true,
+                        ExclusiveAddressUse = false
+                    };
+                    udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    try
+                    {
+                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
+                    }
+                    catch (SocketException)
+                    {
+                        // Fall back to an ephemeral port if the well-known discovery port
+                        // can't be acquired on this platform/NIC (e.g. another process holds
+                        // it). Devices that reply to source-port still reach us either way.
+                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, 0));
+                    }
+                    await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint).ConfigureAwait(false);
+                    perNicClients.Add((udp, interfaceInfo.LocalAddress));
+                    added = true;
+                }
+                catch
+                {
+                    // Skip this NIC; continue with others. Any setup or send failure is
+                    // recoverable at the discovery level.
+                }
+                finally
+                {
+                    if (!added)
+                    {
+                        udp?.Dispose();
+                    }
+                }
+            }
+
+            if (perNicClients.Count == 0)
+            {
                 return discoveredDevices;
             }
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            if (timeout != Timeout.InfiniteTimeSpan)
-            {
-                cts.CancelAfter(timeout);
-            }
+            var receiveTasks = perNicClients
+                .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, passToken))
+                .ToArray();
 
-            // Bind a separate UdpClient per NIC so the OS routes each broadcast out the intended adapter
-            // and replies arrive on the socket whose bound IP is the actual local interface — avoiding
-            // misrouting on hosts where virtual NICs (WSL2 mirrored, Hyper-V) share a subnet with the real one.
-            var perNicClients = new List<(UdpClient Client, IPAddress LocalAddress)>();
-            try
-            {
-                foreach (var interfaceInfo in networkInterfaces)
-                {
-                    UdpClient? udp = null;
-                    var added = false;
-                    try
-                    {
-                        // Bind to the discovery port (with ReuseAddress) rather than an ephemeral
-                        // port so devices that target the well-known port for replies still reach
-                        // us. Per-NIC sockets coexist on the same port via distinct (LocalAddress,
-                        // port) tuples + SO_REUSEADDR.
-                        udp = new UdpClient
-                        {
-                            EnableBroadcast = true,
-                            ExclusiveAddressUse = false
-                        };
-                        udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                        try
-                        {
-                            udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
-                        }
-                        catch (SocketException)
-                        {
-                            // Fall back to an ephemeral port if the well-known discovery port
-                            // can't be acquired on this platform/NIC (e.g. another process holds
-                            // it). Devices that reply to source-port still reach us either way.
-                            udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, 0));
-                        }
-                        await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint).ConfigureAwait(false);
-                        perNicClients.Add((udp, interfaceInfo.LocalAddress));
-                        added = true;
-                    }
-                    catch
-                    {
-                        // Skip this NIC; continue with others. Any setup or send failure is
-                        // recoverable at the discovery level.
-                    }
-                    finally
-                    {
-                        if (!added)
-                        {
-                            udp?.Dispose();
-                        }
-                    }
-                }
-
-                if (perNicClients.Count == 0)
-                {
-                    OnDiscoveryCompleted();
-                    return discoveredDevices;
-                }
-
-                var receiveTasks = perNicClients
-                    .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, cts.Token))
-                    .ToArray();
-
-                await Task.WhenAll(receiveTasks).ConfigureAwait(false);
-            }
-            finally
-            {
-                foreach (var (client, _) in perNicClients)
-                {
-                    try { client.Dispose(); } catch { /* ignore */ }
-                }
-            }
-
-            OnDiscoveryCompleted();
-            return discoveredDevices;
+            await Task.WhenAll(receiveTasks).ConfigureAwait(false);
         }
         finally
         {
-            DiscoverySemaphore.Release();
+            foreach (var (client, _) in perNicClients)
+            {
+                try { client.Dispose(); } catch { /* ignore */ }
+            }
         }
+
+        return discoveredDevices;
     }
 
     /// <summary>
@@ -342,13 +317,13 @@ public class WiFiDeviceFinder : DeviceFinderBase
             catch
             {
                 // Catch-all so an unexpected exception type cannot fault this receive task
-                // and hang DiscoverAsync via Task.WhenAll under the infinite-timeout overload.
+                // and hang DiscoverAsync via Task.WhenAll under an infinite timeout.
                 break;
             }
 
             // Defense-in-depth: any unexpected exception in payload processing or subscriber
             // dispatch must not fault this receive task. With parallel per-NIC loops awaited
-            // via Task.WhenAll under the infinite-timeout overload, a single faulted task would
+            // via Task.WhenAll under an infinite timeout, a single faulted task would
             // hang DiscoverAsync indefinitely.
             try
             {

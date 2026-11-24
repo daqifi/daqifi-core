@@ -36,7 +36,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// needs will report nothing, exactly as it would have before.
 /// </para>
 /// </remarks>
-public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter, IPartialResultReporter
+public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 {
     #region Constants
 
@@ -297,135 +297,103 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter, IPartialR
     /// </summary>
     private readonly BusyPortLedger _busyPorts = new();
 
-    /// <summary>
-    /// 1 when the most recent pass gave up before probing every port it enumerated. Written on
-    /// the thread running <see cref="DiscoverAsync(CancellationToken)"/> and read by the caller
-    /// afterwards, so it is accessed through <see cref="Volatile"/> rather than plainly.
-    /// </summary>
-    private int _lastPassWasPartial;
-
     /// <inheritdoc />
     IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
         => _busyPorts.TakePortsFromLastPass();
 
-    /// <inheritdoc />
-    bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()
-        => Interlocked.Exchange(ref _lastPassWasPartial, 0) == 1;
-
     /// <summary>
-    /// Discovers devices asynchronously with a cancellation token.
-    /// Probes each serial port to identify DAQiFi devices.
+    /// Probes each candidate serial port to identify DAQiFi devices.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
-    /// <returns>A task containing the collection of discovered DAQiFi devices.</returns>
-    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
     {
-        ThrowIfDisposed();
+        // Describes this pass alone; a port freed since the last one must not stay "busy".
+        _busyPorts.BeginPass();
 
-        // Prevent concurrent discovery operations
-        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var discoveredDevices = new List<IDeviceInfo>();
+        // Pre-filter by USB VID/PID where the platform supports it
+        // (closes #157). This drops discovery time from ~1 minute on a
+        // typical Windows system (10+ COM ports each timing out at ~5s)
+        // to <1s by skipping every non-DAQiFi port without opening it.
+        // It also stops the previous behavior of sending SCPI commands
+        // to other vendors' COM ports (Bluetooth radios, GPS, etc.).
+        // Ports the descriptor provider can't classify fall through to
+        // legacy probing, matched only by name-pattern in FilterProbableDaqifiPorts.
+        var allPorts = _portNameProvider?.Invoke()
+            ?? SerialStreamTransport.GetAvailablePortNames();
+        var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
+        var availablePorts = FilterByUsbDescriptor(nameFilteredPorts).ToList();
+
+        // Probe candidate ports in parallel (issue #157). Each SerialPort
+        // is its own physical resource so concurrent opens are safe; the
+        // VID/PID pre-filter typically leaves only 0-1 candidates anyway,
+        // but the legacy fallback (null descriptor) can still surface
+        // multiple unclassifiable ports — probing them sequentially adds
+        // ~1.2s per port (DeviceWakeUpDelayMs + ResponseTimeoutMs).
+        //
+        // Cap concurrency at MaxParallelProbes so a 20-port system with
+        // a missing descriptor provider doesn't open 20 serial handles at
+        // once — most platforms throttle quietly above ~8 concurrent opens.
+        //
+        // The gate is taken INSIDE ProbeSafelyAsync, around the port open only.
+        // Holding it across the whole call would let the abandoned-claim drain
+        // wait — which opens nothing and merely awaits an already-running task —
+        // occupy a slot, so a pass whose predecessor timed out with every slot
+        // busy could park all MaxParallelProbes slots on drain waits and delay a
+        // healthy port behind them (Qodo #454 pass 1 #2).
+        var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
+        using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+
+        var probeTasks = availablePorts.Select(async portName =>
+        {
+            var deviceInfo = await ProbeSafelyAsync(portName, probeGate, passToken).ConfigureAwait(false);
+            if (deviceInfo != null)
+            {
+                // Raise per-probe rather than after Task.WhenAll: one hung port
+                // must not silence every healthy device on the system (#294).
+                // Fires on a worker thread, possibly concurrently with other
+                // probes' events — handlers own their thread marshaling (both
+                // desktop apps already dispatch to their UI thread).
+                OnDeviceDiscovered(deviceInfo);
+            }
+            return deviceInfo;
+        }).ToList();
+
+        // Catch OCE here so a pass that ran out of time still answers with the probes that
+        // finished. ProbeSafelyAsync rethrows OCE when the pass token fires so WhenAll
+        // short-circuits the rest of the set.
+        IDeviceInfo?[]? probeResults = null;
         try
         {
-            // Describes this pass alone; a port freed since the last one must not stay "busy".
-            _busyPorts.BeginPass();
-
-            // Same scope as the ledger above: this pass's own completeness, not the last one's.
-            // Reset even if the caller never took the previous value, so a pass that was cut
-            // short cannot vouch for the pass after it.
-            Volatile.Write(ref _lastPassWasPartial, 0);
-
-            var discoveredDevices = new List<IDeviceInfo>();
-            // Pre-filter by USB VID/PID where the platform supports it
-            // (closes #157). This drops discovery time from ~1 minute on a
-            // typical Windows system (10+ COM ports each timing out at ~5s)
-            // to <1s by skipping every non-DAQiFi port without opening it.
-            // It also stops the previous behavior of sending SCPI commands
-            // to other vendors' COM ports (Bluetooth radios, GPS, etc.).
-            // Ports the descriptor provider can't classify fall through to
-            // legacy probing, matched only by name-pattern in FilterProbableDaqifiPorts.
-            var allPorts = _portNameProvider?.Invoke()
-                ?? SerialStreamTransport.GetAvailablePortNames();
-            var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
-            var availablePorts = FilterByUsbDescriptor(nameFilteredPorts).ToList();
-
-            // Probe candidate ports in parallel (issue #157). Each SerialPort
-            // is its own physical resource so concurrent opens are safe; the
-            // VID/PID pre-filter typically leaves only 0-1 candidates anyway,
-            // but the legacy fallback (null descriptor) can still surface
-            // multiple unclassifiable ports — probing them sequentially adds
-            // ~1.2s per port (DeviceWakeUpDelayMs + ResponseTimeoutMs).
-            //
-            // Cap concurrency at MaxParallelProbes so a 20-port system with
-            // a missing descriptor provider doesn't open 20 serial handles at
-            // once — most platforms throttle quietly above ~8 concurrent opens.
-            //
-            // The gate is taken INSIDE ProbeSafelyAsync, around the port open only.
-            // Holding it across the whole call would let the abandoned-claim drain
-            // wait — which opens nothing and merely awaits an already-running task —
-            // occupy a slot, so a pass whose predecessor timed out with every slot
-            // busy could park all MaxParallelProbes slots on drain waits and delay a
-            // healthy port behind them (Qodo #454 pass 1 #2).
-            var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
-            using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-
-            var probeTasks = availablePorts.Select(async portName =>
-            {
-                var deviceInfo = await ProbeSafelyAsync(portName, probeGate, cancellationToken).ConfigureAwait(false);
-                if (deviceInfo != null)
-                {
-                    // Raise per-probe rather than after Task.WhenAll: one hung port
-                    // must not silence every healthy device on the system (#294).
-                    // Fires on a worker thread, possibly concurrently with other
-                    // probes' events — handlers own their thread marshaling (both
-                    // desktop apps already dispatch to their UI thread).
-                    OnDeviceDiscovered(deviceInfo);
-                }
-                return deviceInfo;
-            }).ToList();
-
-            // Catch OCE here so the DiscoveryCompleted event always fires
-            // (callers expect a "discovery pass terminated" signal regardless
-            // of how it ended). ProbeSafelyAsync rethrows OCE on caller
-            // cancellation so WhenAll short-circuits the rest of the set —
-            // we then settle for whatever probes already finished cleanly.
-            IDeviceInfo?[]? probeResults = null;
-            try
-            {
-                probeResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // Drain any tasks that did finish successfully before cancellation.
-                probeResults = probeTasks
-                    .Where(t => t.Status == TaskStatus.RanToCompletion)
-                    .Select(t => t.Result)
-                    .ToArray();
-
-                // The list below is now the probes that finished, not the ports that exist. A
-                // caller that reads absence from it as "the device went away" would drop every
-                // device on a port this pass never reached, so say plainly that it is partial
-                // (IPartialResultReporter). Set only here: this is the one path on which the
-                // pass stops before working through everything it enumerated.
-                Volatile.Write(ref _lastPassWasPartial, 1);
-            }
-
-            // Events already fired per-probe above; this loop only aggregates the
-            // return value.
-            foreach (var deviceInfo in probeResults)
-            {
-                if (deviceInfo != null)
-                {
-                    discoveredDevices.Add(deviceInfo);
-                }
-            }
-
-            OnDiscoveryCompleted();
-            return discoveredDevices;
+            probeResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
         }
-        finally
+        catch (OperationCanceledException) when (passToken.IsCancellationRequested)
         {
-            DiscoverySemaphore.Release();
+            // Drain any tasks that did finish successfully before the token fired.
+            probeResults = probeTasks
+                .Where(t => t.Status == TaskStatus.RanToCompletion)
+                .Select(t => t.Result)
+                .ToArray();
+
+            // The list below is now the probes that finished, not the ports that exist. A
+            // caller that reads absence from it as "the device went away" would drop every
+            // device on a port this pass never reached, so say plainly that it is partial
+            // (IPartialResultReporter). Set only here: this is the one path on which the
+            // pass stops before working through everything it enumerated.
+            MarkPassPartial();
         }
+
+        // Events already fired per-probe above; this loop only aggregates the
+        // return value.
+        foreach (var deviceInfo in probeResults)
+        {
+            if (deviceInfo != null)
+            {
+                discoveredDevices.Add(deviceInfo);
+            }
+        }
+
+        return discoveredDevices;
     }
 
     #endregion

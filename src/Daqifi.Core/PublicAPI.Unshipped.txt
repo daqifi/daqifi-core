@@ -38,26 +38,84 @@
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
+*REMOVED*Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.StopAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverySemaphore.get -> System.Threading.SemaphoreSlim!
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.ConnectionType.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.DevicePath.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.FirmwareVersion.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.IPAddress.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.IsPowerOn.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.LocalInterfaceAddress.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.LocationKey.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.MacAddress.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Name.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Port.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.PortName.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.SerialNumber.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.Type.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist1 = 1 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist2 = 2 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist3 = 3 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Unknown = 0 -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.HidDeviceFinder.DiscoverAsync(int? vendorIdFilter, int? productIdFilter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufMessageType.SdCard = 3 -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+*REMOVED*abstract Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
+*REMOVED*override Daqifi.Core.Device.Discovery.HidDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*override Daqifi.Core.Device.Discovery.MDnsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*override Daqifi.Core.Device.Discovery.SerialDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*override Daqifi.Core.Device.Discovery.WiFiDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
+*REMOVED*virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnDeviceDiscovered(Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
+*REMOVED*virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnDeviceLost(Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
+*REMOVED*virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnDeviceUpdated(Daqifi.Core.Device.Discovery.IDeviceInfo! previousDeviceInfo, Daqifi.Core.Device.Discovery.IDeviceInfo! deviceInfo) -> void
+*REMOVED*virtual Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.OnScanError(System.Exception! exception) -> void
+*REMOVED*virtual Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.Discovery.DeviceInfo.<Clone>$() -> Daqifi.Core.Device.Discovery.DeviceInfo!
+Daqifi.Core.Device.Discovery.DeviceInfo.ConnectionType.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.DevicePath.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.Equals(Daqifi.Core.Device.Discovery.DeviceInfo? other) -> bool
+Daqifi.Core.Device.Discovery.DeviceInfo.FirmwareVersion.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.IPAddress.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.IsPowerOn.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.LocalInterfaceAddress.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.LocationKey.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.MacAddress.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.Name.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.Port.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.PortName.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.SerialNumber.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
+Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+abstract Daqifi.Core.Device.Discovery.DeviceFinderBase.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+override Daqifi.Core.Device.Discovery.DeviceInfo.Equals(object? obj) -> bool
+override Daqifi.Core.Device.Discovery.DeviceInfo.GetHashCode() -> int
+override Daqifi.Core.Device.Discovery.HidDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+override Daqifi.Core.Device.Discovery.SerialDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+override Daqifi.Core.Device.Discovery.WiFiDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+static Daqifi.Core.Device.Discovery.DeviceInfo.operator !=(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
+static Daqifi.Core.Device.Discovery.DeviceInfo.operator ==(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
+virtual Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
