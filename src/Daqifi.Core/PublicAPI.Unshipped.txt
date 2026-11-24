@@ -7,6 +7,9 @@
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.IsPwmEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.get -> bool
 *REMOVED*Daqifi.Core.Channel.IDigitalChannel.OutputValue.set -> void
+*REMOVED*Daqifi.Core.Communication.Messages.IOutboundMessage<T>.Data.set -> void
+*REMOVED*Daqifi.Core.Communication.Messages.ScpiMessage.Data.set -> void
+*REMOVED*Daqifi.Core.Communication.Producers.ScpiMessageProducer.ScpiMessageProducer() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Close() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.CloseAsync() -> System.Threading.Tasks.Task!
@@ -51,6 +54,16 @@
 *REMOVED*Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? sdCardMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.DisableDioPorts() -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableAdcChannels(string! channelSetString) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts() -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, int direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, double value) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiModeExisting.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiModeSelfHosted.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurityOpen.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurityWpa.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(int mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Device.Capabilities.SampleRateCap.EnforceOn(Daqifi.Core.Device.IStreamingDevice! device) -> int?
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
@@ -61,3 +74,11 @@ Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTy
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<DaqifiOutMessage!>? statusMessageHandler = null, System.Action<DaqifiOutMessage!>? streamMessageHandler = null, System.Action<DaqifiOutMessage!>? errorMessageHandler = null) -> void
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.DisableDioPorts.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableAdcChannels(uint mask) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, Daqifi.Core.Channel.ChannelDirection direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, bool high) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiMode(Daqifi.Core.Device.Network.WifiMode mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurity(Daqifi.Core.Device.Network.WifiSecurityType securityType) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!

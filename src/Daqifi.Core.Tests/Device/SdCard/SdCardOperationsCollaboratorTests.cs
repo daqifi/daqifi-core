@@ -939,6 +939,25 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.True(maskIndex < startIndex, "the channel mask must be enabled before streaming starts");
     }
 
+    [Theory]
+    [InlineData("0,1")] // the firmware's two-argument form: one channel, not a mask
+    [InlineData("3;SYSTem:REboot")]
+    [InlineData("3\nSYSTem:REboot")]
+    [InlineData("0x3")]
+    [InlineData("-1")]
+    [InlineData("4294967296")]
+    public async Task StartSdCardLoggingSessionAsync_ChannelMaskNotADecimalBitmask_ThrowsBeforeSendingAnything(string channelMask)
+    {
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => ops.StartSdCardLoggingSessionAsync("data.bin", channelMask));
+
+        Assert.Equal("channelMask", ex.ParamName);
+        Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task StopSdCardLoggingAsync_OverWifi_DoesNotReEnableLan()
     {

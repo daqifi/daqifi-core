@@ -385,7 +385,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         // Asked once the stream is routed to the card with its channels set: that is the
         // configuration the device checks the start against.
         var routed = device.SentCommands.IndexOf(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard).Data);
-        var channels = device.SentCommands.IndexOf(ScpiMessageProducer.EnableAdcChannels("1").Data);
+        var channels = device.SentCommands.IndexOf(ScpiMessageProducer.EnableAdcChannels(1).Data);
         var asked = device.SentCommands.IndexOf(DocumentCommand);
         var started = device.SentCommands.IndexOf(StartAt(7900));
         Assert.True(routed >= 0 && channels > routed && asked > channels && started > asked);

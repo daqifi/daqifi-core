@@ -108,6 +108,97 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Messages.IOutboundMessage`1.set_Data(`0)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Messages.ScpiMessage.set_Data(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.#ctor</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.DisableDioPorts</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableAdcChannels(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.get_SetNetworkWifiModeExisting</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.get_SetNetworkWifiModeSelfHosted</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.get_SetNetworkWifiSecurityOpen</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.get_SetNetworkWifiSecurityWpa</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(System.Int32,System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(System.Int32,System.Double)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.BootloaderSessionDevice.get_IpAddress</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -172,6 +263,20 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>P:Daqifi.Core.Device.Discovery.IDeviceInfo.Type</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Messages.ScpiMessage</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Producers.ScpiMessageProducer</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>

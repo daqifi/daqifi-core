@@ -45,10 +45,10 @@ public class NetworkConfigurationOperationsTests
 {
     // Derived from ScpiMessageProducer rather than hardcoded, so a wire-format change there fails
     // this file's assertions instead of silently drifting out of sync with them.
-    private static readonly string NetTypeExisting = ScpiMessageProducer.SetNetworkWifiModeExisting.Data;
-    private static readonly string NetTypeSelfHosted = ScpiMessageProducer.SetNetworkWifiModeSelfHosted.Data;
-    private static readonly string SecurityOpen = ScpiMessageProducer.SetNetworkWifiSecurityOpen.Data;
-    private static readonly string SecurityWpa = ScpiMessageProducer.SetNetworkWifiSecurityWpa.Data;
+    private static readonly string NetTypeExisting = ScpiMessageProducer.SetNetworkWifiMode(WifiMode.ExistingNetwork).Data;
+    private static readonly string NetTypeSelfHosted = ScpiMessageProducer.SetNetworkWifiMode(WifiMode.SelfHosted).Data;
+    private static readonly string SecurityOpen = ScpiMessageProducer.SetNetworkWifiSecurity(WifiSecurityType.None).Data;
+    private static readonly string SecurityWpa = ScpiMessageProducer.SetNetworkWifiSecurity(WifiSecurityType.WpaPskPhrase).Data;
     private static readonly string DisableSd = ScpiMessageProducer.DisableStorageSd.Data;
     private static readonly string EnableLan = ScpiMessageProducer.EnableNetworkLan.Data;
     private static readonly string SaveLan = ScpiMessageProducer.SaveNetworkLan.Data;

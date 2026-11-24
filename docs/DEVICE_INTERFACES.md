@@ -979,7 +979,7 @@ device.MessageReceived += (sender, e) =>
 };
 
 // Enable channels (decimal bitmask: each bit enables a channel)
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Channels 0 and 1 (bitmask 0b11 = 3)
+device.Send(ScpiMessageProducer.EnableAdcChannels(3)); // Channels 0 and 1 (bitmask 0b11 = 3)
 
 // Start streaming at 100 Hz
 device.Send(ScpiMessageProducer.StartStreaming(100));
@@ -1136,7 +1136,7 @@ device.Send(ScpiMessageProducer.StartStreaming(1000));  // Start at 1000 Hz
 device.Send(ScpiMessageProducer.StopStreaming);
 
 // Channel configuration
-device.Send(ScpiMessageProducer.EnableAdcChannels("255")); // Enable 8 channels (bitmask 0xFF = 255)
+device.Send(ScpiMessageProducer.EnableAdcChannels(255)); // Enable 8 channels (bitmask 0xFF = 255)
 device.Send(ScpiMessageProducer.DisableDeviceEcho);
 device.Send(ScpiMessageProducer.SetProtobufStreamFormat);
 ```
