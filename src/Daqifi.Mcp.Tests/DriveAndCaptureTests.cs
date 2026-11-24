@@ -223,12 +223,26 @@ public class DigitalStimulusTests
 /// Contract tests for <c>drive_and_capture</c> against a connected device double: what reaches the
 /// wire, in what order, and where the pin is left.
 /// </summary>
+/// <remarks>
+/// A capture that is expected to contain an edge is never ended by its window here. The window
+/// is this machine's clock and so is the stimulus, and on a starved CI runner the schedule can
+/// be held for seconds — a 500 ms window closed before a 50 ms delay had fired (Windows leg of
+/// #1026). Those captures run under a window far longer than the test could wait and are ended
+/// by their row budget instead, which <see cref="SamplePump"/> only fills once the pin has seen
+/// every write the test is about. However slow the machine, the edge is in the capture.
+/// </remarks>
 public class DriveAndCaptureContractTests
 {
     private const string Id = AgentHarness.DeviceId;
     private const int Pin = 3;
 
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
+
+    /// <summary>A capture window no test waits out: a hang guard, where the row budget is the real end.</summary>
+    private const int NeverMs = 60_000;
+
+    /// <summary>The row budget <see cref="SamplePump"/> fills to end a capture; well above what it trickles first.</summary>
+    private const int RowBudget = 500;
 
     private static readonly string Output = ScpiMessageProducer.SetDioPortDirection(Pin, 1).Data;
     private static readonly string High = ScpiMessageProducer.SetDioPortState(Pin, 1).Data;
@@ -241,10 +255,11 @@ public class DriveAndCaptureContractTests
     public async Task APulse_IsDrivenAndReleasedInsideTheCapture()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device);
+        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 4);
 
         var result = await agent.DriveAndCaptureAsync(
-            Id, Pin, high: true, delayMs: 50, pulseWidthMs: 50, durationMs: 500, maxRows: 10_000, CancellationToken.None);
+            Id, Pin, high: true, delayMs: 50, pulseWidthMs: 50, NeverMs, RowBudget, CancellationToken.None)
+            .WaitAsync(Bound);
 
         var sent = device.Sent.ToList();
         var start = sent.FindIndex(IsStreamStart);
@@ -274,11 +289,12 @@ public class DriveAndCaptureContractTests
     public async Task AStep_IsLeftAtTheNewLevel_AndSaysSo()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device);
+        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 3);
 
         // Active-low this time, so the baseline is high and the edge is the fall.
         var result = await agent.DriveAndCaptureAsync(
-            Id, Pin, high: false, delayMs: 50, pulseWidthMs: 0, durationMs: 300, maxRows: 10_000, CancellationToken.None);
+            Id, Pin, high: false, delayMs: 50, pulseWidthMs: 0, NeverMs, RowBudget, CancellationToken.None)
+            .WaitAsync(Bound);
 
         Assert.Equal(new[] { Output, High, Low }, device.Sent.Where(IsPinCommand));
         Assert.Null(result.PulseWidthMs);
@@ -295,7 +311,7 @@ public class DriveAndCaptureContractTests
     public async Task EveryPinWrite_IsMadeByTheFlowHoldingTheDevice_SoCoreSendsItRatherThanParkingIt()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        using var pump = new SamplePump(device);
+        using var pump = new SamplePump(device, fillTheBudgetAfterPinWrites: 4);
 
         var heldTheDevice = new List<(string Command, bool Held)>();
         device.OnSend = command =>
@@ -311,7 +327,8 @@ public class DriveAndCaptureContractTests
         };
 
         await agent.DriveAndCaptureAsync(
-            Id, Pin, high: true, delayMs: 20, pulseWidthMs: 20, durationMs: 300, maxRows: 10_000, CancellationToken.None);
+            Id, Pin, high: true, delayMs: 20, pulseWidthMs: 20, NeverMs, RowBudget, CancellationToken.None)
+            .WaitAsync(Bound);
 
         Assert.Equal(new[] { Output, Low, High, Low }, heldTheDevice.Select(w => w.Command));
         Assert.All(heldTheDevice, w => Assert.True(w.Held, $"{w.Command} was sent from a flow that does not hold the device"));
@@ -329,7 +346,7 @@ public class DriveAndCaptureContractTests
         using var cts = new CancellationTokenSource();
 
         var call = agent.DriveAndCaptureAsync(
-            Id, Pin, high: true, delayMs: 0, pulseWidthMs, durationMs: 60_000, maxRows: 10_000, cts.Token);
+            Id, Pin, high: true, delayMs: 0, pulseWidthMs, NeverMs, RowBudget, cts.Token);
 
         await WaitUntilAsync(() => device.Sent.Contains(High));
         await cts.CancelAsync();
@@ -351,7 +368,8 @@ public class DriveAndCaptureContractTests
         using var pump = new SamplePump(device);
 
         var result = await agent.DriveAndCaptureAsync(
-            Id, Pin, high: true, delayMs: 30_000, pulseWidthMs: 100, durationMs: 60_000, maxRows: 5, CancellationToken.None);
+            Id, Pin, high: true, delayMs: 30_000, pulseWidthMs: 100, NeverMs, maxRows: 5, CancellationToken.None)
+            .WaitAsync(Bound);
 
         Assert.Equal(new[] { Output, Low }, device.Sent.Where(IsPinCommand));
         Assert.Null(result.EdgeIssuedAtMs);
@@ -469,24 +487,49 @@ public class DriveAndCaptureContractTests
     }
 
     /// <summary>
-    /// Stands in for the device's sample stream: raises a sample on AI0 every couple of
-    /// milliseconds until disposed, each on its own timestamp so every one is a new row.
+    /// Stands in for the device's sample stream, raising samples on AI0, each on its own timestamp
+    /// so every one is a new row.
     /// </summary>
+    /// <remarks>
+    /// It trickles a few rows — enough for a first sample and some baseline, far short of
+    /// <see cref="RowBudget"/> — and then waits. Only once the pin has been written
+    /// <c>fillTheBudgetAfterPinWrites</c> times does it pour, which fills the row budget and ends
+    /// the capture. Left at the default it never pours: for the captures that end some other way.
+    /// </remarks>
     private sealed class SamplePump : IDisposable
     {
+        private const int Trickle = 50;
+
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _loop;
 
-        internal SamplePump(FakeStreamingDevice device)
+        internal SamplePump(FakeStreamingDevice device, int fillTheBudgetAfterPinWrites = int.MaxValue)
         {
             var channel = device.GetChannelsSnapshot().Single(c => c is { Type: ChannelType.Analog, ChannelNumber: 0 });
             _loop = Task.Run(async () =>
             {
                 var timestamp = new DateTime(2026, 11, 23, 12, 0, 0, DateTimeKind.Local);
-                while (!_stop.IsCancellationRequested)
+                void Raise()
                 {
                     channel.SetActiveSample(new DataSample(timestamp, 1.25));
                     timestamp = timestamp.AddMilliseconds(1);
+                }
+
+                for (var raised = 0; !_stop.IsCancellationRequested; raised++)
+                {
+                    if (device.Sent.Count(IsPinCommand) >= fillTheBudgetAfterPinWrites)
+                    {
+                        // A batch at a time, so the capture's reader gets the core between them.
+                        for (var i = 0; i < 100; i++)
+                        {
+                            Raise();
+                        }
+                    }
+                    else if (raised < Trickle)
+                    {
+                        Raise();
+                    }
+
                     await Task.Delay(2);
                 }
             });
