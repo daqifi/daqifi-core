@@ -80,7 +80,23 @@ public class McpRegistryManifestTests
                 + "for the MCP Registry to read its ownership token from (issue #726).")));
 
     private static string ReleaseWorkflowText =>
-        File.ReadAllText(PathFromRoot(".github/workflows/release.yml"));
+        File.ReadAllText(PathFromRoot(".github/workflows/release.yml")).ReplaceLineEndings("\n");
+
+    /// <summary>
+    /// The <c>mcp-registry</c> job of release.yml, from its key to the end of the file.
+    /// </summary>
+    private static string RegistryJobText
+    {
+        get
+        {
+            var text = ReleaseWorkflowText;
+            var start = text.IndexOf("\n  mcp-registry:\n", StringComparison.Ordinal);
+
+            Assert.True(start >= 0, "release.yml no longer has an mcp-registry job (issue #726).");
+
+            return text[start..];
+        }
+    }
 
     /// <summary>
     /// The server name claimed by the <c>mcp-name:</c> token in the packaged README, or null.
@@ -242,7 +258,20 @@ public class McpRegistryManifestTests
         // `login github-oidc` reads the workflow's OIDC token; without id-token: write it is not
         // issued and authentication fails. The NuGet login step needs the same permission, so
         // this is easy to assume is someone else's problem and remove.
-        Assert.Contains("id-token: write", ReleaseWorkflowText, StringComparison.Ordinal);
+        Assert.Contains("id-token: write", RegistryJobText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_DoesNotListAPrerelease()
+    {
+        // release.yml also publishes prereleases to NuGet, where nobody restores one without
+        // asking for it. The registry has no such opt-in, so v2.0.0-rc.1 must not reach it
+        // (issue #1050). The condition sits on the job so that no step can be left outside it.
+        Assert.Contains(
+            "\n    if: ${{ !contains(github.ref_name, '-') }}\n", RegistryJobText, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "mcp-publisher", ReleaseWorkflowText.Replace(RegistryJobText, ""), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -259,13 +288,17 @@ public class McpRegistryManifestTests
     public void ReleaseWorkflow_ListsTheVersionOnlyAfterPushingIt()
     {
         // The registry fetches the package's README to verify ownership, so the version has to
-        // be on nuget.org before the listing is published. Ordering the steps the other way
-        // round would fail every release with "package does not exist", and only for the version
-        // being released, so a local run of anything would still look fine.
-        var push = ReleaseWorkflowText.IndexOf("nuget push nupkgs/Daqifi.Mcp", StringComparison.Ordinal);
-        var publish = ReleaseWorkflowText.IndexOf("mcp-publisher publish", StringComparison.Ordinal);
+        // be on nuget.org before the listing is published. Listing it first would fail every
+        // release with "package does not exist", and only for the version being released, so a
+        // local run of anything would still look fine.
+        // The push is in the `publish` job and the listing in its own, so `needs` is the order.
+        var pushJob = ReleaseWorkflowText.Replace(RegistryJobText, "");
 
-        Assert.True(push >= 0 && publish > push,
+        Assert.Contains("\n  publish:\n", pushJob, StringComparison.Ordinal);
+        Assert.Contains("nuget push nupkgs/Daqifi.Mcp", pushJob, StringComparison.Ordinal);
+        Assert.Contains("mcp-publisher publish", RegistryJobText, StringComparison.Ordinal);
+        Assert.True(
+            RegistryJobText.Contains("\n    needs: publish\n", StringComparison.Ordinal),
             "release.yml must push Daqifi.Mcp to NuGet before publishing the manifest to the MCP "
             + "Registry; the registry verifies ownership by reading the published package's "
             + "README (issue #726).");

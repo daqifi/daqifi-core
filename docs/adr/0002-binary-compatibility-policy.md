@@ -88,11 +88,11 @@ in place.
   constructor and `Deconstruct`, on both target frameworks, against the
   `PackageValidationBaselineVersion` package from nuget.org. That is expected under this
   decision, not a reason for a major-version bump. The same PR handles it as the intentional
-  break `CONTRIBUTING.md` ("The published package is the second opinion") describes: remove the
-  old signatures from `PublicAPI.Shipped.txt` and check in the `CompatibilitySuppressions.xml`
+  break `CONTRIBUTING.md` ("The published package is the second opinion") describes: add
+  `*REMOVED*` lines for the old signatures to `PublicAPI.Unshipped.txt` and check in the `CompatibilitySuppressions.xml`
   that `-p:ApiCompatGenerateSuppressionFile=true` generates.
 - Remove those suppressions in the change that bumps `PackageValidationBaselineVersion` to a
-  release containing the new constructor. This is required, not tidying: once the baseline no
+  release containing the new constructor (`scripts/post-release.py` does both). This is required, not tidying: once the baseline no
   longer has the old signatures the entries suppress nothing, and ApiCompat fails the pack with
   "Unnecessary suppressions found".
 
