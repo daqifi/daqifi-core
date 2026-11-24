@@ -40,17 +40,46 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
     /// <summary>
     /// Initializes a new firmware update service. The optional <paramref name="logger"/> defaults to
     /// a no-op logger (<see cref="NullLogger{T}.Instance"/>) when omitted, so the service is usable
-    /// without wiring up logging. <paramref name="usbLocationProvider"/> resolves an enumerated
-    /// bootloader's USB physical-location key when targeting by <see cref="FirmwareUpdateTarget.LocationKey"/>; when null,
-    /// a platform-default provider is used (Windows → WMI, others → no-op fallback, which makes
-    /// location-key targeting a no-op).
+    /// without wiring up logging.
     /// </summary>
+    /// <param name="hidTransport">The HID transport used to talk to the PIC32 bootloader.</param>
+    /// <param name="firmwareDownloadService">The service used to find and download firmware releases.</param>
+    /// <param name="externalProcessRunner">Runs the external WiFi module flash tool.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="options">Optional timing and behaviour settings; defaults are used when omitted.</param>
     public FirmwareUpdateService(
         IHidTransport hidTransport,
         IFirmwareDownloadService firmwareDownloadService,
         IExternalProcessRunner externalProcessRunner,
         ILogger<FirmwareUpdateService>? logger = null,
-        IBootloaderProtocol? bootloaderProtocol = null,
+        FirmwareUpdateServiceOptions? options = null)
+        : this(
+            hidTransport,
+            firmwareDownloadService,
+            externalProcessRunner,
+            logger,
+            bootloaderProtocol: null,
+            hidDeviceEnumerator: null,
+            options,
+            usbLocationProvider: null)
+    {
+    }
+
+    /// <summary>
+    /// The constructor the public one forwards to, carrying the seams tests replace.
+    /// <paramref name="logger"/> and <paramref name="bootloaderProtocol"/> have no default so a call
+    /// can never bind ambiguously between this overload and the public one.
+    /// <paramref name="usbLocationProvider"/> resolves an enumerated bootloader's USB
+    /// physical-location key when targeting by <c>targetLocationKey</c>; when null, a
+    /// platform-default provider is used (Windows → WMI, others → no-op fallback, which makes
+    /// location-key targeting a no-op).
+    /// </summary>
+    internal FirmwareUpdateService(
+        IHidTransport hidTransport,
+        IFirmwareDownloadService firmwareDownloadService,
+        IExternalProcessRunner externalProcessRunner,
+        ILogger<FirmwareUpdateService>? logger,
+        IBootloaderProtocol? bootloaderProtocol,
         IHidDeviceEnumerator? hidDeviceEnumerator = null,
         FirmwareUpdateServiceOptions? options = null,
         IUsbLocationProvider? usbLocationProvider = null)

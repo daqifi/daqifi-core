@@ -259,8 +259,8 @@ public class PublicApiTrackingTests
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.Contains("Daqifi.Core.Device.DaqifiDevice", declared);
-        // Generic: mangled as `IMessageConsumer\`1` by reflection.
-        Assert.Contains("Daqifi.Core.Communication.Consumers.IMessageConsumer<T>", declared);
+        // Generic: mangled as `IInboundMessage\`1` by reflection.
+        Assert.Contains("Daqifi.Core.Communication.Messages.IInboundMessage<T>", declared);
         // Global namespace: the protoc-generated message type has no namespace at all.
         Assert.Contains("DaqifiOutMessage", declared);
     }

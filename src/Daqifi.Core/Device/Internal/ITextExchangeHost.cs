@@ -1,7 +1,7 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
-using Daqifi.Core.Device.Protocol;
+using Daqifi.Core.Communication.Messages;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Threading;

@@ -11,7 +11,6 @@ using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
-using Daqifi.Core.Device.Protocol;
 
 namespace Daqifi.Core.Device.Discovery;
 

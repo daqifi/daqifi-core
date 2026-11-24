@@ -7,7 +7,7 @@ namespace Daqifi.Core.Firmware;
 /// Parses Intel HEX format files into structured records, with support for
 /// memory protection ranges to skip calibration data regions.
 /// </summary>
-public class IntelHexParser
+internal class IntelHexParser
 {
     /// <summary>
     /// Default protected memory range start address (calibration data).

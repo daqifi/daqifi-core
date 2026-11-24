@@ -15,7 +15,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// which returns null for every port, preserving the legacy "probe every
 /// port" behavior.
 /// </remarks>
-public interface IUsbPortDescriptorProvider
+internal interface IUsbPortDescriptorProvider
 {
     /// <summary>
     /// Returns the USB descriptor for <paramref name="portName"/>, or
@@ -30,4 +30,4 @@ public interface IUsbPortDescriptorProvider
 /// </summary>
 /// <param name="VendorId">USB vendor ID (e.g. 0x04D8 for DAQiFi/Microchip).</param>
 /// <param name="ProductId">USB product ID (e.g. 0xF794 for DAQiFi USB CDC mode).</param>
-public sealed record UsbPortDescriptor(int VendorId, int ProductId);
+internal sealed record UsbPortDescriptor(int VendorId, int ProductId);
