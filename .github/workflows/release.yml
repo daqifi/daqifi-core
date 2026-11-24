@@ -162,10 +162,9 @@ jobs:
         tar xzf "$archive" mcp-publisher
 
     - name: Stamp the release version into the MCP manifest
-      # The committed manifest carries the last released version so it is valid
-      # to read and to `mcp-publisher validate` locally; the tag is what actually
-      # ships, and both version fields have to name the same package version the
-      # registry will go and verify.
+      # The version committed in the manifest is never what ships; the tag is, and
+      # both version fields have to name the same package version the registry will
+      # go and verify.
       run: |
         jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' \
           src/Daqifi.Mcp/.mcp/server.json > server.json.tmp
