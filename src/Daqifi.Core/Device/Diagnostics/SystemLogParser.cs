@@ -22,7 +22,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// boundary entry that arrives with noise welded onto its front.
 /// </para>
 /// </remarks>
-public static class SystemLogParser
+internal static class SystemLogParser
 {
     /// <summary>
     /// The characters stripped from each end of a line before it is classified. Deliberately not

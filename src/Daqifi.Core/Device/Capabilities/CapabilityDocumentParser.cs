@@ -20,7 +20,7 @@ namespace Daqifi.Core.Device.Capabilities;
 /// firmware's schema rules make additive change routine, and unknown fields must be ignored.
 /// </para>
 /// </remarks>
-public static class CapabilityDocumentParser
+internal static class CapabilityDocumentParser
 {
     /// <summary>
     /// Attempts to parse a capability document from a single JSON string.

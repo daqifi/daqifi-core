@@ -1,8 +1,7 @@
 using Daqifi.Core.Communication.Messages;
-using Daqifi.Core.Device.Protocol;
 using Xunit;
 
-namespace Daqifi.Core.Tests.Device.Protocol;
+namespace Daqifi.Core.Tests.Communication.Messages;
 
 /// <summary>
 /// Unit tests for the <see cref="ProtobufProtocolHandler"/> class.
@@ -10,35 +9,7 @@ namespace Daqifi.Core.Tests.Device.Protocol;
 public class ProtobufProtocolHandlerTests
 {
     [Fact]
-    public void CanHandle_WithDaqifiOutMessage_ReturnsTrue()
-    {
-        // Arrange
-        var handler = new ProtobufProtocolHandler();
-        var message = new GenericInboundMessage<object>(new DaqifiOutMessage());
-
-        // Act
-        var result = handler.CanHandle(message);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public void CanHandle_WithNonProtobufMessage_ReturnsFalse()
-    {
-        // Arrange
-        var handler = new ProtobufProtocolHandler();
-        var message = new GenericInboundMessage<object>("text message");
-
-        // Act
-        var result = handler.CanHandle(message);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public async Task HandleAsync_WithStatusMessage_CallsStatusHandler()
+    public void Handle_WithStatusMessage_CallsStatusHandler()
     {
         // Arrange
         var statusHandlerCalled = false;
@@ -56,10 +27,8 @@ public class ProtobufProtocolHandlerTests
             AnalogInPortNum = 8,
             DigitalPortNum = 16
         };
-        var inboundMessage = new GenericInboundMessage<object>(statusMessage);
-
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(statusMessage);
 
         // Assert
         Assert.True(statusHandlerCalled);
@@ -69,7 +38,7 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_WithStreamMessage_CallsStreamHandler()
+    public void Handle_WithStreamMessage_CallsStreamHandler()
     {
         // Arrange
         var streamHandlerCalled = false;
@@ -89,10 +58,8 @@ public class ProtobufProtocolHandlerTests
         streamMessage.AnalogInData.Add(100);
         streamMessage.AnalogInData.Add(200);
 
-        var inboundMessage = new GenericInboundMessage<object>(streamMessage);
-
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(streamMessage);
 
         // Assert
         Assert.True(streamHandlerCalled);
@@ -102,28 +69,7 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_WithNonProtobufMessage_DoesNotCallHandlers()
-    {
-        // Arrange
-        var statusHandlerCalled = false;
-        var streamHandlerCalled = false;
-
-        var handler = new ProtobufProtocolHandler(
-            statusMessageHandler: _ => statusHandlerCalled = true,
-            streamMessageHandler: _ => streamHandlerCalled = true);
-
-        var textMessage = new GenericInboundMessage<object>("text");
-
-        // Act
-        await handler.HandleAsync(textMessage);
-
-        // Assert
-        Assert.False(statusHandlerCalled);
-        Assert.False(streamHandlerCalled);
-    }
-
-    [Fact]
-    public async Task HandleAsync_WithFloatStreamMessage_CallsStreamHandler()
+    public void Handle_WithFloatStreamMessage_CallsStreamHandler()
     {
         // Arrange - a frame carrying pre-scaled floats (AnalogInDataFloat). No supported firmware
         // sends this shape on any transport, but the protocol defines it and detection must cover it.
@@ -144,10 +90,8 @@ public class ProtobufProtocolHandlerTests
         streamMessage.AnalogInDataFloat.Add(1.234f);
         streamMessage.AnalogInDataFloat.Add(2.345f);
 
-        var inboundMessage = new GenericInboundMessage<object>(streamMessage);
-
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(streamMessage);
 
         // Assert
         Assert.True(streamHandlerCalled, "Stream handler should be called for AnalogInDataFloat messages");
@@ -222,33 +166,21 @@ public class ProtobufProtocolHandlerTests
     }
 
     /// <summary>
-    /// The typed entry point exists so a caller that already holds a <see cref="DaqifiOutMessage"/>
-    /// does not have to wrap it just to be routed — an allocation per frame on a streaming device
-    /// (issue #490). It must route identically to <see cref="ProtobufProtocolHandler.HandleAsync"/>,
-    /// which is now built on it.
+    /// Each message type reaches its own handler and no other; an unclassifiable message reaches none.
     /// </summary>
     [Theory]
-    [InlineData(ProtobufMessageType.Status)]
-    [InlineData(ProtobufMessageType.Stream)]
-    [InlineData(ProtobufMessageType.Error)]
-    [InlineData(ProtobufMessageType.Unknown)]
-    public async Task Handle_RoutesTheSameWayHandleAsyncDoes(ProtobufMessageType messageType)
+    [InlineData(ProtobufMessageType.Status, "status")]
+    [InlineData(ProtobufMessageType.Stream, "stream")]
+    [InlineData(ProtobufMessageType.Error, "error")]
+    [InlineData(ProtobufMessageType.Unknown, null)]
+    public void Handle_RoutesToTheMatchingHandlerOnly(ProtobufMessageType messageType, string? expectedRoute)
     {
-        var viaHandle = new List<string>();
-        var viaHandleAsync = new List<string>();
+        var routed = new List<string>();
+        var handler = HandlerRecording(routed);
 
-        var handleHandler = HandlerRecording(viaHandle);
-        var handleAsyncHandler = HandlerRecording(viaHandleAsync);
+        handler.Handle(MessageOfType(messageType));
 
-        var message = MessageOfType(messageType);
-
-        handleHandler.Handle(message);
-        await handleAsyncHandler.HandleAsync(new GenericInboundMessage<object>(message));
-
-        Assert.Equal(viaHandleAsync, viaHandle);
-        Assert.Equal(
-            messageType == ProtobufMessageType.Unknown ? 0 : 1,
-            viaHandle.Count);
+        Assert.Equal(expectedRoute is null ? [] : [expectedRoute], routed);
     }
 
     [Fact]

@@ -344,7 +344,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// an observing initialization (#385). A connection that is not USB has nothing to route.
     /// </para>
     /// </remarks>
-    protected override void OnSendingInitializationCommands()
+    private protected override void OnSendingInitializationCommands()
     {
         if (IsUsbConnection)
         {
@@ -762,7 +762,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     #region Session restore after an automatic reconnect (issue #379)
 
     /// <inheritdoc />
-    protected override void CaptureSessionSnapshot() => _session.CaptureSessionSnapshot();
+    private protected override void CaptureSessionSnapshot() => _session.CaptureSessionSnapshot();
 
     /// <summary>
     /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -782,7 +782,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// duration.
     /// </para>
     /// </remarks>
-    protected override Task<bool> RestoreSessionSnapshotAsync(
+    private protected override Task<bool> RestoreSessionSnapshotAsync(
         ReconnectOptions options,
         CancellationToken cancellationToken)
         => _session.RestoreSessionSnapshotAsync(options, cancellationToken);
@@ -1565,7 +1565,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// is part of this device's public surface, so subscribers must keep seeing this device as
     /// the <c>sender</c>, and a subclass override must keep intercepting it.
     /// </remarks>
-    protected virtual void OnLowSdSpaceWarning(LowSdSpaceWarningEventArgs e)
+    private protected virtual void OnLowSdSpaceWarning(LowSdSpaceWarningEventArgs e)
     {
         LowSdSpaceWarning?.Invoke(this, e);
     }
