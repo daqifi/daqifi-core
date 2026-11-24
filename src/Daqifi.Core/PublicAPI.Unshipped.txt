@@ -85,6 +85,11 @@
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StartedWriteCount.get -> long?
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.Stop() -> void
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StopSafely(int timeoutMs = 1000) -> bool
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.HidLibraryDeviceEnumerator() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.IHidDeviceEnumerator
+*REMOVED*Daqifi.Core.Communication.Transport.IHidDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.Close() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IUdpTransport.CloseAsync() -> System.Threading.Tasks.Task!

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 
@@ -14,6 +15,7 @@ namespace Daqifi.Core.Tests.Build;
 /// <c>IUsbLocationProvider</c> was exactly this after the seam-carrying
 /// <c>FirmwareUpdateService</c> constructor became internal (#1028): the interface stayed public
 /// while its implementations, its factory and every constructor accepting it were internal.
+/// <c>IHidDeviceEnumerator</c>, the other seam on that constructor, went with it.
 /// </remarks>
 public class PublicInterfaceReachabilityTests
 {
@@ -44,10 +46,13 @@ public class PublicInterfaceReachabilityTests
     }
 
     [Fact]
-    public void TheUsbLocationProviderSeam_IsInternal_ButTheLocationKeyStaysPublic()
+    public void TheFirmwareUpdateTestSeams_AreInternal_ButTheLocationKeyStaysPublic()
     {
-        // The seam is Core's own; what discovery callers need is the key it produces.
+        // The seams are Core's own: the only constructors that take them are internal. What
+        // discovery callers need is the key the location provider produces.
         Assert.False(typeof(IUsbLocationProvider).IsVisible);
+        Assert.False(typeof(IHidDeviceEnumerator).IsVisible);
+        Assert.False(typeof(HidLibraryDeviceEnumerator).IsVisible);
 
         var locationKey = typeof(IDeviceInfo).GetProperty(nameof(IDeviceInfo.LocationKey));
         Assert.NotNull(locationKey);
