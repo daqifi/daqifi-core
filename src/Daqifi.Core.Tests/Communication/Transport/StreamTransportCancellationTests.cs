@@ -294,30 +294,177 @@ public class StreamTransportCancellationTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task SerialConnectAsync_TornDownMidOpen_ClosesThePortInsteadOfPublishingIt(bool dispose)
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task SerialConnectAsync_TornDownMidOpen_EndsTheWholeConnect(bool dispose, bool retry)
     {
         using var serial = new HeldSerialTransport();
-        var connect = serial.Transport.ConnectAsync(LongConnect);
+        var reported = new List<bool>();
+        serial.Transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+        var connect = serial.Transport.ConnectAsync(retry ? RetryAtOnce : LongConnect);
         var open = await serial.NextOpenAsync();
 
-        if (dispose)
-        {
-            serial.Transport.Dispose();
-        }
-        else
-        {
-            await serial.Transport.DisconnectAsync();
-        }
+        await TearDownAsync(serial.Transport, dispose);
+
+        // Ended without waiting for the stuck open, and never retried: a second open would pulse
+        // DTR and reconnect a device the caller has just disconnected.
+        var ex = await Record.ExceptionAsync(() => connect.WaitAsync(Budget));
+        Assert.IsType(dispose ? typeof(ObjectDisposedException) : typeof(TransportNotConnectedException), ex);
+        Assert.False(open.PortDisposed.IsCompleted);
 
         open.Release();
+        await open.PortDisposed.WaitAsync(Budget);
+        Assert.Equal(1, serial.OpenCount);
+        Assert.False(serial.Transport.IsConnected);
+        Assert.Empty(reported);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SerialConnectAsync_TornDownWhileWaitingOutABackoff_DoesNotRetry(bool dispose)
+    {
+        using var serial = new HeldSerialTransport();
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        serial.Transport.StatusChanged += (_, _) => failed.TrySetResult();
+        var connect = serial.Transport.ConnectAsync(new ConnectionRetryOptions
+        {
+            MaxAttempts = 2,
+            InitialDelay = TimeSpan.FromMinutes(1),
+            MaxDelay = TimeSpan.FromMinutes(1)
+        });
+        (await serial.NextOpenAsync()).Release(new IOException("not yet"));
+        await failed.Task.WaitAsync(Budget);
+
+        await TearDownAsync(serial.Transport, dispose);
 
         var ex = await Record.ExceptionAsync(() => connect.WaitAsync(Budget));
         Assert.IsType(dispose ? typeof(ObjectDisposedException) : typeof(TransportNotConnectedException), ex);
-        Assert.True(open.PortDisposed.IsCompleted);
-        Assert.False(serial.Transport.IsConnected);
+        Assert.Equal(1, serial.OpenCount);
     }
+
+    [Fact]
+    public async Task SerialConnectAsync_DisconnectedWhileWaitingForAnAbandonedOpen_DoesNotOpenAfterwards()
+    {
+        using var serial = new HeldSerialTransport();
+        using var cts = new CancellationTokenSource();
+        var canceled = serial.Transport.ConnectAsync(LongConnect, cts.Token);
+        var open = await serial.NextOpenAsync();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled.WaitAsync(Budget));
+        var waiting = serial.Transport.ConnectAsync(LongConnect);
+
+        await serial.Transport.DisconnectAsync();
+
+        await Assert.ThrowsAsync<TransportNotConnectedException>(() => waiting.WaitAsync(Budget));
+        open.Release();
+        await open.PortDisposed.WaitAsync(Budget);
+        Assert.Equal(1, serial.OpenCount);
+    }
+
+    [Fact]
+    public async Task SerialConnectAsync_AfterADisconnectMidOpen_ConnectsAndKeepsItsOwnPort()
+    {
+        // The disconnected connect is still unwinding when the next one starts. Neither its cleanup
+        // nor its late open may touch the new connection.
+        using var serial = new HeldSerialTransport();
+        var first = serial.Transport.ConnectAsync(RetryAtOnce);
+        var firstOpen = await serial.NextOpenAsync();
+        await serial.Transport.DisconnectAsync();
+        var reported = new List<bool>();
+        serial.Transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+
+        var second = serial.Transport.ConnectAsync(LongConnect);
+        firstOpen.Release();
+        var secondOpen = await serial.NextOpenAsync();
+        Assert.True(firstOpen.PortDisposed.IsCompleted, "The second open must not start until the first port is closed.");
+        secondOpen.Release();
+        await second.WaitAsync(Budget);
+        await Assert.ThrowsAsync<TransportNotConnectedException>(() => first.WaitAsync(Budget));
+
+        Assert.False(secondOpen.PortDisposed.IsCompleted);
+        Assert.Equal(new[] { true }, reported);
+        Assert.Equal(2, serial.OpenCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TcpConnectAsync_TornDownMidDial_AbortsTheDialAndDoesNotRetry(bool dispose)
+    {
+        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 9760);
+        var dials = new ConcurrentQueue<CancellationToken>();
+        var dialing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.ConnectTaskFactory = (_, token) =>
+        {
+            dials.Enqueue(token);
+            dialing.TrySetResult();
+            return Task.Delay(Timeout.Infinite, token);
+        };
+        var reported = new List<bool>();
+        transport.StatusChanged += (_, e) => reported.Add(e.IsConnected);
+        var connect = transport.ConnectAsync(RetryAtOnce);
+        await dialing.Task.WaitAsync(Budget);
+
+        await TearDownAsync(transport, dispose);
+
+        var ex = await Record.ExceptionAsync(() => connect.WaitAsync(Budget));
+        Assert.IsType(dispose ? typeof(ObjectDisposedException) : typeof(TransportNotConnectedException), ex);
+        Assert.True(Assert.Single(dials).IsCancellationRequested);
+        Assert.Empty(reported);
+    }
+
+    [Fact]
+    public async Task TcpConnectAsync_DisconnectedAsTheDialCompletes_DoesNotPublishTheSocket()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            transport.ConnectTaskFactory = async (client, _) =>
+            {
+                await client.ConnectAsync(IPAddress.Loopback, port, CancellationToken.None);
+                await transport.DisconnectAsync();
+            };
+
+            await Assert.ThrowsAsync<TransportNotConnectedException>(() => transport.ConnectAsync(RetryAtOnce));
+
+            Assert.False(transport.IsConnected);
+            Assert.False(transport.IsDropDetectionArmed);
+
+            transport.ConnectTaskFactory = null;
+            await transport.ConnectAsync().WaitAsync(Budget);
+            Assert.True(transport.IsConnected);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task TearDownAsync(IStreamTransport transport, bool dispose)
+    {
+        if (dispose)
+        {
+            transport.Dispose();
+        }
+        else
+        {
+            await transport.DisconnectAsync();
+        }
+    }
+
+    /// <summary>Several attempts with no backoff between them.</summary>
+    private static ConnectionRetryOptions RetryAtOnce => new()
+    {
+        MaxAttempts = 3,
+        InitialDelay = TimeSpan.Zero,
+        ConnectionTimeout = TimeSpan.FromMinutes(1)
+    };
 
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
 

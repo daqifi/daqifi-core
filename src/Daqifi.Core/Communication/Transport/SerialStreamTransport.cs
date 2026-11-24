@@ -1,4 +1,5 @@
 using System.IO.Ports;
+using System.Runtime.ExceptionServices;
 using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Communication.Transport;
@@ -87,14 +88,18 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     private readonly TransportConnectionWatchdog _watchdog;
     private SerialPort? _serialPort;
 
-    // The port an attempt is opening right now, and the attempt's claim on it: whoever swaps it out
-    // (a disconnect, a cancel) disowns the open, and the attempt that finds its port gone closes it
-    // instead of publishing it.
-    private SerialPort? _openingPort;
+    // Signalled (and replaced) by every disconnect and dispose, to end the connects in flight. Never
+    // disposed: it holds no timer or wait handle, and a late Cancel must stay safe.
+    private CancellationTokenSource _teardown = new();
 
-    // Completes when an open the caller cancelled has finally returned and its port is closed.
-    private Task? _abandonedOpen;
-    private bool _disposed;
+    // Makes "is this connect still wanted?" and publishing its handle one step against a teardown
+    // taking that handle. Never held while anything blocking or any subscriber runs.
+    private readonly Lock _handleLock = new();
+
+    // The most recent open, which may have outlived the connect that started it. It never faults,
+    // and by the time it completes a port nobody is waiting for any more has been closed.
+    private Task _lastOpen = Task.CompletedTask;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Blocking-read timeout applied once the port is open. The connection timeout is only
@@ -341,6 +346,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
     /// </para>
     /// <para>
+    /// <see cref="DisconnectAsync"/> and <see cref="Dispose"/> end a connect in flight the same way,
+    /// retries included.
+    /// </para>
+    /// <para>
     /// A failed <see cref="SerialPort.Open"/> is reported as a
     /// <see cref="SerialPortConnectException"/> naming the port and why it could not be opened,
     /// rather than the platform's own exception, which on macOS and Linux calls every failure —
@@ -373,10 +382,16 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// Thrown when the final attempt could not start because an earlier open, abandoned by a cancel,
     /// still had not returned.
     /// </exception>
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the transport was disconnected while it was connecting.
+    /// </exception>
     public async Task ConnectAsync(
         ConnectionRetryOptions? retryOptions = null,
         CancellationToken cancellationToken = default)
     {
+        // Read before the disposed check, so a dispose that this check misses is one whose signal
+        // this connect sees.
+        var teardownToken = Volatile.Read(ref _teardown).Token;
         ThrowIfDisposed();
 
         if (IsConnected)
@@ -387,18 +402,25 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // it armed. StartDropDetection() re-arms once the connect succeeds.
         _watchdog.Disarm();
 
+        // The port this connect published, so cleaning up after it can never take down the port of a
+        // connect that has replaced it.
+        SerialPort? published = null;
+
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
             connectAttempt: async (options, attemptToken) =>
             {
                 // A dead port still held from the previous session is released, not overwritten.
-                _serialPort?.Dispose();
-                _serialPort = null;
+                SerialPort? dead;
+                lock (_handleLock)
+                {
+                    attemptToken.ThrowIfCancellationRequested();
+                    (dead, _serialPort) = (_serialPort, null);
+                }
 
-                await WaitForAbandonedOpenAsync(options.ConnectionTimeout, attemptToken).ConfigureAwait(false);
+                dead?.Dispose();
 
-                // Disposed while waiting here or out a backoff: there is nothing left to connect.
-                ThrowIfDisposed();
+                await WaitForLastOpenAsync(options.ConnectionTimeout, attemptToken).ConfigureAwait(false);
 
                 // Last chance to bail before the open starts — on a serial port a DTR-triggered MCU
                 // reset also fires here, so not opening at all is the only way to honor a cancel
@@ -419,25 +441,49 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 // After a successful open, swap the connect timeouts for the (shorter)
                 // operational ones — both directions, not just reads (#399).
                 ApplyOperationalTimeouts(port);
-                _serialPort = port;
 
-                // Armed for this exact port before the executor announces the connection: a
+                // Published and armed in one step, before the executor announces the connection: a
                 // StatusChanged(true) subscriber may disconnect (which disarms) or reconnect
                 // (which arms its own session) synchronously, and arming afterwards would act on
                 // whatever the field holds by then.
-                StartDropDetection();
+                lock (_handleLock)
+                {
+                    if (!attemptToken.IsCancellationRequested)
+                    {
+                        _serialPort = published = port;
+                        _watchdog.Arm(port);
+                    }
+                }
+
+                if (!ReferenceEquals(published, port))
+                {
+                    DisposeQuietly(port);
+                    attemptToken.ThrowIfCancellationRequested();
+                }
+
+                StartPresencePolling();
             },
             onAttemptFailed: () =>
             {
                 // An attempt can fail after it armed detection for its port (a StatusChanged(true)
                 // subscriber that throws fails the attempt), so the failed attempt's detection and
                 // presence polling are retired with its port.
-                _watchdog.Disarm();
-                _serialPort?.Dispose();
-                _serialPort = null;
+                lock (_handleLock)
+                {
+                    if (published is not null && ReferenceEquals(_serialPort, published))
+                    {
+                        _watchdog.Disarm();
+                        _serialPort = null;
+                    }
+                }
+
+                published?.Dispose();
+                published = null;
             },
             onStatusChanged: OnStatusChanged,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            teardownToken,
+            CreateTornDownException).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -447,101 +493,115 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     private async Task OpenAsync(SerialPort port, CancellationToken cancellationToken)
     {
-        Volatile.Write(ref _openingPort, port);
+        const int pending = 0, returned = 1, abandoned = 2;
+        var handoff = pending;
 
         // LongRunning: an open can block for as long as the driver likes, and must not hold a
         // pool thread (or the caller's, which may be a UI thread) while it does.
-        var open = Task.Factory.StartNew(
+        var open = Task.Factory.StartNew<Exception?>(
             () =>
             {
-                if (PortOpener is { } opener)
+                Exception? failure = null;
+                try
                 {
-                    opener(port);
+                    if (PortOpener is { } opener)
+                    {
+                        opener(port);
+                    }
+                    else
+                    {
+                        port.Open();
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    port.Open();
+                    failure = ex;
                 }
+
+                // Whoever is last to touch the port closes it. Closing it from the connect that
+                // gave up would race the open, which would then leave its handle behind in a port
+                // nobody holds.
+                if (Interlocked.CompareExchange(ref handoff, returned, pending) == abandoned)
+                {
+                    DisposeQuietly(port);
+                }
+
+                return failure;
             },
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
+        _lastOpen = open;
 
+        Exception? error;
         try
         {
-            await open.WaitAsync(cancellationToken).ConfigureAwait(false);
+            error = await open.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            Interlocked.CompareExchange(ref _openingPort, null, port);
-
-            // Closed by whoever is last to touch it. Disposing it here would race the open, which
-            // would then leave its handle behind in a port nobody holds.
-            _abandonedOpen = open.ContinueWith(
-                completed =>
-                {
-                    _ = completed.Exception;
-                    DisposeQuietly(port);
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Interlocked.CompareExchange(ref _openingPort, null, port);
-            DisposeQuietly(port);
-
-            if (ex is UnauthorizedAccessException or IOException)
+            if (Interlocked.CompareExchange(ref handoff, abandoned, pending) == returned)
             {
-                // Name the failure instead of forwarding the platform's guess at it (#424).
-                // The evidence is gathered here, immediately after the failed open, because it
-                // is only meaningful in that moment; the classification itself lives in
-                // SerialPortConnectException.Classify. Argument and state exceptions are left
-                // alone — a bad baud rate or an already-open port is a caller bug, not a port
-                // that could not be opened.
-                throw SerialPortConnectException.FromOpenFailure(
-                    _portName, ex, TryObservePortPresence(), TryRuleOutPermissionGate());
+                DisposeQuietly(port);
             }
 
             throw;
         }
 
-        if (!ReferenceEquals(Interlocked.CompareExchange(ref _openingPort, null, port), port) || _disposed)
-        {
-            // Disconnected or disposed while the open was in flight. Nobody is left to close it.
-            DisposeQuietly(port);
-            ThrowIfDisposed();
-            throw new TransportNotConnectedException(
-                $"Serial transport was disconnected while it was connecting ({_portName}).");
-        }
-    }
-
-    /// <summary>
-    /// Waits for an open abandoned by an earlier cancel to let go of the port, so a reconnect does
-    /// not open it a second time alongside the first.
-    /// </summary>
-    private async Task WaitForAbandonedOpenAsync(TimeSpan timeout, CancellationToken cancellationToken)
-    {
-        if (_abandonedOpen is not { } abandoned)
+        if (error is null)
         {
             return;
         }
 
+        DisposeQuietly(port);
+
+        if (error is UnauthorizedAccessException or IOException)
+        {
+            // Name the failure instead of forwarding the platform's guess at it (#424).
+            // The evidence is gathered here, immediately after the failed open, because it
+            // is only meaningful in that moment; the classification itself lives in
+            // SerialPortConnectException.Classify. Argument and state exceptions are left
+            // alone — a bad baud rate or an already-open port is a caller bug, not a port
+            // that could not be opened.
+            throw SerialPortConnectException.FromOpenFailure(
+                _portName, error, TryObservePortPresence(), TryRuleOutPermissionGate());
+        }
+
+        ExceptionDispatchInfo.Throw(error);
+    }
+
+    /// <summary>
+    /// Waits for an open abandoned by an earlier connect to let go of the port, so a reconnect does
+    /// not open it a second time alongside the first.
+    /// </summary>
+    private async Task WaitForLastOpenAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
         try
         {
-            await abandoned.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            await _lastOpen.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         catch (TimeoutException ex)
         {
             throw new TimeoutException(
-                $"Serial port {_portName} is still being opened by an earlier connect that was canceled; "
+                $"Serial port {_portName} is still being opened by an earlier connect that was abandoned; "
                 + $"it did not finish within {timeout.TotalSeconds:0.###}s.", ex);
         }
-
-        _abandonedOpen = null;
     }
+
+    /// <summary>
+    /// Ends every connect in flight, including one waiting out a backoff. Called first by every
+    /// teardown, so a connect cannot redial or publish a handle after the caller has closed the
+    /// transport; a connect started afterwards gets the fresh source and is unaffected.
+    /// </summary>
+    private void EndConnectsInFlight() =>
+        Interlocked.Exchange(ref _teardown, new CancellationTokenSource()).Cancel();
+
+    /// <summary>What a connect ended by a disconnect or a dispose throws.</summary>
+    private Exception CreateTornDownException(Exception cause) =>
+        _disposed
+            ? new ObjectDisposedException(nameof(SerialStreamTransport))
+            : new TransportNotConnectedException(
+                $"Serial transport was disconnected while it was connecting ({_portName}).", cause);
 
     private static void DisposeQuietly(SerialPort port)
     {
@@ -587,23 +647,27 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     private void Close()
     {
+        EndConnectsInFlight();
+
         // Disarm before touching the port. Closing it makes any in-flight read fail, and the
         // port stops being "present" the moment it is released, so a still-armed watchdog could
         // report an intentional disconnect as a lost connection.
-        _watchdog.Disarm();
-
-        // Disown an open still in flight, so the attempt closes its port instead of publishing it.
-        Volatile.Write(ref _openingPort, null);
+        SerialPort? port;
+        lock (_handleLock)
+        {
+            _watchdog.Disarm();
+            (port, _serialPort) = (_serialPort, null);
+        }
 
         // Gated on holding a port, not on IsConnected: a port that closed underneath us (unplug,
         // DTR reset re-enumeration) reads IsOpen == false while still held, and returning early
         // on it would leave it held with the watchdog already disarmed.
-        if (_serialPort is null)
+        if (port is null)
             return;
 
         try
         {
-            _serialPort?.Close();
+            port.Close();
         }
         catch (Exception ex)
         {
@@ -612,8 +676,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         }
         finally
         {
-            _serialPort?.Dispose();
-            _serialPort = null;
+            port.Dispose();
             OnStatusChanged(false, null);
         }
     }
@@ -666,7 +729,14 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     internal void StartDropDetection()
     {
         _watchdog.Arm(_serialPort!);
+        StartPresencePolling();
+    }
 
+    /// <summary>
+    /// Starts port-presence polling for the armed session, when the probe can see the port.
+    /// </summary>
+    private void StartPresencePolling()
+    {
         if (_livenessCheckInterval <= TimeSpan.Zero)
         {
             return;
@@ -912,6 +982,9 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     {
         if (!_disposed)
         {
+            // Set before connects in flight are ended, so they see why, and no connect can start after.
+            _disposed = true;
+
             try
             {
                 Close();
@@ -923,7 +996,6 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 
             _watchdog.Dispose();
             _serialPort?.Dispose();
-            _disposed = true;
         }
     }
 }

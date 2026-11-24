@@ -96,7 +96,9 @@ public interface IStreamTransport : IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Closes the transport connection.
+    /// Closes the transport connection. A connect still in flight is ended too, retries included:
+    /// nothing reopens the connection after this returns until <see cref="ConnectAsync"/> is called
+    /// again.
     /// </summary>
     /// <remarks>
     /// Cancellation never leaves the connection open and never throws
