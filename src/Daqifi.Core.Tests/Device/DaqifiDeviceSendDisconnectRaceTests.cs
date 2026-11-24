@@ -362,9 +362,7 @@ public class DaqifiDeviceSendDisconnectRaceTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed)
             {
@@ -376,16 +374,12 @@ public class DaqifiDeviceSendDisconnectRaceTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

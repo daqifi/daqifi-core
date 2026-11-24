@@ -127,7 +127,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// a LAN command sent too soon is swallowed by the bridge. The failure-path wait does not
     /// observe the caller token — that token is already cancelled when a flash is cancelled, and
     /// cancelling the settle would skip the exit.
-    /// <see cref="WifiBridgeActivator.Deactivate(string, System.Threading.CancellationToken)"/>
+    /// <see cref="WifiBridgeActivator.DeactivateAsync(string, System.Threading.CancellationToken)"/>
     /// paces the same transition over a raw serial port; this is the managed-connection equivalent
     /// and defaults to that pace. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit
     /// tests).
@@ -144,8 +144,9 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan WincBootPromptResponseDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// Optional callback invoked synchronously when the WINC "Power cycle WINC" prompt is detected,
-    /// before the <see cref="WincBootPromptResponseDelay"/> wait. Intended for the host to open a
+    /// Optional callback awaited when the WINC "Power cycle WINC" prompt is detected, before the
+    /// <see cref="WincBootPromptResponseDelay"/> wait; the flash tool stays parked at its prompt
+    /// until the returned task completes. Intended for the host to open a
     /// raw serial port and send the bridge-activation commands (LAN:FWUpdate / LAN:APPLY) that
     /// trigger the device's bridge-mode state machine immediately before the tool starts
     /// programming. No longer required to get into the bridge at all: prep now sends the
@@ -154,10 +155,16 @@ public sealed class FirmwareUpdateServiceOptions
     /// flag brings it straight back, which is what
     /// <see cref="WincBootPromptResponseDelay"/> then waits out. Leave it unset unless the board
     /// genuinely needs that bounce at the prompt. Kept injectable so the raw-serial specifics stay in the host while Core owns
-    /// the flash lifecycle, prompt detection, and response timing. Exceptions thrown by the
-    /// callback are logged and swallowed — they must not abort the flash.
+    /// the flash lifecycle, prompt detection, and response timing. Exceptions from the callback are
+    /// logged and swallowed — they must not abort the flash.
+    /// <para>
+    /// The token is the flash run's own: it is signalled when the run is canceled or times out, and
+    /// the callback must observe it, because the run cannot finish unwinding until the callback
+    /// returns. <see cref="WifiBridgeActivator.ActivateAsync(string, System.Threading.CancellationToken)"/>
+    /// does.
+    /// </para>
     /// </summary>
-    public Action? WifiBridgeActivationCallback { get; set; }
+    public Func<CancellationToken, Task>? WifiBridgeActivationCallback { get; set; }
 
     /// <summary>
     /// Total attempts (initial + retries) for the external WINC flash process when an attempt fails

@@ -99,38 +99,6 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
-    /// Connects to a DAQiFi device over TCP synchronously using a hostname.
-    /// </summary>
-    /// <param name="host">The hostname or IP address string to connect to.</param>
-    /// <param name="port">The TCP port to connect to.</param>
-    /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when host is null or empty.</exception>
-    public static DaqifiStreamingDevice ConnectTcp(
-        string host,
-        int port,
-        DeviceConnectionOptions? options = null)
-    {
-        return ConnectTcpAsync(host, port, options, CancellationToken.None).GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// Connects to a DAQiFi device over TCP synchronously using an IP address.
-    /// </summary>
-    /// <param name="ipAddress">The IP address to connect to.</param>
-    /// <param name="port">The TCP port to connect to.</param>
-    /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when ipAddress is null.</exception>
-    public static DaqifiStreamingDevice ConnectTcp(
-        IPAddress ipAddress,
-        int port,
-        DeviceConnectionOptions? options = null)
-    {
-        return ConnectTcpAsync(ipAddress, port, options, CancellationToken.None).GetAwaiter().GetResult();
-    }
-
-    /// <summary>
     /// Connects to a DAQiFi device over a serial port asynchronously using the default baud rate (9600).
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
@@ -189,37 +157,6 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
-    /// Connects to a DAQiFi device over a serial port synchronously using the default baud rate (9600).
-    /// </summary>
-    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
-    /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
-    public static DaqifiStreamingDevice ConnectSerial(
-        string portName,
-        DeviceConnectionOptions? options = null)
-    {
-        return ConnectSerialAsync(portName, SerialDefaults.BaudRate, options, CancellationToken.None).GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// Connects to a DAQiFi device over a serial port synchronously with a specified baud rate.
-    /// </summary>
-    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
-    /// <param name="baudRate">The baud rate for the serial connection.</param>
-    /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when baudRate is less than or equal to zero.</exception>
-    public static DaqifiStreamingDevice ConnectSerial(
-        string portName,
-        int baudRate,
-        DeviceConnectionOptions? options = null)
-    {
-        return ConnectSerialAsync(portName, baudRate, options, CancellationToken.None).GetAwaiter().GetResult();
-    }
-
-    /// <summary>
     /// Connects to a DAQiFi device asynchronously using device discovery information.
     /// </summary>
     /// <param name="deviceInfo">The device information from discovery.</param>
@@ -262,22 +199,6 @@ public static class DaqifiDeviceFactory
                 throw new NotSupportedException(
                     $"Connection type '{deviceInfo.ConnectionType}' is not supported.");
         }
-    }
-
-    /// <summary>
-    /// Connects to a DAQiFi device synchronously using device discovery information.
-    /// </summary>
-    /// <param name="deviceInfo">The device information from discovery.</param>
-    /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when deviceInfo is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IPAddress or Port for WiFi connections).</exception>
-    /// <exception cref="NotSupportedException">Thrown when the connection type is not supported (e.g., Serial, HID).</exception>
-    public static DaqifiStreamingDevice ConnectFromDeviceInfo(
-        IDeviceInfo deviceInfo,
-        DeviceConnectionOptions? options = null)
-    {
-        return ConnectFromDeviceInfoAsync(deviceInfo, options, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>

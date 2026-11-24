@@ -103,7 +103,7 @@ public sealed class ServerOptions
 
     private const string SessionRules =
         """
-        - Discover first (`discover_devices`), then connect with a returned `device_id`.
+        - Discover first (`discover_devices`), then connect with a returned `deviceId`.
         - Retrieve before you stream, unless `discover_devices` reports a `firmwareVersion` of 3.7.3 or later (treat an empty or unknown version as older). On older firmware a live streaming session collapses the device's SD buffer (firmware #703), after which downloads come back empty until the device is power-cycled or another SD recording re-arms it.
         - Analog output is Nyquist 3 hardware. On any other board `set_analog_output` is refused outright.
         """;

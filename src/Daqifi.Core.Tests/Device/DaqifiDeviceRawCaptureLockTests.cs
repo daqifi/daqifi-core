@@ -182,7 +182,7 @@ public class DaqifiDeviceRawCaptureLockTests
 
         await captureEntered.Task.WaitAsync(DeadlockBudget);
 
-        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, true)));
 
         await Task.Delay(WireSettleWait);
         Assert.DoesNotContain(transport.Writes, w => w.Text.Contains("DIO:PORt:STATe", StringComparison.Ordinal));
@@ -537,8 +537,8 @@ public class DaqifiDeviceRawCaptureLockTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 300,
-                completionTimeoutMs: 100,
+                responseTimeout: TimeSpan.FromMilliseconds(300),
+                completionTimeout: TimeSpan.FromMilliseconds(100),
                 cancellationToken: cancellationToken);
     }
 
@@ -547,7 +547,7 @@ public class DaqifiDeviceRawCaptureLockTests
     {
         public TaggedBinaryMessage(string tag) => Data = Encoding.UTF8.GetBytes(tag);
 
-        public byte[] Data { get; set; }
+        public byte[] Data { get; }
 
         public byte[] GetBytes() => Data;
     }
@@ -575,9 +575,7 @@ public class DaqifiDeviceRawCaptureLockTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(CaptureTransport));
             _isConnected = true;
@@ -585,16 +583,12 @@ public class DaqifiDeviceRawCaptureLockTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

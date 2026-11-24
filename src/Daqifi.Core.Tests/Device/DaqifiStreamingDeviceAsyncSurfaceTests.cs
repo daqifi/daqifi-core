@@ -101,7 +101,7 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
 
         Assert.True(channel.IsEnabled);
         var sent = Assert.Single(device.SentMessages);
-        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels(1).Data, sent.Data);
     }
 
     [Fact]

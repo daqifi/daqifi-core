@@ -20,6 +20,15 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- The directory this project was built from, so the golden tools/list snapshot is compared
+       with, and regenerated into, the checked-in file. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>ProjectDirectory</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Daqifi.Mcp\Daqifi.Mcp.csproj" />
   </ItemGroup>

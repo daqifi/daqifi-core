@@ -18,8 +18,7 @@ dotnet_diagnostic.IDE0161.severity = warning
 
 # CA2007 (ConfigureAwait) applies to the Daqifi.Core library only; test projects
 # are exempt (CONTRIBUTING.md), hence the path-qualified section. The library's
-# sync facades (DaqifiDevice.Connect(), DaqifiDeviceFactory.ConnectTcp, ...) block
-# on its own async work, so one naked await deadlocks a caller on a WPF/WinForms
+# sync facades (DaqifiDevice.Connect() and Disconnect()) block on its own async work, so one naked await deadlocks a caller on a WPF/WinForms
 # UI thread, with no timeout and no exception (issue #495). That is why it covers
 # every await in the library, not just the connect path.
 [src/Daqifi.Core/**.cs]

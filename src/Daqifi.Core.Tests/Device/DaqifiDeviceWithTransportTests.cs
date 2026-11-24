@@ -53,7 +53,7 @@ public class DaqifiDeviceWithTransportTests
     }
 
     [Fact]
-    public void DaqifiDevice_Dispose_WithTransport_ShouldCleanupResources()
+    public async Task DaqifiDevice_Dispose_WithTransport_ShouldCleanupResources()
     {
         // Arrange
         var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
@@ -63,7 +63,7 @@ public class DaqifiDeviceWithTransportTests
         device.Dispose();
         
         // Assert - Transport should be disposed, operations should throw
-        Assert.Throws<ObjectDisposedException>(() => transport.Connect());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => transport.ConnectAsync());
         Assert.Throws<ObjectDisposedException>(() => transport.Stream);
     }
 
@@ -84,12 +84,7 @@ public class DaqifiDeviceWithTransportTests
 
         public string GetWrittenContent() => System.Text.Encoding.UTF8.GetString(_stream.ToArray());
 
-        public Task ConnectAsync()
-        {
-            return ConnectAsync(null);
-        }
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(MockStreamTransport));
             _isConnected = true;
@@ -97,15 +92,12 @@ public class DaqifiDeviceWithTransportTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-        public void Disconnect() => DisconnectAsync().Wait();
 
         // Test helper method to simulate connection loss
         public void SimulateConnectionLoss()
@@ -604,9 +596,7 @@ public class DaqifiDeviceWithTransportTests
 
         public byte[] CurrentStreamSnapshot() => _stream.ToArray();
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(SwappingMockStreamTransport));
             _isConnected = true;
@@ -614,15 +604,12 @@ public class DaqifiDeviceWithTransportTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

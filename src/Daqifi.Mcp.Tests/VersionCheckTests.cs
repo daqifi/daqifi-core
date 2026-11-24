@@ -168,7 +168,7 @@ public class VersionStatusTests
         var newer = Bump(ServerVersion.Current);
         var info = await NewStatus(new StubLatestVersionSource(newer)).GetAsync();
 
-        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Ok, info.VersionCheck);
         Assert.True(info.UpdateAvailable);
         Assert.Equal(newer, info.LatestVersion);
         Assert.Equal(ServerVersion.Current, info.Version);
@@ -181,7 +181,7 @@ public class VersionStatusTests
     {
         var info = await NewStatus(new StubLatestVersionSource(ServerVersion.Current)).GetAsync();
 
-        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Ok, info.VersionCheck);
         Assert.False(info.UpdateAvailable);
         Assert.Equal(ServerVersion.Current, info.LatestVersion);
         Assert.Contains("up to date", info.Message);
@@ -193,7 +193,7 @@ public class VersionStatusTests
         var info = await NewStatus(new StubLatestVersionSource(failure: new HttpRequestException("offline")))
             .GetAsync();
 
-        Assert.Equal("unavailable", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Unavailable, info.VersionCheck);
         Assert.False(info.UpdateAvailable);
         Assert.Null(info.LatestVersion);
         Assert.Equal(ServerVersion.Current, info.Version);
@@ -205,7 +205,7 @@ public class VersionStatusTests
     {
         var info = await NewStatus(new StubLatestVersionSource(latest: null)).GetAsync();
 
-        Assert.Equal("unavailable", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Unavailable, info.VersionCheck);
         Assert.False(info.UpdateAvailable);
     }
 
@@ -219,7 +219,7 @@ public class VersionStatusTests
         var info = await status.GetAsync();
 
         Assert.Equal(0, source.CallCount);
-        Assert.Equal("disabled", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Disabled, info.VersionCheck);
         Assert.False(info.UpdateAvailable);
         Assert.Null(info.LatestVersion);
         Assert.Equal(ServerVersion.Current, info.Version);
@@ -299,7 +299,7 @@ public class VersionStatusTests
 
         var info = await status.GetAsync();
 
-        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Ok, info.VersionCheck);
         Assert.Equal(2, source.CallCount);
     }
 
@@ -318,7 +318,7 @@ public class VersionStatusTests
         hostCts.Cancel();
         var info = await waiting.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Ok, info.VersionCheck);
         Assert.Equal(2, source.CallCount);
     }
 
@@ -334,7 +334,7 @@ public class VersionStatusTests
 
         var info = await DaqifiTools.GetServerInfo(NewStatus(source), cts.Token);
 
-        Assert.Equal("unavailable", info.VersionCheck);
+        Assert.Equal(WireVersionCheck.Unavailable, info.VersionCheck);
         Assert.Equal(ServerVersion.Current, info.Version);
         Assert.Equal(1, source.CallCount);
     }

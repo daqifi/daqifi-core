@@ -172,7 +172,7 @@ public class DropPathSubscriberIsolationTests
     }
 
     [Fact]
-    public void TcpTransport_WhenTheSubscribersExceptionCannotRenderItself_TheDropPathIsStillContained()
+    public async Task TcpTransport_WhenTheSubscribersExceptionCannotRenderItself_TheDropPathIsStillContained()
     {
         using var listener = new LoopbackListener();
         using var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
@@ -184,7 +184,7 @@ public class DropPathSubscriberIsolationTests
             }
         };
 
-        transport.Connect();
+        await transport.ConnectAsync();
         using var server = listener.AcceptOne();
 
         var escaped = Record.Exception(() =>
@@ -201,7 +201,7 @@ public class DropPathSubscriberIsolationTests
     }
 
     [Fact]
-    public void TcpTransport_WhenAStatusSubscriberThrows_TheSocketIsStillReleased()
+    public async Task TcpTransport_WhenAStatusSubscriberThrows_TheSocketIsStillReleased()
     {
         using var listener = new LoopbackListener();
         using var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
@@ -214,7 +214,7 @@ public class DropPathSubscriberIsolationTests
             }
         };
 
-        transport.Connect();
+        await transport.ConnectAsync();
         using var server = listener.AcceptOne();
 
         for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)

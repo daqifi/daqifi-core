@@ -19,8 +19,8 @@ public class ChannelResolutionContractTests
     {
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 2, digitalChannels: 4);
 
-        var analog = agent.ListChannels(AgentHarness.DeviceId)
-            .Where(c => c.Type == nameof(ChannelType.Analog))
+        var analog = agent.ListChannels(AgentHarness.DeviceId).Channels
+            .Where(c => c.Type == WireChannelType.Analog)
             .ToList();
 
         Assert.Equal(2, analog.Count);
@@ -28,7 +28,7 @@ public class ChannelResolutionContractTests
         {
             // The double's capability document says analog_in_res=65535, so this is the device's
             // own answer travelling through rather than anything this server decided.
-            Assert.Equal(65535u, c.Resolution);
+            Assert.Equal(65535u, c.MaxRawValue);
             Assert.Equal(16, c.ResolutionBits);
             Assert.False(c.ResolutionIsAssumed);
             Assert.NotNull(c.PortRangeVolts);
@@ -45,11 +45,11 @@ public class ChannelResolutionContractTests
             analogChannels: 1, digitalChannels: 0, analogResolution: 0);
 
         var channel = Assert.Single(
-            agent.ListChannels(AgentHarness.DeviceId),
-            c => c.Type == nameof(ChannelType.Analog));
+            agent.ListChannels(AgentHarness.DeviceId).Channels,
+            c => c.Type == WireChannelType.Analog);
 
         Assert.True(channel.ResolutionIsAssumed);
-        Assert.Equal(65535u, channel.Resolution);
+        Assert.Equal(65535u, channel.MaxRawValue);
     }
 
     [Fact]
@@ -57,14 +57,14 @@ public class ChannelResolutionContractTests
     {
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 1, digitalChannels: 4);
 
-        var digital = agent.ListChannels(AgentHarness.DeviceId)
-            .Where(c => c.Type == nameof(ChannelType.Digital));
+        var digital = agent.ListChannels(AgentHarness.DeviceId).Channels
+            .Where(c => c.Type == WireChannelType.Digital);
 
         // Null rather than 0: a digital channel has no ADC, and a zero would read as one with no
         // resolution at all.
         Assert.All(digital, c =>
         {
-            Assert.Null(c.Resolution);
+            Assert.Null(c.MaxRawValue);
             Assert.Null(c.ResolutionBits);
             Assert.Null(c.ResolutionIsAssumed);
             Assert.Null(c.PortRangeVolts);
