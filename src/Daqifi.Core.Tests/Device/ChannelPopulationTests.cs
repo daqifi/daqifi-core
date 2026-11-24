@@ -1,4 +1,5 @@
 using Daqifi.Core.Channel;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Xunit;
 
