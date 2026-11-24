@@ -39,7 +39,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = CreateStreaming(transport);
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync(); // runs the body: registers and subscribes synchronously
 
         transport.SimulateDrop();
@@ -60,7 +60,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = CreateStreaming(transport);
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         device.InvokeStreamMessage(AnalogFrame(1000, 1.5f));
         device.InvokeStreamMessage(AnalogFrame(1010, 2.5f));
@@ -85,7 +85,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = CreateStreaming(transport);
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         device.Disconnect();
@@ -101,7 +101,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = CreateStreaming(transport);
 
-        await using var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         await device.DisconnectAsync();
@@ -115,7 +115,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         var device = CreateStreaming(transport);
 
-        var e = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
         // `await using var device` cannot rescue a parked loop — DisposeAsync only runs once the
@@ -135,7 +135,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             async () =>
             {
-                await foreach (var _ in device.StreamSamplesAsync(CancellationToken.None))
+                await foreach (var _ in device.StreamSamplesAsync(cancellationToken: CancellationToken.None))
                 {
                 }
             });
@@ -148,7 +148,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
     {
         using var transport = new DroppableTransport();
         var device = CreateStreaming(transport);
-        var enumerable = device.StreamSamplesAsync(CancellationToken.None);
+        var enumerable = device.StreamSamplesAsync(cancellationToken: CancellationToken.None);
 
         device.Dispose();
 
@@ -169,7 +169,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = CreateStreaming(transport);
 
-        await using (var dropped = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator())
+        await using (var dropped = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator())
         {
             var moveNext = dropped.MoveNextAsync();
             transport.SimulateDrop();
@@ -185,7 +185,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         AnalogChannel(device, 0).IsEnabled = true;
         device.StartStreaming();
 
-        await using var resumed = device.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var resumed = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var next = resumed.MoveNextAsync();
         device.InvokeStreamMessage(AnalogFrame(2000, 3.5f));
 

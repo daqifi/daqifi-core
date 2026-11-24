@@ -220,8 +220,8 @@ public partial class SdCardOperationsCollaboratorTests
 
         await ops.GetSdCardFilesAsync();
 
-        Assert.Equal(3000, Assert.Single(host.ResponseTimeouts));
-        Assert.Equal(1000, Assert.Single(host.CompletionTimeouts));
+        Assert.Equal(TimeSpan.FromSeconds(3), Assert.Single(host.ResponseTimeouts));
+        Assert.Equal(TimeSpan.FromSeconds(1), Assert.Single(host.CompletionTimeouts));
     }
 
     [Fact]
@@ -2571,10 +2571,10 @@ public partial class SdCardOperationsCollaboratorTests
         public List<LowSdSpaceWarningEventArgs> LowSpaceWarnings { get; } = new();
 
         /// <summary>The response timeout each exchange asked for, in order.</summary>
-        public List<int> ResponseTimeouts { get; } = new();
+        public List<TimeSpan?> ResponseTimeouts { get; } = new();
 
         /// <summary>The completion timeout each exchange asked for, in order.</summary>
-        public List<int> CompletionTimeouts { get; } = new();
+        public List<TimeSpan?> CompletionTimeouts { get; } = new();
 
         /// <summary>
         /// Runs after the setup action of the nth exchange (1-based) and before its response is
@@ -2696,16 +2696,16 @@ public partial class SdCardOperationsCollaboratorTests
 
         public async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
-            int responseTimeoutMs = 1000,
-            int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default,
+            TimeSpan? responseTimeout = null,
+            TimeSpan? completionTimeout = null,
             Func<CancellationToken, Task>? prepareAsync = null,
             Func<Task>? finalizeAsync = null,
-            bool keepBlankLines = false)
+            bool keepBlankLines = false,
+            CancellationToken cancellationToken = default)
         {
             var index = ++ExchangeCount;
-            ResponseTimeouts.Add(responseTimeoutMs);
-            CompletionTimeouts.Add(completionTimeoutMs);
+            ResponseTimeouts.Add(responseTimeout);
+            CompletionTimeouts.Add(completionTimeout);
             Record("exchange:begin");
 
             try

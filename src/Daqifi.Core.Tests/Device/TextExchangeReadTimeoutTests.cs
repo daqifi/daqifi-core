@@ -171,8 +171,8 @@ public class TextExchangeReadTimeoutTests
         {
             return ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: ResponseTimeoutMs,
-                completionTimeoutMs: CompletionTimeoutMs);
+                responseTimeout: TimeSpan.FromMilliseconds(ResponseTimeoutMs),
+                completionTimeout: TimeSpan.FromMilliseconds(CompletionTimeoutMs));
         }
 
         public Task CaptureAsync(Func<Stream, CancellationToken, Task> rawAction)

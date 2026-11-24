@@ -348,7 +348,7 @@ public class DeviceErrorSurfaceTests
         }
 
         public Task<IReadOnlyList<string>> CallTextCommandAsync(Action setupAction) =>
-            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 200, completionTimeoutMs: 100);
+            ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(200), completionTimeout: TimeSpan.FromMilliseconds(100));
     }
 
     /// <summary>

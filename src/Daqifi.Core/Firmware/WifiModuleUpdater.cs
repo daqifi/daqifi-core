@@ -525,7 +525,7 @@ internal sealed class WifiModuleUpdater
                 // means the device version is unknown or unparseable, which leaves
                 // MeetsMinimumSupportedVersion null and still falls through to the
                 // flash. A caller that wants to reflash regardless already has
-                // skipVersionCheck: true.
+                // WifiUpdateOptions.SkipVersionCheck.
                 if (status.MeetsMinimumSupportedVersion == true)
                 {
                     var minimumMessage =

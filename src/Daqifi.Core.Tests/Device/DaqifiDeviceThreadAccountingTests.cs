@@ -134,7 +134,7 @@ public class DaqifiDeviceThreadAccountingTests
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
         {
-            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
+            return ExecuteTextCommandAsync(setupAction, responseTimeout: TimeSpan.FromMilliseconds(500), completionTimeout: TimeSpan.FromMilliseconds(150));
         }
     }
 
