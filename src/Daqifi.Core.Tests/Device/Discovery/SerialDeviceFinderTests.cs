@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Tests.TestSupport;
 

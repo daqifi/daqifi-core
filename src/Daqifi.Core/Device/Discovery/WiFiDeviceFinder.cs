@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Device.Discovery;

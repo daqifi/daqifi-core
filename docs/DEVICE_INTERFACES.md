@@ -983,6 +983,8 @@ the drop ends it, and a consumer that wants live samples from the restored sessi
 #### Raw protobuf frames
 
 ```csharp
+using Daqifi.Core.Communication.Messages; // DaqifiOutMessage
+
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 var sampleCount = 0;

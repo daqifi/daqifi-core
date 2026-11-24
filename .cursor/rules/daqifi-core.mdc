@@ -39,7 +39,7 @@ First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-for
 ## Build already owns this
 
 - Nullable is on in `Directory.Build.props`. New files normally do not need `#nullable enable`; leave existing file-level directives unless a deliberate cleanup.
-- New public API → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017). Intentional removal of shipped API → delete from `PublicAPI.Shipped.txt` + ApiCompat suppression. Do not send removals/renames only to Unshipped. Renaming a shipped member → keep an `[Obsolete]` forwarder instead of removing it. Details: CONTRIBUTING.md.
+- New public API → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017). Intentional removal of shipped API → add a `*REMOVED*` line to `PublicAPI.Unshipped.txt` + ApiCompat suppression. Do not edit `PublicAPI.Shipped.txt`; `scripts/post-release.py` does after a release. Renaming a shipped member → keep an `[Obsolete]` forwarder instead of removing it. Details: CONTRIBUTING.md.
 - Awaits in `Daqifi.Core` → `ConfigureAwait(false)` (CA2007; tests exempt).
 - File-scoped namespaces (IDE0161).
 - No underscores in `Daqifi.Core` public member names (CA1707; test method names are exempt).
