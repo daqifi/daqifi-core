@@ -84,7 +84,7 @@ public class DaqifiAgentTests
     [Fact]
     public void ListConnected_StartsEmpty()
     {
-        Assert.Empty(NewAgent().ListConnected());
+        Assert.Empty(NewAgent().ListConnected().Devices);
     }
 
     [Fact]
@@ -134,29 +134,20 @@ public class DaqifiAgentTests
     }
 
     [Fact]
-    public async Task Disconnect_UnknownDevice_ReturnsMessageRatherThanThrows()
+    public async Task Disconnect_UnknownDevice_SaysSoRatherThanThrows()
     {
-        Assert.Contains("was not connected", await NewAgent().DisconnectAsync("serial:NOPE"));
+        var result = await NewAgent().DisconnectAsync("serial:NOPE");
+
+        Assert.Equal("serial:NOPE", result.DeviceId);
+        Assert.False(result.WasConnected);
     }
 
     [Fact]
-    public async Task SetDigitalDirection_InvalidDirection_ThrowsBeforeDeviceLookup()
+    public async Task SetDigitalDirection_UnknownDevice_ThrowsWithActionableMessage()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent().SetDigitalDirectionAsync("x", 0, "sideways"));
-        Assert.Contains("'input' or 'output'", ex.Message);
-    }
-
-    [Theory]
-    [InlineData("input")]
-    [InlineData("OUTPUT")]
-    [InlineData(" out ")]
-    public async Task SetDigitalDirection_ValidDirection_FailsOnUnknownDeviceNotParsing(string direction)
-    {
-        // Direction strings parse (case/whitespace-insensitive), so the failure is the missing device.
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent().SetDigitalDirectionAsync("serial:NOPE", 0, direction));
-        Assert.Contains("not connected", ex.Message);
+            () => NewAgent().SetDigitalDirectionAsync("serial:NOPE", 0, WireDigitalDirection.Output));
+        Assert.Contains("connect_device", ex.Message);
     }
 
     [Fact]

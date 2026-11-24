@@ -48,7 +48,7 @@ public static class HardwareCatalog
     public static IReadOnlyList<HardwareProfile> All { get; } =
     [
         new HardwareProfile(
-            DeviceType: "Nyquist1",
+            DeviceType: WireDeviceType.Nyquist1,
             Model: "DAQiFi Nyquist 1",
             ProductUrl: "https://daqifi.com/products/nyquist-1/",
             AnalogInputs: new AnalogInputSpec(
@@ -64,13 +64,13 @@ public static class HardwareCatalog
                 DacPart: null,
                 DrivableFromThisServer: false,
                 Note: "This board has no analog outputs; set_analog_output is refused."),
-            DigitalIoChannelCount: 16,
+            DigitalChannelCount: 16,
             Notes: "19,250 Hz is the ceiling with one analog channel enabled; it falls as more are "
                 + "enabled, and set_sample_rate rejects a request above whatever the current "
                 + "selection allows rather than lowering it."),
 
         new HardwareProfile(
-            DeviceType: "Nyquist2",
+            DeviceType: WireDeviceType.Nyquist2,
             Model: "DAQiFi Nyquist 2",
             ProductUrl: "https://daqifi.com/products/nyquist-2/",
             AnalogInputs: new AnalogInputSpec(
@@ -87,13 +87,13 @@ public static class HardwareCatalog
                 DrivableFromThisServer: false,
                 Note: "The hardware has 8 DAC channels, but this server does not drive them yet: "
                     + "set_analog_output is Nyquist 3 only and refuses this board."),
-            DigitalIoChannelCount: null,
+            DigitalChannelCount: null,
             Notes: "The 24-bit ADC is the difference from Nyquist 1 at the same count and range. "
                 + "No published single-channel rate ceiling; read the one the device enforces by "
                 + "the rate set_sample_rate accepts."),
 
         new HardwareProfile(
-            DeviceType: "Nyquist3",
+            DeviceType: WireDeviceType.Nyquist3,
             Model: "DAQiFi Nyquist 3",
             ProductUrl: "https://daqifi.com/products/nyquist-3/",
             AnalogInputs: new AnalogInputSpec(
@@ -111,7 +111,7 @@ public static class HardwareCatalog
                 Note: "The only board whose analog outputs this server drives. Use "
                     + "list_analog_outputs for the range each channel accepts — it comes from the "
                     + "device's own capability document — and set_analog_output to drive one."),
-            DigitalIoChannelCount: null,
+            DigitalChannelCount: null,
             Notes: "The only board that samples its analog inputs simultaneously rather than "
                 + "multiplexed, so values in one row share an instant, and the only one that "
                 + "accepts a bipolar input."),
@@ -119,38 +119,10 @@ public static class HardwareCatalog
 
     /// <summary>
     /// The profile for <paramref name="deviceType"/>, or null if this server has no
-    /// specifications for it.
+    /// specifications for it, which includes <see cref="WireDeviceType.Unknown"/>.
     /// </summary>
-    /// <param name="deviceType">
-    /// A board name, matched leniently: the <c>deviceType</c> discovery reports
-    /// (<c>Nyquist1</c>) as well as <c>nyquist 1</c>, <c>nyquist-1</c> and <c>NYQUIST1</c> all
-    /// find the same board. <c>Unknown</c>, which discovery reports for a device whose type it
-    /// could not establish, matches nothing.
-    /// </param>
-    /// <remarks>
-    /// Lenient on purpose. The name reaches this method through a model, which will type the
-    /// board the way the product page spells it as readily as the way discovery reports it, and
-    /// rejecting "Nyquist 3" for its space would send the agent away empty-handed from a board
-    /// this server does describe.
-    /// </remarks>
-    public static HardwareProfile? Find(string? deviceType)
-    {
-        if (string.IsNullOrWhiteSpace(deviceType))
-        {
-            return null;
-        }
-
-        var wanted = Normalize(deviceType);
-        foreach (var profile in All)
-        {
-            if (Normalize(profile.DeviceType) == wanted)
-            {
-                return profile;
-            }
-        }
-
-        return null;
-    }
+    public static HardwareProfile? Find(WireDeviceType deviceType) =>
+        All.FirstOrDefault(profile => profile.DeviceType == deviceType);
 
     /// <summary>
     /// <paramref name="profile"/> as the JSON an MCP resource read returns.
@@ -161,27 +133,6 @@ public static class HardwareCatalog
     /// </remarks>
     public static string ToJson(HardwareProfile profile) =>
         JsonSerializer.Serialize(profile, ToolRegistration.SerializerOptions);
-
-    /// <summary>
-    /// Reduces a board name to a comparable form: lowercase, with the separators that only ever
-    /// vary by taste removed, so <c>Nyquist 1</c>, <c>nyquist-1</c> and <c>Nyquist1</c> agree.
-    /// </summary>
-    private static string Normalize(string deviceType)
-    {
-        var buffer = new char[deviceType.Length];
-        var length = 0;
-        foreach (var c in deviceType)
-        {
-            if (c is ' ' or '-' or '_')
-            {
-                continue;
-            }
-
-            buffer[length++] = char.ToLowerInvariant(c);
-        }
-
-        return new string(buffer, 0, length);
-    }
 }
 
 /// <summary>
@@ -189,25 +140,28 @@ public static class HardwareCatalog
 /// data is and is not.
 /// </summary>
 /// <param name="DeviceType">
-/// The board as discovery reports it in <c>deviceType</c>, e.g. <c>Nyquist1</c>.
+/// The board as discovery reports it in <c>deviceType</c>, e.g. <c>nyquist1</c>.
 /// </param>
 /// <param name="Model">The product name, e.g. <c>DAQiFi Nyquist 1</c>.</param>
 /// <param name="ProductUrl">The product page this data is published on.</param>
 /// <param name="AnalogInputs">What the measured analog inputs are.</param>
 /// <param name="AnalogOutputs">What the driven analog outputs are, if the board has any.</param>
-/// <param name="DigitalIoChannelCount">
+/// <param name="DigitalChannelCount">
 /// Digital I/O channels, or null where no count is published for the board — call
 /// <c>list_channels</c> on a connected device instead of assuming.
 /// </param>
 /// <param name="Notes">What an agent would otherwise get wrong about this board.</param>
 public sealed record HardwareProfile(
-    string DeviceType,
+    WireDeviceType DeviceType,
     string Model,
     string ProductUrl,
     AnalogInputSpec AnalogInputs,
     AnalogOutputSpec AnalogOutputs,
-    int? DigitalIoChannelCount,
+    int? DigitalChannelCount,
     string Notes);
+
+/// <summary>The board specifications <c>get_hardware_info</c> answers with.</summary>
+public sealed record HardwareInfo(IReadOnlyList<HardwareProfile> Boards);
 
 /// <summary>The analog inputs of a board: what it measures, how finely, and how fast.</summary>
 /// <param name="ChannelCount">How many analog input channels the board has.</param>

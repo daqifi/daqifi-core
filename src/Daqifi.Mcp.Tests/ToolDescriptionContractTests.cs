@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Daqifi.Mcp.Tools;
 using ModelContextProtocol.Server;
 
@@ -101,6 +103,72 @@ public class ToolDescriptionContractTests
             }
         }
     }
+
+    [Fact]
+    public void Prose_SpellsEveryNameTheWayTheWireDoes()
+    {
+        // Keys are camelCase and tool names are snake_case, so a snake_case word in prose is a
+        // tool, a prompt or an enum value, and a camelCase one is a parameter or a result field.
+        // Anything else is a name that reads as callable and is not ("device_id", issue #1042).
+        var schemas = AdvertisedMcpTools.All
+            .SelectMany(t => new[] { t.InputSchema, t.OutputSchema!.Value })
+            .ToList();
+        var keys = schemas.SelectMany(PropertyNames).ToHashSet(StringComparer.Ordinal);
+        var snakeCase = AdvertisedMcpTools.All.Select(t => t.Name)
+            .Concat(AdvertisedMcpPrompts.All.Select(p => p.ProtocolPrompt.Name))
+            .Concat(schemas.SelectMany(EnumValues))
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var text in AgentVisibleProse())
+        {
+            foreach (Match word in Regex.Matches(text, @"\b[a-z]+(?:_[a-z]+)+\b"))
+            {
+                Assert.True(snakeCase.Contains(word.Value), $"'{word.Value}' names nothing on the wire: {text}");
+            }
+
+            foreach (Match word in Regex.Matches(text, @"\b[a-z]+(?:[A-Z][a-z]+)+\b"))
+            {
+                Assert.True(keys.Contains(word.Value), $"'{word.Value}' names nothing on the wire: {text}");
+            }
+        }
+    }
+
+    private static IEnumerable<string> AgentVisibleProse()
+    {
+        yield return new ServerOptions { ReadOnly = true }.Instructions;
+
+        foreach (var method in ToolMethods())
+        {
+            yield return method.GetCustomAttribute<DescriptionAttribute>()!.Description;
+            foreach (var parameter in method.GetParameters())
+            {
+                if (parameter.GetCustomAttribute<DescriptionAttribute>() is { } description)
+                {
+                    yield return description.Description;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> PropertyNames(JsonElement schema) =>
+        Nodes(schema)
+            .Where(n => n.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object)
+            .SelectMany(n => n.GetProperty("properties").EnumerateObject().Select(p => p.Name));
+
+    private static IEnumerable<string> EnumValues(JsonElement schema) =>
+        Nodes(schema)
+            .Where(n => n.TryGetProperty("enum", out var e) && e.ValueKind == JsonValueKind.Array)
+            .SelectMany(n => n.GetProperty("enum").EnumerateArray())
+            .Where(v => v.ValueKind == JsonValueKind.String)
+            .Select(v => v.GetString()!);
+
+    private static IEnumerable<JsonElement> Nodes(JsonElement node) =>
+        node.ValueKind switch
+        {
+            JsonValueKind.Object => node.EnumerateObject().SelectMany(p => Nodes(p.Value)).Prepend(node),
+            JsonValueKind.Array => node.EnumerateArray().SelectMany(Nodes),
+            _ => [],
+        };
 
     private static IEnumerable<MethodInfo> ToolMethods() =>
         typeof(DaqifiTools)

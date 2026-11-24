@@ -31,7 +31,7 @@ public static class HardwareResources
         Title = "Nyquist 1 hardware",
         MimeType = "application/json")]
     [Description("DAQiFi Nyquist 1 specifications: 16 analog inputs, nominally 12-bit over 0 to 5 V, up to 19,250 Hz on one channel, 16 digital I/O, no analog outputs. " + HardwareCatalog.Provenance)]
-    public static string Nyquist1() => Json("Nyquist1");
+    public static string Nyquist1() => Json(WireDeviceType.Nyquist1);
 
     /// <summary>The published specifications of the Nyquist 2.</summary>
     [McpServerResource(
@@ -40,7 +40,7 @@ public static class HardwareResources
         Title = "Nyquist 2 hardware",
         MimeType = "application/json")]
     [Description("DAQiFi Nyquist 2 specifications: 16 analog inputs, nominally 24-bit (AD7173) over 0 to 5 V, and 8 DAC outputs this server does not drive. " + HardwareCatalog.Provenance)]
-    public static string Nyquist2() => Json("Nyquist2");
+    public static string Nyquist2() => Json(WireDeviceType.Nyquist2);
 
     /// <summary>The published specifications of the Nyquist 3.</summary>
     [McpServerResource(
@@ -49,7 +49,7 @@ public static class HardwareResources
         Title = "Nyquist 3 hardware",
         MimeType = "application/json")]
     [Description("DAQiFi Nyquist 3 specifications: 8 simultaneously-sampled analog inputs, nominally 18-bit (AD7609) over -10 to +10 V, and 8 DAC outputs this server can drive. " + HardwareCatalog.Provenance)]
-    public static string Nyquist3() => Json("Nyquist3");
+    public static string Nyquist3() => Json(WireDeviceType.Nyquist3);
 
     /// <summary>
     /// The catalog entry for <paramref name="deviceType"/> as JSON.
@@ -60,7 +60,7 @@ public static class HardwareResources
     /// one is ever renamed without the other: the alternative is a resource that quietly serves
     /// nothing.
     /// </exception>
-    private static string Json(string deviceType)
+    private static string Json(WireDeviceType deviceType)
     {
         var profile = HardwareCatalog.Find(deviceType)
             ?? throw new InvalidOperationException(

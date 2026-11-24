@@ -22,7 +22,7 @@ public class AnalogOutputToolContractTests
     {
         var (agent, _) = AgentHarness.WithConnectedDevice(analogOutputs: 2);
 
-        var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId);
+        var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs;
 
         Assert.Equal(new[] { 0, 1 }, outputs.Select(o => o.Channel));
         Assert.All(outputs, o =>
@@ -45,7 +45,7 @@ public class AnalogOutputToolContractTests
         // An agent asking what a device can drive is entitled to the answer "nothing".
         var (agent, _) = AgentHarness.WithConnectedDevice();
 
-        Assert.Empty(agent.ListAnalogOutputs(AgentHarness.DeviceId));
+        Assert.Empty(agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class AnalogOutputToolContractTests
         // AnalogChannelCount would report an acquisition wider than the device can actually run.
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 4, digitalChannels: 8, analogOutputs: 2);
 
-        var listed = Assert.Single(agent.ListConnected());
+        var listed = Assert.Single(agent.ListConnected().Devices);
 
         Assert.Equal(4, listed.AnalogChannelCount);
         Assert.Equal(8, listed.DigitalChannelCount);
@@ -71,8 +71,8 @@ public class AnalogOutputToolContractTests
 
         Assert.True(result.Applied);
         Assert.True(result.RangeChecked);
-        Assert.Equal(2.5, result.State!.Volts);
-        Assert.Null(result.State.PendingVolts);
+        Assert.Equal(2.5, result.Output!.Volts);
+        Assert.Null(result.Output.PendingVolts);
         Assert.Equal(
             new[]
             {
@@ -92,8 +92,8 @@ public class AnalogOutputToolContractTests
         Assert.False(result.Applied);
         // Pending, not driven: the distinction is the whole point of the staged form, and an agent
         // that read this as "done" would report a voltage the hardware is not carrying.
-        Assert.Equal(4.0, result.State!.PendingVolts);
-        Assert.Null(result.State.Volts);
+        Assert.Equal(4.0, result.Output!.PendingVolts);
+        Assert.Null(result.Output.Volts);
         Assert.Equal(new[] { ScpiMessageProducer.SetAnalogOutputVoltage(0, 4.0).Data }, device.Sent);
     }
 
@@ -123,8 +123,8 @@ public class AnalogOutputToolContractTests
 
         var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 1, 6.0, latch: true);
 
-        Assert.Equal(6.0, result.State!.Volts);
-        var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId);
+        Assert.Equal(6.0, result.Output!.Volts);
+        var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs;
         Assert.Equal(3.0, outputs[0].Volts);
         Assert.Null(outputs[0].PendingVolts);
     }
@@ -156,7 +156,7 @@ public class AnalogOutputToolContractTests
         // this is the only place an agent learns what the channel actually accepts.
         Assert.Contains("10", ex.Message);
         Assert.Empty(device.Sent);
-        Assert.Null(agent.ListAnalogOutputs(AgentHarness.DeviceId)[0].PendingVolts);
+        Assert.Null(agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs[0].PendingVolts);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class AnalogOutputToolContractTests
         var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 3, 42, latch: true);
 
         Assert.False(result.RangeChecked);
-        Assert.Null(result.State);
+        Assert.Null(result.Output);
         Assert.True(result.Applied);
         Assert.Equal(
             new[]
@@ -241,7 +241,7 @@ public class AnalogOutputToolContractTests
         device.ClearSent();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, -1, CancellationToken.None));
+            () => agent.GetAnalogOutputAsync(AgentHarness.DeviceId, -1, CancellationToken.None));
 
         Assert.Contains("0 or greater", ex.Message);
         Assert.Empty(device.Sent);
@@ -254,13 +254,13 @@ public class AnalogOutputToolContractTests
         device.AnalogOutputReadbacks[1] = "3.750";
         device.ClearSent();
 
-        var reading = await agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, 1, CancellationToken.None);
+        var reading = await agent.GetAnalogOutputAsync(AgentHarness.DeviceId, 1, CancellationToken.None);
 
         Assert.Equal(3.75, reading.Volts);
         Assert.Equal(new[] { ScpiMessageProducer.GetAnalogOutputVoltage(1).Data }, device.Sent);
         // Recorded on the channel, so list_analog_outputs agrees with the round-trip afterwards
         // instead of still reporting "nothing has driven this".
-        Assert.Equal(3.75, agent.ListAnalogOutputs(AgentHarness.DeviceId)[1].Volts);
+        Assert.Equal(3.75, agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs[1].Volts);
     }
 
     [Fact]
@@ -269,7 +269,7 @@ public class AnalogOutputToolContractTests
         var (agent, _) = AgentHarness.WithConnectedDevice(analogOutputs: 2);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None));
+            () => agent.GetAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None));
 
         Assert.Contains("not a voltage", ex.Message);
     }
@@ -285,7 +285,7 @@ public class AnalogOutputToolContractTests
         device.ClearSent();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None));
+            () => agent.GetAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None));
 
         Assert.Contains("streaming", ex.Message);
         Assert.Empty(device.Sent);
@@ -299,7 +299,7 @@ public class AnalogOutputToolContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true, analogOutputs: 2);
         device.AnalogOutputReadbacks[0] = "0.500";
 
-        var reading = await agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None);
+        var reading = await agent.GetAnalogOutputAsync(AgentHarness.DeviceId, 0, CancellationToken.None);
 
         Assert.Equal(0.5, reading.Volts);
     }
@@ -309,13 +309,13 @@ public class AnalogOutputToolContractTests
     {
         var agent = new DaqifiAgent(new ServerOptions());
 
-        Assert.Throws<InvalidOperationException>(() => agent.ListAnalogOutputs("serial:NOPE"));
+        Assert.Throws<InvalidOperationException>(() => agent.ListAnalogOutputs("serial:NOPE").Outputs);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.SetAnalogOutputAsync("serial:NOPE", 0, 1.0, latch: true));
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.LatchAnalogOutputsAsync("serial:NOPE"));
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.ReadAnalogOutputAsync("serial:NOPE", 0, CancellationToken.None));
+            () => agent.GetAnalogOutputAsync("serial:NOPE", 0, CancellationToken.None));
     }
 
     [Fact]
@@ -325,11 +325,11 @@ public class AnalogOutputToolContractTests
         // nothing treats them as something to sample.
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 4, analogOutputs: 2);
 
-        var channels = agent.ListChannels(AgentHarness.DeviceId);
+        var channels = agent.ListChannels(AgentHarness.DeviceId).Channels;
 
-        Assert.Equal(2, channels.Count(c => c.Type == nameof(ChannelType.AnalogOutput)));
+        Assert.Equal(2, channels.Count(c => c.Type == WireChannelType.AnalogOutput));
         Assert.All(
-            channels.Where(c => c.Type == nameof(ChannelType.AnalogOutput)),
+            channels.Where(c => c.Type == WireChannelType.AnalogOutput),
             c => Assert.False(c.Enabled));
         Assert.Empty(agent.GetStatus(AgentHarness.DeviceId).EnabledAnalogChannels);
     }

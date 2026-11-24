@@ -530,7 +530,7 @@ public class SampleRowSinkTests
 
         sink.Add(LiveSampleCaptureTests.Sample(ChannelType.Analog, 0, 1.0, T0, deviceTimestamp: 4242u));
 
-        Assert.Equal(4242u, sink.Complete()[0].DeviceTimestamp);
+        Assert.Equal(4242u, sink.Complete()[0].DeviceTimestampTicks);
     }
 
     [Theory]

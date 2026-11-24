@@ -25,7 +25,7 @@ public class DeviceToolCancellationTests
         "set_digital_direction",
         "set_digital_output",
         "set_pwm_output",
-        "disable_pwm",
+        "disable_pwm_output",
         "set_analog_output",
         "latch_analog_outputs",
         "set_sample_rate",
@@ -52,7 +52,7 @@ public class DeviceToolCancellationTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => disconnect.WaitAsync(Bound));
 
-            Assert.Single(agent.ListConnected());
+            Assert.Single(agent.ListConnected().Devices);
         }
         finally
         {
@@ -62,7 +62,7 @@ public class DeviceToolCancellationTests
 
         // The cancelled wait never took the gate, so it is free for the next caller.
         await agent.DisconnectAsync(AgentHarness.DeviceId).WaitAsync(Bound);
-        Assert.Empty(agent.ListConnected());
+        Assert.Empty(agent.ListConnected().Devices);
     }
 
     [Fact]
@@ -108,10 +108,10 @@ public class DeviceToolCancellationTests
             {
                 "configure_analog_channels" => DaqifiTools.ConfigureAnalogChannels(agent, id, new[] { 0 }, ct),
                 "configure_digital_channels" => DaqifiTools.ConfigureDigitalChannels(agent, id, new[] { 0 }, ct),
-                "set_digital_direction" => DaqifiTools.SetDigitalDirection(agent, id, 0, "output", ct),
+                "set_digital_direction" => DaqifiTools.SetDigitalDirection(agent, id, 0, WireDigitalDirection.Output, ct),
                 "set_digital_output" => DaqifiTools.SetDigitalOutput(agent, id, 0, true, ct),
                 "set_pwm_output" => DaqifiTools.SetPwmOutput(agent, id, 4, 50, 1000, ct),
-                "disable_pwm" => DaqifiTools.DisablePwm(agent, id, 4, ct),
+                "disable_pwm_output" => DaqifiTools.DisablePwmOutput(agent, id, 4, ct),
                 "set_analog_output" => DaqifiTools.SetAnalogOutput(agent, id, 0, 2.5, true, ct),
                 "latch_analog_outputs" => DaqifiTools.LatchAnalogOutputs(agent, id, ct),
                 _ => DaqifiTools.SetSampleRate(agent, id, 100, ct),

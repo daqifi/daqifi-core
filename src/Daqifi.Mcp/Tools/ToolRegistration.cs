@@ -73,12 +73,21 @@ internal static class ToolRegistration
         return builder.WithPrompts(promptTypes, SerializerOptions);
     }
 
+    /// <summary>How <paramref name="value"/> is spelled on the wire, for use in a message.</summary>
+    internal static string WireName<T>(T value)
+        where T : struct, Enum =>
+        JsonSerializer.SerializeToElement(value, SerializerOptions).GetString()!;
+
     private static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions)
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.Never,
         };
+
+        // Ahead of the SDK's own enum converter, which also takes a number for an enum. The schema
+        // advertises strings, and the numbers behind them are this assembly's business.
+        options.Converters.Insert(0, new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false));
         options.MakeReadOnly();
         return options;
     }

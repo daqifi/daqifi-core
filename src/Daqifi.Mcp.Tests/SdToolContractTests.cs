@@ -127,26 +127,15 @@ public class SdCardToolContractTests
         await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0, 1 });
         await agent.SetSampleRateAsync(AgentHarness.DeviceId, 500);
 
-        var result = await agent.StartLoggingAsync(AgentHarness.DeviceId, fileName: null, "csv", CancellationToken.None);
+        var result = await agent.StartLoggingAsync(AgentHarness.DeviceId, fileName: null, WireSdLogFormat.Csv, CancellationToken.None);
 
         Assert.Equal(SdCardLogFormat.Csv, device.StartedSession!.Format);
+        Assert.Equal(WireSdLogFormat.Csv, result.Format);
         // Core owns the naming convention, so the tool must report what came back rather than a
         // name it guessed — the two used to be generated independently.
         Assert.Equal(device.StartedSession.FileName, result.FileName);
         Assert.Equal(500, result.SampleRateHz);
         Assert.Equal(new[] { 0, 1 }, result.EnabledAnalogChannels);
-    }
-
-    [Fact]
-    public async Task StartSdLogging_WithAnUnknownFormat_IsRejectedBeforeTheCardIsTouched()
-    {
-        var (agent, device) = AgentHarness.WithConnectedDevice();
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "parquet", CancellationToken.None));
-
-        Assert.Contains("'protobuf', 'json', or 'csv'", ex.Message);
-        Assert.Null(device.StartedSession);
     }
 
     [Fact]
@@ -166,7 +155,7 @@ public class SdCardToolContractTests
         await device.ReadCapabilityDocumentAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None));
+            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", WireSdLogFormat.Protobuf, CancellationToken.None));
 
         Assert.Contains("set_sample_rate", ex.Message);
         Assert.Null(device.StartedSession);
@@ -176,12 +165,13 @@ public class SdCardToolContractTests
     public async Task StopSdLogging_EndsTheSessionAndTheStatusSaysSo()
     {
         var (agent, _) = AgentHarness.WithConnectedDevice();
-        await agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None);
+        await agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", WireSdLogFormat.Protobuf, CancellationToken.None);
         Assert.True(agent.GetStatus(AgentHarness.DeviceId).LoggingToSdCard);
 
-        var message = await agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None);
+        var result = await agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None);
 
-        Assert.Contains("Stopped SD-card logging", message);
+        Assert.Equal(AgentHarness.DeviceId, result.DeviceId);
+        Assert.False(result.LoggingToSdCard);
         Assert.False(agent.GetStatus(AgentHarness.DeviceId).LoggingToSdCard);
     }
 
@@ -191,7 +181,7 @@ public class SdCardToolContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None));
+            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", WireSdLogFormat.Protobuf, CancellationToken.None));
 
         Assert.Contains("read-only", ex.Message);
         Assert.Null(device.StartedSession);
@@ -305,12 +295,12 @@ public class SdCardToolContractTests
         // A serial port released with the card still recording leaves the device writing to a log
         // nothing will ever close.
         var (agent, device) = AgentHarness.WithConnectedDevice();
-        await agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None);
+        await agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", WireSdLogFormat.Protobuf, CancellationToken.None);
 
         await agent.ShutdownAsync();
 
         Assert.False(((ISdCardOperations)device).IsLoggingToSdCard);
-        Assert.Empty(agent.ListConnected());
+        Assert.Empty(agent.ListConnected().Devices);
     }
 }
 
@@ -375,7 +365,7 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetPwmOutput(
                 agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: dutyCyclePercent));
 
-        Assert.Contains("disable_pwm", ex.Message);
+        Assert.Contains("disable_pwm_output", ex.Message);
         Assert.DoesNotContain("SetPwmEnabled", ex.Message);
 
         var rewritten = Assert.IsType<InvalidOperationException>(ex.InnerException);
@@ -398,7 +388,7 @@ public class ToolErrorTranslationTests
         // The message names the device's minimum (the fixed 6 Hz here, with no capability
         // document), which is what set_pwm_output's frequency description promises (#958).
         Assert.Contains("PWM frequency must be 6-50000 Hz", ex.Message);
-        Assert.DoesNotContain("disable_pwm", ex.Message);
+        Assert.DoesNotContain("disable_pwm_output", ex.Message);
         var core = Assert.IsType<ArgumentOutOfRangeException>(ex.InnerException);
         Assert.Equal("frequencyHz", core.ParamName);
     }

@@ -21,10 +21,10 @@ public class IntrospectionToolContractTests
     {
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 4, digitalChannels: 8);
 
-        var listed = Assert.Single(agent.ListConnected());
+        var listed = Assert.Single(agent.ListConnected().Devices);
 
         Assert.Equal(AgentHarness.DeviceId, listed.DeviceId);
-        Assert.True(listed.Connected);
+        Assert.True(listed.ConnectionStatus == WireConnectionStatus.Connected);
         Assert.Equal(4, listed.AnalogChannelCount);
         Assert.Equal(8, listed.DigitalChannelCount);
     }
@@ -53,22 +53,22 @@ public class IntrospectionToolContractTests
     {
         var (agent, _) = AgentHarness.WithConnectedDevice(analogChannels: 2, digitalChannels: 8);
 
-        var channels = agent.ListChannels(AgentHarness.DeviceId);
+        var channels = agent.ListChannels(AgentHarness.DeviceId).Channels;
 
         Assert.Equal(10, channels.Count);
-        Assert.Equal(2, channels.Count(c => c.Type == nameof(ChannelType.Analog)));
+        Assert.Equal(2, channels.Count(c => c.Type == WireChannelType.Analog));
 
         // PWM capability is a hardware fact the agent has no other way to learn, and getting it
         // wrong sends an agent at a channel the firmware will half-arm and then refuse (#450).
         var pwmCapable = channels
-            .Where(c => c.Type == nameof(ChannelType.Digital) && c.PwmCapable == true)
-            .Select(c => c.ChannelNumber)
+            .Where(c => c.Type == WireChannelType.Digital && c.PwmCapable == true)
+            .Select(c => c.Channel)
             .OrderBy(n => n);
         Assert.Equal(new[] { 0, 3, 4, 5, 6, 7 }, pwmCapable);
 
         // Analog channels carry no digital-only fields at all, rather than a misleading false.
         Assert.All(
-            channels.Where(c => c.Type == nameof(ChannelType.Analog)),
+            channels.Where(c => c.Type == WireChannelType.Analog),
             c =>
             {
                 Assert.Null(c.PwmCapable);
@@ -81,11 +81,11 @@ public class IntrospectionToolContractTests
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
 
-        var message = await agent.DisconnectAsync(AgentHarness.DeviceId);
+        var result = await agent.DisconnectAsync(AgentHarness.DeviceId);
 
-        Assert.Contains("Disconnected", message);
+        Assert.True(result.WasConnected);
         Assert.False(device.IsConnected);
-        Assert.Empty(agent.ListConnected());
+        Assert.Empty(agent.ListConnected().Devices);
 
         // And the id is genuinely gone, not just hidden from the listing.
         var ex = Assert.Throws<InvalidOperationException>(() => agent.GetStatus(AgentHarness.DeviceId));
@@ -104,7 +104,7 @@ public class IntrospectionToolContractTests
         Assert.Contains("no longer connected", ex.Message);
 
         // Evicted, so it does not linger in list_connected_devices as if it were usable.
-        Assert.Empty(agent.ListConnected());
+        Assert.Empty(agent.ListConnected().Devices);
     }
 }
 
@@ -316,10 +316,10 @@ public class DigitalPinToolContractTests
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
 
-        var result = await agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 2, "output");
+        var result = await agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 2, WireDigitalDirection.Output);
 
         Assert.Equal(2, result.Channel);
-        Assert.Equal(nameof(ChannelDirection.Output), result.Direction);
+        Assert.Equal(WireChannelDirection.Output, result.Direction);
         Assert.Contains(ScpiMessageProducer.SetDioPortDirection(2, 1).Data, device.Sent);
     }
 
@@ -330,7 +330,7 @@ public class DigitalPinToolContractTests
         device.ClearSent();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 11, "output"));
+            () => agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 11, WireDigitalDirection.Output));
 
         Assert.Contains("11", ex.Message);
         Assert.Contains("0, 1, 2, 3", ex.Message);
@@ -347,7 +347,7 @@ public class DigitalPinToolContractTests
 
         var result = await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 1, high: true);
 
-        Assert.Equal(nameof(ChannelDirection.Output), result.Direction);
+        Assert.Equal(WireChannelDirection.Output, result.Direction);
 
         var direction = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortDirection(1, 1).Data);
         var value = device.Sent.ToList().IndexOf(ScpiMessageProducer.SetDioPortState(1, 1).Data);
@@ -360,7 +360,7 @@ public class DigitalPinToolContractTests
     public async Task SetDigitalOutput_OnAChannelAlreadyAnOutput_DoesNotResendTheDirection()
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
-        await agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 1, "output");
+        await agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 1, WireDigitalDirection.Output);
         device.ClearSent();
 
         await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 1, high: false);
@@ -381,14 +381,14 @@ public class DigitalPinToolContractTests
         device.ClearSent();
 
         Task Call() => operation == "direction"
-            ? agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 4, "output")
+            ? agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 4, WireDigitalDirection.Output)
             : agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 4, high: true);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(Call);
 
         // Names the tool an agent actually has, and only that: Core's own guard would have said
         // "SetPwmEnabled(channel, false)", an SDK method an MCP caller has no way to reach.
-        Assert.Contains("disable_pwm", ex.Message);
+        Assert.Contains("disable_pwm_output", ex.Message);
         Assert.DoesNotContain("SetPwmEnabled", ex.Message);
         Assert.Empty(device.Sent);
     }
@@ -398,12 +398,12 @@ public class DigitalPinToolContractTests
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
         await agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, dutyCyclePercent: 50, frequencyHz: 1000);
-        await agent.DisablePwmAsync(AgentHarness.DeviceId, 4);
+        await agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 4);
         device.ClearSent();
 
         var result = await agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 4, high: true);
 
-        Assert.Equal(nameof(ChannelDirection.Output), result.Direction);
+        Assert.Equal(WireChannelDirection.Output, result.Direction);
         Assert.Contains(ScpiMessageProducer.SetDioPortState(4, 1).Data, device.Sent);
     }
 }
@@ -429,7 +429,7 @@ public class PwmToolContractTests
         Assert.True(duty < frequency, "the frequency was programmed before the duty was stored");
         Assert.True(frequency < enable, "the channel was enabled before the timer was programmed");
 
-        Assert.True(result.Enabled);
+        Assert.True(result.PwmEnabled);
         Assert.Equal(25, result.DutyCyclePercent);
         Assert.Equal(2000, result.FrequencyHz);
     }
@@ -473,9 +473,9 @@ public class PwmToolContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice();
         device.ClearSent();
 
-        var result = await agent.DisablePwmAsync(AgentHarness.DeviceId, 1);
+        var result = await agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 1);
 
-        Assert.False(result.Enabled);
+        Assert.False(result.PwmEnabled);
         Assert.Contains(ScpiMessageProducer.SetPwmChannelEnabled(1, false).Data, device.Sent);
     }
 
@@ -486,7 +486,7 @@ public class PwmToolContractTests
         // device state. Reporting them would be the tool inventing a reading.
         var (agent, _) = AgentHarness.WithConnectedDevice();
 
-        var result = await agent.DisablePwmAsync(AgentHarness.DeviceId, 4);
+        var result = await agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 4);
 
         Assert.Null(result.DutyCyclePercent);
         Assert.Null(result.FrequencyHz);
@@ -498,9 +498,9 @@ public class PwmToolContractTests
         var (agent, _) = AgentHarness.WithConnectedDevice();
         await agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, dutyCyclePercent: 35, frequencyHz: 900);
 
-        var result = await agent.DisablePwmAsync(AgentHarness.DeviceId, 4);
+        var result = await agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 4);
 
-        Assert.False(result.Enabled);
+        Assert.False(result.PwmEnabled);
         Assert.Equal(35, result.DutyCyclePercent);
         Assert.Equal(900, result.FrequencyHz);
     }
@@ -513,7 +513,7 @@ public class PwmToolContractTests
         var (agent, _) = AgentHarness.WithConnectedDevice();
         await agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, dutyCyclePercent: 35, frequencyHz: 900);
 
-        var result = await agent.DisablePwmAsync(AgentHarness.DeviceId, 6);
+        var result = await agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 6);
 
         Assert.Equal(900, result.FrequencyHz);
         Assert.Null(result.DutyCyclePercent);
@@ -529,7 +529,7 @@ public class PwmToolContractTests
         Assert.Contains("Unknown digital channel 30", setEx.Message);
 
         var disableEx = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => agent.DisablePwmAsync(AgentHarness.DeviceId, 30));
+            () => agent.DisablePwmOutputAsync(AgentHarness.DeviceId, 30));
         Assert.Contains("Unknown digital channel 30", disableEx.Message);
     }
 }
@@ -544,7 +544,7 @@ public class SampleRateToolContractTests
 
         var result = await agent.SetSampleRateAsync(AgentHarness.DeviceId, 10_000);
 
-        Assert.Equal(10_000, result.RequestedRateHz);
+        Assert.Equal(10_000, result.SampleRateHz);
         Assert.Equal(10_000, agent.GetStatus(AgentHarness.DeviceId).SampleRateHz);
     }
 
@@ -607,7 +607,7 @@ public class SampleRateToolContractTests
         Assert.Contains("250", ex.Message);
 
         var ok = await agent.SetSampleRateAsync(AgentHarness.DeviceId, 250);
-        Assert.Equal(250, ok.RequestedRateHz);
+        Assert.Equal(250, ok.SampleRateHz);
     }
 
     [Fact]
@@ -658,7 +658,7 @@ public class ReadOnlyModeContractTests
         "set_digital_direction",
         "set_digital_output",
         "set_pwm_output",
-        "disable_pwm",
+        "disable_pwm_output",
         "set_analog_output",
         "latch_analog_outputs",
         "set_sample_rate",
@@ -695,10 +695,10 @@ public class ReadOnlyModeContractTests
     {
         "configure_analog_channels" => agent.ConfigureAnalogChannelsAsync(deviceId, new[] { 0 }),
         "configure_digital_channels" => agent.ConfigureDigitalChannelsAsync(deviceId, new[] { 0 }),
-        "set_digital_direction" => agent.SetDigitalDirectionAsync(deviceId, 0, "output"),
+        "set_digital_direction" => agent.SetDigitalDirectionAsync(deviceId, 0, WireDigitalDirection.Output),
         "set_digital_output" => agent.SetDigitalOutputAsync(deviceId, 0, high: true),
         "set_pwm_output" => agent.SetPwmOutputAsync(deviceId, 4, 50, 1000),
-        "disable_pwm" => agent.DisablePwmAsync(deviceId, 4),
+        "disable_pwm_output" => agent.DisablePwmOutputAsync(deviceId, 4),
         "set_analog_output" => agent.SetAnalogOutputAsync(deviceId, 0, 2.5, latch: true),
         "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(deviceId),
         "set_sample_rate" => agent.SetSampleRateAsync(deviceId, 100),
@@ -720,13 +720,13 @@ public class ReadOnlyModeContractTests
                 Assert.Equal(AgentHarness.DeviceId, agent.GetStatus(AgentHarness.DeviceId).DeviceId);
                 break;
             case "channels":
-                Assert.NotEmpty(agent.ListChannels(AgentHarness.DeviceId));
+                Assert.NotEmpty(agent.ListChannels(AgentHarness.DeviceId).Channels);
                 break;
             case "analog_outputs":
-                Assert.Equal(2, agent.ListAnalogOutputs(AgentHarness.DeviceId).Count);
+                Assert.Equal(2, agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs.Count);
                 break;
             default:
-                Assert.Single(agent.ListConnected());
+                Assert.Single(agent.ListConnected().Devices);
                 break;
         }
     }
