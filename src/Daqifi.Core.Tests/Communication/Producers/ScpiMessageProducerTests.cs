@@ -67,6 +67,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
         { () => ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
         { () => ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
+        { () => ScpiMessageProducer.GetSdMinFreeSpace, "SYSTem:STORage:SD:MINFree?" },
         { () => ScpiMessageProducer.GetSdCrcProtection, "SYSTem:STORage:SD:PROTect?" },
         { () => ScpiMessageProducer.GetSdCardInfo, "SYSTem:STORage:SD:INFO?" },
 
@@ -150,7 +151,6 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
         // Zero disables the free-space gate, so it must not be rejected.
         { () => ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
-        { () => ScpiMessageProducer.GetSdMinFreeSpace, "SYSTem:STORage:SD:MINFree?" },
 
         // Streaming
         { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
