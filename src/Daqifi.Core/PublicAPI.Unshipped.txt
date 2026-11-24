@@ -134,6 +134,8 @@
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Nyquist3 = 3 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceType.Unknown = 0 -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
+*REMOVED*Daqifi.Core.Device.Discovery.IUsbLocationProvider
+*REMOVED*Daqifi.Core.Device.Discovery.IUsbLocationProvider.GetLocationKey(string! portNameOrDevicePath) -> string?
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider.GetDescriptor(string! portName) -> Daqifi.Core.Device.Discovery.UsbPortDescriptor?
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor

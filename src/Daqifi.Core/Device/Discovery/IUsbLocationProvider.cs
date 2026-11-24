@@ -14,7 +14,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <c>DEVPKEY_Device_LocationInfo</c>. Platforms without an implementation fall back to
 /// <see cref="NullUsbLocationProvider"/>, which returns null for every input.
 /// </remarks>
-public interface IUsbLocationProvider
+internal interface IUsbLocationProvider
 {
     /// <summary>
     /// Returns the USB physical-location key for <paramref name="portNameOrDevicePath"/>,
