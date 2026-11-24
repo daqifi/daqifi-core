@@ -315,10 +315,11 @@ public sealed class DaqifiAgent
     /// be a different unit. Internal for testing.
     /// </summary>
     /// <remarks>
-    /// An id names a unit by serial number, but a connection is opened to the <i>address</i> that
-    /// unit was last seen at, and another unit may have taken it since: a second device on the same
-    /// USB port, or a DHCP lease handed on. Returned under the requested id, every later call would
-    /// configure and drive the wrong hardware.
+    /// An id names a unit by serial number or MAC address, but a connection is opened to the
+    /// <i>address</i> that unit was last seen at, and another unit may have taken it since: a second
+    /// device on the same USB port, or a DHCP lease handed on. Returned under the requested id,
+    /// every later call would configure and drive the wrong hardware. An id made of a port or an IP
+    /// address names that address, so there is nothing to check it against.
     /// </remarks>
     internal static DeviceRegistration AcceptConnection(
         DaqifiDeviceRegistry registry, string deviceId, IDeviceInfo requested, DeviceRegistrationResult result)
@@ -327,9 +328,7 @@ public sealed class DaqifiAgent
             ?? throw new InvalidOperationException(
                 $"Connection to '{deviceId}' was canceled by the duplicate-device policy.");
 
-        if (KnownSerialNumber(requested.SerialNumber) is { } wanted
-            && KnownSerialNumber(registration.Identity.SerialNumber) is { } actual
-            && !DeviceIdentity.Create(wanted).Matches(DeviceIdentity.Create(actual)))
+        if (FindMismatch(deviceId, requested, registration.Device.Metadata) is { } mismatch)
         {
             // Only a connection this call opened is closed again; one that was already live under
             // its own id belongs to whoever opened it.
@@ -339,12 +338,49 @@ public sealed class DaqifiAgent
             }
 
             throw new InvalidOperationException(
-                $"The device at {Address(requested) ?? "that address"} is now serial number {actual}, not the "
-                + $"{wanted} that '{deviceId}' stands for, so it was not connected under that id. "
+                $"The device at {Address(requested) ?? "that address"} is now {mismatch.Actual}, not the "
+                + $"{mismatch.Wanted} that '{deviceId}' stands for, so it was not connected under that id. "
                 + "Call discover_devices again and connect to the deviceId it reports.");
         }
 
         return registration;
+    }
+
+    /// <summary>
+    /// How the connected device contradicts the one that was discovered, or <c>null</c> when nothing
+    /// both of them report says it is a different unit.
+    /// </summary>
+    /// <remarks>
+    /// Reads the device's own metadata, not the registration's identity, which fills in whatever
+    /// the device left out from the very discovery result being checked. The serial number decides
+    /// when both report one, except for an id made of the MAC address: that is what it stands for,
+    /// and it is also what tells apart two units reporting the same serial number.
+    /// </remarks>
+    private static (string Wanted, string Actual)? FindMismatch(
+        string deviceId, IDeviceInfo requested, DeviceMetadata connected)
+    {
+        var wantedMac = KnownMacAddress(requested.MacAddress);
+        var namedByMac = wantedMac is not null && deviceId == MintId(requested.ConnectionType, wantedMac);
+
+        if (KnownSerialNumber(requested.SerialNumber) is { } wanted
+            && KnownSerialNumber(connected.SerialNumber) is { } actual)
+        {
+            if (!DeviceIdentity.Create(wanted).Matches(DeviceIdentity.Create(actual)))
+            {
+                return ($"serial number {wanted}", $"serial number {actual}");
+            }
+
+            if (!namedByMac)
+            {
+                return null;
+            }
+        }
+
+        return wantedMac is not null
+            && KnownMacAddress(connected.MacAddress) is { } actualMac
+            && !DeviceIdentity.Create(null, wantedMac).Matches(DeviceIdentity.Create(null, actualMac))
+                ? ($"MAC address {wantedMac}", $"MAC address {actualMac}")
+                : null;
     }
 
     public async Task<DisconnectResult> DisconnectAsync(string deviceId, CancellationToken cancellationToken = default)
@@ -1865,11 +1901,11 @@ public sealed class DaqifiAgent
         var ids = new List<string>(infos.Count);
         foreach (var info in infos)
         {
-            var transport = ToolRegistration.WireName(info.ConnectionType.ToWire());
-            var id = $"{transport}:{KnownSerialNumber(info.SerialNumber) ?? Address(info) ?? info.Name}";
+            var fallback = FallbackName(info) ?? info.Name;
+            var id = MintId(info.ConnectionType, KnownSerialNumber(info.SerialNumber) ?? fallback);
             if (ids.Contains(id))
             {
-                id = $"{transport}:{Address(info) ?? info.Name}";
+                id = MintId(info.ConnectionType, fallback);
             }
 
             ids.Add(id);
@@ -1877,11 +1913,22 @@ public sealed class DaqifiAgent
 
         return ids;
 
-        static string? Address(IDeviceInfo info) => info.ConnectionType == ConnectionType.WiFi
-            && !string.IsNullOrWhiteSpace(info.MacAddress)
-                ? info.MacAddress.Trim().ToLowerInvariant()
-                : DaqifiAgent.Address(info);
+        static string? FallbackName(IDeviceInfo info) => info.ConnectionType == ConnectionType.WiFi
+            ? KnownMacAddress(info.MacAddress) ?? Address(info)
+            : Address(info);
     }
+
+    private static string MintId(ConnectionType connectionType, string name) =>
+        $"{ToolRegistration.WireName(connectionType.ToWire())}:{name}";
+
+    /// <summary>
+    /// The MAC address in lowercase, or <c>null</c> when the device did not report one. All zeros is
+    /// the firmware's value for a radio it has not read yet, not an address.
+    /// </summary>
+    private static string? KnownMacAddress(string? macAddress) =>
+        macAddress?.Trim().ToLowerInvariant() is { Length: > 0 } mac && mac.Any(c => c is not ('0' or '-' or ':'))
+            ? mac
+            : null;
 
     /// <summary>
     /// The serial number, or <c>null</c> when the device did not report one. Core renders the
