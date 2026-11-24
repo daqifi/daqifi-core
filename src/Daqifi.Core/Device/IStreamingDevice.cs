@@ -98,8 +98,9 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Confirmed means one of two things: a stream frame arrived, or, when none arrived in the
-    /// first few sample periods, the device was asked and answered that it is streaming. Use
+    /// Confirmed means one of two things: a stream frame arrived after this was called, or, when
+    /// none arrived in the first few sample periods, the device was asked and answered that it is
+    /// streaming. Use
     /// <see cref="StartStreaming"/> to send the command without waiting for either.
     /// </para>
     /// <para>

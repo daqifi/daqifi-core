@@ -54,7 +54,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     private const double MaxStartConfirmationMs = 2000;
 
     /// <summary>
-    /// How often <see cref="WaitForFirstStreamFrameAsync"/> looks for the first frame.
+    /// How often <see cref="WaitForStreamFrameAsync"/> looks for the first frame.
     /// </summary>
     private static readonly TimeSpan StartConfirmationPollInterval = TimeSpan.FromMilliseconds(10);
 
@@ -454,12 +454,26 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         await RefreshSampleRateCapAsync(cancellationToken).ConfigureAwait(false);
 
+        // Evidence that the device is streaming has to be newer than this call. A new session
+        // counts its frames from zero, so what must not be there is a frame of the stream before
+        // it; a running one has frames already, and those say only that it was streaming once.
+        var framesBefore = 0L;
+        if (alreadyStreaming)
+        {
+            framesBefore = _frameDecoder.AdmittedStreamFrameCount;
+        }
+        else if (_session.RemainingSettleTime(StoppedStreamSettleDelay) is var settle && settle > TimeSpan.Zero)
+        {
+            await Task.Delay(settle, Clock, cancellationToken).ConfigureAwait(false);
+        }
+
         StartStreaming();
 
         Exception? confirmationFailure = null;
         try
         {
-            await ConfirmStreamStartedAsync(startSent: !alreadyStreaming, cancellationToken).ConfigureAwait(false);
+            await ConfirmStreamStartedAsync(startSent: !alreadyStreaming, framesBefore, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -598,8 +612,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </para>
     /// <para>
     /// The budget scales with the rate, because "nothing yet" only means something after a
-    /// sample period or two: three periods, held between
-    /// <see cref="MinStartConfirmationMs"/> and <see cref="MaxStartConfirmationMs"/>. A
+    /// sample period or two, and a quick restart can have its first two frames discarded as
+    /// possible leftovers (<see cref="StreamFrameGate.LeftoverWindowSamplePeriods"/>): four periods,
+    /// held between <see cref="MinStartConfirmationMs"/> and <see cref="MaxStartConfirmationMs"/>. A
     /// delivering stream returns from here as soon as its first frame lands, which at any rate
     /// above a few hertz is a handful of milliseconds.
     /// </para>
@@ -616,13 +631,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Whether this call sent the start. When it did not, the error queue is not this call's to
     /// judge: whatever it holds came from something else.
     /// </param>
+    /// <param name="framesBefore">How many frames of the session predate the call and so prove nothing.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
     /// <exception cref="DeviceCommandFailedException">
     /// Thrown when the device refused the start, reports that it is not streaming, or did not answer.
     /// </exception>
-    private async Task ConfirmStreamStartedAsync(bool startSent, CancellationToken cancellationToken)
+    private async Task ConfirmStreamStartedAsync(
+        bool startSent,
+        long framesBefore,
+        CancellationToken cancellationToken)
     {
-        if (await WaitForFirstStreamFrameAsync(cancellationToken).ConfigureAwait(false))
+        if (await WaitForStreamFrameAsync(framesBefore, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -762,15 +781,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// Waits until the device has sent at least one stream frame, or the confirmation budget for
-    /// the current rate runs out.
+    /// Waits until the device has sent a stream frame beyond the first
+    /// <paramref name="framesBefore"/> of the session, or the confirmation budget for the current
+    /// rate runs out.
     /// </summary>
+    /// <param name="framesBefore">How many of the session's frames do not count.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
     /// <returns><c>true</c> when a frame arrived; <c>false</c> when the budget ran out first.</returns>
-    private async Task<bool> WaitForFirstStreamFrameAsync(CancellationToken cancellationToken)
+    private async Task<bool> WaitForStreamFrameAsync(long framesBefore, CancellationToken cancellationToken)
     {
         var budgetMs = Math.Clamp(
-            3000.0 / Math.Max(1, StreamingFrequency),
+            4000.0 / Math.Max(1, StreamingFrequency),
             MinStartConfirmationMs,
             MaxStartConfirmationMs);
 
@@ -778,7 +799,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         while (true)
         {
-            if (_frameDecoder.ReceivedStreamFrameCount > 0)
+            if (_frameDecoder.AdmittedStreamFrameCount > framesBefore)
             {
                 return true;
             }
@@ -1935,6 +1956,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     // read it.
     void IStreamingSessionHost.BeginDecoderSession(int streamingFrequencyHz)
         => _frameDecoder.BeginSession(TimestampFrequency, streamingFrequencyHz);
+
+    TimeProvider IStreamingSessionHost.Clock => Clock;
 
     void IStreamingSessionHost.EndSdCardLogSession() => _sdCardOperations.EndLoggingSession();
 
