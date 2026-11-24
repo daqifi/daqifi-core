@@ -64,16 +64,20 @@ public static class DaqifiPrompts
             """;
 
     [McpServerPrompt(Name = "drive_and_measure", Title = "Drive an output and measure the response")]
-    [Description("Drive a digital output on a DAQiFi device, then read an analog input to see what happened.")]
+    [Description("Drive a digital output on a DAQiFi device and capture an analog input across the edge to see what happened.")]
     public static string DriveAndMeasure(
         [Description("The digital channel to drive (default 3).")] int digitalChannel = 3,
         [Description("The analog channel to measure (default 0).")] int analogChannel = 0,
         [Description("How long to measure for, in milliseconds (default 1000).")] int durationMs = 1000)
         => $"""
-            Set digital channel {digitalChannel} to output and drive it high, then read analog channel {analogChannel} for {durationMs} ms.
+            Drive digital channel {digitalChannel} high while capturing analog channel {analogChannel} for {durationMs} ms, so I can see what the output did to it.
 
-            Capture the analog channel across the transition if you can, so I can see what the output did to
-            it, and tell me the level before and after. Drive the digital channel low again afterwards
-            unless I say otherwise — leaving an output asserted is a surprise for whatever is wired to it.
+            Enable analog channel {analogChannel} and digital channel {digitalChannel}, set a sample rate fast enough to
+            resolve the response, then use drive_and_capture: it starts the capture, drives the pin
+            part-way through and returns the rows, so the edge and the response are in one capture. Tell
+            me the level before and after, and how long the response took, measured from the transition
+            in the DIO{digitalChannel} column — edgeIssuedAtMs is only when the command was issued by this machine, not
+            when the pin moved, so do not time the response from it. Drive the digital channel low again afterwards unless I say otherwise —
+            leaving an output asserted is a surprise for whatever is wired to it.
             """;
 }
