@@ -5,6 +5,9 @@
          tested on every framework it ships an asset for; see issue #643. -->
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
+    <!-- Same reason as in Daqifi.Core.Tests.csproj: tests that block must not leave the others
+         waiting for a pool thread. -->
+    <ThreadPoolMinThreads>64</ThreadPoolMinThreads>
   </PropertyGroup>
 
   <ItemGroup>

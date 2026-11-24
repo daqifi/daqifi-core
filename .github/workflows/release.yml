@@ -18,7 +18,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    
+      with:
+        # Full history, so the tag can be checked against main below.
+        fetch-depth: 0
+
     - name: Setup .NET
       uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
@@ -34,7 +37,34 @@ jobs:
           echo "Invalid version format. Must follow semantic versioning (e.g., 1.0.0 or 1.0.0-beta.1)"
           exit 1
         fi
-    
+
+    # The box decides what GitHub calls "Latest" and the suffix decides what NuGet and
+    # the MCP Registry do, so a release where they disagree is a mistake in one of them.
+    # Read live rather than from the event payload: a re-run replays the original
+    # payload, so a corrected box would never be seen.
+    - name: Verify the prerelease box matches the tag
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        case "$VERSION" in
+          *-*) expected=true ;;
+          *)   expected=false ;;
+        esac
+        actual=$(gh release view "$GITHUB_REF_NAME" --json isPrerelease --jq .isPrerelease)
+        if [ "$actual" != "$expected" ]; then
+          echo "::error::$GITHUB_REF_NAME needs prerelease=$expected, but the GitHub Release says $actual. Correct the release's prerelease box and re-run this job."
+          exit 1
+        fi
+
+    # `main` is the only ref whose CI run validates the packaged API (the packs below are
+    # --no-build, which skips ApiCompat), so a tag from anywhere else is unchecked.
+    - name: Verify the tag is on main
+      run: |
+        if ! git merge-base --is-ancestor HEAD origin/main; then
+          echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main."
+          exit 1
+        fi
+
     - name: Restore dependencies
       run: dotnet restore
     
@@ -66,11 +96,29 @@ jobs:
     - name: Push MCP server to NuGet
       run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
-    # --- Official MCP Registry (issue #726) ---
-    # Daqifi.Mcp has been on NuGet since 1.0.0, but it was not listed in the
-    # official MCP Registry, so the only way to find it was to read this repo's
-    # README. These steps list it as part of the release, so the registry entry
-    # tracks every version instead of being a one-off that goes stale.
+  # --- Official MCP Registry (issue #726) ---
+  # Daqifi.Mcp has been on NuGet since 1.0.0, but it was not listed in the
+  # official MCP Registry, so the only way to find it was to read this repo's
+  # README. This job lists it as part of the release, so the registry entry
+  # tracks every version instead of being a one-off that goes stale.
+  #
+  # Stable versions only (issue #1050). A prerelease is on NuGet for whoever asks for
+  # it by version; the registry has no such opt-in, so listing one would offer it to
+  # everybody. A job of its own so that one condition covers every step.
+  mcp-registry:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
     - name: Wait for Daqifi.Mcp to be readable on NuGet
       # The registry proves package ownership by fetching the README of the exact
@@ -114,10 +162,9 @@ jobs:
         tar xzf "$archive" mcp-publisher
 
     - name: Stamp the release version into the MCP manifest
-      # The committed manifest carries the last released version so it is valid
-      # to read and to `mcp-publisher validate` locally; the tag is what actually
-      # ships, and both version fields have to name the same package version the
-      # registry will go and verify.
+      # The version committed in the manifest is never what ships; the tag is, and
+      # both version fields have to name the same package version the registry will
+      # go and verify.
       run: |
         jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' \
           src/Daqifi.Mcp/.mcp/server.json > server.json.tmp

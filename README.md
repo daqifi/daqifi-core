@@ -424,8 +424,9 @@ This library follows semantic versioning. Releases are automated via GitHub Acti
 1. Create a new GitHub Release
 2. Tag it `vX.Y.Z` (pre-releases use `-alpha.1`, `-beta.1`, `-rc.1` suffixes)
 3. Publishing to NuGet happens automatically on release
+4. After a stable release, run `python3 scripts/post-release.py X.Y.Z` and open a PR with the result ([CONTRIBUTING.md](https://github.com/daqifi/daqifi-core/blob/main/CONTRIBUTING.md#after-a-release))
 
-The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`.
+The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and, unless it is a pre-release, lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`.
 
 Semver here tracks **source** compatibility, not binary compatibility: appending a parameter
 to a public positional record (with a default) is not treated as a breaking change requiring
