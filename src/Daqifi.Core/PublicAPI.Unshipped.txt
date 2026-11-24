@@ -119,13 +119,41 @@
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.LoadAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.LoadFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.LoadVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SaveAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SaveFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SaveVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationOffset(int channelNumber, double calB) -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationSlope(int channelNumber, double calM) -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.UseAdcCalibration(int bank) -> void
 *REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocument.MergeInto(Daqifi.Core.Device.DeviceCapabilities! capabilities) -> void
 *REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocumentParser
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.CreateFeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature) -> Daqifi.Core.Device.FeatureNotSupportedException!
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.SnapshotChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Channel.IChannel!>!
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock(System.Action! action) -> void
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock<T>(System.Func<T>! action) -> T
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.DisableAllChannelsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.DisableChannelAsync(Daqifi.Core.Channel.IChannel! channel, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnableChannelAsync(Daqifi.Core.Channel.IChannel! channel, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnableChannelsAsync(System.Collections.Generic.IEnumerable<Daqifi.Core.Channel.IChannel!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.LoadAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.LoadFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.LoadVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SaveAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SaveFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SaveVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationOffset(int channelNumber, double calB) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationSlope(int channelNumber, double calM) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAnalogOutputAsync(int channelNumber, double voltage, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetDioDirectionAsync(Daqifi.Core.Channel.IChannel! channel, Daqifi.Core.Channel.ChannelDirection direction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetDioValueAsync(Daqifi.Core.Channel.IChannel! channel, bool value, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetPwmDutyCycleAsync(Daqifi.Core.Channel.IChannel! channel, int dutyCyclePercent, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetPwmEnabledAsync(Daqifi.Core.Channel.IChannel! channel, bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetPwmFrequencyAsync(int frequencyHz, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.UseAdcCalibration(int bank) -> void
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.Diagnostics.CommandHistoryParser
 *REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelParser
@@ -153,7 +181,26 @@
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.get -> int
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.DisableAllChannelsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.DisableChannelAsync(Daqifi.Core.Channel.IChannel! channel, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.EnableChannelAsync(Daqifi.Core.Channel.IChannel! channel, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.EnableChannelsAsync(System.Collections.Generic.IEnumerable<Daqifi.Core.Channel.IChannel!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.LoadAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.LoadFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.LoadVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SaveAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SaveFactoryAdcCalibration() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SaveVoltagePrecision() -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetAdcCalibrationOffset(int channelNumber, double calB) -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetAdcCalibrationSlope(int channelNumber, double calM) -> void
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetAnalogOutputAsync(int channelNumber, double voltage, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetDioDirectionAsync(Daqifi.Core.Channel.IChannel! channel, Daqifi.Core.Channel.ChannelDirection direction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetDioValueAsync(Daqifi.Core.Channel.IChannel! channel, bool value, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetPwmDutyCycleAsync(Daqifi.Core.Channel.IChannel! channel, int dutyCyclePercent, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetPwmEnabledAsync(Daqifi.Core.Channel.IChannel! channel, bool enabled, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.SetPwmFrequencyAsync(int frequencyHz, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IStreamingDevice.UseAdcCalibration(int bank) -> void
 *REMOVED*Daqifi.Core.Device.Network.NetworkAddressHelper
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.CanHandle(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> bool
@@ -308,6 +355,9 @@ Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.ProtobufProtocolHandl
 Daqifi.Core.Communication.Transport.IStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get -> bool
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.BootloaderSessionDevice.RebootAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.BootloaderSessionDevice.StartStreamingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.BootloaderSessionDevice.StopStreamingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.INetworkAddressedDevice

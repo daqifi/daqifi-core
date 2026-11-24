@@ -246,6 +246,62 @@ public class DaqifiStreamingDeviceConfirmationTests
         Assert.False(device.IsStreaming);
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData(null)]
+    public async Task Start_ReplacedByAnotherCallersStreamWhileBeingAsked_LeavesThatStreamAlone(string? reply)
+    {
+        // Whatever the device answered, the answer is about a stream this call did not start.
+        var device = ConnectedDevice();
+        if (reply != null)
+        {
+            device.Replies.Enqueue([reply]);
+        }
+
+        device.DuringExchange = () =>
+        {
+            device.DuringExchange = null;
+            device.StopStreaming();
+            device.StartStreaming();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.StartStreamingAsync());
+
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task Start_ReplacedWhileTheErrorQueueIsRead_LeavesTheReplacementAlone()
+    {
+        var device = ConnectedDevice();
+        device.QueuedErrors.Add("-222,\"Data out of range\"");
+        device.DuringErrorQueueRead = () =>
+        {
+            device.StopStreaming();
+            device.StartStreaming();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.StartStreamingAsync());
+
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task Start_ReplacedWhileWaitingForAFrame_IsNotConfirmedByTheReplacementsFrames()
+    {
+        var device = ConnectedDevice();
+        device.StreamingFrequency = 10;
+        var start = device.StartStreamingAsync();
+
+        device.StopStreaming();
+        device.StartStreaming();
+        device.SendFrame();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+        Assert.True(device.IsStreaming);
+    }
+
     [Fact]
     public async Task Start_ConnectionEndsWhileWaitingForAFrame_SaysSo()
     {
@@ -309,6 +365,22 @@ public class DaqifiStreamingDeviceConfirmationTests
         Assert.Equal(Stop, failure.Command);
         Assert.Equal("1", failure.DeviceResponse);
         Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task Stop_RestartedAndStoppedByAnotherCallerWhileBeingAsked_DoesNotReviveTheOldSession()
+    {
+        var device = StreamingDevice();
+        device.Replies.Enqueue(["1"]);
+        device.DuringExchange = () =>
+        {
+            device.StartStreaming();
+            device.StopStreaming();
+        };
+
+        await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StopStreamingAsync());
+
+        Assert.False(device.IsStreaming);
     }
 
     [Fact]
@@ -524,6 +596,8 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         public int ErrorQueueReads { get; private set; }
 
+        public Action? DuringErrorQueueRead { get; set; }
+
         public int Exchanges { get; private set; }
 
         public int LastResponseTimeoutMs { get; private set; }
@@ -576,6 +650,7 @@ public class DaqifiStreamingDeviceConfirmationTests
             CancellationToken cancellationToken = default)
         {
             ErrorQueueReads++;
+            DuringErrorQueueRead?.Invoke();
             return ErrorQueueFailure != null
                 ? Task.FromException<IReadOnlyList<string>>(ErrorQueueFailure)
                 : Task.FromResult<IReadOnlyList<string>>(QueuedErrors.ToList());

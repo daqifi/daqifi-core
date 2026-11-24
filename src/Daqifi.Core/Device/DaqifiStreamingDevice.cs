@@ -439,7 +439,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </para>
     /// <para>
     /// A stream another caller stops while this is waiting is left stopped, and this ends as
-    /// cancelled: the device never confirmed it, and nothing failed.
+    /// cancelled: the device never confirmed it, and nothing failed. The same goes for one that is
+    /// stopped and started again: the new stream is the other caller's, and is left alone.
     /// </para>
     /// </remarks>
     /// <exception cref="Daqifi.Core.Communication.Consumers.ConsumerThreadNotExitedException">
@@ -450,29 +451,25 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var alreadyStreaming = IsStreaming;
-
         await RefreshSampleRateCapAsync(cancellationToken).ConfigureAwait(false);
 
         // Evidence that the device is streaming has to be newer than this call. A new session
         // counts its frames from zero, so what must not be there is a frame of the stream before
         // it; a running one has frames already, and those say only that it was streaming once.
-        var framesBefore = 0L;
-        if (alreadyStreaming)
-        {
-            framesBefore = _frameDecoder.AdmittedStreamFrameCount;
-        }
-        else if (_session.RemainingSettleTime(StoppedStreamSettleDelay) is var settle && settle > TimeSpan.Zero)
+        if (!IsStreaming
+            && _session.RemainingSettleTime(StoppedStreamSettleDelay) is var settle
+            && settle > TimeSpan.Zero)
         {
             await Task.Delay(settle, Clock, cancellationToken).ConfigureAwait(false);
         }
 
-        StartStreaming();
+        var (session, startSent) = _session.StartStreaming();
+        var framesBefore = startSent ? 0L : _frameDecoder.AdmittedStreamFrameCount;
 
         Exception? confirmationFailure = null;
         try
         {
-            await ConfirmStreamStartedAsync(startSent: !alreadyStreaming, framesBefore, cancellationToken)
+            await ConfirmStreamStartedAsync(session, startSent, framesBefore, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -484,7 +481,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // capture cannot restart the reader. The wait then sees the session end, or the exchange
         // that follows it fails on the same stuck reader; neither is a refusal, so the reason the
         // start never reached the device goes out in place of either (issue #975).
-        if (!alreadyStreaming && _session.TakeParkedStartFailure() is { } notSent)
+        if (session.StartNotSent is { } notSent)
         {
             ExceptionDispatchInfo.Capture(notSent).Throw();
         }
@@ -627,6 +624,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// no.
     /// </para>
     /// </remarks>
+    /// <param name="session">
+    /// The session being confirmed. Evidence counts, and a refusal ends a session, only while this
+    /// is still the current one.
+    /// </param>
     /// <param name="startSent">
     /// Whether this call sent the start. When it did not, the error queue is not this call's to
     /// judge: whatever it holds came from something else.
@@ -637,11 +638,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Thrown when the device refused the start, reports that it is not streaming, or did not answer.
     /// </exception>
     private async Task ConfirmStreamStartedAsync(
+        StreamingSession session,
         bool startSent,
         long framesBefore,
         CancellationToken cancellationToken)
     {
-        if (await WaitForStreamFrameAsync(framesBefore, cancellationToken).ConfigureAwait(false))
+        if (await WaitForStreamFrameAsync(session, framesBefore, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -653,7 +655,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             // The device is not streaming, whatever the flag says, so put the session back before
             // the exception leaves: a device reported as streaming while it sits idle also makes
             // the next StartStreaming() a silent no-op.
-            _session.MarkStartRefused();
+            MarkStartRefusedOrThrowIfSessionEnded(session);
 
             throw ScpiResponseClassifier.TryParseSystemErrorReplyCode(refusal, out var code) && code != 0
                 ? new DeviceCommandFailedException(command, code, refusal)
@@ -665,7 +667,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         // Stopped from another thread while the device was being asked: its "no" is that stop, not
         // a refused start.
-        ThrowIfStreamEnded();
+        ThrowIfSessionEnded(session);
 
         if (isStreaming == true)
         {
@@ -679,9 +681,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         // An SD log the device has ended by itself still owns the card's bus on this side;
         // StopSdCardLoggingAsync is what hands that back.
-        if (!IsLoggingToSdCard)
+        if (session.Kind != StreamingSessionKind.SdCardLog)
         {
-            _session.MarkStartRefused();
+            MarkStartRefusedOrThrowIfSessionEnded(session);
         }
 
         throw DeviceCommandFailedException.Contradicted(
@@ -689,17 +691,32 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// Throws when the stream being confirmed is no longer this device's session.
+    /// Throws when the session being confirmed is no longer the current one.
     /// </summary>
     /// <exception cref="DeviceNotConnectedException">The connection ended, and the session with it.</exception>
-    /// <exception cref="OperationCanceledException">Another caller stopped the stream.</exception>
-    private void ThrowIfStreamEnded()
+    /// <exception cref="OperationCanceledException">Another caller stopped the stream, or stopped and restarted it.</exception>
+    private void ThrowIfSessionEnded(StreamingSession session)
     {
-        if (IsStreaming)
+        if (!ReferenceEquals(_session.Current, session))
         {
-            return;
+            ThrowSessionEnded();
         }
+    }
 
+    /// <summary>
+    /// Ends <paramref name="session"/> because the device is not streaming it, or throws as
+    /// <see cref="ThrowIfSessionEnded"/> does when it is no longer the one to end.
+    /// </summary>
+    private void MarkStartRefusedOrThrowIfSessionEnded(StreamingSession session)
+    {
+        if (!_session.TryMarkStartRefused(session))
+        {
+            ThrowSessionEnded();
+        }
+    }
+
+    private void ThrowSessionEnded()
+    {
         EnsureConnected();
 
         throw new OperationCanceledException(
@@ -785,10 +802,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <paramref name="framesBefore"/> of the session, or the confirmation budget for the current
     /// rate runs out.
     /// </summary>
+    /// <param name="session">The session whose frame is waited for.</param>
     /// <param name="framesBefore">How many of the session's frames do not count.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
     /// <returns><c>true</c> when a frame arrived; <c>false</c> when the budget ran out first.</returns>
-    private async Task<bool> WaitForStreamFrameAsync(long framesBefore, CancellationToken cancellationToken)
+    private async Task<bool> WaitForStreamFrameAsync(
+        StreamingSession session,
+        long framesBefore,
+        CancellationToken cancellationToken)
     {
         var budgetMs = Math.Clamp(
             4000.0 / Math.Max(1, StreamingFrequency),
@@ -799,14 +820,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         while (true)
         {
-            if (_frameDecoder.AdmittedStreamFrameCount > framesBefore)
+            var admitted = _frameDecoder.AdmittedStreamFrameCount;
+
+            // Checked after the count is read, so a frame of a later session cannot be taken for
+            // one of this. A stream stopped from another thread while this waited is not a refused
+            // start, so there is nothing to ask the device about either.
+            ThrowIfSessionEnded(session);
+
+            if (admitted > framesBefore)
             {
                 return true;
             }
-
-            // A stream stopped from another thread while this waited is not a refused start, so
-            // there is nothing to ask the device about.
-            ThrowIfStreamEnded();
 
             if (Clock.GetElapsedTime(startedAt).TotalMilliseconds >= budgetMs)
             {
@@ -893,7 +917,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         await RunExclusiveAsync(
             async ct =>
             {
-                var wasLiveStream = IsStreaming && !IsLoggingToSdCard;
+                var running = _session.Current;
 
                 if (IsStreaming)
                 {
@@ -903,6 +927,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
                 {
                     Send(ScpiMessageProducer.StopStreaming);
                 }
+
+                var stopped = _session.Current;
 
                 await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
 
@@ -917,9 +943,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
                 if (isStreaming.Value)
                 {
-                    if (wasLiveStream)
+                    if (running.Kind == StreamingSessionKind.LiveStream)
                     {
-                        _session.MarkStopNotTaken();
+                        _session.MarkStopNotTaken(stopped, running);
                     }
 
                     throw DeviceCommandFailedException.Contradicted(

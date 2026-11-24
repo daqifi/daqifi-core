@@ -27,6 +27,27 @@ internal enum StreamingSessionKind
 }
 
 /// <summary>
+/// One session of a streaming device, or the idle time between two. Compared by reference.
+/// </summary>
+internal sealed class StreamingSession(StreamingSessionKind kind)
+{
+    /// <summary>What kind of session it is.</summary>
+    internal StreamingSessionKind Kind { get; } = kind;
+
+    /// <summary>
+    /// Why this session's start was dropped instead of sent, or <c>null</c>. Written on the thread
+    /// that replays a parked start, read on the one that is confirming it.
+    /// </summary>
+    internal Exception? StartNotSent
+    {
+        get => Volatile.Read(ref _startNotSent);
+        set => Volatile.Write(ref _startNotSent, value);
+    }
+
+    private Exception? _startNotSent;
+}
+
+/// <summary>
 /// Owns what a streaming device knows about the streaming session it is in: whether one is
 /// running and of which kind, the rate it runs at, how a session begins and ends, how a session
 /// driven by raw commands is kept in step, and what is restored after an automatic reconnect.
@@ -55,22 +76,34 @@ internal sealed class StreamingSessionController
         _host = host;
     }
 
-    private StreamingSessionKind _kind;
+    private StreamingSession _current = new(StreamingSessionKind.None);
+
+    /// <summary>
+    /// The session this device is in, as an identity: every session that begins or ends is a new
+    /// object, so a caller that holds one can tell whether what it is asking about is still what is
+    /// running, and change the state only if it is.
+    /// </summary>
+    internal StreamingSession Current => Volatile.Read(ref _current);
+
+    private void SetCurrent(StreamingSessionKind kind) => Volatile.Write(ref _current, new StreamingSession(kind));
+
+    private bool TryReplace(StreamingSession expected, StreamingSession replacement) =>
+        ReferenceEquals(Interlocked.CompareExchange(ref _current, replacement, expected), expected);
 
     /// <inheritdoc cref="DaqifiStreamingDevice.IsStreaming"/>
     /// <remarks>
     /// Read-only: the session changes only through the methods of this class, each of which
     /// names why it changes (issue #940).
     /// </remarks>
-    internal bool IsStreaming => _kind != StreamingSessionKind.None;
+    internal bool IsStreaming => Current.Kind != StreamingSessionKind.None;
 
     /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
-    internal bool IsLoggingToSdCard => _kind == StreamingSessionKind.SdCardLog;
+    internal bool IsLoggingToSdCard => Current.Kind == StreamingSessionKind.SdCardLog;
 
     /// <summary>
     /// Records that the stream now running is going to the SD card.
     /// </summary>
-    internal void BeginSdCardLogSession() => _kind = StreamingSessionKind.SdCardLog;
+    internal void BeginSdCardLogSession() => SetCurrent(StreamingSessionKind.SdCardLog);
 
     /// <summary>
     /// Records that the session, of either kind, has been stopped: a stop command went to the
@@ -82,7 +115,7 @@ internal sealed class StreamingSessionController
     /// </remarks>
     internal void EndSession()
     {
-        _kind = StreamingSessionKind.None;
+        SetCurrent(StreamingSessionKind.None);
         Volatile.Write(ref _stopSent, new StopSent(_host.Clock.GetTimestamp()));
     }
 
@@ -111,41 +144,43 @@ internal sealed class StreamingSessionController
     /// Records that a start did not take effect — the device refused it, or the command could
     /// not be sent — so no session is running, whatever was recorded when the start went out.
     /// </summary>
-    internal void MarkStartRefused() => _kind = StreamingSessionKind.None;
+    internal void MarkStartRefused() => SetCurrent(StreamingSessionKind.None);
+
+    /// <summary>
+    /// The same, for the start of one particular session.
+    /// </summary>
+    /// <returns>
+    /// <c>false</c>, with nothing changed, when that session is no longer the current one: what is
+    /// running now, if anything, is not that start's to clear.
+    /// </returns>
+    internal bool TryMarkStartRefused(StreamingSession session) =>
+        TryReplace(session, new StreamingSession(StreamingSessionKind.None));
 
     /// <summary>
     /// Records that the live stream a stop was sent to is still running, because the device says so.
+    /// Does nothing when the session has moved on since that stop.
     /// </summary>
-    internal void MarkStopNotTaken() => _kind = StreamingSessionKind.LiveStream;
+    /// <param name="stopped">What was current once the stop had been recorded.</param>
+    /// <param name="running">The session the stop was sent to.</param>
+    internal void MarkStopNotTaken(StreamingSession stopped, StreamingSession running) =>
+        TryReplace(stopped, running);
 
     /// <summary>
     /// Records that a live start parked behind a raw capture was never sent, because the reader
     /// could not start once the capture ended (issue #975).
     /// </summary>
     /// <remarks>
-    /// Only a live session is ended: by the time the parked start is replayed, a stop on another
-    /// flow may already have ended it, or an SD log may have begun, and neither is this start's.
-    /// The refusal is kept for <see cref="TakeParkedStartFailure"/>, so a
-    /// <c>StartStreamingAsync</c> that is still confirming this start throws it instead of
-    /// reporting success.
+    /// Only the session of that start is ended: by the time the parked start is replayed, a stop on
+    /// another flow may already have ended it, or another session may have begun, and neither is
+    /// this start's. The refusal is kept on the session, so a <c>StartStreamingAsync</c> that is
+    /// still confirming this start throws it instead of reporting success.
     /// </remarks>
-    private void MarkParkedStartNotSent(Exception refusal)
+    private void MarkParkedStartNotSent(StreamingSession session, Exception refusal)
     {
-        if (_kind == StreamingSessionKind.LiveStream)
-        {
-            _kind = StreamingSessionKind.None;
-            Volatile.Write(ref _parkedStartFailure, refusal);
-        }
+        // Before the session ends, so that whoever sees it ended can already see why.
+        session.StartNotSent = refusal;
+        TryReplace(session, new StreamingSession(StreamingSessionKind.None));
     }
-
-    /// <summary>
-    /// The refusal of the last live start that was parked behind a raw capture and then dropped
-    /// because the reader could not start, or <c>null</c>. Taking it clears it.
-    /// </summary>
-    internal Exception? TakeParkedStartFailure() => Interlocked.Exchange(ref _parkedStartFailure, null);
-
-    /// <summary>Written on the replaying thread, read on the starting one.</summary>
-    private Exception? _parkedStartFailure;
 
     /// <summary>
     /// Ends the session because the connection ended. Sends nothing: there is no link to send a
@@ -159,7 +194,7 @@ internal sealed class StreamingSessionController
     /// before the status leaves <c>Connected</c>, so it still records the session as it was at
     /// the drop.
     /// </remarks>
-    internal void EndSessionOnConnectionEnd() => _kind = StreamingSessionKind.None;
+    internal void EndSessionOnConnectionEnd() => SetCurrent(StreamingSessionKind.None);
 
     private int _streamingFrequency;
 
@@ -419,12 +454,37 @@ internal sealed class StreamingSessionController
     }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StartStreaming"/>
-    internal void StartStreaming()
+    /// <returns>
+    /// The session that is running, and whether this call started it rather than found it.
+    /// </returns>
+    internal (StreamingSession Session, bool Started) StartStreaming()
     {
         _host.EnsureConnected();
 
-        if (IsStreaming) return;
+        while (true)
+        {
+            var observed = Current;
+            if (observed.Kind != StreamingSessionKind.None)
+            {
+                return (observed, false);
+            }
 
+            if (TryStartStreaming(observed) is { } started)
+            {
+                return (started, true);
+            }
+
+            // Another caller began or ended a session while this one was getting ready: decide
+            // again from what is there now.
+        }
+    }
+
+    /// <summary>
+    /// Begins a live session and sends its start, unless the session has changed since
+    /// <paramref name="idle"/> was read.
+    /// </summary>
+    private StreamingSession? TryStartStreaming(StreamingSession idle)
+    {
         // Before anything about the session changes, and before the start command is sent: a
         // stream start whose frames nothing reads is a running session that delivers nothing,
         // with no error anywhere (issue #975). A reader that cannot start throws here instead.
@@ -437,14 +497,20 @@ internal sealed class StreamingSessionController
 
         BeginStreamingSession(rateHz);
 
-        _kind = StreamingSessionKind.LiveStream;
-        Volatile.Write(ref _parkedStartFailure, null);
+        var session = new StreamingSession(StreamingSessionKind.LiveStream);
+        if (!TryReplace(idle, session))
+        {
+            return null;
+        }
 
         // The check above cannot answer for a start that is parked behind a raw capture on another
         // flow: that capture stopped the reader on purpose. The parked start checks again when it
         // is replayed, after the capture's restart, and is dropped with the session ended if the
         // reader still cannot start (issue #975).
-        _host.SendStreamStart(ScpiMessageProducer.StartStreaming(rateHz), MarkParkedStartNotSent);
+        _host.SendStreamStart(
+            ScpiMessageProducer.StartStreaming(rateHz),
+            refusal => MarkParkedStartNotSent(session, refusal));
+        return session;
     }
 
     /// <summary>
@@ -636,7 +702,7 @@ internal sealed class StreamingSessionController
                     // would have given it. Ordering matches too: the state is ready before the
                     // flag flips.
                     BeginStreamingSession(effect.StreamingFrequency);
-                    _kind = StreamingSessionKind.LiveStream;
+                    SetCurrent(StreamingSessionKind.LiveStream);
                 }
 
                 break;
