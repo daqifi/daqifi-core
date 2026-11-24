@@ -258,7 +258,6 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         Assert.Equal(1, transport.DisconnectCount);
         Assert.Equal(1, transport.DisposeCount);
-        Assert.Equal(0, transport.SyncDisconnectCalls);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1),
             $"Dispose() spent {sw.ElapsedMilliseconds}ms; it should have returned at once as the loser.");
     }
@@ -447,25 +446,19 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
 
         public void Dispose()
         {
@@ -483,7 +476,7 @@ public class DaqifiDeviceAsyncLifecycleTests
     // ---- Synchronous parity: the pre-#341 entry points must behave identically ----
 
     [Fact]
-    public void Connect_Disconnect_StillDriveTheTransportSynchronously()
+    public void Connect_Disconnect_RunTheTransportToCompletionBeforeReturning()
     {
         using var transport = new GatedMockTransport();
         transport.OpenConnectGate();
@@ -496,13 +489,13 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         Assert.True(device.IsConnected);
         Assert.Equal(DeviceState.Connected, device.State);
-        Assert.Equal(1, transport.SyncConnectCalls);
+        Assert.Equal(1, transport.ConnectAttempts);
 
         device.Disconnect();
 
         Assert.False(device.IsConnected);
         Assert.Equal(DeviceState.Disconnected, device.State);
-        Assert.Equal(1, transport.SyncDisconnectCalls);
+        Assert.Equal(1, transport.DisconnectCount);
         Assert.Equal(
             new[] { ConnectionStatus.Connecting, ConnectionStatus.Connected, ConnectionStatus.Disconnected },
             statusChanges);
@@ -531,7 +524,7 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         device.Dispose();
 
-        Assert.Equal(1, transport.SyncDisconnectCalls);
+        Assert.Equal(1, transport.DisconnectCount);
         Assert.True(transport.IsDisposed);
     }
 
@@ -553,20 +546,14 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync() => throw new IOException("the port went away");
-
-        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
-
-        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
+        public Task DisconnectAsync(CancellationToken cancellationToken = default) => throw new IOException("the port went away");
 
         public void Dispose()
         {
@@ -612,8 +599,6 @@ public class DaqifiDeviceAsyncLifecycleTests
         private volatile bool _disposed;
         private int _connectAttempts;
         private int _disconnectCount;
-        private int _syncConnectCalls;
-        private int _syncDisconnectCalls;
         private int _disposeCount;
         private int _disconnectGateArmed;
 
@@ -625,8 +610,6 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         public int ConnectAttempts => Volatile.Read(ref _connectAttempts);
         public int DisconnectCount => Volatile.Read(ref _disconnectCount);
-        public int SyncConnectCalls => Volatile.Read(ref _syncConnectCalls);
-        public int SyncDisconnectCalls => Volatile.Read(ref _syncDisconnectCalls);
         public int DisposeCount => Volatile.Read(ref _disposeCount);
         public bool IsDisposed => _disposed;
 
@@ -679,15 +662,7 @@ public class DaqifiDeviceAsyncLifecycleTests
             return false;
         }
 
-        public Task ConnectAsync() => ConnectAsync(null, CancellationToken.None);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions) =>
-            ConnectAsync(retryOptions, CancellationToken.None);
-
-        public Task ConnectAsync(CancellationToken cancellationToken) =>
-            ConnectAsync(null, cancellationToken);
-
-        public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+        public async Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -706,7 +681,7 @@ public class DaqifiDeviceAsyncLifecycleTests
             OnConnected?.Invoke();
         }
 
-        public async Task DisconnectAsync()
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             if (!_isConnected)
             {
@@ -723,18 +698,6 @@ public class DaqifiDeviceAsyncLifecycleTests
             Interlocked.Increment(ref _disconnectCount);
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
-        }
-
-        public void Connect()
-        {
-            Interlocked.Increment(ref _syncConnectCalls);
-            ConnectAsync().GetAwaiter().GetResult();
-        }
-
-        public void Disconnect()
-        {
-            Interlocked.Increment(ref _syncDisconnectCalls);
-            DisconnectAsync().GetAwaiter().GetResult();
         }
 
         public void Dispose()

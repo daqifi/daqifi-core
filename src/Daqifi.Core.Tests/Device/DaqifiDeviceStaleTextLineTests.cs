@@ -1240,9 +1240,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="WithheldLineStream.WaitForLineCollected"/>.</summary>
         public bool WaitForLineCollected(TimeSpan timeout) => _stream.WaitForLineCollected(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(ReleaseOnStreamAccessMockTransport));
             _isConnected = true;
@@ -1250,16 +1248,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1385,9 +1379,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="TwoStageStream.WaitForContentConsumed"/>.</summary>
         public bool WaitForContentConsumed(TimeSpan timeout) => _stream.WaitForContentConsumed(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(TwoStageReleaseTransport));
             _isConnected = true;
@@ -1395,16 +1387,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1586,9 +1574,7 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>See <see cref="HoldableStream.WaitForLinesCollected"/>.</summary>
         public bool WaitForLinesCollected(TimeSpan timeout) => _stream.WaitForLinesCollected(timeout);
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(QueuedWriteTransport));
             _isConnected = true;
@@ -1596,16 +1582,12 @@ public class DaqifiDeviceStaleTextLineTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

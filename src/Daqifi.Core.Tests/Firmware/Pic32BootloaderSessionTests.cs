@@ -867,7 +867,7 @@ public class Pic32BootloaderSessionTests
     private static FakeHidTransport ConnectedTransport()
     {
         var transport = new FakeHidTransport();
-        transport.Connect(0x04D8, 0x003C);
+        transport.ConnectAsync(0x04D8, 0x003C).GetAwaiter().GetResult();
         return transport;
     }
 

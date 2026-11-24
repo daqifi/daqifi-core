@@ -180,30 +180,6 @@ public class DaqifiDeviceFactoryTests
 
     #endregion
 
-    #region ConnectTcp Sync Tests
-
-    [Fact]
-    public void ConnectTcp_NullHost_ThrowsArgumentNullException()
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentNullException>(
-            () => DaqifiDeviceFactory.ConnectTcp((string)null!, 9760));
-
-        Assert.Equal("host", exception.ParamName);
-    }
-
-    [Fact]
-    public void ConnectTcp_NullIpAddress_ThrowsArgumentNullException()
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentNullException>(
-            () => DaqifiDeviceFactory.ConnectTcp((IPAddress)null!, 9760));
-
-        Assert.Equal("ipAddress", exception.ParamName);
-    }
-
-    #endregion
-
     #region ConnectSerialAsync Tests
 
     [Fact]
@@ -274,42 +250,6 @@ public class DaqifiDeviceFactoryTests
         // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", null, cts.Token));
-    }
-
-    #endregion
-
-    #region ConnectSerial Sync Tests
-
-    [Fact]
-    public void ConnectSerial_NullPortName_ThrowsArgumentNullException()
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentNullException>(
-            () => DaqifiDeviceFactory.ConnectSerial(null!));
-
-        Assert.Equal("portName", exception.ParamName);
-    }
-
-    [Fact]
-    public void ConnectSerial_EmptyPortName_ThrowsArgumentException()
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentException>(
-            () => DaqifiDeviceFactory.ConnectSerial(""));
-
-        Assert.Equal("portName", exception.ParamName);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public void ConnectSerial_InvalidBaudRate_ThrowsArgumentOutOfRangeException(int invalidBaudRate)
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentOutOfRangeException>(
-            () => DaqifiDeviceFactory.ConnectSerial("COM3", invalidBaudRate));
-
-        Assert.Equal("baudRate", exception.ParamName);
     }
 
     #endregion
@@ -492,37 +432,6 @@ public class DaqifiDeviceFactoryTests
 
     #endregion
 
-    #region ConnectFromDeviceInfo Sync Tests
-
-    [Fact]
-    public void ConnectFromDeviceInfo_NullDeviceInfo_ThrowsArgumentNullException()
-    {
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentNullException>(
-            () => DaqifiDeviceFactory.ConnectFromDeviceInfo(null!));
-
-        Assert.Equal("deviceInfo", exception.ParamName);
-    }
-
-    [Fact]
-    public void ConnectFromDeviceInfo_SerialDeviceMissingPortName_ThrowsArgumentException()
-    {
-        // Arrange
-        var deviceInfo = new TestDeviceInfo
-        {
-            ConnectionType = ConnectionType.Serial,
-            PortName = null
-        };
-
-        // Act & Assert
-        var exception = Assert.Throws<ArgumentException>(
-            () => DaqifiDeviceFactory.ConnectFromDeviceInfo(deviceInfo));
-
-        Assert.Contains("PortName", exception.Message);
-    }
-
-    #endregion
-
     #region Network capability (issue #616)
 
     private static readonly DeviceConnectionOptions BareConnect = new()
@@ -634,7 +543,8 @@ public class DaqifiDeviceFactoryTests
             var target = (IPEndPoint)first.LocalEndpoint;
             var transport = new TcpStreamTransport("daqifi-peer.test", 9760)
             {
-                ConnectTaskFactory = client => client.ConnectAsync(target.Address, target.Port)
+                ConnectTaskFactory = (client, token) =>
+                    client.ConnectAsync(target.Address, target.Port, token).AsTask()
             };
             await transport.ConnectAsync(BareConnect.ConnectionRetry);
             using var device = DaqifiDeviceFactory.CreateDevice(transport, BareConnect);

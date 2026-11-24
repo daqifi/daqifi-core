@@ -1529,9 +1529,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GatedWriteTransport));
             _isConnected = true;
@@ -1539,17 +1537,13 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _stream.ReleaseWrites();
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1584,9 +1578,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public void ReleaseWrites() => _stream.Release();
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(BlockedWriteTransport));
             _isConnected = true;
@@ -1594,17 +1586,13 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _stream.Release();
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {
@@ -1674,9 +1662,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
-        public Task ConnectAsync() => ConnectAsync(null);
-
-        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions = null, CancellationToken cancellationToken = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(RecordingTransport));
             _isConnected = true;
@@ -1684,16 +1670,12 @@ public class DaqifiDeviceOperationSerializationTests
             return Task.CompletedTask;
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isConnected = false;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
-
-        public void Connect() => ConnectAsync().Wait();
-
-        public void Disconnect() => DisconnectAsync().Wait();
 
         public void Dispose()
         {

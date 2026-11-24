@@ -17,17 +17,10 @@ namespace Daqifi.Core.Firmware;
 /// pair with the timing the firmware's WiFi-deinit/reinit state machine
 /// expects, then closes the port so it can be handed back.
 /// <para>
-/// <see cref="Activate(string, CancellationToken)"/> and
-/// <see cref="Deactivate(string, CancellationToken)"/> call
-/// <see cref="SerialStreamTransport.Connect"/> synchronously, which ultimately
-/// calls <see cref="System.IO.Ports.SerialPort.Open"/>. That call can hang
-/// uncancellably in native code (see the discovery-side isolation in
-/// <c>SerialDeviceFinder</c>, #294/#295) — a stuck open blocks the calling
-/// thread indefinitely and no <see cref="CancellationToken"/> can interrupt it
-/// once the call has begun. Do not call the synchronous overloads from a UI
-/// thread; prefer <see cref="ActivateAsync(string, CancellationToken)"/> /
-/// <see cref="DeactivateAsync(string, CancellationToken)"/>, which isolate the
-/// call onto a worker task and race it against a hard timeout.
+/// The sequence runs on a worker thread raced against a hard timeout, because
+/// <see cref="System.IO.Ports.SerialPort.Open"/> (and a write or close on a port whose device has
+/// gone) can block in native code where no <see cref="CancellationToken"/> reaches it. See the
+/// discovery-side isolation in <c>SerialDeviceFinder</c>, #294/#295.
 /// </para>
 /// </remarks>
 public static class WifiBridgeActivator
@@ -59,38 +52,8 @@ public static class WifiBridgeActivator
     internal static int HardTimeoutMs { get; set; } = DefaultHardTimeoutMs;
 
     /// <summary>
-    /// Briefly opens <paramref name="portName"/>, sends the SCPI sequence that
-    /// puts the device's WiFi module into bridge mode for firmware update, then
-    /// closes the port.
-    /// </summary>
-    /// <param name="portName">The serial port name (e.g. <c>COM5</c>, <c>/dev/cu.usbmodem1</c>).</param>
-    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="portName"/> is null.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
-    public static void Activate(string portName, CancellationToken cancellationToken = default)
-    {
-        // Re-assert the FW-update-requested flag (idempotent with the earlier handshake).
-        RunModeChangeSequence(portName, ScpiMessageProducer.SetLanFirmwareUpdateMode, cancellationToken);
-    }
-
-    /// <summary>
-    /// Briefly opens <paramref name="portName"/>, sends the SCPI sequence that
-    /// takes the device's WiFi module back out of bridge mode after a firmware
-    /// update, then closes the port.
-    /// </summary>
-    /// <param name="portName">The serial port name (e.g. <c>COM5</c>, <c>/dev/cu.usbmodem1</c>).</param>
-    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="portName"/> is null.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
-    public static void Deactivate(string portName, CancellationToken cancellationToken = default)
-    {
-        // Turn off transparent mode so the port goes back to the SCPI console.
-        RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(false), cancellationToken);
-    }
-
-    /// <summary>
-    /// The scripted port sequence both <see cref="Activate(string, CancellationToken)"/> and
-    /// <see cref="Deactivate(string, CancellationToken)"/> run: open the port, let firmware see
+    /// The scripted port sequence both <see cref="ActivateAsync"/> and
+    /// <see cref="DeactivateAsync"/> run: open the port, let firmware see
     /// DTR, send <paramref name="modeCommand"/>, then trigger the WiFi manager's REINIT with
     /// <c>LAN:APPLY</c> and hold the port open long enough for firmware to enqueue it.
     /// </summary>
@@ -108,8 +71,6 @@ public static class WifiBridgeActivator
     /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
     private static void RunModeChangeSequence(string portName, IOutboundMessage<string> modeCommand, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(portName);
-
         // Guarded even though both current callers pass a non-null literal: this method is meant to
         // be the one place a future direction or step gets added, and a null here would otherwise
         // surface as an NRE inside WriteCommand's GetBytes() with the port already open.
@@ -118,7 +79,9 @@ public static class WifiBridgeActivator
         cancellationToken.ThrowIfCancellationRequested();
 
         using var transport = new SerialStreamTransport(portName);
-        transport.Connect();
+
+        // Blocking is deliberate: this runs on RunWithHardTimeoutAsync's own worker thread.
+        transport.ConnectAsync(cancellationToken: cancellationToken).GetAwaiter().GetResult();
 
         // Allow firmware to recognise DTR before sending commands.
         WaitOrCancel(DtrSettleDelay, cancellationToken);
@@ -134,13 +97,12 @@ public static class WifiBridgeActivator
     }
 
     /// <summary>
-    /// Async, isolated equivalent of <see cref="Activate(string, CancellationToken)"/>.
-    /// Runs the synchronous sequence on a worker task and races it against a
-    /// hard timeout, so a wedged <see cref="System.IO.Ports.SerialPort.Open"/>
-    /// cannot block the caller indefinitely.
+    /// Briefly opens <paramref name="portName"/>, sends the SCPI sequence that
+    /// puts the device's WiFi module into bridge mode for firmware update, then
+    /// closes the port.
     /// </summary>
     /// <param name="portName">The serial port name (e.g. <c>COM5</c>, <c>/dev/cu.usbmodem1</c>).</param>
-    /// <param name="cancellationToken">Cancellation token observed up front and while waiting for the worker task.</param>
+    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
     /// <exception cref="ArgumentNullException"><paramref name="portName"/> is null.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
     /// <exception cref="TimeoutException">The worker task did not complete within the hard timeout.</exception>
@@ -150,19 +112,19 @@ public static class WifiBridgeActivator
         cancellationToken.ThrowIfCancellationRequested();
 
         return RunWithHardTimeoutAsync(
-            token => Activate(portName, token),
+            // Re-assert the FW-update-requested flag (idempotent with the earlier handshake).
+            token => RunModeChangeSequence(portName, ScpiMessageProducer.SetLanFirmwareUpdateMode, token),
             nameof(ActivateAsync),
             cancellationToken);
     }
 
     /// <summary>
-    /// Async, isolated equivalent of <see cref="Deactivate(string, CancellationToken)"/>.
-    /// Runs the synchronous sequence on a worker task and races it against a
-    /// hard timeout, so a wedged <see cref="System.IO.Ports.SerialPort.Open"/>
-    /// cannot block the caller indefinitely.
+    /// Briefly opens <paramref name="portName"/>, sends the SCPI sequence that
+    /// takes the device's WiFi module back out of bridge mode after a firmware
+    /// update, then closes the port.
     /// </summary>
     /// <param name="portName">The serial port name (e.g. <c>COM5</c>, <c>/dev/cu.usbmodem1</c>).</param>
-    /// <param name="cancellationToken">Cancellation token observed up front and while waiting for the worker task.</param>
+    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
     /// <exception cref="ArgumentNullException"><paramref name="portName"/> is null.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
     /// <exception cref="TimeoutException">The worker task did not complete within the hard timeout.</exception>
@@ -172,7 +134,8 @@ public static class WifiBridgeActivator
         cancellationToken.ThrowIfCancellationRequested();
 
         return RunWithHardTimeoutAsync(
-            token => Deactivate(portName, token),
+            // Turn off transparent mode so the port goes back to the SCPI console.
+            token => RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(false), token),
             nameof(DeactivateAsync),
             cancellationToken);
     }
@@ -187,9 +150,8 @@ public static class WifiBridgeActivator
     /// </summary>
     /// <param name="operation">
     /// The synchronous operation to isolate. Receives a token that is already
-    /// cancelled once the hard timeout elapses — <see cref="Activate(string, CancellationToken)"/>
-    /// / <see cref="Deactivate(string, CancellationToken)"/> observe it between
-    /// port-open and each subsequent delay/write, so a late-returning
+    /// cancelled once the hard timeout elapses — <see cref="RunModeChangeSequence"/> observes it
+    /// between port-open and each subsequent delay/write, so a late-returning
     /// <see cref="System.IO.Ports.SerialPort.Open"/> still stops the sequence
     /// before it sends any SCPI command (Qodo review #326 #2: a late open must
     /// not let an abandoned worker mutate device state after the caller already
@@ -270,12 +232,19 @@ public static class WifiBridgeActivator
                 // both raced at once.
                 cancellationToken.ThrowIfCancellationRequested();
 
-                throw new TimeoutException(
-                    $"{operationName} did not complete within {hardTimeoutMs}ms; the serial port open may be permanently blocked.");
+                throw CreateTimeoutException(operationName, hardTimeoutMs);
             }
 
             // Propagate success or the operation's own exception unchanged.
             await workerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+            when (hardTimeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The worker observed the hard timeout itself, before the race above did: its connect
+            // aborts on the token, so it usually stops at the same moment. To the caller, who
+            // cancelled nothing, that is the same timeout.
+            throw CreateTimeoutException(operationName, hardTimeoutMs);
         }
         finally
         {
@@ -289,6 +258,9 @@ public static class WifiBridgeActivator
             }
         }
     }
+
+    private static TimeoutException CreateTimeoutException(string operationName, int hardTimeoutMs) =>
+        new($"{operationName} did not complete within {hardTimeoutMs}ms; the serial port open may be permanently blocked.");
 
     private static void WriteCommand(SerialStreamTransport transport, IOutboundMessage<string> message, CancellationToken cancellationToken)
     {

@@ -178,7 +178,7 @@ internal sealed class WifiModuleUpdater
                     // the device stays in "requested" forever and the flash tool finds no bridge
                     // to talk to — the first half of #853. It is also the order the firmware's own
                     // utility script uses (POWer:STATe 1, LAN:FWUpdate, LAN:APPLY) and the order
-                    // WifiBridgeActivator.Activate already drives over a raw serial port.
+                    // WifiBridgeActivator.ActivateAsync already drives over a raw serial port.
                     device.Send(ScpiMessageProducer.ApplyNetworkLan);
 
                     // Same reasoning as above, one state further on — but only as far as the apply
@@ -280,7 +280,7 @@ internal sealed class WifiModuleUpdater
                     // forwarded to the WINC as raw data, so a LAN command sent immediately after
                     // can be swallowed by the bridge and the restore silently does nothing —
                     // the same intermittent failure the exit itself exists to prevent.
-                    // WifiBridgeActivator.Deactivate already paces this exact transition by the
+                    // WifiBridgeActivator.DeactivateAsync already paces this exact transition by the
                     // same amount over a raw serial port; this is the managed-connection twin.
                     if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
                     {
@@ -655,8 +655,15 @@ internal sealed class WifiModuleUpdater
                     Logger.LogInformation("Activating WiFi bridge mode before WINC programming.");
                     try
                     {
-                        activate();
+                        // Blocking, like the wait below and for the same reason: the tool is
+                        // parked on stdin until this responder returns.
+                        activate(cancellationToken).GetAwaiter().GetResult();
                         Logger.LogInformation("Bridge activation callback completed; waiting for firmware bridge init.");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        Logger.LogDebug("WiFi bridge activation canceled; skipping the continue signal.");
+                        return null;
                     }
                     catch (Exception ex)
                     {
@@ -930,7 +937,7 @@ internal sealed class WifiModuleUpdater
     /// <item><description>
     /// <see cref="LanUpdateModeProgress.BridgeEntered"/> — the device may already be bridged, so
     /// the exit goes out as-is. This is the managed-connection twin of
-    /// <see cref="WifiBridgeActivator.Deactivate"/> and sends the same two commands in the same
+    /// <see cref="WifiBridgeActivator.DeactivateAsync"/> and sends the same two commands in the same
     /// order.
     /// </description></item>
     /// <item><description>

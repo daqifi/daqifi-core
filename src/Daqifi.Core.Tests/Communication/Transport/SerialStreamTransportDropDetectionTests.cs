@@ -219,7 +219,7 @@ public class SerialStreamTransportDropDetectionTests
     }
 
     [Fact]
-    public void AfterAnIntentionalDisconnect_ThePortDisappearingReportsNothing()
+    public async Task AfterAnIntentionalDisconnect_ThePortDisappearingReportsNothing()
     {
         // Releasing the port makes it stop being "ours"; that must never be re-reported as a loss
         // on top of the disconnect the caller asked for.
@@ -234,7 +234,7 @@ public class SerialStreamTransportDropDetectionTests
         transport.StartDropDetection();
         Assert.True(transport.IsLivenessMonitorActive);
 
-        transport.Disconnect();
+        await transport.DisconnectAsync();
 
         var drops = 0;
         transport.StatusChanged += (_, e) =>
