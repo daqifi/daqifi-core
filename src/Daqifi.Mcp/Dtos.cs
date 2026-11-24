@@ -369,11 +369,11 @@ public sealed record SdFileEntry(string FileName, long? SizeBytes, DateTime? Cre
 public sealed record SdFileListing(string DeviceId, int FileCount, IReadOnlyList<SdFileEntry> Files);
 
 /// <summary>
-/// Free/used/total space on the device's SD card. <see cref="PercentFree"/> is rounded to one
+/// Free/used/total space on the device's SD card. <see cref="FreePercent"/> is rounded to one
 /// decimal and is 0 when the device reports a total of 0 bytes.
 /// </summary>
 public sealed record SdStorageReport(
-    string DeviceId, long FreeBytes, long UsedBytes, long TotalBytes, double PercentFree)
+    string DeviceId, long FreeBytes, long UsedBytes, long TotalBytes, double FreePercent)
 {
     public static SdStorageReport From(string deviceId, SdCardStorageInfo info) => new(
         deviceId,

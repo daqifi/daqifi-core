@@ -96,7 +96,7 @@ public class SdCardToolContractTests
     }
 
     [Fact]
-    public async Task GetSdStorage_ReportsUsedSpaceAndPercentFree()
+    public async Task GetSdStorage_ReportsUsedSpaceAndFreePercent()
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
         device.SdStorage = new SdCardStorageInfo(FreeBytes: 333, TotalBytes: 1000);
@@ -106,7 +106,7 @@ public class SdCardToolContractTests
         Assert.Equal(333, report.FreeBytes);
         Assert.Equal(667, report.UsedBytes);
         Assert.Equal(1000, report.TotalBytes);
-        Assert.Equal(33.3, report.PercentFree);
+        Assert.Equal(33.3, report.FreePercent);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class SdCardToolContractTests
 
         var report = await agent.GetSdStorageAsync(AgentHarness.DeviceId, CancellationToken.None);
 
-        Assert.Equal(0, report.PercentFree);
+        Assert.Equal(0, report.FreePercent);
     }
 
     [Fact]

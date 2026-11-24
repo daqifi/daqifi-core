@@ -1,0 +1,1740 @@
+[
+  {
+    "name": "capture_samples",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "integer",
+          "default": 1000
+        },
+        "maxRows": {
+          "type": "integer",
+          "default": 500
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        },
+        "startedStream": {
+          "type": "boolean"
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "rowCount": {
+          "type": "integer"
+        },
+        "sampleCount": {
+          "type": "integer"
+        },
+        "droppedSampleCount": {
+          "type": "integer"
+        },
+        "ignoredSampleCount": {
+          "type": "integer"
+        },
+        "measuredRateHz": {
+          "type": "number"
+        },
+        "deviceClockRateHz": {
+          "type": "number"
+        },
+        "rowLimitReached": {
+          "type": "boolean"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "deviceTimestampTicks": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "timestamp",
+              "deviceTimestampTicks",
+              "values"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "sampleRateHz",
+        "startedStream",
+        "durationMs",
+        "rowCount",
+        "sampleCount",
+        "droppedSampleCount",
+        "ignoredSampleCount",
+        "measuredRateHz",
+        "deviceClockRateHz",
+        "rowLimitReached",
+        "columns",
+        "rows"
+      ]
+    }
+  },
+  {
+    "name": "configure_analog_channels",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "enabledChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "enabledChannels"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "enabledAnalogChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        },
+        "sampleRateAdjustedFromHz": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "enabledAnalogChannels",
+        "sampleRateHz",
+        "sampleRateAdjustedFromHz"
+      ]
+    }
+  },
+  {
+    "name": "configure_digital_channels",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "enabledChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "enabledChannels"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "enabledDigitalChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "enabledDigitalChannels",
+        "sampleRateHz"
+      ]
+    }
+  },
+  {
+    "name": "connect_device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "connectionStatus": {
+          "type": "string",
+          "enum": [
+            "disconnected",
+            "connecting",
+            "connected",
+            "lost",
+            "retrying",
+            "failed"
+          ]
+        },
+        "analogChannelCount": {
+          "type": "integer"
+        },
+        "digitalChannelCount": {
+          "type": "integer"
+        },
+        "analogOutputChannelCount": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "name",
+        "connectionStatus",
+        "analogChannelCount",
+        "digitalChannelCount",
+        "analogOutputChannelCount"
+      ]
+    }
+  },
+  {
+    "name": "delete_sd_file",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileName"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileName"
+      ]
+    }
+  },
+  {
+    "name": "disable_pwm_output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "pwmEnabled": {
+          "type": "boolean"
+        },
+        "dutyCyclePercent": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "frequencyHz": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "pwmEnabled",
+        "dutyCyclePercent",
+        "frequencyHz"
+      ]
+    }
+  },
+  {
+    "name": "disconnect_device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "wasConnected": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deviceId",
+        "wasConnected"
+      ]
+    }
+  },
+  {
+    "name": "discover_devices",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "timeoutMs": {
+          "type": "integer",
+          "default": 2000
+        },
+        "wifi": {
+          "type": "boolean",
+          "default": true
+        },
+        "serial": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deviceId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "connectionType": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "serial",
+                  "wifi",
+                  "hid"
+                ]
+              },
+              "serialNumber": {
+                "type": "string"
+              },
+              "firmwareVersion": {
+                "type": "string"
+              },
+              "address": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "deviceType": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "nyquist1",
+                  "nyquist2",
+                  "nyquist3"
+                ]
+              }
+            },
+            "required": [
+              "deviceId",
+              "name",
+              "connectionType",
+              "serialNumber",
+              "firmwareVersion",
+              "address",
+              "deviceType"
+            ]
+          }
+        }
+      },
+      "required": [
+        "devices"
+      ]
+    }
+  },
+  {
+    "name": "download_sd_file",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "exportCsv": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileName"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer"
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "csvPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "csvRowCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sampleCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "csvError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileName",
+        "sizeBytes",
+        "durationMs",
+        "filePath",
+        "csvPath",
+        "csvRowCount",
+        "sampleCount",
+        "csvError"
+      ]
+    }
+  },
+  {
+    "name": "get_analog_output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "volts": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "volts"
+      ]
+    }
+  },
+  {
+    "name": "get_device_status",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "connectionStatus": {
+          "type": "string",
+          "enum": [
+            "disconnected",
+            "connecting",
+            "connected",
+            "lost",
+            "retrying",
+            "failed"
+          ]
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "loggingToSdCard": {
+          "type": "boolean"
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        },
+        "enabledAnalogChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "enabledDigitalChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "name",
+        "connectionStatus",
+        "streaming",
+        "loggingToSdCard",
+        "sampleRateHz",
+        "enabledAnalogChannels",
+        "enabledDigitalChannels"
+      ]
+    }
+  },
+  {
+    "name": "get_hardware_info",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "unknown",
+            "nyquist1",
+            "nyquist2",
+            "nyquist3",
+            null
+          ],
+          "default": null
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "boards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deviceType": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "nyquist1",
+                  "nyquist2",
+                  "nyquist3"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "productUrl": {
+                "type": "string"
+              },
+              "analogInputs": {
+                "type": "object",
+                "properties": {
+                  "channelCount": {
+                    "type": "integer"
+                  },
+                  "nominalResolutionBits": {
+                    "type": "integer"
+                  },
+                  "nominalRange": {
+                    "type": "string"
+                  },
+                  "adcPart": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "simultaneousSampling": {
+                    "type": "boolean"
+                  },
+                  "maxSampleRateHz": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "channelCount",
+                  "nominalResolutionBits",
+                  "nominalRange",
+                  "adcPart",
+                  "simultaneousSampling",
+                  "maxSampleRateHz"
+                ]
+              },
+              "analogOutputs": {
+                "type": "object",
+                "properties": {
+                  "channelCount": {
+                    "type": "integer"
+                  },
+                  "range": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dacPart": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "drivableFromThisServer": {
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "channelCount",
+                  "range",
+                  "dacPart",
+                  "drivableFromThisServer",
+                  "note"
+                ]
+              },
+              "digitalChannelCount": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "deviceType",
+              "model",
+              "productUrl",
+              "analogInputs",
+              "analogOutputs",
+              "digitalChannelCount",
+              "notes"
+            ]
+          }
+        }
+      },
+      "required": [
+        "boards"
+      ]
+    }
+  },
+  {
+    "name": "get_sd_storage",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "freeBytes": {
+          "type": "integer"
+        },
+        "usedBytes": {
+          "type": "integer"
+        },
+        "totalBytes": {
+          "type": "integer"
+        },
+        "freePercent": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "deviceId",
+        "freeBytes",
+        "usedBytes",
+        "totalBytes",
+        "freePercent"
+      ]
+    }
+  },
+  {
+    "name": "get_server_info",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "packageId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "latestVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updateAvailable": {
+          "type": "boolean"
+        },
+        "versionCheck": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "disabled",
+            "unavailable"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packageId",
+        "version",
+        "latestVersion",
+        "updateAvailable",
+        "versionCheck",
+        "message"
+      ]
+    }
+  },
+  {
+    "name": "latch_analog_outputs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "volts": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "pendingVolts": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "minVolts": {
+                "type": "number"
+              },
+              "maxVolts": {
+                "type": "number"
+              },
+              "rangeIsAssumed": {
+                "type": "boolean"
+              },
+              "resolutionBits": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "channel",
+              "name",
+              "volts",
+              "pendingVolts",
+              "minVolts",
+              "maxVolts",
+              "rangeIsAssumed",
+              "resolutionBits"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "outputs"
+      ]
+    }
+  },
+  {
+    "name": "list_analog_outputs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "volts": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "pendingVolts": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "minVolts": {
+                "type": "number"
+              },
+              "maxVolts": {
+                "type": "number"
+              },
+              "rangeIsAssumed": {
+                "type": "boolean"
+              },
+              "resolutionBits": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "channel",
+              "name",
+              "volts",
+              "pendingVolts",
+              "minVolts",
+              "maxVolts",
+              "rangeIsAssumed",
+              "resolutionBits"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "outputs"
+      ]
+    }
+  },
+  {
+    "name": "list_channels",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel": {
+                "type": "integer"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "analog",
+                  "digital",
+                  "analog_output"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "input",
+                  "output"
+                ]
+              },
+              "pwmCapable": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "pwmEnabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "maxRawValue": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "default": null
+              },
+              "resolutionBits": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "default": null
+              },
+              "resolutionIsAssumed": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "default": null
+              },
+              "portRangeVolts": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "channel",
+              "type",
+              "name",
+              "enabled",
+              "direction",
+              "pwmCapable",
+              "pwmEnabled"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "list_connected_devices",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deviceId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "connectionStatus": {
+                "type": "string",
+                "enum": [
+                  "disconnected",
+                  "connecting",
+                  "connected",
+                  "lost",
+                  "retrying",
+                  "failed"
+                ]
+              },
+              "analogChannelCount": {
+                "type": "integer"
+              },
+              "digitalChannelCount": {
+                "type": "integer"
+              },
+              "analogOutputChannelCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "deviceId",
+              "name",
+              "connectionStatus",
+              "analogChannelCount",
+              "digitalChannelCount",
+              "analogOutputChannelCount"
+            ]
+          }
+        }
+      },
+      "required": [
+        "devices"
+      ]
+    }
+  },
+  {
+    "name": "list_sd_files",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileCount": {
+          "type": "integer"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fileName": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "createdDate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "fileName",
+              "sizeBytes",
+              "createdDate"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileCount",
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "read_channel_values",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 2000
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        },
+        "startedStream": {
+          "type": "boolean"
+        },
+        "channelsReported": {
+          "type": "integer"
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "droppedSampleCount": {
+          "type": "integer"
+        },
+        "ignoredSampleCount": {
+          "type": "integer"
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "channel": {
+                "type": "integer"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "analog",
+                  "digital",
+                  "analog_output"
+                ]
+              },
+              "value": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "timestamp": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "deviceTimestampTicks": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "rawValue": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "column",
+              "channel",
+              "type",
+              "value",
+              "timestamp",
+              "deviceTimestampTicks",
+              "rawValue"
+            ]
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "sampleRateHz",
+        "startedStream",
+        "channelsReported",
+        "durationMs",
+        "droppedSampleCount",
+        "ignoredSampleCount",
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "set_analog_output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "volts": {
+          "type": "number"
+        },
+        "latch": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "volts"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "volts": {
+          "type": "number"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "rangeChecked": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "channel": {
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "volts": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "pendingVolts": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "minVolts": {
+              "type": "number"
+            },
+            "maxVolts": {
+              "type": "number"
+            },
+            "rangeIsAssumed": {
+              "type": "boolean"
+            },
+            "resolutionBits": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel",
+            "name",
+            "volts",
+            "pendingVolts",
+            "minVolts",
+            "maxVolts",
+            "rangeIsAssumed",
+            "resolutionBits"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "volts",
+        "applied",
+        "rangeChecked",
+        "output"
+      ]
+    }
+  },
+  {
+    "name": "set_digital_direction",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "input",
+            "output"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "direction"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "input",
+            "output"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "direction"
+      ]
+    }
+  },
+  {
+    "name": "set_digital_output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "high": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "high"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "input",
+            "output"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "direction"
+      ]
+    }
+  },
+  {
+    "name": "set_pwm_output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "dutyCyclePercent": {
+          "type": "integer"
+        },
+        "frequencyHz": {
+          "type": "integer",
+          "default": 0
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "dutyCyclePercent"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "pwmEnabled": {
+          "type": "boolean"
+        },
+        "dutyCyclePercent": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "frequencyHz": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "deviceId",
+        "channel",
+        "pwmEnabled",
+        "dutyCyclePercent",
+        "frequencyHz"
+      ]
+    }
+  },
+  {
+    "name": "set_sample_rate",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "sampleRateHz"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "deviceId",
+        "sampleRateHz"
+      ]
+    }
+  },
+  {
+    "name": "start_sd_logging",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "protobuf",
+            "json",
+            "csv"
+          ],
+          "default": "protobuf"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "protobuf",
+            "json",
+            "csv"
+          ]
+        },
+        "sampleRateHz": {
+          "type": "integer"
+        },
+        "enabledAnalogChannels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "required": [
+        "deviceId",
+        "fileName",
+        "format",
+        "sampleRateHz",
+        "enabledAnalogChannels"
+      ]
+    }
+  },
+  {
+    "name": "stop_sd_logging",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        },
+        "loggingToSdCard": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deviceId",
+        "loggingToSdCard"
+      ]
+    }
+  }
+]
