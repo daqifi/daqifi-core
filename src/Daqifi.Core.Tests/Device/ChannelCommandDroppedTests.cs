@@ -313,6 +313,51 @@ public class ChannelCommandDroppedTests
             });
     }
 
+    /// <summary>What the operation that has the device does, and what is enabled once it has ended.</summary>
+    private static readonly Dictionary<string, (Action<HeldDevice> Owner, string Enabled)> OwnerCases = new()
+    {
+        ["enables one that is on"] = (d => d.EnableChannel(d.Analog(0)), "AI0 AI1 AI2"),
+        ["enables another"] = (d => d.EnableChannel(d.Analog(3)), "AI0 AI1 AI2 AI3"),
+        ["disables one"] = (d => d.DisableChannel(d.Analog(0)), "AI1 AI2"),
+        ["disables all"] = (d => d.DisableAllChannels(), "AI2"),
+        ["sends a raw mask"] = (d => d.Send(ScpiMessageProducer.EnableAdcChannels(0b1000)), "AI2 AI3"),
+    };
+
+    public static TheoryData<string> OwnerCommands() => new(OwnerCases.Keys);
+
+    [Theory]
+    [MemberData(nameof(OwnerCommands))]
+    public async Task AnEnable_BuildsOnWhatIsHeldBack_AndOnWhatTheOperationSentMeanwhile(string owner)
+    {
+        using var device = await HeldDevice.CreateAsync();
+        var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = Task.Run(() => device.RunExclusiveAsync(async cancellation =>
+        {
+            queued.SetResult();
+            await sent.Task;
+            OwnerCases[owner].Owner(device);
+            var last = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ExecutionContext.SuppressFlow())
+            {
+                _ = Task.Run(() =>
+                {
+                    device.EnableChannel(device.Analog(2));
+                    last.SetResult();
+                });
+            }
+
+            await last.Task;
+        }));
+
+        await queued.Task;
+        device.EnableChannel(device.Analog(1));
+        sent.SetResult();
+        await operation;
+
+        Assert.Equal(OwnerCases[owner].Enabled, device.Enabled);
+    }
+
     [Fact]
     public async Task AnEnableBehindARawAdcMask_KeepsAChannelThatBecomesKnownMeanwhile()
     {

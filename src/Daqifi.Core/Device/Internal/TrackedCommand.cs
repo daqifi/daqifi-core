@@ -124,8 +124,15 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
         }
     }
 
-    /// <summary>Makes the command for <paramref name="state"/> the one sent last.</summary>
-    internal TrackedCommand Command(T state)
+    /// <summary>
+    /// Makes the command for <paramref name="state"/> the one sent last.
+    /// </summary>
+    /// <param name="state">What the command sets.</param>
+    /// <param name="change">
+    /// What it changes, for a command that sets more than its caller asked to change. It is applied
+    /// to the requests the command goes out ahead of, so that what is sent behind those keeps both.
+    /// </param>
+    internal TrackedCommand Command(T state, Func<T, T>? change = null)
     {
         TrackedCommand command = null!;
         command = new TrackedCommand(
@@ -135,8 +142,12 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
                 {
                     record(state);
 
-                    // What was sent before it is no longer what the next command builds on.
-                    _outstanding.RemoveRange(0, _outstanding.FindIndex(other => other.Command == command) + 1);
+                    var index = _outstanding.FindIndex(other => other.Command == command);
+                    _outstanding.RemoveAt(index);
+                    for (var i = 0; change != null && i < index; i++)
+                    {
+                        _outstanding[i] = _outstanding[i] with { State = change(_outstanding[i].State) };
+                    }
                 }
             },
             () =>

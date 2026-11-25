@@ -186,8 +186,14 @@ internal sealed class ChannelControlOperations
     /// A raw ADC enable mask, which is recorded and built on like a typed one. Every bit of it is
     /// kept: a channel it names can become known before it goes out.
     /// </summary>
-    internal TrackedCommand RawAdcMask(uint mask) => _enabledAnalog.Command(
-        Enumerable.Range(0, MaxAdcBitmaskChannel + 1).Where(number => (mask & (1u << number)) != 0).ToHashSet());
+    internal TrackedCommand RawAdcMask(uint mask)
+    {
+        var enabled = Enumerable.Range(0, MaxAdcBitmaskChannel + 1)
+            .Where(number => (mask & (1u << number)) != 0)
+            .ToHashSet();
+
+        return _enabledAnalog.Command(enabled, _ => enabled);
+    }
 
     private PinState Pin(DigitalChannel channel)
         => _pins.GetValue(channel, pin => new PinState(_host, pin));
@@ -272,7 +278,7 @@ internal sealed class ChannelControlOperations
         _host.EnsureConnected();
 
         // Push the cleared state for whichever channel types this device actually has.
-        ApplyEnabled(_host.SnapshotChannels, enabled: false, allTypes: true);
+        ApplyEnabled(_host.SnapshotChannels, enabled: false, all: true);
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetDioDirection" />
@@ -674,14 +680,14 @@ internal sealed class ChannelControlOperations
             EnsureChannelBelongs(channel);
         }
 
-        ApplyEnabled(() => channels, enabled, allTypes: false);
+        ApplyEnabled(() => channels, enabled, all: false);
     }
 
     /// <summary>
-    /// Sends the commands that enable or disable the channels, for the channel types among them or
-    /// for every type the device has. Each type is recorded when its command goes out.
+    /// Sends the commands that enable or disable the channels, or that disable everything the device
+    /// streams when they are all of them. Each channel type is recorded when its command goes out.
     /// </summary>
-    private void ApplyEnabled(Func<IReadOnlyList<IChannel>> getChannels, bool enabled, bool allTypes)
+    private void ApplyEnabled(Func<IReadOnlyList<IChannel>> getChannels, bool enabled, bool all)
     {
         // A command names every channel of its type, not just the ones this call touches, so working
         // it out and sending it have to be one step: otherwise a concurrent call can work out a newer
@@ -690,15 +696,17 @@ internal sealed class ChannelControlOperations
         {
             var channels = getChannels();
 
-            if (Request(_enabledAnalog, ChannelType.Analog, channels, enabled, allTypes) is { } analog)
+            if (ChangeOf(ChannelType.Analog, channels, enabled, all) is { } analogChange)
             {
+                var analog = analogChange(AheadOfNextSend(_enabledAnalog));
                 var mask = ScpiMessageProducer.EnableAdcChannels(AdcEnableMask(analog));
-                _enabledAnalog.Command(analog).Send(_host, mask);
+                _enabledAnalog.Command(analog, analogChange).Send(_host, mask);
             }
 
-            if (Request(_enabledDigital, ChannelType.Digital, channels, enabled, allTypes) is { } digital)
+            if (ChangeOf(ChannelType.Digital, channels, enabled, all) is { } digitalChange)
             {
-                _enabledDigital.Command(digital).Send(
+                var digital = digitalChange(AheadOfNextSend(_enabledDigital));
+                _enabledDigital.Command(digital, digitalChange).Send(
                     _host,
                     digital.Count > 0 ? ScpiMessageProducer.EnableDioPorts : ScpiMessageProducer.DisableDioPorts);
             }
@@ -706,44 +714,25 @@ internal sealed class ChannelControlOperations
     }
 
     /// <summary>
-    /// The channels of one type that are to be enabled, built on what has been requested already;
-    /// <c>null</c> when there is nothing to command for that type.
+    /// What enabling or disabling the channels does to the enabled ones of a type; <c>null</c> when
+    /// there is nothing to command for that type.
     /// </summary>
-    private HashSet<int>? Request(
-        CommandedState<HashSet<int>> state,
-        ChannelType type,
-        IReadOnlyList<IChannel> channels,
-        bool enabled,
-        bool allTypes)
+    private Func<HashSet<int>, HashSet<int>>? ChangeOf(
+        ChannelType type, IReadOnlyList<IChannel> channels, bool enabled, bool all)
     {
-        var numbers = channels.Where(channel => channel.Type == type).Select(channel => channel.ChannelNumber).ToList();
-        if (numbers.Count == 0 && !allTypes)
+        var numbers = channels.Where(channel => channel.Type == type).Select(channel => channel.ChannelNumber).ToHashSet();
+        if (numbers.Count == 0)
         {
             return null;
         }
 
-        if (!_host.SnapshotChannels().Any(channel => channel.Type == type))
+        if (all)
         {
-            return null;
+            // Including any a raw mask names that the device has not described yet.
+            return _ => [];
         }
 
-        if (allTypes && !enabled)
-        {
-            return [];
-        }
-
-        // Including any a raw mask names that the device has not described yet.
-        var requested = AheadOfNextSend(state).ToHashSet();
-        if (enabled)
-        {
-            requested.UnionWith(numbers);
-        }
-        else
-        {
-            requested.ExceptWith(numbers);
-        }
-
-        return requested;
+        return enabled ? current => [.. current, .. numbers] : current => [.. current.Except(numbers)];
     }
 
     /// <summary>The ADC enable bitmask for these analog channels.</summary>
