@@ -161,6 +161,45 @@ public class FirmwareVersionTests
     }
 
     /// <summary>
+    /// The revision is part of the positional shape, so taking a version apart and putting it
+    /// back together gives the same version. It used to be a separate init property, and this
+    /// round trip turned 3.8.0.1 into 3.8.0 (#1036).
+    /// </summary>
+    [Theory]
+    [InlineData("3.8.0.1")]
+    [InlineData("3.8.0.42-rc2")]
+    [InlineData("3.8.0")]
+    public void Deconstruct_ThenConstruct_KeepsEveryPart(string input)
+    {
+        Assert.True(FirmwareVersion.TryParse(input, out var parsed));
+
+        var (major, minor, patch, revision, preLabel, preNumber) = parsed;
+        var rebuilt = new FirmwareVersion(major, minor, patch, revision, preLabel, preNumber);
+
+        Assert.Equal(parsed, rebuilt);
+        Assert.Equal(parsed.GetHashCode(), rebuilt.GetHashCode());
+        Assert.Equal(parsed.ToString(), rebuilt.ToString());
+    }
+
+    /// <summary>
+    /// Two versions that differ only in their revision are different versions, however they were
+    /// built.
+    /// </summary>
+    [Fact]
+    public void Constructor_RevisionTakesPartInEqualityAndOrdering()
+    {
+        var plain = new FirmwareVersion(3, 8, 0, 0, null, 0);
+        var build1 = new FirmwareVersion(3, 8, 0, 1, null, 0);
+
+        Assert.NotEqual(plain, build1);
+        Assert.True(plain < build1);
+        Assert.Equal("3.8.0.1", build1.ToString());
+        Assert.Equal(build1, plain with { Revision = 1 });
+        Assert.True(FirmwareVersion.TryParse("3.8.0.1", out var parsed));
+        Assert.Equal(parsed, build1);
+    }
+
+    /// <summary>
     /// Pins which capability gates a newly parseable version string opens. Every gate in the
     /// library is a <c>parsed &gt;= floor</c> test against a plain three-part floor, so this
     /// records the gating decisions that move now that these strings parse at all. Before, they
@@ -181,7 +220,7 @@ public class FirmwareVersionTests
     public void FeatureGate_MovesOnlyWhereTheVersionIsGenuinelyAtOrAboveTheFloor(
         string deviceVersion, int floorMajor, int floorMinor, int floorPatch, bool expectedAtOrAbove)
     {
-        var floor = new FirmwareVersion(floorMajor, floorMinor, floorPatch, null, 0);
+        var floor = new FirmwareVersion(floorMajor, floorMinor, floorPatch, 0, null, 0);
 
         Assert.True(FirmwareVersion.TryParse(deviceVersion, out var parsed));
         Assert.Equal(expectedAtOrAbove, parsed >= floor);
@@ -508,8 +547,8 @@ public class FirmwareVersionTests
     [Fact]
     public void Equals_EmptyLabel_MatchesMissingLabel()
     {
-        var missing = new FirmwareVersion(3, 2, 0, null, 0);
-        var empty = new FirmwareVersion(3, 2, 0, string.Empty, 0);
+        var missing = new FirmwareVersion(3, 2, 0, 0, null, 0);
+        var empty = new FirmwareVersion(3, 2, 0, 0, string.Empty, 0);
 
         Assert.False(missing.IsPreRelease);
         Assert.False(empty.IsPreRelease);

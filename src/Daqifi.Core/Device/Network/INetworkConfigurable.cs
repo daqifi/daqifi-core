@@ -6,13 +6,15 @@ namespace Daqifi.Core.Device.Network;
 /// <summary>
 /// Represents a device that supports network configuration.
 /// </summary>
+/// <remarks>
+/// These members write the configuration. The settings the device reports are in
+/// <see cref="DeviceMetadata.Ssid"/>, <see cref="DeviceMetadata.WifiInfrastructureMode"/> and
+/// <see cref="DeviceMetadata.WifiSecurityMode"/>. They come from the device's last full status
+/// message, so they do not change when a configuration is applied. The device never reports the
+/// password.
+/// </remarks>
 public interface INetworkConfigurable
 {
-    /// <summary>
-    /// Gets the current network configuration.
-    /// </summary>
-    NetworkConfiguration NetworkConfiguration { get; }
-
     /// <summary>
     /// Updates the device network configuration with the specified settings.
     /// </summary>
@@ -72,7 +74,7 @@ public interface INetworkConfigurable
     /// thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:LOAD</c>): it repopulates
     /// the device's runtime WiFi settings from the last saved values but does not itself re-apply them to
     /// the live interface — send an apply/reboot afterwards if the loaded values must take effect on the
-    /// active connection. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+    /// active connection.
     /// </remarks>
     Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default);
 
@@ -84,34 +86,7 @@ public interface INetworkConfigurable
     /// <remarks>
     /// A thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:FACRESET</c>): it restores
     /// the default WiFi settings into the device's runtime settings. Persist and/or apply them afterwards
-    /// for the reset to take effect. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+    /// for the reset to take effect.
     /// </remarks>
     Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Prepares the SD card interface for use. Over USB the LAN interface is disabled first to
-    /// free the shared SPI bus for the SD card. Over WiFi/TCP the LAN is left enabled.
-    /// </summary>
-    /// <remarks>
-    /// On older firmware the SD card and LAN interfaces share the same SPI bus and cannot be
-    /// used simultaneously, so over USB the LAN is disabled before accessing the SD card. On
-    /// firmware &gt;= v3.7.0 (#598/#599) the Harmony SPI driver arbitrates SD/WiFi transactions
-    /// on the shared bus, so over a WiFi/TCP control transport the LAN MUST stay enabled (the
-    /// SD reply routes back over that channel). Call this method before accessing the SD card.
-    /// </remarks>
-    void PrepareSdInterface();
-
-    /// <summary>
-    /// Prepares the LAN interface for use by disabling the SD card interface. Over USB the LAN
-    /// is re-enabled; over WiFi/TCP the LAN (never disabled) is left untouched.
-    /// </summary>
-    /// <remarks>
-    /// The mirror of <see cref="PrepareSdInterface"/> for restoring the interface after an SD
-    /// card operation. Over USB it disables the SD subsystem and re-enables the LAN. Over a
-    /// WiFi/TCP control transport the LAN was never disabled, so it is left alone (re-enabling
-    /// it would re-initialize the WiFi module and drop the connection). Note: a
-    /// network-reconfiguration flow that must unconditionally bring the LAN back up should
-    /// enable it explicitly rather than rely on this transport-aware helper.
-    /// </remarks>
-    void PrepareLanInterface();
 }

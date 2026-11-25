@@ -40,7 +40,7 @@ public partial class SdCardOperationsTests
             () => device.SetSdCardCrcProtectionAsync(true));
 
         Assert.Equal(DeviceFeature.SdCardCrcProtection, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), ex.RequiredVersion);
         Assert.Empty(device.SentMessages);
     }
 

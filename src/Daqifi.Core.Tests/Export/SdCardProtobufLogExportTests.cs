@@ -166,14 +166,16 @@ public class SdCardProtobufLogExportTests
             "log_20261106_093815.bin",
             new SdCardParseOptions
             {
-                ConfigurationOverride = new SdCardDeviceConfiguration(
-                    AnalogPortCount: 16,
-                    DigitalPortCount: 1,
-                    TimestampFrequency: 80_000_000,
-                    DeviceSerialNumber: "LIVE-SN",
-                    DevicePartNumber: null,
-                    FirmwareVersion: null,
-                    CalibrationValues: null)
+                ConfigurationOverride = new SdCardDeviceConfiguration
+                {
+                    AnalogPortCount = 16,
+                    DigitalPortCount = 1,
+                    TimestampFrequency = 80_000_000,
+                    DeviceSerialNumber = "LIVE-SN",
+                    DevicePartNumber = null,
+                    FirmwareVersion = null,
+                    CalibrationValues = null
+                }
             });
 
         Assert.Equal(80_000_000u, session.TimestampFrequency);

@@ -363,17 +363,19 @@ public sealed class SdCardCsvValueUnitTests
     /// are the figures in the issue's repro and on the bench Nyquist 1.
     /// </summary>
     private static SdCardDeviceConfiguration FromDeviceStyleOverride(int channelCount) =>
-        new(
-            AnalogPortCount: channelCount,
-            DigitalPortCount: 0,
-            TimestampFrequency: TickRate,
-            DeviceSerialNumber: "7E2815916200E898",
-            DevicePartNumber: "Nyquist 1",
-            FirmwareVersion: "3.8.0",
-            CalibrationValues: Repeat((1.0, 0.0), channelCount),
-            Resolution: AdcResolution,
-            PortRange: Repeat(PortRangeVolts, channelCount),
-            InternalScaleM: Repeat(1.0, channelCount));
+        new()
+        {
+            AnalogPortCount = channelCount,
+            DigitalPortCount = 0,
+            TimestampFrequency = TickRate,
+            DeviceSerialNumber = "7E2815916200E898",
+            DevicePartNumber = "Nyquist 1",
+            FirmwareVersion = "3.8.0",
+            CalibrationValues = Repeat((1.0, 0.0), channelCount),
+            Resolution = AdcResolution,
+            PortRange = Repeat(PortRangeVolts, channelCount),
+            InternalScaleM = Repeat(1.0, channelCount)
+        };
 
     private static T[] Repeat<T>(T value, int count)
     {

@@ -115,11 +115,11 @@ directly (no cast required). It implements:
 
 - `IStreamingDevice` — streaming start/stop, channel enable/disable, digital I/O, PWM, analog output
   (see [Channel Management](#channel-management) below)
-- `INetworkConfigurable` — WiFi/LAN configuration (see the
+- `INetworkConfigurable` — applies, loads and resets the WiFi/LAN configuration (see the
   [Network configuration](../README.md#network-configuration) recipe in the root README)
 - `IWifiLinkStatusProvider` — live WiFi link state and the mode the radio is actually running
   (firmware v3.9.0+, gated by `DeviceFeature.WifiLinkStatus`)
-- `ISdCardOperations` — list/download/delete/format SD card contents, start/stop on-device logging, and opt in to CRC-protected SD writes
+- `ISdCardOperations` — list/download/delete/format SD card contents, start/stop on-device logging, opt in to CRC-protected SD writes, and hand the shared SPI bus between the SD card and the LAN
 - `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)

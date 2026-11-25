@@ -324,7 +324,7 @@ public class WifiLinkStatusTests
     {
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.WifiLinkStatus);
 
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.WiFi, requirement.Hardware);
     }
@@ -355,7 +355,7 @@ public class WifiLinkStatusTests
         Assert.All(new[] { linkEx, modeEx }, ex =>
         {
             Assert.Equal(DeviceFeature.WifiLinkStatus, ex.Feature);
-            Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+            Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), ex.RequiredVersion);
         });
         Assert.Empty(device.SentCommands);
     }

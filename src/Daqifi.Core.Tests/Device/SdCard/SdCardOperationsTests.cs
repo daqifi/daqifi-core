@@ -2278,7 +2278,7 @@ public partial class SdCardOperationsTests
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
             () => device.DownloadSdCardFileAsync("test.bin", stream));
         Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), ex.RequiredVersion);
     }
 
     [Fact]
@@ -2373,7 +2373,7 @@ public partial class SdCardOperationsTests
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
             () => device.GetSdCardFilesAsync());
         Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), ex.RequiredVersion);
         // The gate short-circuits up front — no SD command should have been dispatched over
         // a transport the firmware can't service (else it would stall on the shared SPI bus).
         Assert.DoesNotContain("SYSTem:STORage:SD:LIST?", device.SentMessages.Select(m => m.Data));

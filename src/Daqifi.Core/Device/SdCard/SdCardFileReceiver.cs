@@ -375,7 +375,7 @@ internal sealed class SdCardFileReceiver
             if (heldContent is { HasReleasedContent: false })
             {
                 heldContent.DiscardHeldBytes();
-                progress?.Report(new SdCardTransferProgress(0, fileName));
+                progress?.Report(new SdCardTransferProgress { BytesReceived = 0, FileName = fileName });
                 return 0;
             }
 
@@ -581,7 +581,7 @@ internal sealed class SdCardFileReceiver
                     // sends nothing more. A transfer LONGER than the listed size still succeeds:
                     // a listing goes stale the moment an active logging session appends to the
                     // file, and those extra bytes are real content.
-                    progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));
+                    progress?.Report(new SdCardTransferProgress { BytesReceived = totalBytesReceived, FileName = fileName });
                     return totalBytesReceived;
                 }
 
@@ -639,7 +639,7 @@ internal sealed class SdCardFileReceiver
                     trailingCount = combinedLen;
                 }
 
-                progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));
+                progress?.Report(new SdCardTransferProgress { BytesReceived = totalBytesReceived, FileName = fileName });
             }
         }
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)

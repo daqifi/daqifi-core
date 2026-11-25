@@ -232,15 +232,16 @@ public sealed class SdCardJsonFileParserTests
             (100u, new[] { 1.0, 2.0 }, "")
         );
 
-        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
-            AnalogPortCount: 2,
-            DigitalPortCount: 1,
-            TimestampFrequency: 1000,
-            DeviceSerialNumber: "TEST123",
-            DevicePartNumber: "NQ1",
-            FirmwareVersion: "1.0.0",
-            CalibrationValues: null
-        );
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 2,
+            DigitalPortCount = 1,
+            TimestampFrequency = 1000,
+            DeviceSerialNumber = "TEST123",
+            DevicePartNumber = "NQ1",
+            FirmwareVersion = "1.0.0",
+            CalibrationValues = null
+        };
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
@@ -400,17 +401,19 @@ public sealed class SdCardJsonFileParserTests
             (100u, new[] { 0, 22, 16 }, "00")
         );
 
-        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
-            AnalogPortCount: 3,
-            DigitalPortCount: 0,
-            TimestampFrequency: 100u,
-            DeviceSerialNumber: "SN001",
-            DevicePartNumber: "TestDevice",
-            FirmwareVersion: null,
-            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
-            Resolution: 65535,
-            PortRange: new[] { 10.0, 10.0, 10.0 },
-            InternalScaleM: new[] { 1.0, 1.0, 1.0 });
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 3,
+            DigitalPortCount = 0,
+            TimestampFrequency = 100u,
+            DeviceSerialNumber = "SN001",
+            DevicePartNumber = "TestDevice",
+            FirmwareVersion = null,
+            CalibrationValues = new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
+            Resolution = 65535,
+            PortRange = new[] { 10.0, 10.0, 10.0 },
+            InternalScaleM = new[] { 1.0, 1.0, 1.0 }
+        };
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
@@ -439,17 +442,19 @@ public sealed class SdCardJsonFileParserTests
             (100u, new[] { 0, 32768, 0 }, "00")
         );
 
-        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
-            AnalogPortCount: 3,
-            DigitalPortCount: 0,
-            TimestampFrequency: 100u,
-            DeviceSerialNumber: "SN001",
-            DevicePartNumber: "TestDevice",
-            FirmwareVersion: null,
-            CalibrationValues: new[] { (1.0, -0.05), (1.0, -0.05), (1.0, -0.05) },
-            Resolution: 65535,
-            PortRange: new[] { 10.0, 10.0, 10.0 },
-            InternalScaleM: new[] { 2.0, 2.0, 2.0 });
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 3,
+            DigitalPortCount = 0,
+            TimestampFrequency = 100u,
+            DeviceSerialNumber = "SN001",
+            DevicePartNumber = "TestDevice",
+            FirmwareVersion = null,
+            CalibrationValues = new[] { (1.0, -0.05), (1.0, -0.05), (1.0, -0.05) },
+            Resolution = 65535,
+            PortRange = new[] { 10.0, 10.0, 10.0 },
+            InternalScaleM = new[] { 2.0, 2.0, 2.0 }
+        };
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
@@ -706,14 +711,16 @@ public sealed class SdCardJsonFileParserTests
             "\"ai\":[{\"ch\":0, \"val\":1.5}]",
             "}");
 
-        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
-            AnalogPortCount: 1,
-            DigitalPortCount: 0,
-            TimestampFrequency: 50_000_000,
-            DeviceSerialNumber: "OTHER",
-            DevicePartNumber: "OTHER",
-            FirmwareVersion: "3.8.0",
-            CalibrationValues: null);
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 1,
+            DigitalPortCount = 0,
+            TimestampFrequency = 50_000_000,
+            DeviceSerialNumber = "OTHER",
+            DevicePartNumber = "OTHER",
+            FirmwareVersion = "3.8.0",
+            CalibrationValues = null
+        };
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
@@ -832,17 +839,19 @@ public sealed class SdCardJsonFileParserTests
             "]",
             "}");
 
-        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
-            AnalogPortCount: 2,
-            DigitalPortCount: 0,
-            TimestampFrequency: 0u,
-            DeviceSerialNumber: null,
-            DevicePartNumber: null,
-            FirmwareVersion: null,
-            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0) },
-            Resolution: 65535,
-            PortRange: new[] { 10.0, 10.0 },
-            InternalScaleM: new[] { 1.0, 1.0 });
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 2,
+            DigitalPortCount = 0,
+            TimestampFrequency = 0u,
+            DeviceSerialNumber = null,
+            DevicePartNumber = null,
+            FirmwareVersion = null,
+            CalibrationValues = new[] { (1.0, 0.0), (1.0, 0.0) },
+            Resolution = 65535,
+            PortRange = new[] { 10.0, 10.0 },
+            InternalScaleM = new[] { 1.0, 1.0 }
+        };
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
