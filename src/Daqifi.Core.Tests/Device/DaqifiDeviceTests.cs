@@ -2,7 +2,6 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Tests.TestSupport;
 using System.Collections.Generic;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -14,14 +13,12 @@ public class DaqifiDeviceTests
     {
         // Arrange
         const string deviceName = "TestDevice";
-        var ipAddress = IPAddress.Parse("192.168.1.1");
 
         // Act
-        var device = new DaqifiDevice(deviceName, ipAddress);
+        var device = new TransportlessDevice(deviceName);
 
         // Assert
         Assert.Equal(deviceName, device.Name);
-        Assert.Equal(ipAddress, device.IpAddress);
         Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
     }
@@ -30,7 +27,7 @@ public class DaqifiDeviceTests
     public void Connect_ChangesStateAndRaisesEvents()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var statusChanges = new List<DeviceState>();
         device.StateChanged += (_, args) =>
         {
@@ -52,7 +49,7 @@ public class DaqifiDeviceTests
     public void Disconnect_ChangesStateAndRaisesEvents()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.Connect(); // Connect first
 
         var receivedArgs = new List<DeviceStateChangedEventArgs>();
@@ -298,7 +295,7 @@ public class DaqifiDeviceTests
 
     private sealed class TestableDaqifiDevice : DaqifiDevice
     {
-        public TestableDaqifiDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public TestableDaqifiDevice(string name) : base(name)
         {
         }
 

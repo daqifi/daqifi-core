@@ -1,5 +1,4 @@
 using System;
-using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -92,8 +91,8 @@ public class DaqifiDeviceTextCommandLockTests
     /// </summary>
     private class TextCommandTestableDevice : DaqifiDevice
     {
-        public TextCommandTestableDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TextCommandTestableDevice(string name)
+            : base(name)
         {
         }
 

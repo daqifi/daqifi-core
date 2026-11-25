@@ -59,7 +59,7 @@ public sealed class DuplicateDeviceCheck
         DeviceRegistration existing,
         DeviceIdentity newIdentity,
         IDeviceInfo? newDeviceInfo,
-        DaqifiDevice? newDevice,
+        DaqifiStreamingDevice? newDevice,
         ConnectionType newConnectionType,
         DuplicateCheckPhase phase)
     {
@@ -91,7 +91,7 @@ public sealed class DuplicateDeviceCheck
     /// Gets the device being registered, or <c>null</c> when the duplicate was caught in
     /// <see cref="DuplicateCheckPhase.BeforeConnect"/> and nothing has been connected yet.
     /// </summary>
-    public DaqifiDevice? NewDevice { get; }
+    public DaqifiStreamingDevice? NewDevice { get; }
 
     /// <summary>
     /// Gets the transport the new connection uses.

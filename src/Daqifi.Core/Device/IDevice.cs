@@ -33,6 +33,20 @@ public interface IDevice : IAsyncDisposable
     DeviceState State { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this device supports <paramref name="feature"/>. Branch on
+    /// this rather than comparing firmware versions or board types (ADR 0001).
+    /// </summary>
+    /// <remarks>
+    /// Answered from what the device has reported so far, on every call. A firmware requirement
+    /// fails closed: an unknown or unreadable version is not support. A board or hardware
+    /// requirement is not applied until the device has reported its board.
+    /// </remarks>
+    /// <param name="feature">The feature to test.</param>
+    /// <returns><c>true</c> if the device meets every requirement for <paramref name="feature"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="feature"/> is not a defined feature.</exception>
+    bool Supports(DeviceFeature feature);
+
+    /// <summary>
     /// Occurs on every change of <see cref="State"/>, in the order the changes were made.
     /// </summary>
     /// <remarks>
@@ -120,6 +134,29 @@ public interface IDevice : IAsyncDisposable
     /// <param name="cancellationToken">A cancellation token to observe while disconnecting.</param>
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
     Task DisconnectAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Puts a connected device into a known state and waits until it has described itself, moving
+    /// <see cref="State"/> to <see cref="DeviceState.Ready"/>. Does nothing when the device is
+    /// already initialized.
+    /// </summary>
+    /// <remarks>
+    /// The devices <see cref="DaqifiDeviceFactory"/> connects are already initialized unless
+    /// <see cref="DeviceConnectionOptions.InitializeDevice"/> is off. Call this after connecting a
+    /// device yourself. By default it stops a stream any session has running on the device; see
+    /// <see cref="DaqifiDevice.InitializeAsync"/>.
+    /// </remarks>
+    /// <param name="channelPopulationTimeout">
+    /// How long to wait for the device to describe itself. Defaults to 8 seconds when omitted.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
+    /// <returns>A task that completes once the device is ready.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelPopulationTimeout"/> is not positive.</exception>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="ScpiInitializationErrorException">Thrown when the device reports a SCPI error that persists after a retry.</exception>
+    /// <exception cref="TimeoutException">Thrown when the device does not describe itself in time.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a message to the device.

@@ -3,7 +3,6 @@ using Daqifi.Core.Device;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -190,8 +189,8 @@ public class DaqifiDeviceDrainErrorQueueTests
         public Queue<IReadOnlyList<string>> Replies { get; } = new();
         public int ExecuteTextCommandCallCount { get; private set; }
 
-        public SequencedReplyDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public SequencedReplyDevice(string name)
+            : base(name)
         {
         }
 

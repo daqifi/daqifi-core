@@ -32,7 +32,7 @@ public class SdCardTimestampFrequencyTests
     public void FromDevice_WithDeviceReportedFrequency_PropagatesIt()
     {
         // Arrange — a device whose status message reported a real timestamp clock.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -52,7 +52,7 @@ public class SdCardTimestampFrequencyTests
     public void FromDevice_WhenDeviceReportedNoFrequency_KeepsZero()
     {
         // Arrange — status message with channel counts but no TimestampFreq.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -71,7 +71,7 @@ public class SdCardTimestampFrequencyTests
     public void FromDevice_WithNoAnalogChannels_ReturnsNull()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             DigitalPortNum = 2,

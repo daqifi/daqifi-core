@@ -18,9 +18,7 @@ namespace Daqifi.Core.Device;
 /// <para>
 /// The address is read from the transport on every call rather than captured at construction:
 /// a host-name transport re-resolves on reconnect, and the device must report the peer it is
-/// actually talking to. <see cref="INetworkAddressedDevice.IpAddress"/> is implemented by the
-/// inherited <see cref="DaqifiDevice.IpAddress"/>, which reads through
-/// <see cref="CurrentNetworkAddress"/>, so the two can never disagree.
+/// actually talking to.
 /// </para>
 /// </remarks>
 internal sealed class NetworkStreamingDevice : DaqifiStreamingDevice, INetworkAddressedDevice
@@ -40,5 +38,5 @@ internal sealed class NetworkStreamingDevice : DaqifiStreamingDevice, INetworkAd
     }
 
     /// <inheritdoc />
-    private protected override IPAddress? CurrentNetworkAddress => _tcpTransport.RemoteAddress;
+    public IPAddress? IpAddress => _tcpTransport.RemoteAddress;
 }

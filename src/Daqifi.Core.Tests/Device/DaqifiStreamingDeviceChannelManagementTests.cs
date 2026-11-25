@@ -7,7 +7,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -910,7 +909,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     {
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
 
-        public TestableDaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public TestableDaqifiStreamingDevice(string name) : base(name)
         {
         }
 

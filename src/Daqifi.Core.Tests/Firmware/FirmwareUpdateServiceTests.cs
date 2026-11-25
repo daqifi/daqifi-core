@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
@@ -3769,6 +3770,53 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
 
+    /// <summary>
+    /// The application boots dormant, so the update initializes the device it reconnected to, through
+    /// <see cref="IDevice"/> and so whatever its class (issue #1038). A failure there does not fail
+    /// an update that has already been written.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateFirmwareAsync_InitializesTheReconnectedDevice(bool initializeFails)
+    {
+        var device = new FakeStreamingDevice("COM3")
+        {
+            InitializeFailure = initializeFails ? new TimeoutException("still dormant") : null
+        };
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            CreateFastOptions());
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(1, device.InitializeCalls);
+    }
+
     [Fact]
     public async Task UpdateFirmwareAsync_PostReconnectReadinessProbe_AwaitedBeforeComplete()
     {
@@ -5004,6 +5052,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(int channelNumber, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -5128,6 +5184,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(int channelNumber, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -6038,6 +6102,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(int channelNumber, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => Disconnect();
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }

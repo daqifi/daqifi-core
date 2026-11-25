@@ -6,7 +6,6 @@ using Daqifi.Core.Device.Network;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,7 +93,7 @@ public class DeviceNotConnectedExceptionTests
         Action<DaqifiStreamingDevice> call)
     {
         _ = siteName;
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         var ex = Assert.Throws<DeviceNotConnectedException>(() => call(device));
 
@@ -153,7 +152,7 @@ public class DeviceNotConnectedExceptionTests
         Func<DaqifiStreamingDevice, Task> call)
     {
         _ = siteName;
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(() => call(device));
 
@@ -166,7 +165,7 @@ public class DeviceNotConnectedExceptionTests
     {
         // This guard keeps its own wording, so it is worth pinning separately: the type is
         // what callers classify on, not the message.
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.InitializeAsync());
 
@@ -288,8 +287,8 @@ public class DeviceNotConnectedExceptionTests
     /// </summary>
     private sealed class TextCommandTestableDevice : DaqifiDevice
     {
-        public TextCommandTestableDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TextCommandTestableDevice(string name)
+            : base(name)
         {
         }
 

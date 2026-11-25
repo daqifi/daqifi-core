@@ -55,7 +55,7 @@ public class DeviceLinkTypeTests
     [Fact]
     public void DeviceWithoutTransport_IsNotAUsbConnection()
     {
-        using var device = new DaqifiStreamingDevice("Device");
+        using var device = new TransportlessStreamingDevice("Device");
 
         Assert.False(device.IsUsbConnection);
     }

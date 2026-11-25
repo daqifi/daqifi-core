@@ -25,10 +25,13 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `IsConnected` - Whether the device has a session up
 - `State` - Where the device is in its life, as one `DeviceState` (see
   [Connection State Monitoring](#connection-state-monitoring))
+- `Supports(DeviceFeature)` - Whether the device can do something (see [Feature support](#feature-support))
 - `Connect()` / `Disconnect()` - Blocking connection management
 - `ConnectAsync(CancellationToken)` / `DisconnectAsync(CancellationToken)` - Non-blocking, cancellable
   connection management. These are genuine interface members, not default-interface-method shims over
   the blocking calls — every implementer honors the token.
+- `InitializeAsync(...)` - Puts a connected device into a known state and waits for it to describe
+  itself. The factory does this for you unless `DeviceConnectionOptions.InitializeDevice` is off.
 - `IAsyncDisposable.DisposeAsync()` - `IDevice` extends `IAsyncDisposable`, so any consumer coding
   against the interface (not just the concrete `DaqifiDevice`) can tear a device down with
   `await using`/`await device.DisposeAsync()` — no cast required.
@@ -52,7 +55,9 @@ if (device is INetworkAddressedDevice { IpAddress: { } address })
 ### IStreamingDevice
 
 Extends `IDevice` with data streaming functionality for devices that support continuous data acquisition:
-starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and analog output.
+starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and analog output, plus
+`Metadata` and the two reads that refresh it, `RefreshDeviceStatusAsync` and
+`ReadCapabilityDocumentAsync`.
 `DaqifiStreamingDevice` implements it in this library — see [DaqifiStreamingDevice](#daqifistreamingdevice)
 below.
 
@@ -106,6 +111,10 @@ The primary device class that provides:
 - Protocol buffer message handling
 - Channel population from device status
 
+The constructors that take no transport are protected: they are for a derived class that stands in
+for a device, such as a test double. `Connect()` on one opens nothing and reports connected, and
+`Send` throws unless the class overrides it.
+
 ### DaqifiStreamingDevice
 
 Extends `DaqifiDevice` with the full streaming/configuration surface — this is the class
@@ -114,6 +123,7 @@ directly (no cast required). It implements:
 
 - `IStreamingDevice` — streaming start/stop, channel enable/disable, digital I/O, PWM, analog output
   (see [Channel Management](#channel-management) below)
+- `IDeviceIdentification` — the stored friendly name, and flashing the LEDs to find a board
 - `INetworkConfigurable` — applies, loads and resets the WiFi/LAN configuration (see the
   [Network configuration](../README.md#network-configuration) recipe in the root README)
 - `IWifiLinkStatusProvider` — live WiFi link state and the mode the radio is actually running
@@ -1155,8 +1165,8 @@ calls above are.
 
 ### Feature support
 
-Some surfaces are board- or firmware-gated. Branch on `device.Supports(DeviceFeature)` —
-do not compare firmware strings yourself. `Supports` answers for the device, not for the
+Some surfaces are board- or firmware-gated. Branch on `device.Supports(DeviceFeature)`, a member
+of `IDevice` — do not compare firmware strings yourself. `Supports` answers for the device, not for the
 link it is on, and not every gated call enforces its own gate in every case:
 
 - **SD list / download / delete and the storage-space query** enforce theirs, and only on a

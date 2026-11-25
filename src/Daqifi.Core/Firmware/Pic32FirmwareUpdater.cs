@@ -687,25 +687,20 @@ internal sealed class Pic32FirmwareUpdater
         // (echo off, stream format, etc.). Without this, callers writing
         // a "natural" probe like GetLanChipInfoAsync would silently fail
         // for tens of seconds because the device is still dormant.
-        // Skipped for non-DaqifiDevice transports (e.g. test fakes); they
-        // are responsible for their own readiness if needed.
-        if (device is DaqifiDevice initializableDevice)
+        Logger.LogInformation("Waking post-reset device via InitializeAsync.");
+        try
         {
-            Logger.LogInformation("Waking post-reset device via InitializeAsync.");
-            try
-            {
-                // Pass the update's token so a cancel during the post-reset wake isn't ignored
-                // while InitializeAsync waits (up to ChannelPopulationTimeout) for channels.
-                await initializableDevice.InitializeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                // Don't fail the firmware update outright — the readiness
-                // probe (if configured) is the source of truth for "ready".
-                // Surface the init failure as a warning so a probe timeout
-                // later isn't mysterious.
-                Logger.LogWarning(ex, "InitializeAsync after reconnect threw; continuing to readiness probe.");
-            }
+            // Pass the update's token so a cancel during the post-reset wake isn't ignored
+            // while InitializeAsync waits (up to ChannelPopulationTimeout) for channels.
+            await device.InitializeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Don't fail the firmware update outright — the readiness
+            // probe (if configured) is the source of truth for "ready".
+            // Surface the init failure as a warning so a probe timeout
+            // later isn't mysterious.
+            Logger.LogWarning(ex, "InitializeAsync after reconnect threw; continuing to readiness probe.");
         }
 
         // Application-readiness probe (closes #145). Serial transport

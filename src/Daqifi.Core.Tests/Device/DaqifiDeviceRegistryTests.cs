@@ -16,9 +16,9 @@ public class DaqifiDeviceRegistryTests
     /// A device that reports itself connected without touching any transport — the no-transport
     /// constructor short-circuits <see cref="DaqifiDevice.Connect"/> to a status change.
     /// </summary>
-    private static DaqifiDevice ConnectedDevice(string name = "device", string? serialNumber = null, string? macAddress = null)
+    private static DaqifiStreamingDevice ConnectedDevice(string name = "device", string? serialNumber = null, string? macAddress = null)
     {
-        var device = new DaqifiDevice(name);
+        var device = new TransportlessStreamingDevice(name);
         if (serialNumber != null)
         {
             device.Metadata.SerialNumber = serialNumber;
@@ -55,7 +55,7 @@ public class DaqifiDeviceRegistryTests
     /// Builds a registry whose connect step is a stub, so the duplicate-policy paths can be
     /// exercised without hardware. The stub hands out the queued devices in order.
     /// </summary>
-    private static DaqifiDeviceRegistry RegistryReturning(List<int> connectCalls, params DaqifiDevice[] devices)
+    private static DaqifiDeviceRegistry RegistryReturning(List<int> connectCalls, params DaqifiStreamingDevice[] devices)
     {
         var index = 0;
         return new DaqifiDeviceRegistry((_, _, _) =>
@@ -294,7 +294,7 @@ public class DaqifiDeviceRegistryTests
             attempt++;
             return attempt == 1
                 ? Task.FromResult(overUsb)
-                : Task.FromException<DaqifiDevice>(
+                : Task.FromException<DaqifiStreamingDevice>(
                     new TimeoutException("TCP connect to 192.0.2.1:9760 timed out after 5s."));
         });
         var removals = new List<DeviceRemovedEventArgs>();
@@ -324,7 +324,7 @@ public class DaqifiDeviceRegistryTests
         // nowhere earlier, which is what makes the ordering assertion meaningful. Connecting it
         // during setup (as the ConnectedDevice helper does) would make the assertion tautological —
         // true whether or not the registry actually waits.
-        var overWifi = new DaqifiDevice("wifi");
+        var overWifi = new TransportlessStreamingDevice("wifi");
         overWifi.Metadata.SerialNumber = serialNumber;
 
         var policyCalls = new List<DuplicateCheckPhase>();
@@ -339,7 +339,7 @@ public class DaqifiDeviceRegistryTests
             }
 
             overWifi.Connect();
-            return Task.FromResult(overWifi);
+            return Task.FromResult<DaqifiStreamingDevice>(overWifi);
         });
 
         await registry.ConnectAsync(UsbInfo(serialNumber));
@@ -589,7 +589,7 @@ public class DaqifiDeviceRegistryTests
     public void Register_DisconnectedDevice_ThrowsWithoutTakingOwnership()
     {
         using var registry = new DaqifiDeviceRegistry();
-        var device = new DaqifiDevice("never-connected");
+        var device = new TransportlessStreamingDevice("never-connected");
 
         Assert.Throws<ArgumentException>(() => registry.Register(device));
         Assert.Equal(0, registry.Count);

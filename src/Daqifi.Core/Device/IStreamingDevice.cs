@@ -15,7 +15,9 @@ namespace Daqifi.Core.Device;
 /// The synchronous commands here are fire-and-forget: each sends and returns, and parses no reply.
 /// An <c>...Async</c> member of this interface means one thing: its task completes once the device
 /// has confirmed the command, and fails with <see cref="DeviceCommandFailedException"/> when the
-/// device refuses it or does not confirm it. What counts as confirmation is stated on each member.
+/// device refuses it or does not confirm it. What counts as confirmation is stated on each member. The
+/// reads (<see cref="RefreshDeviceStatusAsync"/>, <see cref="ReadCapabilityDocumentAsync"/>,
+/// <see cref="GetAnalogOutputAsync"/>) complete with what the device reported.
 /// </para>
 /// <para>
 /// Extends <see cref="IConfirmingDeviceAdministration"/>, so the calibration commands, which exist
@@ -28,6 +30,43 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Gets the device metadata containing part number, firmware version, capabilities, etc.
     /// </summary>
     DeviceMetadata Metadata { get; }
+
+    /// <summary>
+    /// Asks the device for a status message and waits for it, so that <see cref="Metadata"/>,
+    /// including <see cref="DeviceMetadata.Health"/>, is current when this completes.
+    /// </summary>
+    /// <remarks>
+    /// The device sends a status message only when asked, so without this call the health
+    /// values stay as they were at initialization.
+    /// </remarks>
+    /// <param name="timeout">How long to wait, in total. Defaults to 5 seconds when omitted.</param>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>A task that completes once a status message has been received and applied.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="timeout"/> is not positive.</exception>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="TimeoutException">Thrown when no status message arrives in time.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the device's capability document and applies it to <see cref="Metadata"/>.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort: a device that does not support the document
+    /// (<see cref="DeviceFeature.CapabilityDocument"/>), does not answer, or answers with one that
+    /// cannot be trusted keeps the capabilities it already had. Read it again when a fresh
+    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed: the device computes that
+    /// from the channels enabled at the moment of the read. This runs a text-mode exchange, so do
+    /// not call it while streaming.
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to observe while reading.</param>
+    /// <returns>
+    /// The document, already applied to <see cref="Metadata"/>; or <c>null</c> when the device did
+    /// not supply a usable one.
+    /// </returns>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the collection of channels populated from device status messages. Every
@@ -265,7 +304,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// </summary>
     /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000. The floor is
     /// 6 Hz (<see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
-    /// floor the device advertises (<see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>). Values below it
+    /// floor the device advertises (<see cref="PwmFrequencyFloorHz"/>). Values below it
     /// are rejected because the firmware's 16-bit period register silently wraps for them, producing a
     /// kilohertz-range output.</param>
     /// <remarks>
@@ -285,6 +324,19 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     int PwmFrequencyHz { get; }
 
     /// <summary>
+    /// Gets the lowest frequency <see cref="SetPwmFrequency"/> accepts on this device, in hertz.
+    /// </summary>
+    /// <remarks>
+    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.PwmFrequencyFloor"/>) with a
+    /// capability document read, this is the floor the device advertises
+    /// (<see cref="Capabilities.CapabilityChannel.PwmMinimumFrequencyHz"/>), which the firmware
+    /// computes from its actual peripheral clock and enforces itself. Otherwise it is
+    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
+    /// Read it when bounding a frequency input rather than hard-coding the constant.
+    /// </remarks>
+    int PwmFrequencyFloorHz { get; }
+
+    /// <summary>
     /// Sets the analog output (DAC) voltage of a channel and applies it immediately.
     /// </summary>
     /// <param name="channelNumber">The analog output channel number.</param>
@@ -296,8 +348,8 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <remarks>
     /// Analog output is available on NQ3 hardware only. Each call stages the level and then latches it
     /// immediately, so it is not suitable for synchronized multi-channel updates — use
-    /// <see cref="DaqifiStreamingDevice.StageAnalogOutput"/> and
-    /// <see cref="DaqifiStreamingDevice.LatchAnalogOutputs"/> for that.
+    /// <see cref="StageAnalogOutput"/> and
+    /// <see cref="LatchAnalogOutputs"/> for that.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The channel number is negative, or the voltage falls outside the range the device stated
@@ -305,6 +357,62 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// </exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     void SetAnalogOutput(int channelNumber, double voltage);
+
+    /// <summary>
+    /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
+    /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
+    /// </summary>
+    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="voltage">
+    /// The output voltage, in volts. Must be finite, and within the channel's range when the
+    /// device described one.
+    /// </param>
+    /// <remarks>
+    /// This is the device's own two-step protocol made explicit:
+    /// <see cref="SetAnalogOutput"/> is exactly a stage followed by a latch. Until the latch,
+    /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.PendingVoltage"/> reports the staged
+    /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
+    /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The channel number is negative, or the voltage falls outside the channel's stated range.
+    /// </exception>
+    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    void StageAnalogOutput(int channelNumber, double voltage);
+
+    /// <summary>
+    /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
+    /// channels change together.
+    /// </summary>
+    /// <remarks>
+    /// Latching with nothing staged is harmless — the device re-applies what it already holds.
+    /// Analog output is available on NQ3 hardware only.
+    /// </remarks>
+    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    void LatchAnalogOutputs();
+
+    /// <summary>
+    /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
+    /// on the modelled channel.
+    /// </summary>
+    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="cancellationToken">Cancels the exchange.</param>
+    /// <returns>The voltage the device reports, in volts.</returns>
+    /// <remarks>
+    /// The DAC has no hardware readback, so the device answers with the value it was last told
+    /// to drive. That still makes this the authoritative round-trip: it reflects what the
+    /// device actually accepted, including a write made before this session connected.
+    /// Analog output is available on NQ3 hardware only.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelNumber"/> is negative.</exception>
+    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The device rejected the query or answered with something that is not a voltage.
+    /// </exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reboots the device and disconnects from it.

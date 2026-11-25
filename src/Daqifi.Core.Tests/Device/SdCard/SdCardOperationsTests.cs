@@ -8,7 +8,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -745,7 +744,7 @@ public partial class SdCardOperationsTests
     public void IsLoggingToSdCard_DefaultsToFalse()
     {
         // Arrange & Act
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         // Assert
         Assert.False(device.IsLoggingToSdCard);
@@ -755,7 +754,7 @@ public partial class SdCardOperationsTests
     public void SdCardFiles_DefaultsToEmpty()
     {
         // Arrange & Act
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         // Assert
         Assert.Empty(device.SdCardFiles);
@@ -3276,8 +3275,8 @@ public partial class SdCardOperationsTests
         /// <inheritdoc cref="TestableSdCardStreamingDevice.UnterminatedAttempts"/>
         public int UnterminatedAttempts { get; set; }
 
-        public RetryableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public RetryableSdCardStreamingDevice(string name)
+            : base(name)
         {
         }
 
@@ -3452,8 +3451,8 @@ public partial class SdCardOperationsTests
 
         public override bool IsUsbConnection => UsbConnection;
 
-        public TestableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableSdCardStreamingDevice(string name)
+            : base(name)
         {
         }
 
@@ -3615,8 +3614,8 @@ public partial class SdCardOperationsTests
     /// </summary>
     private sealed class FinalizeDroppingSdCardDevice : TestableSdCardStreamingDevice
     {
-        public FinalizeDroppingSdCardDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public FinalizeDroppingSdCardDevice(string name)
+            : base(name)
         {
         }
 
@@ -3668,8 +3667,8 @@ public partial class SdCardOperationsTests
         public List<string> CannedTextResponse { get; set; } = new();
         public byte[] CannedFileData { get; set; } = Array.Empty<byte>();
 
-        public TestableDownloadDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableDownloadDevice(string name)
+            : base(name)
         {
         }
 
@@ -4193,8 +4192,8 @@ public partial class SdCardOperationsTests
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
         internal override TimeSpan SdNoCardRecheckDelay => TimeSpan.Zero;
-        public TestableNonUsbStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableNonUsbStreamingDevice(string name)
+            : base(name)
         {
         }
 
@@ -4223,8 +4222,8 @@ public partial class SdCardOperationsTests
         public List<string> CannedTextResponse { get; set; } = new();
         public byte[] CannedFileData { get; set; } = Array.Empty<byte>();
 
-        public TestableNonUsbSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableNonUsbSdCardStreamingDevice(string name)
+            : base(name)
         {
         }
 

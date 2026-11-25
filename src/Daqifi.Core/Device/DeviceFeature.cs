@@ -70,7 +70,7 @@ public enum DeviceFeature
     /// decides whether a value the device reports can be believed. Earlier firmware advertises
     /// a fixed 1 Hz that the hardware cannot produce, so there Core keeps
     /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
-    /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>.
+    /// <see cref="IStreamingDevice.PwmFrequencyFloorHz"/>.
     /// </remarks>
     PwmFrequencyFloor,
 

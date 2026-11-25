@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -851,6 +852,14 @@ public class LanChipInfoProviderExtensionsTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(int channelNumber, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => Disconnect();
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }

@@ -3,7 +3,6 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Tests.TestSupport;
-using System.Net;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Device;
@@ -326,7 +325,7 @@ public class DeviceErrorSurfaceTests
     /// </summary>
     private sealed class DecodableStreamingDevice : DaqifiStreamingDevice
     {
-        public DecodableStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public DecodableStreamingDevice(string name) : base(name)
         {
         }
 

@@ -240,7 +240,7 @@ public class DeviceStateEventOrderTests
     [Fact]
     public void DisposeOfADeviceThatWasNeverConnected()
     {
-        var device = new DaqifiDevice("Device");
+        var device = new TransportlessDevice("Device");
         var log = new StateLog(device);
 
         device.Dispose();
@@ -539,7 +539,7 @@ public class DeviceStateEventOrderTests
     [Fact]
     public async Task ChangesRacingOnManyThreads_AreRaisedAsOneUnbrokenWalk()
     {
-        var device = new DaqifiDevice("Device");
+        var device = new TransportlessDevice("Device");
         var log = new StateLog(device);
         var steps = new[]
         {

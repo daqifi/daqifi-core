@@ -3,6 +3,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
@@ -158,6 +159,25 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     public void SetPwmFrequency(int frequencyHz) { }
     public int PwmFrequencyHz => 0;
     public void SetAnalogOutput(int channelNumber, double voltage) { }
+    public int PwmFrequencyFloorHz => 0;
+    public void StageAnalogOutput(int channelNumber, double voltage) { }
+    public void LatchAnalogOutputs() { }
+    public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+    public bool Supports(DeviceFeature feature) => false;
+    public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default)
+    {
+        InitializeCalls++;
+        return InitializeFailure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
+    }
+
+    /// <summary>How many times the update asked the device to initialize.</summary>
+    public int InitializeCalls { get; private set; }
+
+    /// <summary>When set, every initialize fails with it.</summary>
+    public Exception? InitializeFailure { get; init; }
+
+    public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
     public void Reboot() => Disconnect();
     public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
     public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
