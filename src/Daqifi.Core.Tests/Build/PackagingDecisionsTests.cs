@@ -1,0 +1,162 @@
+using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
+
+namespace Daqifi.Core.Tests.Build;
+
+/// <summary>
+/// Pins the packaging decisions of ADR 0003 (issue #1053) that could be undone without anything
+/// else going red.
+/// </summary>
+public class PackagingDecisionsTests
+{
+    private static string PathFromRoot(params string[] parts) =>
+        Path.Combine([RepositoryRoot.FullPath, .. parts]);
+
+    private static string? Property(string file, string name) =>
+        XDocument.Load(file)
+            .Descendants("PropertyGroup")
+            .Elements()
+            .Where(e => e.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Value.Trim())
+            .SingleOrDefault();
+
+    private static string CoreProject => PathFromRoot("src", "Daqifi.Core", "Daqifi.Core.csproj");
+
+    private static string BuildProps => PathFromRoot("Directory.Build.props");
+
+    private static string ReleaseWorkflowText =>
+        File.ReadAllText(PathFromRoot(".github", "workflows", "release.yml")).ReplaceLineEndings("\n");
+
+    /// <summary>
+    /// One job of release.yml, from its key to the next job's (or the end of the file), without
+    /// comment lines: what matters is what runs.
+    /// </summary>
+    private static string Job(string name)
+    {
+        var lines = ReleaseWorkflowText.Split('\n');
+        var start = Array.IndexOf(lines, $"  {name}:");
+        Assert.True(start >= 0, $"release.yml has no {name} job.");
+
+        return string.Join('\n', lines
+            .Skip(start + 1)
+            .TakeWhile(line => !(line.StartsWith("  ", StringComparison.Ordinal) && line.Length > 2 && char.IsLetter(line[2])))
+            .Where(line => !line.TrimStart().StartsWith('#')));
+    }
+
+    [Fact]
+    public void CoreAssembly_IsMarkedTrimmableAndAotCompatible()
+    {
+        // Read from the assembly that was built: IsAotCompatible turns on the analyzers and stamps
+        // these, and losing it turns the analyzers off without a warning.
+        var metadata = typeof(Daqifi.Core.Device.DaqifiDevice).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), inherit: false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .ToDictionary(a => a.Key, a => a.Value);
+
+        Assert.Equal("True", metadata.GetValueOrDefault("IsTrimmable"), ignoreCase: true);
+        Assert.Equal("True", metadata.GetValueOrDefault("IsAotCompatible"), ignoreCase: true);
+    }
+
+    [Fact]
+    public void BuildsThatAreNotReleases_AreAheadOfTheLastReleaseAndMarkedAsDev()
+    {
+        // With no prefix every local and CI build is 1.0.0. With no suffix a locally packed build
+        // takes the next release's version, and NuGet's cache then serves it in place of the real
+        // one.
+        var prefix = Version.Parse(Property(BuildProps, "VersionPrefix") ?? "0.0.0");
+        var baseline = Version.Parse(Property(CoreProject, "PackageValidationBaselineVersion") ?? "0.0.0");
+
+        Assert.True(prefix > baseline, $"VersionPrefix {prefix} is not ahead of the released {baseline}.");
+        Assert.Equal("dev", Property(BuildProps, "VersionSuffix"));
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_TakesTheVersionFromTheTagAtBuildAndAtPack()
+    {
+        // Both, because the packs are --no-build: the first stamps the assemblies, the second
+        // names the packages. Without them a release would publish VersionPrefix-dev.
+        var pack = Job("pack");
+
+        Assert.Contains("dotnet build --configuration Release --no-restore /p:Version=${VERSION}", pack, StringComparison.Ordinal);
+        var packs = pack.Split('\n').Where(l => l.Contains("run: dotnet pack", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, packs.Count);
+        Assert.All(packs, line => Assert.Contains("-p:PackageVersion=${VERSION}", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_PushesAttestsAndAttachesTheSameArchives()
+    {
+        // Two packs of one build hash differently. A retried push that packed again would attest
+        // and attach an archive NuGet never accepted, because --skip-duplicate keeps the first.
+        Assert.Contains("actions/upload-artifact@", Job("pack"), StringComparison.Ordinal);
+
+        foreach (var (job, needs) in new[] { ("publish", "pack"), ("release-assets", "publish") })
+        {
+            var text = Job(job);
+            Assert.Contains($"\n    needs: {needs}\n", "\n" + text, StringComparison.Ordinal);
+            Assert.Contains("actions/download-artifact@", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet pack", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet build", text, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_ComparesWithNuGetBeforeItAttestsOrAttaches()
+    {
+        // "Re-run all jobs" deletes the original artifact and packs again, while --skip-duplicate
+        // keeps NuGet's first one. Without this check the release would be given the second.
+        var assets = Job("release-assets");
+        var compare = assets.IndexOf("diff -r ", StringComparison.Ordinal);
+
+        Assert.Contains("https://api.nuget.org/v3-flatcontainer/", assets, StringComparison.Ordinal);
+        Assert.True(compare >= 0, "release-assets no longer compares its packages with NuGet's.");
+        Assert.Contains("exit 1", assets[compare..], StringComparison.Ordinal);
+        Assert.True(compare < assets.IndexOf("actions/attest@", StringComparison.Ordinal));
+        Assert.True(compare < assets.IndexOf("gh release upload", StringComparison.Ordinal));
+        Assert.DoesNotContain("continue-on-error", assets, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_ChecksThePrereleaseBoxAndTheTagInTheJobThatPushes()
+    {
+        // In the pushing job, and before the push, so that a re-run of that job alone checks again.
+        var publish = Job("publish");
+        var push = publish.IndexOf("dotnet nuget push", StringComparison.Ordinal);
+
+        foreach (var gate in new[] { "--json isPrerelease", "git merge-base --is-ancestor HEAD origin/main" })
+        {
+            var at = publish.IndexOf(gate, StringComparison.Ordinal);
+            Assert.True(at >= 0 && at < push, $"'{gate}' must run before the push.");
+        }
+
+        Assert.Contains("fetch-depth: 0", publish, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_AttachesToTheReleaseWithoutGivingTheOtherJobsWriteAccess()
+    {
+        var assets = Job("release-assets");
+
+        Assert.Contains("gh release upload", assets, StringComparison.Ordinal);
+        Assert.Contains("actions/attest@", assets, StringComparison.Ordinal);
+        Assert.Contains("contents: write", assets, StringComparison.Ordinal);
+
+        // It adds files. Editing or creating the release could undo the prerelease gate.
+        Assert.DoesNotContain("gh release edit", ReleaseWorkflowText, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh release create", ReleaseWorkflowText, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(": write", Job("pack"), StringComparison.Ordinal);
+        Assert.DoesNotContain("contents: write", Job("publish"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageIcon_ExistsAndIsSmallEnoughForNuGet()
+    {
+        var icon = Property(PathFromRoot("Directory.Build.targets"), "PackageIcon");
+        Assert.NotNull(icon);
+
+        var file = new FileInfo(PathFromRoot("assets", icon));
+        Assert.True(file.Exists, $"{file.FullName} is missing.");
+        Assert.True(file.Length <= 1024 * 1024, "nuget.org rejects an icon over 1 MB.");
+    }
+}

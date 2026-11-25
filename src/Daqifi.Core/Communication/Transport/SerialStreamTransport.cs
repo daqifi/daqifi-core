@@ -15,7 +15,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// after a USB device is physically unplugged, so it is not on its own a liveness signal. Two
 /// detectors sit on top of it (issue #382), and whichever notices first closes the port and raises
 /// <see cref="StatusChanged"/> with <c>IsConnected == false</c>, which a
-/// <see cref="Device.DaqifiDevice"/> surfaces as <see cref="Device.ConnectionStatus.Lost"/>:
+/// <see cref="Device.DaqifiDevice"/> surfaces as <see cref="Device.DeviceState.Lost"/>:
 /// </para>
 /// <list type="bullet">
 /// <item><description>
@@ -931,7 +931,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             // stay claimed for the life of the process and re-plugging the device would fail with
             // "Access is denied". Not rethrown: the callers of this are a watchdog timer thread and
             // the reader/writer loops, all of which already absorb it, so propagating only risks
-            // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
+            // disturbing them. A DaqifiDevice surfaces its own StateChanged subscriber failures on
             // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
             // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
             //

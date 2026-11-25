@@ -9,7 +9,61 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
+  # Build, test and pack once, and keep the packages: everything below uses these archives and
+  # never packs its own. After a failure, use "Re-run failed jobs". It leaves this job alone,
+  # and GitHub keeps its artifact for the jobs that run again. "Re-run all jobs" deletes the
+  # run's earlier artifacts, so this job packs again; release-assets then refuses archives that
+  # are not what NuGet published.
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+      with:
+        dotnet-version: |
+          10.0.x
+    
+    - name: Set version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+    
+    - name: Verify version format
+      run: |
+        if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+          echo "Invalid version format. Must follow semantic versioning (e.g., 1.0.0 or 1.0.0-beta.1)"
+          exit 1
+        fi
+
+    - name: Restore dependencies
+      run: dotnet restore
+    
+    - name: Build
+      run: dotnet build --configuration Release --no-restore /p:Version=${VERSION}
+    
+    - name: Test
+      run: dotnet test --configuration Release --no-build
+    
+    - name: Pack
+      run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
+
+    - name: Pack MCP server (dotnet tool)
+      run: dotnet pack src/Daqifi.Mcp/Daqifi.Mcp.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
+
+    # The .snupkg files too: `dotnet nuget push` sends the one next to each .nupkg.
+    - name: Keep the packages
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: nupkgs
+        path: nupkgs/
+        if-no-files-found: error
+
   publish:
+    needs: pack
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -31,13 +85,6 @@ jobs:
     - name: Set version
       run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
     
-    - name: Verify version format
-      run: |
-        if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-          echo "Invalid version format. Must follow semantic versioning (e.g., 1.0.0 or 1.0.0-beta.1)"
-          exit 1
-        fi
-
     # The box decides what GitHub calls "Latest" and the suffix decides what NuGet and
     # the MCP Registry do, so a release where they disagree is a mistake in one of them.
     # Read live rather than from the event payload: a re-run replays the original
@@ -56,7 +103,7 @@ jobs:
           exit 1
         fi
 
-    # `main` is the only ref whose CI run validates the packaged API (the packs below are
+    # `main` is the only ref whose CI run validates the packaged API (the packs above are
     # --no-build, which skips ApiCompat), so a tag from anywhere else is unchecked.
     - name: Verify the tag is on main
       run: |
@@ -65,24 +112,11 @@ jobs:
           exit 1
         fi
 
-    - name: Restore dependencies
-      run: dotnet restore
-    
-    - name: Build
-      run: dotnet build --configuration Release --no-restore /p:Version=${VERSION}
-    
-    - name: Test
-      run: dotnet test --configuration Release --no-build
-    
-    # Pack both nupkgs before either push. If MCP pack fails after Core is already
-    # on nuget.org, the tag is half-published; `--skip-duplicate` only helps a retry
-    # of the same push, not the missing second package.
-
-    - name: Pack
-      run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
-
-    - name: Pack MCP server (dotnet tool)
-      run: dotnet pack src/Daqifi.Mcp/Daqifi.Mcp.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
+    - name: Fetch the packages
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: nupkgs
+        path: nupkgs
 
     - name: NuGet login (OIDC -> temp API key)
       uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
@@ -95,6 +129,75 @@ jobs:
 
     - name: Push MCP server to NuGet
       run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # Attach the packages to the GitHub Release, with a provenance attestation that ties them
+  # to this workflow and commit (docs/adr/0003). A job of its own so that the jobs that
+  # build and push do not hold `contents: write`, and so that a failure here neither
+  # holds up the MCP Registry nor needs the packages pushed again to retry.
+  release-assets:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      attestations: write
+      contents: write
+
+    steps:
+    - name: Set version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
+    - name: Fetch the packages
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: nupkgs
+        path: nupkgs
+
+    # `--skip-duplicate` keeps whatever NuGet accepted first, so if the packages were built again
+    # after a push ("Re-run all jobs", or a release deleted and published again) these may not be
+    # the ones it has. Nothing is attested or replaced on the release unless they are.
+    #
+    # NuGet adds its signature. The .psmdcp name and the _rels entry pointing at it are generated
+    # by each pack. Everything else has to be identical.
+    - name: Verify these are the packages NuGet published
+      run: |
+        version=$(echo "$VERSION" | tr '[:upper:]' '[:lower:]')
+        for package in nupkgs/*.nupkg; do
+          name=$(basename "$package" .nupkg | tr '[:upper:]' '[:lower:]')
+          id=${name%."$version"}
+          url="https://api.nuget.org/v3-flatcontainer/$id/$version/$name.nupkg"
+          work="$RUNNER_TEMP/$name"
+          mkdir -p "$work"
+          # nuget.org validates a package before serving it.
+          for _ in $(seq 1 60); do
+            curl -fsS -o "$work/published.nupkg" "$url" && break
+            echo "Not available yet; retrying in 10s. ($url)"
+            sleep 10
+          done
+          if [ ! -s "$work/published.nupkg" ]; then
+            echo "::error::$name was not readable on NuGet after 10 minutes. Re-run failed jobs once it is."
+            exit 1
+          fi
+          unzip -q "$package" -d "$work/built"
+          unzip -q "$work/published.nupkg" -d "$work/published"
+          if ! diff -r --exclude=.signature.p7s --exclude='*.psmdcp' --exclude=_rels "$work/built" "$work/published"; then
+            echo "::error::NuGet published a different build of $name, so this one was neither attested nor attached."
+            exit 1
+          fi
+          echo "$name matches what NuGet published."
+        done
+
+    - name: Attest build provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-path: nupkgs/*.nupkg
+
+    # `upload` adds files and nothing else: it does not touch the prerelease box checked above.
+    - name: Attach to the GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: gh release upload "$GITHUB_REF_NAME" nupkgs/*.nupkg --clobber
 
   # --- Official MCP Registry (issue #726) ---
   # Daqifi.Mcp has been on NuGet since 1.0.0, but it was not listed in the

@@ -42,8 +42,8 @@ internal interface IReconnectHost
     /// </summary>
     TimeProvider TimeProvider { get; }
 
-    /// <summary>The device's current connection status.</summary>
-    ConnectionStatus Status { get; }
+    /// <summary>Where the device is in its life.</summary>
+    DeviceState State { get; }
 
     /// <summary>Whether the device has been disposed.</summary>
     bool IsDisposed { get; }
@@ -68,9 +68,9 @@ internal interface IReconnectHost
     void ConnectCore();
 
     /// <summary>
-    /// Tears the session down and settles the device on <paramref name="finalStatus"/>.
+    /// Tears the session down and settles the device on <paramref name="finalState"/>.
     /// </summary>
-    void DisconnectCore(ConnectionStatus finalStatus);
+    void DisconnectCore(DeviceState finalState);
 
     /// <summary>
     /// Re-runs the device's initialization handshake on a freshly reopened transport. Virtual on

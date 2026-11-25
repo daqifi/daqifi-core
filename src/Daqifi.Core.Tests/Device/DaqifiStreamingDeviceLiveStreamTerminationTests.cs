@@ -17,7 +17,7 @@ namespace Daqifi.Core.Tests.Device;
 /// went away. The buffer behind it was completed only by the enumerator's own exit path, so a
 /// consumer sitting in the documented <c>await foreach</c> idiom when the cable was pulled got no
 /// samples, no exception and no loop exit — it waited forever on a device the rest of the library
-/// had already reported as <see cref="ConnectionStatus.Lost"/>, still subscribed to every channel.
+/// had already reported as <see cref="DeviceState.Lost"/>, still subscribed to every channel.
 /// </summary>
 /// <remarks>
 /// These drive the whole path a real drop takes — transport watchdog, device status transition,
@@ -51,7 +51,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         // A drop is not a shutdown the caller asked for, and the flag is how a consumer decides
         // whether to offer a reconnect.
         Assert.False(thrown.IsShuttingDown);
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
     }
 
     [Fact]
@@ -203,17 +203,17 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         using var device = new ThrowingHookDevice("Badly Wired Device", transport);
 
-        var seen = new List<ConnectionStatus>();
+        var seen = new List<DeviceState>();
         var errors = new List<DeviceErrorEventArgs>();
-        device.StatusChanged += (_, e) => seen.Add(e.Status);
+        device.StateChanged += (_, e) => seen.Add(e.CurrentState);
         device.ErrorOccurred += (_, e) => errors.Add(e);
 
         var escaped = Record.Exception(() => device.Connect());
 
         Assert.Null(escaped);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
-        Assert.Contains(ConnectionStatus.Connected, seen);
-        Assert.Contains(errors, e => e.Source == DeviceErrorSource.StatusNotification);
+        Assert.Equal(DeviceState.Connected, device.State);
+        Assert.Contains(DeviceState.Connected, seen);
+        Assert.Contains(errors, e => e.Source == DeviceErrorSource.StateNotification);
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
 
         public override void Send<T>(IOutboundMessage<T> message) { }
 
-        internal override void OnConnectionStatusChanged(ConnectionStatus status) =>
+        internal override void OnStateChanged(DeviceState previous, DeviceState current) =>
             throw new InvalidOperationException("a badly wired internal status hook");
 
         internal override void ReleaseDerivedResources() =>
@@ -306,7 +306,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
     /// <summary>
     /// A transport over an in-memory stream that can report an unexpected drop on command, which
     /// is all these tests need from it. Mirrors the one in
-    /// <c>DeviceStatusChangedIsolationTests</c>; kept local so neither test file's fake can be
+    /// <c>DeviceStateChangedIsolationTests</c>; kept local so neither test file's fake can be
     /// bent to suit the other.
     /// </summary>
     private sealed class DroppableTransport : IStreamTransport

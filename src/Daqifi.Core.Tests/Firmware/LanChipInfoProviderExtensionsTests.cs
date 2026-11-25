@@ -767,14 +767,14 @@ public class LanChipInfoProviderExtensionsTests
 
         public string Name => "SCRIPTED";
         public bool IsConnected { get; set; } = true;
-        public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
+        public DeviceState State => IsConnected ? DeviceState.Connected : DeviceState.Disconnected;
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
 
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged
+        public event EventHandler<DeviceStateChangedEventArgs>? StateChanged
         {
             add { }
             remove { }

@@ -32,13 +32,36 @@ public class WireEnumContractTests
     {
         // Walks Core's enums, so a member added there fails here instead of throwing at a caller.
         AssertMapped<ConnectionType, WireConnectionType>(v => v.ToWire());
-        AssertMapped<ConnectionStatus, WireConnectionStatus>(v => v.ToWire());
         AssertMapped<DeviceType, WireDeviceType>(v => v.ToWire());
         AssertMapped<ChannelType, WireChannelType>(v => v.ToWire());
         AssertMapped<ChannelDirection, WireChannelDirection>(v => v.ToWire());
         AssertMapped<SdCardLogFormat, WireSdLogFormat>(v => v.ToWire());
         AssertMapped<WireDigitalDirection, ChannelDirection>(v => v.ToCore());
         AssertMapped<WireSdLogFormat, SdCardLogFormat>(v => v.ToCore());
+    }
+
+    [Theory]
+    [InlineData(DeviceState.Disconnected, WireConnectionStatus.Disconnected)]
+    [InlineData(DeviceState.Connecting, WireConnectionStatus.Connecting)]
+    [InlineData(DeviceState.Connected, WireConnectionStatus.Connected)]
+    [InlineData(DeviceState.Initializing, WireConnectionStatus.Connected)]
+    [InlineData(DeviceState.Ready, WireConnectionStatus.Connected)]
+    [InlineData(DeviceState.InitializationFailed, WireConnectionStatus.Connected)]
+    [InlineData(DeviceState.Disconnecting, WireConnectionStatus.Connected)]
+    [InlineData(DeviceState.Lost, WireConnectionStatus.Lost)]
+    [InlineData(DeviceState.Retrying, WireConnectionStatus.Retrying)]
+    [InlineData(DeviceState.Failed, WireConnectionStatus.Failed)]
+    [InlineData(DeviceState.Disposed, WireConnectionStatus.Disconnected)]
+    public void EveryDeviceState_MapsToWhetherThereIsAConnection(DeviceState state, WireConnectionStatus wire)
+    {
+        Assert.Equal(wire, state.ToWire());
+    }
+
+    [Fact]
+    public void EveryDeviceState_IsMapped()
+    {
+        // ToWire throws on a value it does not know.
+        Assert.All(Enum.GetValues<DeviceState>(), state => state.ToWire());
     }
 
     [Fact]

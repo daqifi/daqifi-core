@@ -9,7 +9,7 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 
 /// <summary>
 /// Issue #382 for the TCP transport: an unexpected drop must raise <c>StatusChanged(false)</c> —
-/// which is what makes <see cref="ConnectionStatus.Lost"/> reachable — while an intentional
+/// which is what makes <see cref="DeviceState.Lost"/> reachable — while an intentional
 /// disconnect must stay an ordinary disconnect. Driven end to end over a real loopback socket
 /// with a real reader loop, so the whole feedback path is exercised.
 /// </summary>
@@ -112,21 +112,21 @@ public class TcpStreamTransportDropDetectionTests
     public void DeviceOverTcp_WhenThePeerDisappears_ReportsConnectionLost()
     {
         // The acceptance criterion end to end: a real transport, a real device, an unexpected
-        // drop, and ConnectionStatus.Lost coming out the other side.
+        // drop, and DeviceState.Lost coming out the other side.
         using var listener = new LoopbackListener();
         var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
         using var device = new DaqifiDevice("Loopback Device", transport);
 
         var lost = new ManualResetEventSlim(false);
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (statuses)
             {
-                statuses.Add(e.Status);
+                statuses.Add(e.CurrentState);
             }
 
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 lost.Set();
             }
@@ -134,12 +134,12 @@ public class TcpStreamTransportDropDetectionTests
 
         device.Connect();
         using var server = listener.AcceptOne();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
         server.Close();
 
-        Assert.True(lost.Wait(TimeSpan.FromSeconds(10)), "the device never reported ConnectionStatus.Lost");
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.True(lost.Wait(TimeSpan.FromSeconds(10)), "the device never reported DeviceState.Lost");
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsConnected);
     }
 
@@ -152,14 +152,14 @@ public class TcpStreamTransportDropDetectionTests
 
         device.Connect();
         using var server = listener.AcceptOne();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (statuses)
             {
-                statuses.Add(e.Status);
+                statuses.Add(e.CurrentState);
             }
         };
 
@@ -174,19 +174,19 @@ public class TcpStreamTransportDropDetectionTests
             {
                 lock (statuses)
                 {
-                    return !statuses.Contains(ConnectionStatus.Lost);
+                    return !statuses.Contains(DeviceState.Lost);
                 }
             },
-            "an intentional disconnect was reported as ConnectionStatus.Lost",
+            "an intentional disconnect was reported as DeviceState.Lost",
             TimeSpan.FromMilliseconds(500));
 
         lock (statuses)
         {
-            Assert.DoesNotContain(ConnectionStatus.Lost, statuses);
-            Assert.Contains(ConnectionStatus.Disconnected, statuses);
+            Assert.DoesNotContain(DeviceState.Lost, statuses);
+            Assert.Contains(DeviceState.Disconnected, statuses);
         }
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
     /// <summary>

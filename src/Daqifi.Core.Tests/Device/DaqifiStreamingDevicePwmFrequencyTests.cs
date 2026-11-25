@@ -156,7 +156,7 @@ public class DaqifiStreamingDevicePwmFrequencyTests
     [Fact]
     public void SetPwmFrequency_AfterConnectionLost_ReconnectReSendsEvenIfUnchanged()
     {
-        // An unexpected transport drop sets ConnectionStatus.Lost (not Disconnected); the cache
+        // An unexpected transport drop sets DeviceState.Lost (not Disconnected); the cache
         // must still clear so a reconnect re-sends (the device's PWM state isn't trustworthy).
         // using var guarantees disposal even if an assertion throws — device before transport
         // (reverse declaration order), so the consumer/producer stop before the stream closes.

@@ -29,6 +29,16 @@
       violation fails the build for everyone.
     -->
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!--
+      What a build that is not a release calls itself: the next version, marked
+      -dev so a locally packed build can never be mistaken for, or cached as, the
+      published one. The tag decides what a release is called: release.yml passes
+      it as a global Version, which makes the SDK ignore both of these.
+      scripts/post-release.py keeps the prefix ahead of the last release, and
+      package validation (CP0003) fails a pack whose prefix is behind it.
+    -->
+    <VersionPrefix>2.0.0</VersionPrefix>
+    <VersionSuffix>dev</VersionSuffix>
   </PropertyGroup>
 
 </Project>

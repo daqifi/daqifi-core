@@ -30,7 +30,7 @@ namespace Daqifi.Core.Device.Internal;
 /// Every enumeration is bound to the connected session it started in (issue #496). Samples only
 /// ever arrive while the device is connected, so an enumeration that outlived its session had
 /// nothing left to wait for and waited anyway — forever, with no exception and no loop exit.
-/// <see cref="OnConnectionStatusChanged"/> and <see cref="OnDeviceReleased"/> are the two ends
+/// <see cref="OnStateChanged"/> and <see cref="OnDeviceReleased"/> are the two ends
 /// the device calls to close that out; see <see cref="StreamSamplesAsync"/> for the contract
 /// they implement.
 /// </para>
@@ -91,23 +91,23 @@ internal sealed class LiveSampleStream
     /// Ends every enumeration in flight when the device stops being connected.
     /// </summary>
     /// <remarks>
-    /// Called by the device on every status transition, before consumers are notified. A
-    /// transition to anything other than <see cref="ConnectionStatus.Connected"/> means no
-    /// further samples can arrive on this session, so the enumerations are drained and closed:
-    /// gracefully when the teardown was asked for (<see cref="ConnectionStatus.Disconnected"/>),
-    /// and as a failure otherwise — an unplug reports <see cref="ConnectionStatus.Lost"/>, and a
+    /// Called by the device on every state change, before consumers are notified. A state with no
+    /// session (<see cref="DeviceStateExtensions.IsConnected"/>) means no further samples can
+    /// arrive, so the enumerations are drained and closed: gracefully when the teardown was asked
+    /// for (<see cref="DeviceState.Disconnected"/>, or <see cref="DeviceState.Disposed"/>), and as
+    /// a failure otherwise — an unplug reports <see cref="DeviceState.Lost"/>, and a
     /// consumer that had its acquisition cut short must not mistake it for the end of the data.
     /// </remarks>
-    /// <param name="status">The status the device has just moved to.</param>
-    internal void OnConnectionStatusChanged(ConnectionStatus status)
+    /// <param name="state">The state the device has just moved to.</param>
+    internal void OnStateChanged(DeviceState state)
     {
-        if (status == ConnectionStatus.Connected)
+        if (state.IsConnected())
         {
             return;
         }
 
         EndEnumerations(
-            status == ConnectionStatus.Disconnected ? EndReason.Deliberate : EndReason.Dropped,
+            state is DeviceState.Disconnected or DeviceState.Disposed ? EndReason.Deliberate : EndReason.Dropped,
             release: false);
     }
 

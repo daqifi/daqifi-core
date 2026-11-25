@@ -15,7 +15,7 @@ namespace Daqifi.Core.Tests.Device;
 /// Issue #379: after a mid-stream drop, a device with reconnect enabled has to rebuild the whole
 /// session by itself — transport, initialization, channel configuration, and the stream — with no
 /// consumer code involved. With reconnect left at its default it must do exactly what it has always
-/// done: report <see cref="ConnectionStatus.Lost"/> and stop.
+/// done: report <see cref="DeviceState.Lost"/> and stop.
 /// </summary>
 /// <remarks>
 /// Driven by a scripted transport that can be dropped on command and told to refuse the next N
@@ -59,12 +59,12 @@ public class DeviceReconnectTests
         ConnectAndInitialize(device);
 
         // Subscribed after the connect, so the recorded transitions are only what the drop caused.
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (statuses)
             {
-                statuses.Add(e.Status);
+                statuses.Add(e.CurrentState);
             }
         };
 
@@ -82,14 +82,14 @@ public class DeviceReconnectTests
         // event to wait for — so watch, over the window this test has always used, for any
         // reconnect that would have started by now.
         WaitUntil.HoldsFor(
-            () => device.Status == ConnectionStatus.Lost
+            () => device.State == DeviceState.Lost
                 && !device.IsReconnecting
                 && Volatile.Read(ref reconnectEvents) == 0
                 && transport.ConnectCount == connectsBeforeDrop,
             "a drop with reconnect at its default did more than stop at Lost",
             TimeSpan.FromMilliseconds(500));
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsReconnecting);
         Assert.Equal(0, Volatile.Read(ref reconnectEvents));
         Assert.Equal(connectsBeforeDrop, transport.ConnectCount);
@@ -98,7 +98,7 @@ public class DeviceReconnectTests
         lock (statuses)
         {
             // Exactly one transition, to Lost. No Retrying, no Failed, nothing else.
-            Assert.Equal(new[] { ConnectionStatus.Lost }, statuses);
+            Assert.Equal(new[] { DeviceState.Lost }, statuses);
         }
     }
 
@@ -141,7 +141,7 @@ public class DeviceReconnectTests
         var result = await reconnected;
 
         // The device is connected, re-initialized and streaming again — nobody was asked to help.
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.True(device.IsConnected);
         Assert.Equal(2, device.InitializeCount);
         Assert.True(device.IsStreaming);
@@ -689,7 +689,7 @@ public class DeviceReconnectTests
         var result = await reconnected;
 
         Assert.True(result.StreamingResumed);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.Contains("ENAble:VOLTage:DC 1", device.SentCommands);
         Assert.Contains(device.SentCommands, c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
@@ -722,7 +722,7 @@ public class DeviceReconnectTests
         Assert.NotNull(result.LastError);
 
         // Terminal, and impossible to miss: a distinct status plus the device error surface.
-        Assert.Equal(ConnectionStatus.Failed, device.Status);
+        Assert.Equal(DeviceState.Failed, device.State);
         Assert.False(device.IsConnected);
 
         Assert.NotNull(deviceError);
@@ -742,7 +742,7 @@ public class DeviceReconnectTests
             "the reconnect loop never stopped after giving up",
             EventTimeout);
         WaitUntil.HoldsFor(
-            () => device.Status == ConnectionStatus.Failed
+            () => device.State == DeviceState.Failed
                 && !device.IsReconnecting
                 && transport.ConnectCount == connectsAtGiveUp,
             "a reconnect started again after the device gave up",
@@ -771,7 +771,7 @@ public class DeviceReconnectTests
 
         Assert.Equal(2, result.AttemptsMade);
         Assert.IsType<TimeoutException>(result.LastError);
-        Assert.Equal(ConnectionStatus.Failed, device.Status);
+        Assert.Equal(DeviceState.Failed, device.State);
 
         // Nothing half-open is left behind: the transport it managed to open was closed again.
         Assert.False(transport.IsConnected);
@@ -810,7 +810,7 @@ public class DeviceReconnectTests
         // The 30 s backoff means cancellation, not exhaustion, is what ended this.
         Assert.True(result.WasCanceled);
         Assert.Equal(1, result.AttemptsMade);
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsReconnecting);
         Assert.False(device.IsConnected);
     }
@@ -843,7 +843,7 @@ public class DeviceReconnectTests
         // the post-conditions into the wait would turn a wrong final state into a fifteen-second
         // timeout instead of an assertion that names it.
         WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(transport.IsConnected);
         Assert.False(device.IsReconnecting);
     }
@@ -879,12 +879,12 @@ public class DeviceReconnectTests
         // The caller shuts the device down while that connect is in flight. The attempt still
         // finishes and re-opens the transport.
         device.Disconnect();
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
 
         WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
 
         // The caller's decision has to survive it.
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
     }
@@ -922,7 +922,7 @@ public class DeviceReconnectTests
             "a caller's Disconnect was inside the transport at the same time as the reconnect's connect");
 
         // The round-one guarantee still holds on top of the new one.
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
     }
@@ -992,7 +992,7 @@ public class DeviceReconnectTests
 
         device.Disconnect();
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(transport.SawConcurrentLifecycleCalls);
 
         WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
@@ -1036,7 +1036,7 @@ public class DeviceReconnectTests
             + "it should have abandoned the wait");
 
         // The caller's intent is still recorded, even though the transport could not be touched.
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
 
         // And it did not race the wedged connect to get there.
@@ -1071,12 +1071,12 @@ public class DeviceReconnectTests
         ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(800));
 
         device.Disconnect();
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
 
         await connecting;
 
         // The caller asked for teardown; it has to stand whoever was holding the lock.
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
 
@@ -1106,7 +1106,7 @@ public class DeviceReconnectTests
         // #341's contract: this must not throw, however cancelled the token is.
         await device.DisconnectAsync(alreadyCancelled.Token);
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
 
         // The wire-level evidence: teardown really ran rather than being skipped.
@@ -1145,7 +1145,7 @@ public class DeviceReconnectTests
         await device.DisconnectAsync(alreadyCancelled.Token);
         await connecting;
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(transport.IsConnected);
         Assert.False(transport.SawConcurrentLifecycleCalls);
     }
@@ -1161,7 +1161,7 @@ public class DeviceReconnectTests
         device.Disconnect();
 
         Assert.False(transport.SawConcurrentLifecycleCalls);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
     [Fact]
@@ -1196,13 +1196,13 @@ public class DeviceReconnectTests
         WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
 
         Assert.Equal(0, Volatile.Read(ref reconnectedCount));
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
     }
 
     [Fact]
-    public void DisposingDuringAReconnect_UnwindsTheLoopAndLeavesTheDeviceDisconnected()
+    public void DisposingDuringAReconnect_UnwindsTheLoopAndLeavesTheDeviceDisposed()
     {
         using var transport = new ScriptedReconnectTransport();
         var device = new ScriptedStreamingDevice("Disposed Device", transport);
@@ -1220,7 +1220,7 @@ public class DeviceReconnectTests
         // it. The loop still has to unwind, and must not overwrite the teardown on its way out:
         // the same post-conditions as a caller Disconnect during retry.
         WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disposed, device.State);
         Assert.False(transport.IsConnected);
     }
 
@@ -1243,7 +1243,7 @@ public class DeviceReconnectTests
 
         var result = await reconnected;
         Assert.Equal(1, result.AttemptNumber);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]
@@ -1259,7 +1259,7 @@ public class DeviceReconnectTests
         device.ReconnectOptions = FastPolicy();
 
         ConnectAndInitialize(device);
-        device.StatusChanged += (_, _) =>
+        device.StateChanged += (_, _) =>
             throw new InvalidOperationException("the calling thread cannot access this object");
 
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
@@ -1267,7 +1267,7 @@ public class DeviceReconnectTests
 
         var result = await reconnected;
         Assert.Equal(1, result.AttemptNumber);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]
@@ -1311,9 +1311,9 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
 
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 device.Disconnect();
             }
@@ -1330,14 +1330,14 @@ public class DeviceReconnectTests
         // that no reconnect follows, which produces no event to wait for — so watch for one over
         // the window this test has always used.
         WaitUntil.HoldsFor(
-            () => device.Status == ConnectionStatus.Disconnected
+            () => device.State == DeviceState.Disconnected
                 && !device.IsReconnecting
                 && Volatile.Read(ref reconnectEvents) == 0
                 && transport.ConnectCount == connectsBeforeDrop,
             "the Lost handler's Disconnect was overruled by a reconnect",
             TimeSpan.FromMilliseconds(500));
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.Equal(0, Volatile.Read(ref reconnectEvents));
         Assert.Equal(connectsBeforeDrop, transport.ConnectCount);
         Assert.False(transport.IsConnected);
@@ -1591,7 +1591,7 @@ public class DeviceReconnectTests
 
         device.Disconnect();
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsStreaming);
     }
 
@@ -1608,7 +1608,7 @@ public class DeviceReconnectTests
         // Raises Lost before it returns, and with reconnect off nothing follows it.
         transport.SimulateDrop();
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsStreaming);
     }
 
@@ -1683,9 +1683,9 @@ public class DeviceReconnectTests
         // What a consumer sees at Lost: the session has ended by then. The snapshot the reconnect
         // restores from was taken before that, so it still records the stream.
         bool? streamingAtLost = null;
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 streamingAtLost = device.IsStreaming;
             }
@@ -1720,7 +1720,7 @@ public class DeviceReconnectTests
     /// </summary>
     private static void WaitUntilRetrying(DaqifiStreamingDevice device) =>
         WaitUntil.That(
-            () => device.Status == ConnectionStatus.Retrying,
+            () => device.State == DeviceState.Retrying,
             "the reconnect loop never reached its backoff wait",
             EventTimeout);
 

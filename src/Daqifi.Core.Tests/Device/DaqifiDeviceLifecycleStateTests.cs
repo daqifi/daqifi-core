@@ -12,7 +12,7 @@ namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
 /// Issue #931: a device has one state. After a lost connection, a connect has to give a device
-/// that operates, and a connect from an event handler has to leave Status, State and IsConnected
+/// that operates, and a connect from an event handler has to leave State and IsConnected
 /// telling the same story. Automatic reconnection is off in every test here.
 /// </summary>
 public class DaqifiDeviceLifecycleStateTests
@@ -22,7 +22,7 @@ public class DaqifiDeviceLifecycleStateTests
     #region A connect after a lost connection
 
     [Fact]
-    public async Task ALostConnection_ReportsTheSameStateFromStatusAndState()
+    public async Task ALostConnection_ReadsLost()
     {
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport);
@@ -32,8 +32,7 @@ public class DaqifiDeviceLifecycleStateTests
 
         transport.SimulateDrop();
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
-        Assert.Equal(DeviceState.Disconnected, device.State);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsConnected);
     }
 
@@ -140,12 +139,10 @@ public class DaqifiDeviceLifecycleStateTests
 
         transport.SimulateDrop();
         await ConnectAsync(device, useAsync);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Connected, device.State);
 
         await device.InitializeAsync();
 
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Ready, device.State);
         Assert.Equal(attemptsBeforeDrop + 1, device.TextCommandAttemptCount);
     }
@@ -162,7 +159,6 @@ public class DaqifiDeviceLifecycleStateTests
         transport.FailNextConnects = 1;
 
         Assert.Throws<IOException>(() => device.Connect());
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
 
         device.Connect();
@@ -187,9 +183,9 @@ public class DaqifiDeviceLifecycleStateTests
         var attemptsBefore = device.TextCommandAttemptCount;
 
         var reconnected = false;
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Disconnected && !reconnected)
+            if (e.CurrentState == DeviceState.Disconnected && !reconnected)
             {
                 reconnected = true;
                 device.Connect();
@@ -206,14 +202,12 @@ public class DaqifiDeviceLifecycleStateTests
         }
 
         Assert.True(reconnected);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Connected, device.State);
         Assert.True(device.IsConnected);
         Assert.True(transport.IsConnected);
 
         await device.InitializeAsync();
 
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Ready, device.State);
         Assert.Equal(attemptsBefore + 1, device.TextCommandAttemptCount);
     }
@@ -226,9 +220,9 @@ public class DaqifiDeviceLifecycleStateTests
         device.Connect();
 
         var reconnected = false;
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Disconnected && !reconnected)
+            if (e.CurrentState == DeviceState.Disconnected && !reconnected)
             {
                 reconnected = true;
                 device.Connect();
@@ -238,7 +232,6 @@ public class DaqifiDeviceLifecycleStateTests
 
         device.Disconnect();
 
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Ready, device.State);
 
         // The teardown that raised Disconnected has to leave nothing behind that the session the
@@ -251,9 +244,9 @@ public class DaqifiDeviceLifecycleStateTests
     {
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport);
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Connected)
+            if (e.CurrentState == DeviceState.Connected)
             {
                 device.Disconnect();
             }
@@ -261,7 +254,6 @@ public class DaqifiDeviceLifecycleStateTests
 
         device.Connect();
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
@@ -275,9 +267,9 @@ public class DaqifiDeviceLifecycleStateTests
         device.Connect();
         await device.InitializeAsync();
 
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 device.Connect();
             }
@@ -285,7 +277,6 @@ public class DaqifiDeviceLifecycleStateTests
 
         transport.SimulateDrop();
 
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Connected, device.State);
 
         await device.InitializeAsync();
@@ -304,8 +295,8 @@ public class DaqifiDeviceLifecycleStateTests
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport);
 
-        var seen = new List<(ConnectionStatus Status, DeviceState State, bool IsConnected)>();
-        device.StatusChanged += (_, _) => seen.Add((device.Status, device.State, device.IsConnected));
+        var seen = new List<(DeviceState Reported, DeviceState State, bool IsConnected)>();
+        device.StateChanged += (_, e) => seen.Add((e.CurrentState, device.State, device.IsConnected));
 
         device.Connect();
         await device.InitializeAsync();
@@ -316,12 +307,15 @@ public class DaqifiDeviceLifecycleStateTests
         Assert.Equal(
             new[]
             {
-                (ConnectionStatus.Connecting, DeviceState.Connecting, false),
-                (ConnectionStatus.Connected, DeviceState.Connected, true),
-                (ConnectionStatus.Lost, DeviceState.Disconnected, false),
-                (ConnectionStatus.Connecting, DeviceState.Connecting, false),
-                (ConnectionStatus.Connected, DeviceState.Connected, true),
-                (ConnectionStatus.Disconnected, DeviceState.Disconnected, false)
+                (DeviceState.Connecting, DeviceState.Connecting, false),
+                (DeviceState.Connected, DeviceState.Connected, true),
+                (DeviceState.Initializing, DeviceState.Initializing, true),
+                (DeviceState.Ready, DeviceState.Ready, true),
+                (DeviceState.Lost, DeviceState.Lost, false),
+                (DeviceState.Connecting, DeviceState.Connecting, false),
+                (DeviceState.Connected, DeviceState.Connected, true),
+                (DeviceState.Disconnecting, DeviceState.Disconnecting, true),
+                (DeviceState.Disconnected, DeviceState.Disconnected, false)
             },
             seen);
     }
@@ -341,12 +335,12 @@ public class DaqifiDeviceLifecycleStateTests
         device.Connect();
         await device.InitializeAsync();
 
-        var seen = new List<(ConnectionStatus Status, DeviceState State)>();
-        device.StatusChanged += (_, _) =>
+        var seen = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (seen)
             {
-                seen.Add((device.Status, device.State));
+                seen.Add(e.CurrentState);
             }
         };
         using var reconnected = new ManualResetEventSlim(false);
@@ -356,13 +350,12 @@ public class DaqifiDeviceLifecycleStateTests
         transport.SimulateDrop();
 
         Assert.True(reconnected.Wait(WaitUntil.DefaultTimeout), "the reconnect never finished");
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Ready, device.State);
 
         lock (seen)
         {
-            Assert.Contains((ConnectionStatus.Lost, DeviceState.Disconnected), seen);
-            Assert.Contains((ConnectionStatus.Retrying, DeviceState.Disconnected), seen);
+            Assert.Contains(DeviceState.Lost, seen);
+            Assert.Contains(DeviceState.Retrying, seen);
         }
 
         device.SendThroughProducer = true;
@@ -373,7 +366,7 @@ public class DaqifiDeviceLifecycleStateTests
     }
 
     [Fact]
-    public async Task AnAutomaticReconnectThatGivesUp_ReadsFailedAndDisconnected_AndACallerCanStillConnect()
+    public async Task AnAutomaticReconnectThatGivesUp_ReadsFailed_AndACallerCanStillConnect()
     {
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport)
@@ -390,8 +383,7 @@ public class DaqifiDeviceLifecycleStateTests
         transport.SimulateDrop();
 
         Assert.True(gaveUp.Wait(WaitUntil.DefaultTimeout), "the reconnect never gave up");
-        Assert.Equal(ConnectionStatus.Failed, device.Status);
-        Assert.Equal(DeviceState.Disconnected, device.State);
+        Assert.Equal(DeviceState.Failed, device.State);
 
         device.Connect();
         await device.InitializeAsync();
@@ -417,11 +409,11 @@ public class DaqifiDeviceLifecycleStateTests
     {
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport);
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
-            statuses.Add(e.Status);
-            if (e.Status == ConnectionStatus.Connecting)
+            statuses.Add(e.CurrentState);
+            if (e.CurrentState == DeviceState.Connecting)
             {
                 device.Disconnect();
             }
@@ -429,12 +421,11 @@ public class DaqifiDeviceLifecycleStateTests
 
         device.Connect();
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(transport.IsConnected);
         Assert.Null(PrivateField(device, "_messageProducer"));
         Assert.Null(PrivateField(device, "_messageConsumer"));
-        Assert.DoesNotContain(ConnectionStatus.Connected, statuses);
+        Assert.DoesNotContain(DeviceState.Connected, statuses);
     }
 
     #endregion
@@ -462,7 +453,6 @@ public class DaqifiDeviceLifecycleStateTests
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.InitializeAsync());
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
@@ -481,21 +471,7 @@ public class DaqifiDeviceLifecycleStateTests
 
         await Assert.ThrowsAsync<IOException>(() => device.InitializeAsync());
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
-        Assert.Equal(DeviceState.Disconnected, device.State);
-    }
-
-    #endregion
-
-    #region Numeric values
-
-    [Fact]
-    public void DeviceStateError_KeepsItsNumericValue()
-    {
-        // Streaming (5), which nothing ever set, was removed in 2.0. Error keeps 6 so a value
-        // persisted or logged as a number still reads back as the same state.
-        Assert.Equal(6, (int)DeviceState.Error);
-        Assert.False(Enum.IsDefined(typeof(DeviceState), 5));
+        Assert.Equal(DeviceState.Lost, device.State);
     }
 
     #endregion
@@ -522,7 +498,7 @@ public class DaqifiDeviceLifecycleStateTests
     /// stream. The old stream stays writable and readable, so a pump left on it is seen doing
     /// work rather than failing.
     /// </summary>
-    private sealed class ReopeningTransport : IStreamTransport
+    internal sealed class ReopeningTransport : IStreamTransport
     {
         public bool IsUsbConnection => false;
 
@@ -594,7 +570,7 @@ public class DaqifiDeviceLifecycleStateTests
     }
 
     /// <summary>Counts what the pumps do to it, and hands the consumer whatever it is given.</summary>
-    private sealed class LiveStream : Stream
+    internal sealed class LiveStream : Stream
     {
         private readonly object _gate = new();
         private byte[] _inbound = Array.Empty<byte>();

@@ -58,7 +58,7 @@ internal sealed class ReconnectSupervisor
     internal ReconnectSupervisor(IReconnectHost host) => _host = host;
 
     /// <summary>
-    /// The policy for re-establishing a session after <see cref="ConnectionStatus.Lost"/>.
+    /// The policy for re-establishing a session after <see cref="DeviceState.Lost"/>.
     /// Never null — the device's public property rejects that before it reaches here.
     /// </summary>
     internal ReconnectOptions Options
@@ -103,7 +103,7 @@ internal sealed class ReconnectSupervisor
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The epoch is read <i>before</i> the caller raises <see cref="ConnectionStatus.Lost"/>,
+    /// The epoch is read <i>before</i> the caller raises <see cref="DeviceState.Lost"/>,
     /// because a handler is free to call Connect or Disconnect synchronously from inside it; if
     /// it does, this drop must not start a reconnect for a session the caller has already moved
     /// on from.
@@ -150,7 +150,7 @@ internal sealed class ReconnectSupervisor
     /// <param name="expectedEpoch">
     /// The session epoch observed before the drop was announced. A mismatch means a caller
     /// connected or disconnected in the meantime — including from inside their own
-    /// <c>StatusChanged</c> handler — and this drop is no longer theirs to recover from.
+    /// <c>StateChanged</c> handler — and this drop is no longer theirs to recover from.
     /// </param>
     internal void BeginIfEnabled(int expectedEpoch)
     {
@@ -161,7 +161,7 @@ internal sealed class ReconnectSupervisor
 
         // Only ever start from a device that is actually sitting on a lost connection with the
         // session it was lost from still current.
-        if (_host.Status != ConnectionStatus.Lost || Volatile.Read(ref _sessionEpoch) != expectedEpoch)
+        if (_host.State != DeviceState.Lost || Volatile.Read(ref _sessionEpoch) != expectedEpoch)
         {
             return;
         }
@@ -292,7 +292,7 @@ internal sealed class ReconnectSupervisor
                 // are still bound to a stream that is gone, and Connect() only rebuilds them
                 // once they have been nulled. Reported as Retrying, not Disconnected — nobody
                 // asked for this teardown.
-                _host.DisconnectCore(ConnectionStatus.Retrying);
+                _host.DisconnectCore(DeviceState.Retrying);
 
                 if (delay > TimeSpan.Zero)
                 {
@@ -396,7 +396,7 @@ internal sealed class ReconnectSupervisor
 
             try
             {
-                _host.DisconnectCore(ConnectionStatus.Disconnected);
+                _host.DisconnectCore(DeviceState.Disconnected);
             }
             catch (Exception ex)
             {
@@ -437,11 +437,11 @@ internal sealed class ReconnectSupervisor
     /// why.
     /// </summary>
     /// <remarks>
-    /// Exhausting the attempts is terminal and loud: <see cref="ConnectionStatus.Failed"/>, a
+    /// Exhausting the attempts is terminal and loud: <see cref="DeviceState.Failed"/>, a
     /// logged error, and an <c>ErrorOccurred</c> raise. Being cancelled is neither — the caller
-    /// asked for it — so the device is simply left reporting <see cref="ConnectionStatus.Lost"/>,
-    /// which is the truth. Neither touches the device's status at all once the session is stale,
-    /// since by then the status belongs to whatever the caller did next.
+    /// asked for it — so the device is simply left reporting <see cref="DeviceState.Lost"/>,
+    /// which is the truth. Neither touches the device's state at all once the session is stale,
+    /// since by then the state belongs to whatever the caller did next.
     /// </remarks>
     private void ReportReconnectStopped(int epoch, int attemptsMade, Exception? lastError, bool wasCanceled)
     {
@@ -449,8 +449,8 @@ internal sealed class ReconnectSupervisor
         {
             // An attempt can fail after the transport is back up (a re-initialization that
             // times out, say), so tear the half-built session down rather than leaving a live
-            // handle and a running reader behind a terminal status.
-            _host.DisconnectCore(wasCanceled ? ConnectionStatus.Lost : ConnectionStatus.Failed);
+            // handle and a running reader behind a terminal state.
+            _host.DisconnectCore(wasCanceled ? DeviceState.Lost : DeviceState.Failed);
         }
 
         if (wasCanceled)

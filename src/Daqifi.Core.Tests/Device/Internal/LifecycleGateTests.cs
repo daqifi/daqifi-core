@@ -369,7 +369,7 @@ public class LifecycleGateTests
     [Fact]
     public void Run_WhenReenteredFromInsideTheCriticalSection_ProceedsInsteadOfDeadlocking()
     {
-        // Both connect and disconnect raise StatusChanged from inside their critical section, and
+        // Both connect and disconnect raise StateChanged from inside their critical section, and
         // a consumer handler calling Disconnect from there is re-entry on the same flow. It ran
         // nested before the gate existed and has to keep working against a non-reentrant semaphore.
         var gate = Create();
@@ -428,6 +428,109 @@ public class LifecycleGateTests
             release.Set();
             await holder;
         }
+    }
+
+    #endregion
+
+    #region Work for when the gate is released
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunOnceReleased_FromInsideANestedOperation_WaitsForTheOutermost(bool useAsync)
+    {
+        var gate = Create();
+        var order = new List<string>();
+
+        void Operation()
+        {
+            gate.Run(() => gate.RunOnceReleased(() => order.Add("deferred")), LifecycleContention.Abandon);
+            order.Add("outer ends");
+        }
+
+        if (useAsync)
+        {
+            await gate.RunAsync(
+                async () =>
+                {
+                    await Task.Yield();
+                    Operation();
+                },
+                LifecycleContention.Fail,
+                CancellationToken.None);
+        }
+        else
+        {
+            gate.Run(Operation, LifecycleContention.Fail);
+        }
+
+        Assert.Equal(["outer ends", "deferred"], order);
+    }
+
+    [Fact]
+    public void RunOnceReleased_OutsideAnOperation_RunsAtOnce()
+    {
+        var ran = false;
+
+        Create().RunOnceReleased(() => ran = true);
+
+        Assert.True(ran);
+    }
+
+    [Fact]
+    public void RunOnceReleased_RunsForAnOperationThatThrows()
+    {
+        var gate = Create();
+        var ran = false;
+
+        Assert.Throws<IOException>(() => gate.Run(
+            () =>
+            {
+                gate.RunOnceReleased(() => ran = true);
+                throw new IOException("no");
+            },
+            LifecycleContention.Fail));
+
+        Assert.True(ran);
+    }
+
+    [Fact]
+    public async Task AFlowThatOutlivesTheOperationItWasStartedIn_IsOutsideTheGate()
+    {
+        // It inherits the operation through its execution context. Still taking itself for part of
+        // it would let it run alongside the next one, and would lose whatever it defers.
+        var gate = Create();
+        using var operationOver = new ManualResetEventSlim(false);
+        using var nextHolds = new ManualResetEventSlim(false);
+        var ranDeferred = false;
+        var ranAlongside = true;
+        Task? flow = null;
+
+        gate.Run(
+            () => flow = Task.Run(() =>
+            {
+                operationOver.Wait(EventTimeout);
+                gate.RunOnceReleased(() => ranDeferred = true);
+                nextHolds.Wait(EventTimeout);
+                ranAlongside = gate.Run(() => { }, LifecycleContention.Abandon);
+            }),
+            LifecycleContention.Fail);
+        operationOver.Set();
+
+        var (release, holder) = HoldGate(gate);
+        try
+        {
+            nextHolds.Set();
+            await flow!.WaitAsync(EventTimeout);
+        }
+        finally
+        {
+            release.Set();
+            await holder;
+        }
+
+        Assert.True(ranDeferred);
+        Assert.False(ranAlongside);
     }
 
     #endregion

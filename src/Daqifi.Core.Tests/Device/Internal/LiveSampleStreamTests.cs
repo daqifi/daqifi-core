@@ -206,7 +206,7 @@ public class LiveSampleStreamTests
         await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
-        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnStateChanged(DeviceState.Lost);
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
@@ -225,7 +225,7 @@ public class LiveSampleStreamTests
         await using var e = stream.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
 
-        stream.OnConnectionStatusChanged(ConnectionStatus.Disconnected);
+        stream.OnStateChanged(DeviceState.Disconnected);
 
         Assert.False(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
         Assert.Equal(0, host.Channels[0].SubscriberCount);
@@ -245,7 +245,7 @@ public class LiveSampleStreamTests
         Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
         Assert.Equal(1.0, e.Current.Sample.Value);
 
-        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnStateChanged(DeviceState.Lost);
 
         Assert.True(await e.MoveNextAsync().AsTask().WaitAsync(MoveNextTimeout));
         Assert.Equal(2.0, e.Current.Sample.Value);
@@ -265,9 +265,9 @@ public class LiveSampleStreamTests
         // The real sequence after an unplug: Lost, then whatever teardown follows it — the reconnect
         // loop's Retrying, or the Disconnect a consumer issues from its status handler. None of them
         // may downgrade the drop to an ordinary end of session.
-        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
-        stream.OnConnectionStatusChanged(ConnectionStatus.Retrying);
-        stream.OnConnectionStatusChanged(ConnectionStatus.Disconnected);
+        stream.OnStateChanged(DeviceState.Lost);
+        stream.OnStateChanged(DeviceState.Retrying);
+        stream.OnStateChanged(DeviceState.Disconnected);
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
@@ -341,7 +341,7 @@ public class LiveSampleStreamTests
         var firstMove = first.MoveNextAsync();
         var secondMove = second.MoveNextAsync();
 
-        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnStateChanged(DeviceState.Lost);
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => firstMove.AsTask().WaitAsync(MoveNextTimeout));
@@ -364,7 +364,7 @@ public class LiveSampleStreamTests
 
         // A finished enumeration deregisters itself, so the device's own teardown — which always
         // follows eventually — has nothing left to touch.
-        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnStateChanged(DeviceState.Lost);
         stream.OnDeviceReleased();
         Assert.Equal(0, host.Channels[0].SubscriberCount);
     }
@@ -380,7 +380,7 @@ public class LiveSampleStreamTests
 
         // The transition a reconnect ends on. Only leaving Connected ends an enumeration; arriving
         // at it must leave a healthy one alone.
-        stream.OnConnectionStatusChanged(ConnectionStatus.Connected);
+        stream.OnStateChanged(DeviceState.Connected);
         host.Channels[0].RaiseSample(4.0);
 
         Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));

@@ -19,15 +19,14 @@ public class DaqifiDeviceAsyncLifecycleTests
         transport.OpenConnectGate();
         await using var device = new DaqifiDevice("Mock Device", transport);
 
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (_, args) => statusChanges.Add(args.CurrentState);
 
         await device.ConnectAsync();
 
         Assert.True(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
         Assert.Equal(DeviceState.Connected, device.State);
-        Assert.Equal(new[] { ConnectionStatus.Connecting, ConnectionStatus.Connected }, statusChanges);
+        Assert.Equal(new[] { DeviceState.Connecting, DeviceState.Connected }, statusChanges);
 
         // The producer really is running over the transport's stream, not just flagged as such.
         device.Send(ScpiMessageProducer.GetDeviceInfo);
@@ -47,7 +46,7 @@ public class DaqifiDeviceAsyncLifecycleTests
         Assert.Equal(0, transport.ConnectAttempts);
         Assert.False(device.IsConnected);
         // The device never even claimed to be connecting, so no consumer sees a spurious transition.
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
     [Fact]
@@ -59,8 +58,8 @@ public class DaqifiDeviceAsyncLifecycleTests
         using var device = new DaqifiDevice("Mock Device", transport);
         using var cts = new CancellationTokenSource();
 
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (_, args) => statusChanges.Add(args.CurrentState);
 
         var connect = device.ConnectAsync(cts.Token);
         Assert.True(await transport.WaitForConnectEnteredAsync());
@@ -70,9 +69,8 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
         Assert.False(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
-        Assert.Equal(new[] { ConnectionStatus.Connecting, ConnectionStatus.Disconnected }, statusChanges);
+        Assert.Equal(new[] { DeviceState.Connecting, DeviceState.Disconnected }, statusChanges);
     }
 
     [Fact]
@@ -104,7 +102,6 @@ public class DaqifiDeviceAsyncLifecycleTests
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => device.ConnectAsync());
 
         Assert.Equal("no route", thrown.Message);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
@@ -120,7 +117,6 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         Assert.Equal(1, transport.DisconnectCount);
         Assert.False(transport.IsConnected);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
 
         // Still reusable afterwards — teardown must not have poisoned anything.
@@ -136,13 +132,13 @@ public class DaqifiDeviceAsyncLifecycleTests
         using var device = new DaqifiDevice("Mock Device", transport);
         await device.ConnectAsync();
 
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (_, args) => statusChanges.Add(args.CurrentState);
 
         await device.DisconnectAsync();
 
-        Assert.DoesNotContain(ConnectionStatus.Lost, statusChanges);
-        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
+        Assert.DoesNotContain(DeviceState.Lost, statusChanges);
+        Assert.Contains(DeviceState.Disconnected, statusChanges);
     }
 
     [Fact]
@@ -172,7 +168,7 @@ public class DaqifiDeviceAsyncLifecycleTests
         await disconnect;
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
             $"DisconnectAsync waited {sw.ElapsedMilliseconds}ms despite a cancelled token.");
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
 
         // Let the abandoned exchange unwind; it is expected to fail now that the device is gone.
         try
@@ -482,8 +478,8 @@ public class DaqifiDeviceAsyncLifecycleTests
         transport.OpenConnectGate();
         using var device = new DaqifiDevice("Mock Device", transport);
 
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (_, args) => statusChanges.Add(args.CurrentState);
 
         device.Connect();
 
@@ -497,7 +493,10 @@ public class DaqifiDeviceAsyncLifecycleTests
         Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.Equal(1, transport.DisconnectCount);
         Assert.Equal(
-            new[] { ConnectionStatus.Connecting, ConnectionStatus.Connected, ConnectionStatus.Disconnected },
+            new[]
+            {
+                DeviceState.Connecting, DeviceState.Connected, DeviceState.Disconnecting, DeviceState.Disconnected
+            },
             statusChanges);
     }
 
@@ -510,7 +509,6 @@ public class DaqifiDeviceAsyncLifecycleTests
         var thrown = Assert.Throws<InvalidOperationException>(() => device.Connect());
 
         Assert.Equal("no route", thrown.Message);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
