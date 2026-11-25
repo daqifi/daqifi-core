@@ -188,7 +188,7 @@ public class DaqifiDeviceInitializeTests
 
         Assert.Contains("-200", ex.Message);
         Assert.Equal("**ERROR: -200, \"Execution error\"", ex.LastScpiError);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
         // The block is sent once. The retry it used to carry existed to get past a stale queue
         // entry, and the queue is now emptied before the block runs (#898).
         Assert.Equal(1, device.TextCommandAttemptCount);
@@ -211,7 +211,7 @@ public class DaqifiDeviceInitializeTests
             () => device.InitializeAsync());
 
         Assert.Contains("-200", ex.Message);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
     }
 
 
@@ -272,7 +272,7 @@ public class DaqifiDeviceInitializeTests
             () => device.InitializeAsync());
 
         Assert.Equal(errorReply.Trim(), ex.LastScpiError);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
         Assert.Equal(1, device.TextCommandAttemptCount);
     }
 
@@ -407,7 +407,7 @@ public class DaqifiDeviceInitializeTests
         await Assert.ThrowsAnyAsync<TimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
 
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
         Assert.Empty(device.Channels);
         // GetDeviceInfo is re-sent while waiting (initial request + at least one retry).
         Assert.True(device.DeviceInfoRequestCount >= 2);
@@ -435,7 +435,7 @@ public class DaqifiDeviceInitializeTests
         // thrown type is the ChannelPopulationTimeoutException that derives from it (#911).
         await Assert.ThrowsAnyAsync<TimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
     }
 
     [Fact]
@@ -456,7 +456,7 @@ public class DaqifiDeviceInitializeTests
             () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
 
         // Caller-initiated cancellation is not a device fault — state must not flip to Error.
-        Assert.NotEqual(DeviceState.Error, device.State);
+        Assert.NotEqual(DeviceState.InitializationFailed, device.State);
         Assert.Equal(DeviceState.Connected, device.State);
     }
 
@@ -511,7 +511,7 @@ public class DaqifiDeviceInitializeTests
         }
 
         // Caller-initiated cancellation is not a device fault.
-        Assert.NotEqual(DeviceState.Error, device.State);
+        Assert.NotEqual(DeviceState.InitializationFailed, device.State);
     }
 
     [Fact]
@@ -545,7 +545,7 @@ public class DaqifiDeviceInitializeTests
         Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
         Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.Message);
 
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
         Assert.Empty(device.Metadata.PartNumber);
         Assert.Equal(DeviceType.Unknown, device.Metadata.DeviceType);
     }
@@ -575,7 +575,7 @@ public class DaqifiDeviceInitializeTests
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(300)));
 
         Assert.Contains(expectedMissing, ex.Message);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
     }
 
     [Fact]
@@ -727,7 +727,7 @@ public class DaqifiDeviceInitializeTests
         var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(
             () => device.InitializeAsync());
 
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
         Assert.NotNull(ex.LastScpiError);
     }
 
@@ -888,7 +888,7 @@ public class DaqifiDeviceInitializeTests
 
         Assert.Contains("The device may be unresponsive or still initializing.", ex.Message);
         Assert.False(ex.IsDeviceResponding);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
     }
 
     [Fact]

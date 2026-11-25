@@ -22,19 +22,21 @@ public interface IDevice : IAsyncDisposable
     string Name { get; }
 
     /// <summary>
-    /// Gets a value indicating whether the device is connected.
+    /// Gets a value indicating whether the device has a session up:
+    /// <see cref="DeviceStateExtensions.IsConnected"/> of <see cref="State"/>.
     /// </summary>
     bool IsConnected { get; }
 
     /// <summary>
-    /// Gets the current connection status of the device.
+    /// Gets where the device is in its life.
     /// </summary>
-    ConnectionStatus Status { get; }
+    DeviceState State { get; }
 
     /// <summary>
-    /// Occurs when the device status changes.
+    /// Occurs on every change of <see cref="State"/>, in the order the changes were made.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Handlers run synchronously on whatever thread raised the change, and no particular
     /// thread is guaranteed: a drop is raised from the watchdog or reader thread that detected
     /// it, a reconnect from the reconnect supervisor, and a connect either from a thread-pool
@@ -43,8 +45,20 @@ public interface IDevice : IAsyncDisposable
     /// synchronous <see cref="Connect"/> facade cannot deadlock a UI thread (issue #495), but
     /// that only declines the context — it is not a promise of a thread hop. Treat the thread
     /// as arbitrary: a UI consumer must marshal to its own dispatcher before touching controls.
+    /// </para>
+    /// <para>
+    /// Events are raised one at a time. A change made while a handler runs,
+    /// by that handler or by another thread, is raised after the handler returns: a handler must
+    /// not wait for a later event, and <see cref="State"/> may already be further on than
+    /// <see cref="DeviceStateChangedEventArgs.CurrentState"/>.
+    /// </para>
+    /// <para>
+    /// <see cref="DeviceState.Connecting"/> and <see cref="DeviceState.Disconnecting"/> are raised by
+    /// a connect or disconnect that is still running and waits for the handler, so a handler of these
+    /// two must not block on another one made from another thread. For every other event it may.
+    /// </para>
     /// </remarks>
-    event EventHandler<DeviceStatusEventArgs> StatusChanged;
+    event EventHandler<DeviceStateChangedEventArgs> StateChanged;
 
     /// <summary>
     /// Occurs when a message is received from the device.

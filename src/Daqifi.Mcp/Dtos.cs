@@ -66,7 +66,7 @@ public sealed record ConnectedDeviceInfo(
             else if (ch.Type == ChannelType.Digital) digital++;
             else if (ch.Type == ChannelType.AnalogOutput) analogOutput++;
         }
-        return new ConnectedDeviceInfo(id, device.Name, device.Status.ToWire(), analog, digital, analogOutput);
+        return new ConnectedDeviceInfo(id, device.Name, device.State.ToWire(), analog, digital, analogOutput);
     }
 }
 
@@ -98,7 +98,7 @@ public sealed record DeviceStatus(
             .OrderBy(n => n)
             .ToList();
         return new DeviceStatus(
-            id, device.Name, device.Status.ToWire(), streaming, logging, rate, enabledAnalog, enabledDigital);
+            id, device.Name, device.State.ToWire(), streaming, logging, rate, enabledAnalog, enabledDigital);
     }
 }
 

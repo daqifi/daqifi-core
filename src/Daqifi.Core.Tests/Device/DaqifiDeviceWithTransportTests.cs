@@ -13,14 +13,14 @@ namespace Daqifi.Core.Tests.Device;
 public class DaqifiDeviceWithTransportTests
 {
     [Fact]
-    public void DaqifiDevice_StatusChanged_ShouldFireOnTransportEvents()
+    public void DaqifiDevice_StateChanged_ShouldFireOnTransportEvents()
     {
         // Arrange - Use localhost port 1 (reserved, never listening)
         using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         using var device = new DaqifiDevice("Test Device", transport);
         
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (sender, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (sender, args) => statusChanges.Add(args.CurrentState);
         
         // Act - Try to connect (will fail)
         try
@@ -33,8 +33,8 @@ public class DaqifiDeviceWithTransportTests
         }
         
         // Assert
-        Assert.Contains(ConnectionStatus.Connecting, statusChanges);
-        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
+        Assert.Contains(DeviceState.Connecting, statusChanges);
+        Assert.Contains(DeviceState.Disconnected, statusChanges);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class DaqifiDeviceWithTransportTests
         device.Disconnect();
         
         // Assert
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
     }
 
@@ -133,8 +133,8 @@ public class DaqifiDeviceWithTransportTests
         using var transport = new MockStreamTransport();
         using var device = new DaqifiDevice("Mock Device", transport);
         
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (sender, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (sender, args) => statusChanges.Add(args.CurrentState);
         
         // Act
         device.Connect();
@@ -142,9 +142,9 @@ public class DaqifiDeviceWithTransportTests
         device.Disconnect();
         
         // Assert
-        Assert.Contains(ConnectionStatus.Connecting, statusChanges);
-        Assert.Contains(ConnectionStatus.Connected, statusChanges);
-        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
+        Assert.Contains(DeviceState.Connecting, statusChanges);
+        Assert.Contains(DeviceState.Connected, statusChanges);
+        Assert.Contains(DeviceState.Disconnected, statusChanges);
         
         // Verify message was written to stream
         var memoryStream = (MemoryStream)transport.Stream;
@@ -215,18 +215,18 @@ public class DaqifiDeviceWithTransportTests
         using var device = new DaqifiDevice("Mock Device", transport);
 
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (sender, args) => statusChanges.Add(args.Status);
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (sender, args) => statusChanges.Add(args.CurrentState);
 
         // Act - Intentional disconnect
         device.Disconnect();
 
         // Assert - Should go straight to Disconnected, never Lost
-        Assert.DoesNotContain(ConnectionStatus.Lost, statusChanges);
-        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.DoesNotContain(DeviceState.Lost, statusChanges);
+        Assert.Contains(DeviceState.Disconnected, statusChanges);
+        Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
     [Fact]
@@ -238,12 +238,12 @@ public class DaqifiDeviceWithTransportTests
         using var transport = new MockStreamTransport();
         using var device = new DaqifiDevice("Mock Device", transport);
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
         transport.SimulateSilentConnectionLoss();
 
         // Device still reports Connected (status-based), but the transport does not.
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.False(transport.IsConnected);
 
         // Act & Assert — InitializeAsync drives ExecuteTextCommandCoreAsync, which must surface
@@ -253,7 +253,7 @@ public class DaqifiDeviceWithTransportTests
         var ex = await Assert.ThrowsAsync<TransportNotConnectedException>(
             () => device.InitializeAsync());
         Assert.IsAssignableFrom<InvalidOperationException>(ex);
-        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
     }
 
     [Fact]
@@ -264,13 +264,13 @@ public class DaqifiDeviceWithTransportTests
         using var device = new DaqifiDevice("Mock Device", transport);
 
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
         // Act - Simulate transport connection loss
         transport.SimulateConnectionLoss();
 
         // Assert
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
     }
 
     [Fact]
@@ -415,7 +415,7 @@ public class DaqifiDeviceWithTransportTests
         Assert.Null(PrivateField<IMessageConsumer<WireMessage>>(device, "_messageConsumer"));
         Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
         Assert.False(transport.IsConnected);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         var error = Assert.Single(errors);
         Assert.Same(failure, error.Error);
         Assert.Equal(DeviceErrorSource.Unknown, error.Source);

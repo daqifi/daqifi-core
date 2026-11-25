@@ -64,7 +64,7 @@ public class DeviceErrorSurfaceTests
             "the idle reader never issued timeout reads");
 
         Assert.Equal(0, Volatile.Read(ref errors));
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class DeviceErrorSurfaceTests
         WaitUntil.That(
             () => transport.ScriptedStream.ReadCount > readsSoFar + 2,
             "the reader loop stopped issuing reads after a subscriber threw");
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]

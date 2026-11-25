@@ -175,14 +175,21 @@ internal static class WireEnums
         _ => throw Unmapped(value),
     };
 
-    internal static WireConnectionStatus ToWire(this ConnectionStatus value) => value switch
+    // The wire says whether there is a connection, not how far its initialization has got: every
+    // state with a session up is "connected".
+    internal static WireConnectionStatus ToWire(this DeviceState value) => value switch
     {
-        ConnectionStatus.Disconnected => WireConnectionStatus.Disconnected,
-        ConnectionStatus.Connecting => WireConnectionStatus.Connecting,
-        ConnectionStatus.Connected => WireConnectionStatus.Connected,
-        ConnectionStatus.Lost => WireConnectionStatus.Lost,
-        ConnectionStatus.Retrying => WireConnectionStatus.Retrying,
-        ConnectionStatus.Failed => WireConnectionStatus.Failed,
+        DeviceState.Disconnected => WireConnectionStatus.Disconnected,
+        DeviceState.Connecting => WireConnectionStatus.Connecting,
+        DeviceState.Connected => WireConnectionStatus.Connected,
+        DeviceState.Initializing => WireConnectionStatus.Connected,
+        DeviceState.Ready => WireConnectionStatus.Connected,
+        DeviceState.InitializationFailed => WireConnectionStatus.Connected,
+        DeviceState.Disconnecting => WireConnectionStatus.Connected,
+        DeviceState.Lost => WireConnectionStatus.Lost,
+        DeviceState.Retrying => WireConnectionStatus.Retrying,
+        DeviceState.Failed => WireConnectionStatus.Failed,
+        DeviceState.Disposed => WireConnectionStatus.Disconnected,
         _ => throw Unmapped(value),
     };
 

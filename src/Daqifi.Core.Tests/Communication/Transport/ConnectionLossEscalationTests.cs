@@ -7,7 +7,7 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 
 /// <summary>
 /// Issues #377 and #394: a connection that dies mid-stream must reach the device as
-/// <see cref="ConnectionStatus.Lost"/> rather than leaving it reporting <c>Connected</c> forever,
+/// <see cref="DeviceState.Lost"/> rather than leaving it reporting <c>Connected</c> forever,
 /// and an intentional disconnect must never be mistaken for one.
 /// </summary>
 /// <remarks>
@@ -26,21 +26,21 @@ public class ConnectionLossEscalationTests
         using var device = new DaqifiDevice("Unplugged Device", transport);
 
         var lost = new ManualResetEventSlim(false);
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 lost.Set();
             }
         };
 
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
         transport.FailingStream.FailReads = true;
 
-        Assert.True(lost.Wait(TimeSpan.FromSeconds(10)), "the device never reported ConnectionStatus.Lost");
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.True(lost.Wait(TimeSpan.FromSeconds(10)), "the device never reported DeviceState.Lost");
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsConnected);
     }
 
@@ -72,12 +72,12 @@ public class ConnectionLossEscalationTests
         using var transport = new WatchedFailingTransport();
         using var device = new DaqifiDevice("Blipping Device", transport);
 
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (statuses)
             {
-                statuses.Add(e.Status);
+                statuses.Add(e.CurrentState);
             }
         };
 
@@ -100,10 +100,10 @@ public class ConnectionLossEscalationTests
 
         lock (statuses)
         {
-            Assert.DoesNotContain(ConnectionStatus.Lost, statuses);
+            Assert.DoesNotContain(DeviceState.Lost, statuses);
         }
 
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]
@@ -113,14 +113,14 @@ public class ConnectionLossEscalationTests
         using var device = new DaqifiDevice("Departing Device", transport);
 
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
 
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) =>
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) =>
         {
             lock (statuses)
             {
-                statuses.Add(e.Status);
+                statuses.Add(e.CurrentState);
             }
         };
 
@@ -141,7 +141,7 @@ public class ConnectionLossEscalationTests
             {
                 lock (statuses)
                 {
-                    return !statuses.Contains(ConnectionStatus.Lost) && Volatile.Read(ref errors) == 0;
+                    return !statuses.Contains(DeviceState.Lost) && Volatile.Read(ref errors) == 0;
                 }
             },
             "an intentional disconnect was reported as a lost connection or a device error",
@@ -149,11 +149,11 @@ public class ConnectionLossEscalationTests
 
         lock (statuses)
         {
-            Assert.DoesNotContain(ConnectionStatus.Lost, statuses);
-            Assert.Contains(ConnectionStatus.Disconnected, statuses);
+            Assert.DoesNotContain(DeviceState.Lost, statuses);
+            Assert.Contains(DeviceState.Disconnected, statuses);
         }
 
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
 
         // Teardown is also silent: an intentional disconnect is not a diagnostic event, and the
         // failures its own handle-closing provokes must not be reported as device problems.

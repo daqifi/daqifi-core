@@ -347,7 +347,7 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
     {
         public string Name => "Minimal";
         public bool IsConnected { get; private set; } = true;
-        public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
+        public DeviceState State => IsConnected ? DeviceState.Connected : DeviceState.Disconnected;
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
@@ -355,7 +355,7 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
         public bool IsStreaming { get; private set; }
         public int PwmFrequencyHz => 0;
 
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<DeviceStateChangedEventArgs>? StateChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }

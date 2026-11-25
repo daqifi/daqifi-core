@@ -4,13 +4,13 @@ using Daqifi.Core.Device;
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
-/// Issue #494: <see cref="DaqifiDevice.StatusChanged"/> is raised on whichever thread observed the
+/// Issue #494: <see cref="DaqifiDevice.StateChanged"/> is raised on whichever thread observed the
 /// change, so a UI consumer touching a bound property from the handler throws a cross-thread
 /// <see cref="InvalidOperationException"/> out of a library event. That exception used to escape the
 /// status transition and take everything that runs after it with it — most damagingly the reconnect
 /// start — and then vanish into a background loop's catch, leaving a dead device and no error.
 /// </summary>
-public class DeviceStatusChangedIsolationTests
+public class DeviceStateChangedIsolationTests
 {
     [Fact]
     public void AThrowingSubscriber_DoesNotEscapeConnect()
@@ -18,12 +18,12 @@ public class DeviceStatusChangedIsolationTests
         using var transport = new DroppableTransport();
         using var device = new DaqifiDevice("Badly Observed Device", transport);
 
-        device.StatusChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
+        device.StateChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
 
         var escaped = Record.Exception(() => device.Connect());
 
         Assert.Null(escaped);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.True(device.IsConnected);
     }
 
@@ -34,12 +34,12 @@ public class DeviceStatusChangedIsolationTests
         using var device = new DaqifiDevice("Badly Observed Device", transport);
 
         device.Connect();
-        device.StatusChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
+        device.StateChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
 
         var escaped = Record.Exception(() => device.Disconnect());
 
         Assert.Null(escaped);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
     }
 
     [Fact]
@@ -49,11 +49,11 @@ public class DeviceStatusChangedIsolationTests
         using var device = new DaqifiDevice("Badly Observed Device", transport);
 
         device.Connect();
-        device.StatusChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
+        device.StateChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
 
         transport.SimulateDrop();
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsConnected);
     }
 
@@ -77,16 +77,32 @@ public class DeviceStatusChangedIsolationTests
 
         // Subscribed after the connect so the drop is the only transition the subscriber sees.
         device.Connect();
-        device.StatusChanged += (_, _) => throw thrown;
+        device.StateChanged += (_, _) => throw thrown;
 
         transport.SimulateDrop();
 
         lock (errors)
         {
             var error = Assert.Single(errors);
-            Assert.Equal(DeviceErrorSource.StatusNotification, error.Source);
+            Assert.Equal(DeviceErrorSource.StateNotification, error.Source);
             Assert.Same(thrown, error.Error);
         }
+    }
+
+    [Fact]
+    public void AThrowingSubscriber_DoesNotKeepTheChangeFromTheOthers()
+    {
+        using var transport = new DroppableTransport();
+        using var device = new DaqifiDevice("Badly Observed Device", transport);
+        var heard = new List<DeviceState>();
+
+        device.StateChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
+        device.StateChanged += (_, e) => heard.Add(e.CurrentState);
+
+        device.Connect();
+        transport.SimulateDrop();
+
+        Assert.Equal([DeviceState.Connecting, DeviceState.Connected, DeviceState.Lost], heard);
     }
 
     [Fact]
@@ -96,13 +112,13 @@ public class DeviceStatusChangedIsolationTests
         using var transport = new DroppableTransport();
         using var device = new DaqifiDevice("Doubly Badly Observed Device", transport);
 
-        device.StatusChanged += (_, _) => throw new InvalidOperationException("a badly behaved status subscriber");
+        device.StateChanged += (_, _) => throw new InvalidOperationException("a badly behaved status subscriber");
         device.ErrorOccurred += (_, _) => throw new InvalidOperationException("a badly behaved error subscriber");
 
         var escaped = Record.Exception(() => device.Connect());
 
         Assert.Null(escaped);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     /// <summary>

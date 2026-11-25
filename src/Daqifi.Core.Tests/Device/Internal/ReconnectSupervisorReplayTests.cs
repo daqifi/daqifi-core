@@ -10,7 +10,7 @@ namespace Daqifi.Core.Tests.Device.Internal;
 /// the loop ran is replayed, on that drop's own epoch, and nothing else is.
 /// </summary>
 /// <remarks>
-/// The host here reads <see cref="ConnectionStatus.Lost"/> throughout, as a real device still does
+/// The host here reads <see cref="DeviceState.Lost"/> throughout, as a real device still does
 /// while a caller's <c>Disconnect</c> has superseded the session but not yet torn it down. That is
 /// the state in which a replay on the current epoch would start a loop nobody asked for.
 /// </remarks>
@@ -131,7 +131,7 @@ public class ReconnectSupervisorReplayTests
 
         public TimeProvider TimeProvider => TimeProvider.System;
 
-        public ConnectionStatus Status => ConnectionStatus.Lost;
+        public DeviceState State => DeviceState.Lost;
 
         public bool IsDisposed => false;
 
@@ -157,7 +157,7 @@ public class ReconnectSupervisorReplayTests
             throw new IOException("The device is not answering.");
         }
 
-        public void DisconnectCore(ConnectionStatus finalStatus)
+        public void DisconnectCore(DeviceState finalState)
         {
         }
 

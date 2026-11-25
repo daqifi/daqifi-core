@@ -4951,13 +4951,13 @@ public class FirmwareUpdateServiceTests
 
         public string Name { get; }
         public bool IsConnected { get; private set; }
-        public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceState State => DeviceState.Connected;
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<DeviceStateChangedEventArgs>? StateChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
@@ -5088,13 +5088,13 @@ public class FirmwareUpdateServiceTests
         }
         public string Name { get; }
         public bool IsConnected { get; private set; }
-        public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceState State => DeviceState.Connected;
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<DeviceStateChangedEventArgs>? StateChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
@@ -5913,7 +5913,7 @@ public class FirmwareUpdateServiceTests
     private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider, ISerialPortNamed
     {
         private readonly LanChipInfo? _chipInfo;
-        private ConnectionStatus _status = ConnectionStatus.Connected;
+        private DeviceState _state = DeviceState.Connected;
         private int _remainingTransientFailures;
         private int _remainingLanNotInitializedFailures;
 
@@ -5935,7 +5935,7 @@ public class FirmwareUpdateServiceTests
             IsConnected = isConnected;
             if (!isConnected)
             {
-                _status = ConnectionStatus.Disconnected;
+                _state = DeviceState.Disconnected;
             }
         }
 
@@ -5952,7 +5952,7 @@ public class FirmwareUpdateServiceTests
         public string? SerialPortName { get; set; }
 
         public bool IsConnected { get; private set; }
-        public ConnectionStatus Status => _status;
+        public DeviceState State => _state;
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
@@ -5967,7 +5967,7 @@ public class FirmwareUpdateServiceTests
         /// <summary>Elapsed time (from construction) at which the first <see cref="GetLanChipInfoAsync"/> call landed.</summary>
         public TimeSpan? FirstGetLanChipInfoCallAt { get; private set; }
 
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
+        public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
         {
             add { }
@@ -5989,15 +5989,17 @@ public class FirmwareUpdateServiceTests
         public void Connect()
         {
             IsConnected = true;
-            _status = ConnectionStatus.Connected;
-            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+            var previous = _state;
+            _state = DeviceState.Connected;
+            StateChanged?.Invoke(this, new DeviceStateChangedEventArgs(previous, _state));
         }
 
         public void Disconnect()
         {
             IsConnected = false;
-            _status = ConnectionStatus.Disconnected;
-            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+            var previous = _state;
+            _state = DeviceState.Disconnected;
+            StateChanged?.Invoke(this, new DeviceStateChangedEventArgs(previous, _state));
         }
 
         public Task ConnectAsync(CancellationToken cancellationToken = default)

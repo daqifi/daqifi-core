@@ -69,7 +69,7 @@ internal sealed class ChannelControlOperations
     /// channels lock, never inside it. <c>Send</c> queues rather than waits, so nothing held
     /// under it blocks on another thread. The disconnect resets
     /// (<see cref="ResetPwmEnabled"/>, <see cref="ResetSentPwmFrequency"/>) stay off it: they
-    /// run from the status handler, which must not wait behind a caller's send.
+    /// run from the state-change hook, which must not wait behind a caller's send.
     /// </para>
     /// </remarks>
     private readonly Lock _commandGate = new();
@@ -489,7 +489,7 @@ internal sealed class ChannelControlOperations
             // device may end on another frequency: clear the cache, and the next call sends.
             var deliveredInOrder = !_host.HasDeferredSends;
 
-            // The link can also drop between the send and this record, and the status handler
+            // The link can also drop between the send and this record, and the state-change hook
             // then clears the cache (ResetSentPwmFrequency, under this same lock). Recording
             // after that would make the first call after the reconnect skip a frequency the
             // device may no longer have — the same reasoning as the PWM enable record (#945).

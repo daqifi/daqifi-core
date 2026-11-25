@@ -126,7 +126,7 @@ internal sealed class StreamingSessionController
     /// <c>true</c> on a disconnected device, and after a reconnect that sends no stop
     /// (<see cref="DaqifiDevice.PreserveActiveStream"/>) <see cref="StartStreaming"/> returned
     /// without sending anything (issue #940). The snapshot for an automatic reconnect is taken
-    /// before the status leaves <c>Connected</c>, so it still records the session as it was at
+    /// before the device leaves its connected states, so it still records the session as it was at
     /// the drop.
     /// </remarks>
     internal void EndSessionOnConnectionEnd() => _kind = StreamingSessionKind.None;
@@ -690,7 +690,7 @@ internal sealed class StreamingSessionController
 
         // The session ended with the connection (EndSessionOnConnectionEnd), so nothing is
         // recorded as running here and the StartStreaming() below is not a silent no-op. This
-        // repeats it for a caller that reaches this method without a status change.
+        // repeats it for a caller that reaches this method without a state change.
         EndSessionOnConnectionEnd();
 
         var snapshot = _sessionSnapshot;

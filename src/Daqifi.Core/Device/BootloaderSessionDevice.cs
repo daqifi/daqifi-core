@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -41,8 +42,7 @@ namespace Daqifi.Core.Device;
 /// </list>
 /// <para>
 /// Safe to use from multiple threads. Every operation but connect/disconnect is stateless, and
-/// those two use an atomic compare-and-set so <see cref="StatusChanged"/> is raised exactly once
-/// per real transition — a dialog tearing the session down can race the update flow's own
+/// those two raise <see cref="StateChanged"/> exactly once per real transition, in order — a dialog tearing the session down can race the update flow's own
 /// <see cref="Disconnect"/> without producing a duplicate or a missed notification.
 /// </para>
 /// <para>
@@ -60,13 +60,16 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// </summary>
     public const string DefaultName = "DAQiFi Bootloader";
 
-    // 1 = connected. An int rather than a bool so the connect/disconnect transition can be an
-    // atomic compare-and-set: StatusChanged must be raised exactly once per real transition even if
-    // a dialog's teardown races the update flow's own Disconnect().
-    private int _isConnected = Connected;
+    // Connected or Disconnected, and nothing else: there is no transport to dial and no device to
+    // initialize.
+    private volatile DeviceState _state = DeviceState.Connected;
 
-    private const int Connected = 1;
-    private const int NotConnected = 0;
+    // Makes a transition and its place in the queue one step: StateChanged must be raised exactly
+    // once per real transition, and in order, even if a dialog's teardown races the update flow's
+    // own Disconnect().
+    private readonly Lock _transitionLock = new();
+
+    private readonly StateChangeQueue _stateChanges;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BootloaderSessionDevice"/> class, already in the
@@ -79,6 +82,11 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public BootloaderSessionDevice(string? name = null)
     {
         Name = string.IsNullOrWhiteSpace(name) ? DefaultName : name;
+
+        // A subscriber's failure is isolated, as on a real device: the update flow calls
+        // Disconnect() itself, and that failure must not become the update's. There is nothing to
+        // report it on — ErrorOccurred is never raised by this type.
+        _stateChanges = new StateChangeQueue(this, () => StateChanged, static _ => { });
     }
 
     #region IDevice
@@ -87,18 +95,18 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public string Name { get; }
 
     /// <inheritdoc />
-    public bool IsConnected => Volatile.Read(ref _isConnected) == Connected;
+    public bool IsConnected => _state.IsConnected();
 
     /// <inheritdoc />
-    public ConnectionStatus Status => IsConnected
-        ? ConnectionStatus.Connected
-        : ConnectionStatus.Disconnected;
+    public DeviceState State => _state;
 
     /// <summary>
     /// Raised by <see cref="Connect"/> and <see cref="Disconnect"/>. This is the one event this type
-    /// actually raises — the device itself produces nothing to report.
+    /// actually raises — the device itself produces nothing to report. A subscriber that throws fails
+    /// neither the <see cref="Connect"/> or <see cref="Disconnect"/> it was notified of nor the
+    /// other subscribers.
     /// </summary>
-    public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
+    public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
 
     /// <summary>
     /// Never raised: a device in bootloader mode emits no protocol messages. Declared with no-op
@@ -123,16 +131,16 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     }
 
     /// <summary>
-    /// Marks the session connected, raising <see cref="StatusChanged"/> if it was not already.
+    /// Marks the session connected, raising <see cref="StateChanged"/> if it was not already.
     /// Opens no transport — there is nothing to open.
     /// </summary>
-    public void Connect() => SetConnected(true);
+    public void Connect() => SetState(DeviceState.Connected);
 
     /// <summary>
-    /// Marks the session disconnected, raising <see cref="StatusChanged"/> if it was not already.
+    /// Marks the session disconnected, raising <see cref="StateChanged"/> if it was not already.
     /// Closes no transport — there is nothing to close.
     /// </summary>
-    public void Disconnect() => SetConnected(false);
+    public void Disconnect() => SetState(DeviceState.Disconnected);
 
     /// <inheritdoc cref="Connect" />
     /// <param name="cancellationToken">Observed before the state change is applied.</param>
@@ -449,19 +457,21 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
             ? Task.FromCanceled(cancellationToken)
             : Task.CompletedTask;
 
-    private void SetConnected(bool connected)
+    private void SetState(DeviceState state)
     {
-        var desired = connected ? Connected : NotConnected;
-        if (Interlocked.Exchange(ref _isConnected, desired) == desired)
+        StateChangeQueue.Change change;
+        lock (_transitionLock)
         {
-            // Already in this state — not a transition, so nothing to announce.
-            return;
+            if (_state == state)
+            {
+                // Already there — not a transition, so nothing to announce.
+                return;
+            }
+
+            change = _stateChanges.Enqueue(_state, state);
+            _state = state;
         }
 
-        // Raised outside any lock, and reporting the transition this call performed rather than
-        // re-reading the field, so a concurrent flip cannot make the notification lie about which
-        // transition fired.
-        var status = connected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
-        StatusChanged?.Invoke(this, new DeviceStatusEventArgs(status));
+        _stateChanges.Publish(change);
     }
 }
