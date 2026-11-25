@@ -10,9 +10,12 @@ namespace Daqifi.Core.Device.SdCard;
 /// <param name="AnalogPortCount">Number of analog input ports.</param>
 /// <param name="DigitalPortCount">Number of digital ports.</param>
 /// <param name="TimestampFrequency">Clock frequency for tick-to-time conversion.</param>
-/// <param name="DeviceSerialNumber">Device serial number, if present.</param>
+/// <param name="DeviceSerialNumber">
+/// Device serial number, if present, in decimal as <see cref="DeviceMetadata.SerialNumber"/>
+/// reports it. CSV and JSON logs state it in hex; the parsers convert it.
+/// </param>
 /// <param name="DevicePartNumber">Device part number, if present.</param>
-/// <param name="FirmwareRevision">Firmware revision string, if present.</param>
+/// <param name="FirmwareVersion">Firmware revision string, if present.</param>
 /// <param name="CalibrationValues">Per-channel calibration slope/intercept pairs, if present.</param>
 /// <param name="Resolution">ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.</param>
 /// <param name="PortRange">Per-channel voltage port range values, if present.</param>
@@ -23,7 +26,7 @@ public sealed record SdCardDeviceConfiguration(
     uint TimestampFrequency,
     string? DeviceSerialNumber,
     string? DevicePartNumber,
-    string? FirmwareRevision,
+    string? FirmwareVersion,
     IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues,
     uint Resolution = 0,
     IReadOnlyList<double>? PortRange = null,
@@ -71,7 +74,7 @@ public sealed record SdCardDeviceConfiguration(
             TimestampFrequency: device.TimestampFrequency,
             DeviceSerialNumber: device.Metadata.SerialNumber,
             DevicePartNumber: device.Metadata.PartNumber,
-            FirmwareRevision: device.Metadata.FirmwareVersion,
+            FirmwareVersion: device.Metadata.FirmwareVersion,
             CalibrationValues: analogChannels
                 .Select(ch => (ch.CalibrationM, ch.CalibrationB))
                 .ToArray(),

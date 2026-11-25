@@ -1,7 +1,8 @@
 using System;
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Export helpers for a parsed SD-card log.
@@ -64,6 +65,15 @@ public static class SdCardLogSessionExtensions
     /// export comes out in volts like a live recording.
     /// </para>
     /// <para>
+    /// <b>To match a live recording of the same device, pass its name:</b>
+    /// <c>session.AsSampleSource(SdCardDeviceConfiguration.FromDevice(device), device.Name)</c>.
+    /// The serial number already agrees, because both paths write it in decimal. The name is not
+    /// in the log, and a device connected through discovery is named after whatever that transport
+    /// reported, so only the caller can supply the one the live recording used. With no name on
+    /// either side both paths write <see cref="DeviceConnectionOptions.DefaultDeviceName"/>
+    /// (issue #915).
+    /// </para>
+    /// <para>
     /// Nothing is read here. The returned source enumerates the session lazily when the exporter
     /// asks it to, subject to the single-cursor rule described on
     /// <see cref="SdCardLogSampleSource"/>.
@@ -75,8 +85,9 @@ public static class SdCardLogSessionExtensions
     /// <see cref="SdCardDeviceConfiguration.FromDevice"/> for the connected device. Optional.
     /// </param>
     /// <param name="deviceName">
-    /// The device name to build channel keys from. Null or blank becomes
-    /// <see cref="SdCardLogSampleSource.DefaultDeviceName"/>, since a log carries no device name.
+    /// The device name to build channel keys from, normally the connected device's
+    /// <see cref="IDevice.Name"/>. A log carries none, so null or blank becomes
+    /// <see cref="DeviceConnectionOptions.DefaultDeviceName"/>.
     /// </param>
     /// <returns>A source over <see cref="SdCardLogSession.Samples"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="session"/> is null.</exception>
@@ -115,9 +126,9 @@ public static class SdCardLogSessionExtensions
 
         return new SdCardLogSampleSource(
             session.Samples,
-            serial,
             analogCount,
-            deviceName)
+            deviceName,
+            serial)
         {
             ValueUnit = valueUnit
         };
