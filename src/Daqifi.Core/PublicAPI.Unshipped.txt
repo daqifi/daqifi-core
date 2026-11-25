@@ -217,7 +217,6 @@
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.UsbPortDescriptor(int VendorId, int ProductId) -> void
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.get -> int
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
-*REMOVED*Daqifi.Core.Device.FeatureNotSupportedException.FeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature, Daqifi.Core.Firmware.FirmwareVersion? requiredVersion = null, string? actualVersion = null, Daqifi.Core.Device.DeviceType? board = null) -> void
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
@@ -830,7 +829,6 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTyp
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
 Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
-Daqifi.Core.Device.FeatureNotSupportedException.FeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature, Daqifi.Core.Firmware.FirmwareVersion? requiredVersion = null, string? actualVersion = null, Daqifi.Core.Device.DeviceType? board = null, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null) -> void
 Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?

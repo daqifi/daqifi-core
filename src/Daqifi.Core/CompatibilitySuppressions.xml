@@ -1214,13 +1214,6 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
-    <Target>M:Daqifi.Core.Device.FeatureNotSupportedException.#ctor(Daqifi.Core.Device.DeviceFeature,System.Nullable{Daqifi.Core.Firmware.FirmwareVersion},System.String,System.Nullable{Daqifi.Core.Device.DeviceType})</Target>
-    <Left>lib/net10.0/Daqifi.Core.dll</Left>
-    <Right>lib/net10.0/Daqifi.Core.dll</Right>
-    <IsBaselineSuppression>true</IsBaselineSuppression>
-  </Suppression>
-  <Suppression>
-    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.IDevice.get_IpAddress</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>

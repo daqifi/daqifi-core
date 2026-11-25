@@ -42,16 +42,25 @@ public sealed class FeatureNotSupportedException : DaqifiDeviceException
     /// <param name="requiredVersion">The minimum firmware version required for <paramref name="feature"/>, if known.</param>
     /// <param name="actualVersion">The device's reported firmware version string, if known.</param>
     /// <param name="board">The device's board type, if known.</param>
-    /// <param name="rawDeviceResponse">
-    /// The reply the device rejected the command with, or <c>null</c> when the check was made
-    /// before anything was sent.
-    /// </param>
     public FeatureNotSupportedException(
         DeviceFeature feature,
         FirmwareVersion? requiredVersion = null,
         string? actualVersion = null,
-        DeviceType? board = null,
-        IReadOnlyList<string>? rawDeviceResponse = null)
+        DeviceType? board = null)
+        : this(feature, requiredVersion, actualVersion, board, rawDeviceResponse: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance that also carries the reply the device rejected the command with.
+    /// Kept apart from the public constructor, whose signature shipped in 1.x.
+    /// </summary>
+    internal FeatureNotSupportedException(
+        DeviceFeature feature,
+        FirmwareVersion? requiredVersion,
+        string? actualVersion,
+        DeviceType? board,
+        IReadOnlyList<string>? rawDeviceResponse)
         : base(BuildMessage(feature, requiredVersion, actualVersion, board), rawDeviceResponse)
     {
         Feature = feature;

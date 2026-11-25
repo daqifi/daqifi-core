@@ -77,7 +77,7 @@ public class DaqifiDeviceExceptionTests
         new DeviceCommandFailedException("CMD", 0, "reply"),
         new DeviceCommandFailedException("CMD", "reply"),
         new ScpiInitializationErrorException("failed", ["reply"]),
-        new FeatureNotSupportedException(DeviceFeature.Identify, rawDeviceResponse: ["reply"]),
+        new FeatureNotSupportedException(DeviceFeature.Identify, null, null, null, ["reply"]),
         new DeviceDiagnosticsException("failed", ["reply"]),
         new DeviceDiagnosticsCorruptedResponseException("failed", ["reply"]),
         new SdCardOperationException("failed", ["reply"]),
