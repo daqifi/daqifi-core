@@ -6,7 +6,7 @@
 
 1. Every *REMOVED* line in PublicAPI.Unshipped.txt has a table row that is about it: a code span in the
    left column is that type, or that type's member. Mentioning it as a parameter or in another row does
-   not count, nor does a "Behaviour" row. A lost setter may be in a "Setters" row; a lost or re-typed
+   not count, nor does a "Behaviour" row or the summary. A lost setter may be in a "Setters" row; a lost or re-typed
    getter may not. A line that differs only in a namespace needs a row for the type that moved.
    Overloads are not told apart: one row naming a method covers all its removed overloads.
 2. Per CompatibilitySuppressions.xml: every member that implementers now have to add (CP0005, CP0006) is
@@ -192,7 +192,7 @@ def check_removed(rows, removed, current):
 
     live_names = set(map(local, live_types))
     still = set(map(local, current))
-    rows = [row for row in rows if not row.behaviour]
+    rows = [row for row in rows if not row.behaviour and not row.section.startswith("The changes most")]
     problems = []
     for line in removed:
         type_name, member = symbol(line)
@@ -259,6 +259,7 @@ def self_test():
             (1, removed(table("`Kept`", "`Gone`"), gone)),
             (1, removed(table("`Kept`", intro="On `Gone`:"), gone)),
             (1, removed(table("`Gone`", intro="Behaviour:"), gone)),
+            (1, removed(table("`Gone`", section="The changes most callers need"), gone)),
             (0, removed(table("`Gone`"), gone)),
             # So does a removed member, and on its own type.
             (1, removed(table("`Other.Value`, `Kept.More`"), getter, "N.Kept")),
