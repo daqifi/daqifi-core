@@ -727,6 +727,8 @@
 *REMOVED*static Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource(this Daqifi.Core.Device.SdCard.SdCardLogSession! session, Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration? fallbackConfiguration = null, string? deviceName = null) -> Daqifi.Core.Logging.Export.SdCardLogSampleSource!
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnErrorOccurred(System.Exception! error, byte[]? rawData = null) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Consumers.StreamMessageConsumer<T>.OnMessageReceived(Daqifi.Core.Communication.Messages.IInboundMessage<T>! message, byte[]! rawData) -> void
+*REMOVED*virtual Daqifi.Core.Communication.Transport.SerialStreamTransport.OnStatusChanged(bool isConnected, System.Exception? error) -> void
+*REMOVED*virtual Daqifi.Core.Communication.Transport.TcpStreamTransport.OnStatusChanged(bool isConnected, System.Exception? error) -> void
 *REMOVED*virtual Daqifi.Core.Communication.Transport.UdpTransport.OnStatusChanged(bool isOpen, System.Exception? error) -> void
 *REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.CaptureSessionSnapshot() -> void
 *REMOVED*virtual Daqifi.Core.Device.DaqifiDevice.ExecuteTextCommandAsync(System.Action! setupAction, int responseTimeoutMs = 1000, int completionTimeoutMs = 250, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>? prepareAsync = null, System.Func<System.Threading.Tasks.Task!>? finalizeAsync = null, bool keepBlankLines = false) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
@@ -1235,7 +1237,6 @@ override Daqifi.Core.Communication.Messages.DaqifiOutMessage.GetHashCode() -> in
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
 override Daqifi.Core.Device.Discovery.DeviceInfo.Equals(object? obj) -> bool
 override Daqifi.Core.Device.Discovery.DeviceInfo.GetHashCode() -> int
-override Daqifi.Core.Device.Discovery.HidDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 override Daqifi.Core.Device.Discovery.SerialDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 override Daqifi.Core.Device.Discovery.WiFiDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 override Daqifi.Core.Device.SdCard.SdCardParseOptions.Equals(object? obj) -> bool

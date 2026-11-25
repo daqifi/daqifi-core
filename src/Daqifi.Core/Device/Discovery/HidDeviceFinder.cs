@@ -5,7 +5,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Discovers DAQiFi devices in USB HID bootloader mode.
 /// </summary>
-public class HidDeviceFinder : DeviceFinderBase
+public sealed class HidDeviceFinder : DeviceFinderBase
 {
     private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
     private readonly IUsbLocationProvider _usbLocationProvider;

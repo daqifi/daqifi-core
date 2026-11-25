@@ -37,7 +37,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// disconnect and never a loss.
 /// </para>
 /// </remarks>
-public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
+public sealed class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 {
     /// <summary>
     /// Idle time, in seconds, before TCP keep-alive probing starts on an established connection.
@@ -590,7 +590,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     /// <param name="isConnected">The current connection status.</param>
     /// <param name="error">Any error that occurred, if applicable.</param>
-    protected virtual void OnStatusChanged(bool isConnected, Exception? error)
+    private void OnStatusChanged(bool isConnected, Exception? error)
     {
         StatusChanged?.Invoke(this, new TransportStatusEventArgs(isConnected, ConnectionInfo, error));
     }

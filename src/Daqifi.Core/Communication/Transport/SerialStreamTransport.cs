@@ -67,7 +67,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// path whose timing the SCPI exchanges depend on.
 /// </para>
 /// </remarks>
-public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
+public sealed class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 {
     /// <summary>
     /// Default cadence at which an established connection is checked for the continued presence of
@@ -928,7 +928,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     /// <param name="isConnected">The current connection status.</param>
     /// <param name="error">Any error that occurred, if applicable.</param>
-    protected virtual void OnStatusChanged(bool isConnected, Exception? error)
+    private void OnStatusChanged(bool isConnected, Exception? error)
     {
         StatusChanged?.Invoke(this, new TransportStatusEventArgs(isConnected, ConnectionInfo, error));
     }

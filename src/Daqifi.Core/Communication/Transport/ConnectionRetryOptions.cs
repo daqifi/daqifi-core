@@ -14,7 +14,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// cannot tell a permanent misconfiguration from a transient connect failure, it then sat
 /// through the whole backoff curve re-dialling a healthy device.
 /// </remarks>
-public class ConnectionRetryOptions
+public sealed class ConnectionRetryOptions
 {
     private int _maxAttempts = 3;
     private TimeSpan _initialDelay = TimeSpan.FromSeconds(1);
