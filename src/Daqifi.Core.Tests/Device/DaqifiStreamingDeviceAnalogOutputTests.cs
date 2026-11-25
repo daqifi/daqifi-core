@@ -276,7 +276,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         var device = ConnectedDeviceWith(TwoDacDocument);
         device.SyncAnalogOutputChannelsFromCapabilities();
 
-        device.SetAnalogOutput(0, 2.5);
+        device.SetAnalogOutput(Output(device, 0), 2.5);
 
         Assert.Equal(
             new[] { "SOURce:VOLTage:LEVel 0,2.5", "CONFigure:DAC:UPDATE" },
@@ -294,7 +294,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         var device = ConnectedDeviceWith(TwoDacDocument);
         device.SyncAnalogOutputChannelsFromCapabilities();
 
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, voltage));
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(Output(device, 0), voltage));
         Assert.Contains("0 to 10", ex.Message);
         Assert.Empty(device.SentCommands);
         Assert.Null(OutputChannels(device)[0].OutputVoltage);
@@ -307,35 +307,23 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SyncAnalogOutputChannelsFromCapabilities();
 
         // -2 V is out of channel 0's 0..10 V range but inside channel 1's -5..5 V.
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, -2.0));
-        device.SetAnalogOutput(1, -2.0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(Output(device, 0), -2.0));
+        device.SetAnalogOutput(Output(device, 1), -2.0);
 
         Assert.Equal(-2.0, OutputChannels(device)[1].OutputVoltage);
     }
 
     [Fact]
-    public void SetAnalogOutput_DeviceDescribedNoDacChannels_StillWritesByNumber()
-    {
-        // The only analog-output path this library has ever had addresses the DAC by number
-        // with no channel model behind it. Firmware that does not describe its DACs must keep
-        // working rather than start being refused.
-        var device = new CapturingAnalogOutputDevice();
-        device.Connect();
-
-        device.SetAnalogOutput(3, 42.0);
-
-        Assert.Equal(
-            new[] { "SOURce:VOLTage:LEVel 3,42", "CONFigure:DAC:UPDATE" },
-            device.SentCommands);
-    }
-
-    [Fact]
-    public void SetAnalogOutput_NegativeChannel_ThrowsAndSendsNothing()
+    public async Task AnalogOutput_ChannelOfAnotherDevice_ThrowsAndSendsNothing()
     {
         var device = ConnectedDeviceWith(TwoDacDocument);
         device.SyncAnalogOutputChannelsFromCapabilities();
+        var foreign = new AnalogOutputChannel(0);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(-1, 1.0));
+        Assert.Throws<ArgumentException>(() => device.SetAnalogOutput(foreign, 1.0));
+        Assert.Throws<ArgumentException>(() => device.StageAnalogOutput(foreign, 1.0));
+        await Assert.ThrowsAsync<ArgumentException>(() => device.GetAnalogOutputAsync(foreign));
+        Assert.Throws<ArgumentNullException>(() => device.SetAnalogOutput(null!, 1.0));
         Assert.Empty(device.SentCommands);
     }
 
@@ -344,7 +332,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
     {
         var device = new CapturingAnalogOutputDevice();
 
-        Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(0, 1.0));
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(new AnalogOutputChannel(0), 1.0));
         Assert.Empty(device.SentCommands);
     }
 
@@ -354,7 +342,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         var device = ConnectedDeviceWith(TwoDacDocument);
         device.SyncAnalogOutputChannelsFromCapabilities();
 
-        device.StageAnalogOutput(0, 1.5);
+        device.StageAnalogOutput(Output(device, 0), 1.5);
 
         Assert.Equal(new[] { "SOURce:VOLTage:LEVel 0,1.5" }, device.SentCommands);
         var output = OutputChannels(device)[0];
@@ -368,8 +356,8 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         var device = ConnectedDeviceWith(TwoDacDocument);
         device.SyncAnalogOutputChannelsFromCapabilities();
 
-        device.StageAnalogOutput(0, 1.5);
-        device.StageAnalogOutput(1, -1.5);
+        device.StageAnalogOutput(Output(device, 0), 1.5);
+        device.StageAnalogOutput(Output(device, 1), -1.5);
         device.LatchAnalogOutputs();
 
         Assert.Equal(
@@ -400,7 +388,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SyncAnalogOutputChannelsFromCapabilities();
         device.Disconnect();
 
-        Assert.Throws<DeviceNotConnectedException>(() => device.StageAnalogOutput(0, 1.0));
+        Assert.Throws<DeviceNotConnectedException>(() => device.StageAnalogOutput(Output(device, 0), 1.0));
         Assert.Null(OutputChannels(device)[0].PendingVoltage);
         Assert.Empty(device.SentCommands);
     }
@@ -450,7 +438,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SyncAnalogOutputChannelsFromCapabilities();
         device.CannedTextResponse.Add("2.5000");
 
-        var volts = await device.GetAnalogOutputAsync(0);
+        var volts = await device.GetAnalogOutputAsync(Output(device, 0));
 
         Assert.Equal(2.5, volts);
         Assert.Equal(new[] { "SOURce:VOLTage:LEVel? 0" }, device.SentCommands);
@@ -465,7 +453,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.CannedTextResponse.Add("SOURce:VOLTage:LEVel? 0");
         device.CannedTextResponse.Add(" -1.2500 ");
 
-        Assert.Equal(-1.25, await device.GetAnalogOutputAsync(1));
+        Assert.Equal(-1.25, await device.GetAnalogOutputAsync(Output(device, 1)));
     }
 
     [Fact]
@@ -476,7 +464,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.CannedTextResponse.Add("**ERROR: -113, \"Undefined header\"");
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => device.GetAnalogOutputAsync(0));
+            () => device.GetAnalogOutputAsync(Output(device, 0)));
         Assert.Contains("rejected", ex.Message);
     }
 
@@ -487,7 +475,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SyncAnalogOutputChannelsFromCapabilities();
         device.CannedTextResponse.Add("not a voltage");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetAnalogOutputAsync(0));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetAnalogOutputAsync(Output(device, 0)));
     }
 
     [Fact]
@@ -497,17 +485,8 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SyncAnalogOutputChannelsFromCapabilities();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => device.GetAnalogOutputAsync(0));
+            () => device.GetAnalogOutputAsync(Output(device, 0)));
         Assert.Contains("(nothing)", ex.Message);
-    }
-
-    [Fact]
-    public async Task GetAnalogOutputAsync_NegativeChannel_Throws()
-    {
-        var device = ConnectedDeviceWith(TwoDacDocument);
-
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => device.GetAnalogOutputAsync(-1));
     }
 
     [Fact]
@@ -516,7 +495,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         var device = new CapturingAnalogOutputDevice();
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.GetAnalogOutputAsync(0));
+            () => device.GetAnalogOutputAsync(new AnalogOutputChannel(0)));
     }
 
     #endregion
@@ -531,39 +510,19 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.Metadata.DeviceType = board;
         device.SentCommands.Clear();
 
-        var setError = Assert.Throws<FeatureNotSupportedException>(() => device.SetAnalogOutput(0, 1.0));
+        var setError = Assert.Throws<FeatureNotSupportedException>(() => device.SetAnalogOutput(new AnalogOutputChannel(0), 1.0));
         Assert.Equal(DeviceFeature.AnalogOutput, setError.Feature);
         Assert.Equal(board, setError.Board);
         Assert.Empty(device.SentCommands);
 
-        Assert.Throws<FeatureNotSupportedException>(() => device.StageAnalogOutput(0, 1.0));
+        Assert.Throws<FeatureNotSupportedException>(() => device.StageAnalogOutput(new AnalogOutputChannel(0), 1.0));
         Assert.Empty(device.SentCommands);
 
         Assert.Throws<FeatureNotSupportedException>(() => device.LatchAnalogOutputs());
         Assert.Empty(device.SentCommands);
 
-        await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetAnalogOutputAsync(0));
+        await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetAnalogOutputAsync(new AnalogOutputChannel(0)));
         Assert.Empty(device.SentCommands);
-    }
-
-    [Theory]
-    [InlineData(DeviceType.Unknown)]
-    [InlineData(DeviceType.Nyquist3)]
-    public async Task AnalogOutput_WithoutChannelDocument_PreservesNumberedCommands(DeviceType board)
-    {
-        using var device = new CapturingAnalogOutputDevice();
-        device.Connect();
-        device.Metadata.DeviceType = board;
-        device.CannedTextResponse.Add("1.25");
-        device.SentCommands.Clear();
-
-        device.SetAnalogOutput(2, 1.25);
-        Assert.Equal(1.25, await device.GetAnalogOutputAsync(2));
-
-        Assert.Equal(
-            new[] { "SOURce:VOLTage:LEVel 2,1.25", "CONFigure:DAC:UPDATE", "SOURce:VOLTage:LEVel? 2" },
-            device.SentCommands);
-        Assert.Empty(OutputChannels(device));
     }
 
     private static CapturingAnalogOutputDevice ConnectedDeviceWith(string capabilityJson)
@@ -576,6 +535,9 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         device.SentCommands.Clear();
         return device;
     }
+
+    private static IAnalogOutputChannel Output(DaqifiDevice device, int channelNumber)
+        => OutputChannels(device).Single(c => c.ChannelNumber == channelNumber);
 
     private static List<IAnalogOutputChannel> OutputChannels(DaqifiDevice device)
         => device.GetChannelsSnapshot()

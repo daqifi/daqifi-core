@@ -7,6 +7,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Export;
 using Daqifi.Core.Tests.Firmware;
+using Daqifi.Core.Tests.TestSupport;
 using ChannelFactory = System.Threading.Channels.Channel;
 
 namespace Daqifi.Core.Tests.Export;
@@ -148,8 +149,8 @@ public class LiveCsvRecordingTests
     {
         using var device = CreateScripted(analogCount: 3);
         var channels = device.GetChannelsSnapshot();
-        channels[0].IsEnabled = true;
-        channels[2].IsEnabled = true;
+        channels[0].SetEnabled(true);
+        channels[2].SetEnabled(true);
         var writer = new StringWriter();
 
         var recording = device.RecordLiveSamplesToCsvAsync(writer, duration: TimeSpan.FromMilliseconds(200));
@@ -171,7 +172,7 @@ public class LiveCsvRecordingTests
     {
         using var device = CreateScripted(analogCount: 2);
         var channels = device.GetChannelsSnapshot();
-        channels[0].IsEnabled = true;
+        channels[0].SetEnabled(true);
         var writer = new StringWriter();
 
         var recording = device.RecordLiveSamplesToCsvAsync(writer, duration: TimeSpan.FromMilliseconds(200));
@@ -195,7 +196,7 @@ public class LiveCsvRecordingTests
         // cancellation tear through the exporter instead would silently drop that last line.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         var writer = new StringWriter();
 
         var recording = device.RecordLiveSamplesToCsvAsync(writer, duration: TimeSpan.FromMilliseconds(300));
@@ -217,7 +218,7 @@ public class LiveCsvRecordingTests
         // What a disconnect looks like from here: the enumeration ends, and so does the recording.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         var writer = new StringWriter();
 
         var recording = device.RecordLiveSamplesToCsvAsync(writer);
@@ -235,7 +236,7 @@ public class LiveCsvRecordingTests
         // A recording the caller aborted must not be indistinguishable from one that finished.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         using var cts = new CancellationTokenSource();
 
         var recording = device.RecordLiveSamplesToCsvAsync(new StringWriter(), cancellationToken: cts.Token);
@@ -252,7 +253,7 @@ public class LiveCsvRecordingTests
         // win rather than being absorbed as a clean finish.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         using var cts = new CancellationTokenSource();
 
         var recording = device.RecordLiveSamplesToCsvAsync(
@@ -270,7 +271,7 @@ public class LiveCsvRecordingTests
         // surfaces, BOTH the window and the caller have cancelled. Absorbing it because the window
         // fired would turn an abort the caller asked for into a recording that looks complete.
         using var device = CreateScripted(analogCount: 1);
-        device.GetChannelsSnapshot()[0].IsEnabled = true;
+        device.GetChannelsSnapshot()[0].SetEnabled(true);
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         device.GateStreamOn(gate);
         using var cts = new CancellationTokenSource();
@@ -296,7 +297,7 @@ public class LiveCsvRecordingTests
         // this recording for drops that happened before it started.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         device.Dropped = 7;
         device.OnStreamRequested = () => device.Dropped = 10;
 
@@ -312,7 +313,7 @@ public class LiveCsvRecordingTests
     public async Task RecordLiveSamplesToCsvAsync_BufferCapacity_ReachesTheLiveStream()
     {
         using var device = CreateScripted(analogCount: 1);
-        device.GetChannelsSnapshot()[0].IsEnabled = true;
+        device.GetChannelsSnapshot()[0].SetEnabled(true);
 
         var recording = device.RecordLiveSamplesToCsvAsync(
             new StringWriter(), duration: TimeSpan.FromMilliseconds(200), bufferCapacity: 8);
@@ -326,7 +327,7 @@ public class LiveCsvRecordingTests
     {
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         var writer = new StringWriter();
 
         var recording = device.RecordLiveSamplesToCsvAsync(
@@ -350,7 +351,7 @@ public class LiveCsvRecordingTests
         // the writer belongs to the caller, who may still have more to write to it.
         using var device = CreateScripted(analogCount: 1);
         var channel = device.GetChannelsSnapshot()[0];
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         using var stream = new MemoryStream();
         var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
 
@@ -379,7 +380,7 @@ public class LiveCsvRecordingTests
         var channels = device.GetChannelsSnapshot();
         foreach (var channel in channels)
         {
-            channel.IsEnabled = true;
+            channel.SetEnabled(true);
         }
 
         device.StartStreaming();

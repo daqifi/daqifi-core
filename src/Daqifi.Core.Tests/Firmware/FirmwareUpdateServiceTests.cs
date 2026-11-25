@@ -4997,13 +4997,13 @@ public class FirmwareUpdateServiceTests
         public void EnableChannels(IEnumerable<IChannel> channels) { }
         public void DisableChannel(IChannel channel) { }
         public void DisableAllChannels() { }
-        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
-        public void SetDioValue(IChannel channel, bool value) { }
-        public void SetPwmEnabled(IChannel channel, bool enabled) { }
-        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IDigitalChannel channel, bool value) { }
+        public void SetPwmEnabled(IDigitalChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent) { }
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
-        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -5121,13 +5121,13 @@ public class FirmwareUpdateServiceTests
         public void EnableChannels(IEnumerable<IChannel> channels) { }
         public void DisableChannel(IChannel channel) { }
         public void DisableAllChannels() { }
-        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
-        public void SetDioValue(IChannel channel, bool value) { }
-        public void SetPwmEnabled(IChannel channel, bool enabled) { }
-        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IDigitalChannel channel, bool value) { }
+        public void SetPwmEnabled(IDigitalChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent) { }
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
-        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -6031,13 +6031,13 @@ public class FirmwareUpdateServiceTests
         public void EnableChannels(IEnumerable<IChannel> channels) { }
         public void DisableChannel(IChannel channel) { }
         public void DisableAllChannels() { }
-        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
-        public void SetDioValue(IChannel channel, bool value) { }
-        public void SetPwmEnabled(IChannel channel, bool enabled) { }
-        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IDigitalChannel channel, bool value) { }
+        public void SetPwmEnabled(IDigitalChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent) { }
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
-        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
         public void Reboot() => Disconnect();
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }

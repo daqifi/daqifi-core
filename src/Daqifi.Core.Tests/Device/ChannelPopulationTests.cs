@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -71,9 +72,9 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(message);
 
         var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
-        analog0.IsEnabled = true;
+        analog0.SetEnabled(true);
         var digital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
-        digital1.IsEnabled = true;
+        digital1.SetEnabled(true);
         ((DigitalChannel)digital1).ApplyDirection(ChannelDirection.Output);
 
         // Repopulate with the same shape — identity is unchanged, so instances are reused.
@@ -417,7 +418,7 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(message);
 
         var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
-        analog0.IsEnabled = true; // Core enabled it locally.
+        analog0.SetEnabled(true); // Core enabled it locally.
 
         // Act - the device reports channel 0 as actually disabled.
         var refreshed = new DaqifiOutMessage

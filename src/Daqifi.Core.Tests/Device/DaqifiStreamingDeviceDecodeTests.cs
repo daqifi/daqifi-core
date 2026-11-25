@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Google.Protobuf;
 using System;
 using System.Collections.Generic;
@@ -22,7 +23,7 @@ public class DaqifiStreamingDeviceDecodeTests
     public void GapDetected_FiresOnceOnDeviceClockGap_AfterSteadyCadence()
     {
         var device = CreateStreamingDevice(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         var events = new List<TimestampGapEventArgs>();
@@ -47,7 +48,7 @@ public class DaqifiStreamingDeviceDecodeTests
     public void GapDetected_DoesNotFireOnSteadyCadence()
     {
         var device = CreateStreamingDevice(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         var fired = false;
@@ -65,7 +66,7 @@ public class DaqifiStreamingDeviceDecodeTests
     public void GapDetected_ResetsBetweenSessions_NoFalseGapOnDifferentCadence()
     {
         var device = CreateStreamingDevice(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
 
         // Session 1: fast cadence (1000-tick deltas) trains the EMA.
         device.StartStreaming();
@@ -93,7 +94,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         device.GapDetected += (_, _) => throw new InvalidOperationException("boom");
@@ -118,7 +119,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // eagerly, a throwing ToString escaped that catch and the per-frame catch dropped the frame.
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         device.GapDetected += (_, _) => throw new UnrenderableException();
@@ -145,8 +146,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 3);
         var ai0 = AnalogChannel(device, 0);
         var ai2 = AnalogChannel(device, 2);
-        ai0.IsEnabled = true;
-        ai2.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai2.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 4242 };
@@ -177,8 +178,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2, portRange: 10.0f, resolution: 65535);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 7 };
@@ -206,8 +207,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 3);
         var ai2 = AnalogChannel(device, 2);
         var ai0 = AnalogChannel(device, 0);
-        ai2.IsEnabled = true;
-        ai0.IsEnabled = true;
+        ai2.SetEnabled(true);
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
@@ -225,7 +226,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         SampleReceivedEventArgs? captured = null;
@@ -251,7 +252,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 4);
         var dio = Enumerable.Range(0, 4).Select(n => DigitalChannel(device, n)).ToList();
-        foreach (var d in dio) d.IsEnabled = true;
+        foreach (var d in dio) d.SetEnabled(true);
         device.StartStreaming();
 
         // 0b1010 => DIO0=low, DIO1=high, DIO2=low, DIO3=high
@@ -276,7 +277,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // that densely packed enabled channels would wrongly read bit 0.
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 8);
         var dio5 = DigitalChannel(device, 5);
-        dio5.IsEnabled = true;
+        dio5.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
@@ -295,8 +296,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 16);
         var dio3 = DigitalChannel(device, 3);
         var dio5 = DigitalChannel(device, 5);
-        dio3.IsEnabled = true;
-        dio5.IsEnabled = true;
+        dio3.SetEnabled(true);
+        dio5.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
@@ -317,8 +318,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 2);
         var dio0 = DigitalChannel(device, 0);
         var dio1 = DigitalChannel(device, 1);
-        dio0.IsEnabled = true;
-        dio1.IsEnabled = true;
+        dio0.SetEnabled(true);
+        dio1.SetEnabled(true);
         ((Daqifi.Core.Channel.DigitalChannel)dio1).ApplyDirection(ChannelDirection.Output);
         device.StartStreaming();
 
@@ -350,8 +351,8 @@ public class DaqifiStreamingDeviceDecodeTests
 
         var dio0 = DigitalChannel(device, 0);
         var dio1 = DigitalChannel(device, 1);
-        dio0.IsEnabled = true;
-        dio1.IsEnabled = true;
+        dio0.SetEnabled(true);
+        dio1.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
@@ -371,7 +372,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // position i must map to byte i/8, bit i%8 — not wrap byte 1 for i>=16.
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 17);
         var dio = Enumerable.Range(0, 17).Select(n => DigitalChannel(device, n)).ToList();
-        foreach (var d in dio) d.IsEnabled = true;
+        foreach (var d in dio) d.SetEnabled(true);
         device.StartStreaming();
 
         // Only channel index 16 high: byte 2 bit 0. A wrapping decoder would read byte 1 bit 0 (low).
@@ -394,7 +395,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // payload get no sample rather than a bogus "low" reading.
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 10);
         var dio = Enumerable.Range(0, 10).Select(n => DigitalChannel(device, n)).ToList();
-        foreach (var d in dio) d.IsEnabled = true;
+        foreach (var d in dio) d.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
@@ -419,7 +420,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         // Note: StartStreaming intentionally NOT called.
 
         var raised = false;
@@ -439,7 +440,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         // Existing consumers that hand-demux the raw frame must keep working.
         var device = CreateStreamingDevice(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         MessageReceivedEventArgs? raw = null;
@@ -458,7 +459,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         // Classified event should fire in addition to the undifferentiated MessageReceived.
         var device = CreateStreamingDevice(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         DaqifiOutMessage? classified = null;
@@ -480,7 +481,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // the sample decode below from running.
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         device.StreamMessageReceived += _ => throw new InvalidOperationException("boom");
@@ -499,7 +500,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
@@ -520,8 +521,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         device.StartStreaming();
 
         // First a full frame to clear the warmup guard.
@@ -546,7 +547,7 @@ public class DaqifiStreamingDeviceDecodeTests
     {
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         var first = new DaqifiOutMessage { MsgTimeStamp = 1000 };
@@ -577,8 +578,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         device.StartStreaming();
 
         var samples = new List<double>();
@@ -610,8 +611,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // The warmup frame's timestamp is normal (one sample period before the next frame), so it
         // anchors the session clock correctly — a steady cadence after it reports no false gap.
         var device = CreateStreamingDevice(analogCount: 2);
-        AnalogChannel(device, 0).IsEnabled = true;
-        AnalogChannel(device, 1).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
+        AnalogChannel(device, 1).SetEnabled(true);
         device.StartStreaming();
 
         var gaps = new List<TimestampGapEventArgs>();
@@ -644,10 +645,10 @@ public class DaqifiStreamingDeviceDecodeTests
         var ai1 = AnalogChannel(device, 1);
         var dio0 = DigitalChannel(device, 0);
         var dio1 = DigitalChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
-        dio0.IsEnabled = true;
-        dio1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
+        dio0.SetEnabled(true);
+        dio1.SetEnabled(true);
         device.StartStreaming();
 
         var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
@@ -672,8 +673,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // there as in the decoded path — the example CLI's offline export inferred a channel count
         // of one from it and truncated every sample that followed.
         var device = CreateStreamingDevice(analogCount: 2);
-        AnalogChannel(device, 0).IsEnabled = true;
-        AnalogChannel(device, 1).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
+        AnalogChannel(device, 1).SetEnabled(true);
         device.StartStreaming();
 
         var rawFrames = new List<DaqifiOutMessage>();
@@ -707,7 +708,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // A suppressed frame must be observable: a consumer counting samples has to be able to
         // tell "Core dropped a malformed frame" from "the device sent nothing".
         var device = CreateStreamingDevice(analogCount: 4);
-        for (var n = 0; n < 4; n++) AnalogChannel(device, n).IsEnabled = true;
+        for (var n = 0; n < 4; n++) AnalogChannel(device, n).SetEnabled(true);
         device.StartStreaming();
 
         var discards = new List<StreamFrameDiscardedEventArgs>();
@@ -734,8 +735,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // and a test that installs a throwing listener can be reached by anything else running in
         // the same process. SafeTrace covers the listener case in production.
         var device = CreateStreamingDevice(analogCount: 2);
-        AnalogChannel(device, 0).IsEnabled = true;
-        AnalogChannel(device, 1).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
+        AnalogChannel(device, 1).SetEnabled(true);
         device.StartStreaming();
 
         var calls = 0;
@@ -766,8 +767,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // The isolation catch writes the subscriber's exception into a trace line. Composed
         // eagerly, a throwing ToString escaped that catch; it must stay contained like the throw.
         var device = CreateStreamingDevice(analogCount: 2);
-        AnalogChannel(device, 0).IsEnabled = true;
-        AnalogChannel(device, 1).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
+        AnalogChannel(device, 1).SetEnabled(true);
         device.StartStreaming();
 
         var calls = 0;
@@ -800,8 +801,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         device.StartStreaming();
 
         var rawFrames = new List<object?>();
@@ -829,7 +830,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // indistinguishable from the malformed frame by value count alone.
         var device = CreateStreamingDevice(analogCount: 4);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true; // exactly one enabled
+        ai0.SetEnabled(true); // exactly one enabled
         device.StartStreaming();
 
         var rawFrames = 0;
@@ -851,7 +852,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // frame is decoded normally.
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 4);
         var dio = Enumerable.Range(0, 4).Select(n => DigitalChannel(device, n)).ToList();
-        foreach (var d in dio) d.IsEnabled = true;
+        foreach (var d in dio) d.SetEnabled(true);
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
@@ -870,8 +871,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
 
         device.StreamingFrequency = 100; // 500_000 ticks per sample at the 50 MHz default
 
@@ -909,7 +910,7 @@ public class DaqifiStreamingDeviceDecodeTests
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
         var dio0 = DigitalChannel(device, 0);
-        dio0.IsEnabled = true; // digital-only at start
+        dio0.SetEnabled(true); // digital-only at start
         device.StartStreaming();
 
         // A digital frame streams normally.
@@ -937,8 +938,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // After MaxSuppressedWarmupFrames (5) suppressed frames, the guard releases.
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
-        AnalogChannel(device, 1).IsEnabled = true;
-        ai0.IsEnabled = true;
+        AnalogChannel(device, 1).SetEnabled(true);
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         // 5 suppressed, the 6th is released (best-effort mapped).
@@ -966,8 +967,8 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         device.StreamingFrequency = 100; // 500_000 ticks per sample
 
         // Session 1 ends with a frame at tick 10_000_000.
@@ -1020,8 +1021,8 @@ public class DaqifiStreamingDeviceDecodeTests
         // this restart gap is 200 ms.
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
-        AnalogChannel(device, 1).IsEnabled = true;
+        ai0.SetEnabled(true);
+        AnalogChannel(device, 1).SetEnabled(true);
         device.StreamingFrequency = 100;
 
         device.StartStreaming();
@@ -1052,7 +1053,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // first session after connect delivers its first frame untouched rather than guessing.
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         var discards = 0;
@@ -1074,7 +1075,7 @@ public class DaqifiStreamingDeviceDecodeTests
         // raw consumers, but it must also update the reference the next session is checked against.
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StreamingFrequency = 100;
 
         var trailing = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };

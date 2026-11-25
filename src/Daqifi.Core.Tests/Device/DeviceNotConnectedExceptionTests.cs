@@ -78,7 +78,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("StopStreaming", d => d.StopStreaming());
         yield return Site("Reboot", d => d.Reboot());
         yield return Site("DisableAllChannels", d => d.DisableAllChannels());
-        yield return Site("SetAnalogOutput", d => d.SetAnalogOutput(0, 1.0));
+        yield return Site("SetAnalogOutput", d => d.SetAnalogOutput(new Daqifi.Core.Channel.AnalogOutputChannel(0), 1.0));
         yield return Site("SetPwmFrequency", d => d.SetPwmFrequency(1000));
         yield return Site("PrepareSdInterface", d => d.PrepareSdInterface());
         yield return Site("PrepareLanInterface", d => d.PrepareLanInterface());

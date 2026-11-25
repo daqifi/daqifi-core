@@ -149,7 +149,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.DisablePwmOutputAsync(deviceId, channel, cancellationToken));
 
     [McpServerTool(Name = "list_analog_outputs", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
-    [Description("List analog output (DAC) channels with range, resolution, and the volts this server last wrote or read. An empty list means none are modelled — not necessarily that writes are impossible; a null volts is untouched this session, not 0 V.")]
+    [Description("List analog output (DAC) channels with range, resolution, and the volts this server last wrote or read. An empty list means the device described none, and writes are refused; a null volts is untouched this session, not 0 V.")]
     public static AnalogOutputListing ListAnalogOutputs(
         DaqifiAgent agent,
         [Description("The deviceId to inspect.")] string deviceId)

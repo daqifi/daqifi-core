@@ -1133,9 +1133,13 @@ device.DisableChannel(ai0);
 // Turn everything off.
 device.DisableAllChannels();
 
-// Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
-// Check device.Supports(DeviceFeature.AnalogOutput) first — see Feature support below.
-device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
+// Analog output (NQ3 only); the staged value is applied immediately. The channels come from the
+// device's capability document, so a device without a DAC has none.
+var dac0 = channels.OfType<IAnalogOutputChannel>().FirstOrDefault(c => c.ChannelNumber == 0);
+if (dac0 is not null)
+{
+    device.SetAnalogOutput(dac0, 2.5);
+}
 
 // Reboot the device (also disconnects, since the device drops its link while restarting).
 device.Reboot();
@@ -1146,9 +1150,13 @@ Digital I/O and PWM recipes live in the root README
 The `SetDio*` / `SetPwm*` members are on `IStreamingDevice` the same way the enable/disable
 calls above are.
 
-> Channel objects passed to the enable/disable and DIO methods must belong to the device's
-> `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
-> channels are not part of `Channels`, so `SetAnalogOutput` takes a channel number directly.
+> Channel objects passed to these methods must belong to the device's `Channels` collection (so the
+> internal state and bitmask stay in sync).
+
+Channel state is read-only: `IsEnabled`, `Direction`, the PWM mode and the duty cycle change through
+these methods, and through what the device reports. A command that is held back behind another
+operation is recorded when it is sent and taken back if it is dropped instead; an analog output's
+`PendingVoltage` and `OutputVoltage` change once the command has gone out.
 
 `Reboot()` sends and disconnects without knowing whether the device took the command;
 `await device.RebootAsync(cancellationToken)` waits for the device to acknowledge it.
@@ -1188,7 +1196,7 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 if (device.Metadata.DeviceType != DeviceType.Unknown
     && device.Supports(DeviceFeature.AnalogOutput))
 {
-    device.SetAnalogOutput(0, 2.5);
+    device.SetAnalogOutput(device.GetChannelsSnapshot().OfType<IAnalogOutputChannel>().First(), 2.5);
 }
 
 // SdFileTransferOverWifi (firmware >= 3.7.0 plus SD and WiFi hardware) is the gate only on a
@@ -1389,7 +1397,7 @@ lifecycle calls through one thread. What you should know:
 
 - Streaming callbacks (`StreamSamplesAsync`, sample events, decode) never take the operation lock
   and are never blocked by it. A live stream keeps flowing while control operations run.
-- `IChannel` objects are mutable and shared. Reading `channel.IsEnabled` while another thread
+- `IChannel` objects are shared, and change as commands and status messages do. Reading `channel.IsEnabled` while another thread
   reconfigures it can give you a torn view; use `GetChannelsSnapshot()` for a consistent one.
 - Two `DaqifiDevice` instances pointed at the *same* physical unit over two transports are two
   independent locks and will fight. Use `DaqifiDeviceRegistry`, which detects that duplicate.

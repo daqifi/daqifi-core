@@ -63,24 +63,6 @@ public class AnalogOutputChannelTests
             () => new AnalogOutputChannel(0, 12, minimum, maximum));
     }
 
-    [Fact]
-    public void Direction_SetToOutput_IsAccepted()
-    {
-        var channel = new AnalogOutputChannel(0) { Direction = ChannelDirection.Output };
-
-        Assert.Equal(ChannelDirection.Output, channel.Direction);
-    }
-
-    [Theory]
-    [InlineData(ChannelDirection.Input)]
-    [InlineData(ChannelDirection.Unknown)]
-    public void Direction_SetToAnythingElse_Throws(ChannelDirection direction)
-    {
-        var channel = new AnalogOutputChannel(0);
-
-        Assert.Throws<ArgumentException>(() => channel.Direction = direction);
-    }
-
     [Theory]
     [InlineData(0.0, true)]     // the low endpoint is in range
     [InlineData(10.0, true)]    // so is the high one
@@ -190,14 +172,6 @@ public class AnalogOutputChannelTests
 
         var ex = Assert.Throws<ArgumentNullException>(() => channel.Name = null!);
         Assert.Equal("value", ex.ParamName);
-    }
-
-    [Fact]
-    public void SetActiveSample_NullSample_Throws()
-    {
-        var channel = new AnalogOutputChannel(0);
-
-        Assert.Throws<ArgumentNullException>(() => channel.SetActiveSample(null!));
     }
 
     /// <summary>

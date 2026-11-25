@@ -11,9 +11,9 @@ public class DataSample : IDataSample
     public DateTime Timestamp { get; init; }
 
     /// <summary>
-    /// Gets or sets the value of the sample.
+    /// Gets the value of the sample.
     /// </summary>
-    public double Value { get; set; }
+    public double Value { get; init; }
 
     /// <summary>
     /// Gets the raw device value this sample was decoded from — the raw ADC count for a streamed

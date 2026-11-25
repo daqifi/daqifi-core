@@ -2,6 +2,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
+using Daqifi.Core.Tests.TestSupport;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -222,7 +223,7 @@ public class SampleRateCapTests
         EnableAnalog(device, 0, 1);
         foreach (var digital in device.Channels.Where(c => c.Type == ChannelType.Digital))
         {
-            digital.IsEnabled = true;
+            digital.SetEnabled(true);
         }
 
         Assert.Equal(13750, device.MaximumStreamingFrequencyHz);
@@ -267,7 +268,7 @@ public class SampleRateCapTests
         device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
         foreach (var digital in device.Channels.Where(c => c.Type == ChannelType.Digital))
         {
-            digital.IsEnabled = true;
+            digital.SetEnabled(true);
         }
 
         Assert.Equal(0, device.MaximumStreamingFrequencyHz);

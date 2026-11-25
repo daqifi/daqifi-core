@@ -16,9 +16,14 @@ public interface IChannel
     string Name { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the channel is enabled.
+    /// Gets whether the channel is enabled.
     /// </summary>
-    bool IsEnabled { get; set; }
+    /// <remarks>
+    /// Use <c>IStreamingDevice.EnableChannel</c> and its siblings to change it. There is no setter,
+    /// for the reason <see cref="Direction"/> gives: the stream decoder picks channels by this, so
+    /// moving it without telling the device attributes readings to the wrong channel.
+    /// </remarks>
+    bool IsEnabled { get; }
 
     /// <summary>
     /// Gets the channel type. See <see cref="ChannelType"/> (Analog, Digital, or AnalogOutput).
@@ -47,19 +52,4 @@ public interface IChannel
     /// Event raised when a new sample is received on this channel.
     /// </summary>
     event EventHandler<SampleReceivedEventArgs>? SampleReceived;
-
-    /// <summary>
-    /// Sets the active sample for this channel and triggers the SampleReceived event.
-    /// </summary>
-    /// <param name="value">The raw or scaled value.</param>
-    /// <param name="timestamp">The timestamp when the sample was taken.</param>
-    void SetActiveSample(double value, DateTime timestamp);
-
-    /// <summary>
-    /// Sets the active sample for this channel to a fully-formed sample and triggers the
-    /// SampleReceived event. Used by the decode pipeline to carry raw value and device
-    /// timestamp metadata that <see cref="SetActiveSample(double, DateTime)"/> cannot.
-    /// </summary>
-    /// <param name="sample">The sample to set as active.</param>
-    void SetActiveSample(IDataSample sample);
 }

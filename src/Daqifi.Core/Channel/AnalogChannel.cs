@@ -42,7 +42,6 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     private string _name;
     private bool _isEnabled;
     private Action? _enablementChanged;
-    private ChannelDirection _direction;
     private double _minValue;
     private double _maxValue;
     private double _calibrationM;
@@ -79,13 +78,17 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
         remove => Internal.ChannelEnablementNotification.RemoveHandler(_lock, ref _enablementChanged, value);
     }
 
+    /// <inheritdoc />
+    void IChannelEnablementNotifier.SetEnabled(bool enabled) => IsEnabled = enabled;
+
     /// <summary>
-    /// Gets or sets whether the channel is enabled.
+    /// Gets whether the channel is enabled. Use <c>IStreamingDevice.EnableChannel</c> and its
+    /// siblings to change it.
     /// </summary>
     public bool IsEnabled
     {
         get { lock (_lock) { return _isEnabled; } }
-        set => Internal.ChannelEnablementNotification.SetAndNotify(_lock, value, ref _isEnabled, ref _enablementChanged);
+        internal set => Internal.ChannelEnablementNotification.SetAndNotify(_lock, value, ref _isEnabled, ref _enablementChanged);
     }
 
     /// <summary>
@@ -94,13 +97,9 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     public ChannelType Type => ChannelType.Analog;
 
     /// <summary>
-    /// Gets or sets the channel direction (Input or Output).
+    /// Gets the channel direction (always <see cref="ChannelDirection.Input"/> for this class).
     /// </summary>
-    public ChannelDirection Direction
-    {
-        get { lock (_lock) { return _direction; } }
-        set { lock (_lock) { _direction = value; } }
-    }
+    public ChannelDirection Direction => ChannelDirection.Input;
 
     /// <summary>
     /// Gets the most recent data sample received on this channel.
@@ -280,7 +279,6 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
         _resolutionIsAssumed = resolutionIsAssumed;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
-        _direction = ChannelDirection.Input;
         _minValue = -10.0;
         _maxValue = 10.0;
         _calibrationM = 1.0;
@@ -331,28 +329,12 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     }
 
     /// <summary>
-    /// Sets the active sample for this channel and triggers the SampleReceived event.
-    /// </summary>
-    /// <param name="value">The raw or scaled value.</param>
-    /// <param name="timestamp">The timestamp when the sample was taken.</param>
-    /// <remarks>
-    /// The channel's current <see cref="Scaling"/> is stamped onto the sample, so a value pushed
-    /// through this overload reports engineering units exactly as a decoded one does. The
-    /// <see cref="SetActiveSample(IDataSample)"/> overload does not: a caller who supplies a whole
-    /// sample has already said what it carries.
-    /// </remarks>
-    public void SetActiveSample(double value, DateTime timestamp)
-    {
-        SetActiveSample(new DataSample(timestamp, value) { Scaling = Scaling });
-    }
-
-    /// <summary>
     /// Sets the active sample for this channel to a fully-formed sample and triggers the
     /// SampleReceived event.
     /// </summary>
     /// <param name="sample">The sample to set as active.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
-    public void SetActiveSample(IDataSample sample)
+    internal void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);
         SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));

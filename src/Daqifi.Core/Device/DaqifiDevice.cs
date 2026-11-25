@@ -456,9 +456,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     /// <summary>
     /// Bumps <see cref="ChannelStateVersion"/>. Subscribed to every channel this device owns,
-    /// so that a caller writing <c>channel.IsEnabled = true</c> directly — which
-    /// <see cref="IChannel"/> permits and no device API observes — invalidates the same caches
-    /// that <see cref="PopulateChannelsFromStatus"/> does.
+    /// so that every change of <see cref="IChannel.IsEnabled"/> invalidates the same caches that
+    /// <see cref="PopulateChannelsFromStatus"/> does.
     /// </summary>
     private void OnChannelEnablementChanged() => Interlocked.Increment(ref _channelStateVersion);
 

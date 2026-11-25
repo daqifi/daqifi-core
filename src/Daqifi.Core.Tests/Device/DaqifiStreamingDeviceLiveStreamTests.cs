@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -26,7 +27,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     {
         var device = CreateStreaming(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.StartStreaming();
 
         await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
@@ -43,7 +44,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     public async Task StreamSamplesAsync_MultipleFrames_YieldsInOrder()
     {
         var device = CreateStreaming(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         await using var e = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
@@ -64,7 +65,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     public async Task StreamSamplesAsync_Cancellation_EndsEnumeration_ButNotDeviceStream()
     {
         var device = CreateStreaming(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         using var cts = new CancellationTokenSource();
@@ -98,7 +99,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     public async Task StreamSamplesAsync_ConsumerFallsBehind_DropsOldest_AndCountsDrops()
     {
         var device = CreateStreaming(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         await using var e = device.StreamSamplesAsync(bufferCapacity: 2, cancellationToken: CancellationToken.None).GetAsyncEnumerator();
@@ -115,7 +116,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     public async Task StreamSamplesAsync_WithCancellation_EndsEnumeration_ButNotDeviceStream()
     {
         var device = CreateStreaming(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         using var cts = new CancellationTokenSource();
@@ -157,7 +158,7 @@ public class DaqifiStreamingDeviceLiveStreamTests
     public async Task DroppedLiveSampleCount_IsVisibleThroughTheCapabilityInterface()
     {
         var device = CreateStreaming(analogCount: 1);
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         ILiveSampleSource live = device;

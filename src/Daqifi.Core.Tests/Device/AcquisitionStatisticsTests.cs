@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -835,7 +836,7 @@ public class AcquisitionStatisticsTests
     {
         foreach (var channel in device.Channels)
         {
-            channel.IsEnabled = true;
+            channel.SetEnabled(true);
         }
     }
 

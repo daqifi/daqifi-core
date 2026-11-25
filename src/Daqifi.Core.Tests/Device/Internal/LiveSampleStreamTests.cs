@@ -460,9 +460,6 @@ public class LiveSampleStreamTests
         public ChannelType Type => ChannelType.Analog;
         public ChannelDirection Direction { get; set; } = ChannelDirection.Input;
         public IDataSample? ActiveSample { get; private set; }
-
-        public void SetActiveSample(double value, DateTime timestamp) => throw new NotSupportedException();
-        public void SetActiveSample(IDataSample sample) => throw new NotSupportedException();
     }
 
     private sealed class FakeHost : IDeviceOperationHost

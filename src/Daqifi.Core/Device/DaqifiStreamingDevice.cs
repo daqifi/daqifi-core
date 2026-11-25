@@ -989,9 +989,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <param name="message">The message to send.</param>
     public override void Send<T>(IOutboundMessage<T> message)
     {
-        if (message is IOutboundMessage<string> textCommand)
+        if (message is ITrackedSend tracked)
         {
-            _session.SendTracked(textCommand.Data, tracked => SendOrHoldBack(message, tracked));
+            // A channel command, whose state its sender keeps.
+            SendOrHoldBack(message, tracked);
+        }
+        else if (message is IOutboundMessage<string> textCommand)
+        {
+            _session.SendTracked(textCommand.Data, session => SendOrHoldBack(message, session));
         }
         else
         {
@@ -1250,11 +1255,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void DisableAllChannels() => _channelControl.DisableAllChannels();
 
     /// <inheritdoc />
-    public void SetDioDirection(IChannel channel, ChannelDirection direction)
+    public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction)
         => _channelControl.SetDioDirection(channel, direction);
 
     /// <inheritdoc />
-    public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
+    public void SetDioValue(IDigitalChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
 
     /// <summary>
     /// The PWM frequency floor Core assumes when the device does not state a trustworthy one:
@@ -1303,10 +1308,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public int PwmFrequencyHz => _channelControl.PwmFrequencyHz;
 
     /// <inheritdoc />
-    public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
+    public void SetPwmEnabled(IDigitalChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
     /// <inheritdoc />
-    public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
+    public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent)
         => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
     /// <inheritdoc />
@@ -1404,17 +1409,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _administration.GetIdentifyAsync(cancellationToken);
 
     /// <inheritdoc />
-    public void SetAnalogOutput(int channelNumber, double voltage)
-        => _channelControl.SetAnalogOutput(channelNumber, voltage);
+    public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage)
+        => _channelControl.SetAnalogOutput(channel, voltage);
 
     /// <summary>
     /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
     /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="voltage">
-    /// The output voltage, in volts. Must be finite, and within the channel's range when the
-    /// device described one.
+    /// The output voltage, in volts. Must be within the channel's range.
     /// </param>
     /// <remarks>
     /// This is the device's own two-step protocol made explicit:
@@ -1423,13 +1427,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
     /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// The channel number is negative, or the voltage falls outside the channel's stated range.
-    /// </exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The voltage falls outside the channel's range.</exception>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    public void StageAnalogOutput(int channelNumber, double voltage)
-        => _channelControl.StageAnalogOutput(channelNumber, voltage);
+    public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage)
+        => _channelControl.StageAnalogOutput(channel, voltage);
 
     /// <summary>
     /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
@@ -1445,9 +1448,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     /// <summary>
     /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
-    /// on the modelled channel.
+    /// on the channel.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="cancellationToken">Cancels the exchange.</param>
     /// <returns>The voltage the device reports, in volts.</returns>
     /// <remarks>
@@ -1456,14 +1459,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// device actually accepted, including a write made before this session connected.
     /// Analog output is available on NQ3 hardware only.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelNumber"/> is negative.</exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
     /// <exception cref="InvalidOperationException">
     /// The device rejected the query or answered with something that is not a voltage.
     /// </exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
-        => _channelControl.GetAnalogOutputAsync(channelNumber, cancellationToken);
+    public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default)
+        => _channelControl.GetAnalogOutputAsync(channel, cancellationToken);
 
     /// <inheritdoc />
     public void Reboot() => _administration.Reboot();

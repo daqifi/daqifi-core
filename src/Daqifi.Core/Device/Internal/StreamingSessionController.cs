@@ -1181,7 +1181,7 @@ internal sealed class StreamingSessionController
                     continue;
                 }
 
-                channel.IsEnabled = (mask & (1u << channel.ChannelNumber)) != 0;
+                (channel as IChannelEnablementNotifier)?.SetEnabled((mask & (1u << channel.ChannelNumber)) != 0);
             }
         });
     }

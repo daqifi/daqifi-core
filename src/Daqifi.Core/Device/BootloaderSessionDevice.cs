@@ -292,28 +292,28 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>
     /// <param name="direction">Ignored.</param>
-    public void SetDioDirection(IChannel channel, ChannelDirection direction)
+    public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction)
     {
     }
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>
     /// <param name="value">Ignored.</param>
-    public void SetDioValue(IChannel channel, bool value)
+    public void SetDioValue(IDigitalChannel channel, bool value)
     {
     }
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>
     /// <param name="enabled">Ignored.</param>
-    public void SetPwmEnabled(IChannel channel, bool enabled)
+    public void SetPwmEnabled(IDigitalChannel channel, bool enabled)
     {
     }
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>
     /// <param name="dutyCyclePercent">Ignored.</param>
-    public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
+    public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent)
     {
     }
 
@@ -331,9 +331,9 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public int PwmFrequencyHz => DaqifiStreamingDevice.DefaultPwmFrequencyHz;
 
     /// <summary>No-op: see the remarks on this type.</summary>
-    /// <param name="channelNumber">Ignored.</param>
+    /// <param name="channel">Ignored.</param>
     /// <param name="voltage">Ignored.</param>
-    public void SetAnalogOutput(int channelNumber, double voltage)
+    public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage)
     {
     }
 

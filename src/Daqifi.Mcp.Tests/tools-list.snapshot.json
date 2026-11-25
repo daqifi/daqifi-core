@@ -1571,14 +1571,8 @@
         "applied": {
           "type": "boolean"
         },
-        "rangeChecked": {
-          "type": "boolean"
-        },
         "output": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": "object",
           "properties": {
             "channel": {
               "type": "integer"
@@ -1628,7 +1622,6 @@
         "channel",
         "volts",
         "applied",
-        "rangeChecked",
         "output"
       ]
     }

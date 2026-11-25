@@ -213,7 +213,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
     /// firmware ignores direction writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
     /// <c>enabled: false</c> first.</exception>
-    void SetDioDirection(IChannel channel, ChannelDirection direction);
+    void SetDioDirection(IDigitalChannel channel, ChannelDirection direction);
 
     /// <summary>
     /// Sets the output state (high or low) of a digital I/O channel.
@@ -225,7 +225,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
     /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
     /// <c>enabled: false</c> first.</exception>
-    void SetDioValue(IChannel channel, bool value);
+    void SetDioValue(IDigitalChannel channel, bool value);
 
     /// <summary>
     /// Enables or disables PWM output on a PWM-capable digital channel.
@@ -248,7 +248,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// which happened. Call this again after a reconnect — <c>true</c> to carry on, <c>false</c> to stop.
     /// </para>
     /// </remarks>
-    void SetPwmEnabled(IChannel channel, bool enabled);
+    void SetPwmEnabled(IDigitalChannel channel, bool enabled);
 
     /// <summary>
     /// Sets the PWM duty cycle of a PWM-capable digital channel.
@@ -258,7 +258,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <param name="dutyCyclePercent">The duty cycle in whole percent, 1-100. A duty of 0 is rejected
     /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
     /// with <see cref="SetPwmEnabled"/> instead.</param>
-    void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent);
+    void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent);
 
     /// <summary>
     /// Sets the PWM frequency, in hertz, for the whole device.
@@ -287,11 +287,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <summary>
     /// Sets the analog output (DAC) voltage of a channel and applies it immediately.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="voltage">
-    /// The output voltage, in volts. Must be a finite number, and within the channel's stated
-    /// range when the device described one (see
-    /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel"/>).
+    /// The output voltage, in volts. Must be within the channel's range
+    /// (<see cref="Daqifi.Core.Channel.IAnalogOutputChannel.IsInRange"/>).
     /// </param>
     /// <remarks>
     /// Analog output is available on NQ3 hardware only. Each call stages the level and then latches it
@@ -299,12 +298,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <see cref="DaqifiStreamingDevice.StageAnalogOutput"/> and
     /// <see cref="DaqifiStreamingDevice.LatchAnalogOutputs"/> for that.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// The channel number is negative, or the voltage falls outside the range the device stated
-    /// for a channel it described.
-    /// </exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The voltage falls outside the channel's range.</exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    void SetAnalogOutput(int channelNumber, double voltage);
+    void SetAnalogOutput(IAnalogOutputChannel channel, double voltage);
 
     /// <summary>
     /// Reboots the device and disconnects from it.

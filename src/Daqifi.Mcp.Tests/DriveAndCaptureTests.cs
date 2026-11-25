@@ -654,7 +654,7 @@ public class DriveAndCaptureContractTests
     public async Task ACancelThatLandsInsideTheFinalRow_StillFailsTheCall_AndPutsThePinBack()
     {
         var (agent, device) = await ReadyDeviceAsync();
-        var channel = device.GetChannelsSnapshot().Single(c => c is { Type: ChannelType.Analog, ChannelNumber: 0 });
+        var channel = device.GetChannelsSnapshot().OfType<AnalogChannel>().Single(c => c.ChannelNumber == 0);
         var t0 = new DateTime(2026, 11, 24, 12, 0, 0, DateTimeKind.Local);
         using var cts = new CancellationTokenSource();
 
@@ -841,7 +841,7 @@ public class DriveAndCaptureContractTests
             }
         }
 
-        public double Value { get; set; } = 1.25;
+        public double Value => 1.25;
 
         public int? RawValue => null;
 
@@ -905,7 +905,7 @@ public class DriveAndCaptureContractTests
 
         internal SamplePump(FakeStreamingDevice device, Func<bool>? pourWhen = null)
         {
-            var channel = device.GetChannelsSnapshot().Single(c => c is { Type: ChannelType.Analog, ChannelNumber: 0 });
+            var channel = device.GetChannelsSnapshot().OfType<AnalogChannel>().Single(c => c.ChannelNumber == 0);
             _loop = Task.Run(async () =>
             {
                 var timestamp = new DateTime(2026, 11, 23, 12, 0, 0, DateTimeKind.Local);

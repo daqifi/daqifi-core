@@ -8,6 +8,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -182,7 +183,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         // the drop leaves the device unable to serve it.
         device.Connect();
         device.PopulateChannelsFromStatus(StatusFrame(analogCount: 1));
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
 
         await using var resumed = device.StreamSamplesAsync(cancellationToken: CancellationToken.None).GetAsyncEnumerator();
@@ -246,7 +247,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         var device = new LiveStreamDevice("TestDevice", transport);
         device.Connect();
         device.PopulateChannelsFromStatus(StatusFrame(analogCount: 1));
-        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 0).SetEnabled(true);
         device.StartStreaming();
         return device;
     }

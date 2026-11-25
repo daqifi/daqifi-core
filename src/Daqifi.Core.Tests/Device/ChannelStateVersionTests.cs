@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Linq;
 using System.Net;
 using Xunit;
@@ -38,7 +39,7 @@ public class ChannelStateVersionTests
         var device = CreateDevice(analogCount: 2);
         var before = device.ChannelStateVersion;
 
-        device.Channels.First(c => c.ChannelNumber == 0).IsEnabled = true;
+        device.Channels.First(c => c.ChannelNumber == 0).SetEnabled(true);
 
         Assert.NotEqual(before, device.ChannelStateVersion);
     }
@@ -53,10 +54,10 @@ public class ChannelStateVersionTests
     {
         var device = CreateDevice(analogCount: 2);
         var channel = device.Channels.First(c => c.ChannelNumber == 0);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         var before = device.ChannelStateVersion;
 
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         Assert.Equal(before, device.ChannelStateVersion);
     }
@@ -71,7 +72,7 @@ public class ChannelStateVersionTests
         var device = CreateDevice(analogCount: 1, digitalCount: 2);
         var before = device.ChannelStateVersion;
 
-        device.Channels.First(c => c.Type == ChannelType.Digital).IsEnabled = true;
+        device.Channels.First(c => c.Type == ChannelType.Digital).SetEnabled(true);
 
         Assert.NotEqual(before, device.ChannelStateVersion);
     }
@@ -140,7 +141,7 @@ public class ChannelStateVersionTests
         Assert.DoesNotContain(dropped, device.Channels);
 
         var before = device.ChannelStateVersion;
-        dropped.IsEnabled = !dropped.IsEnabled;
+        dropped.SetEnabled(!dropped.IsEnabled);
 
         Assert.Equal(before, device.ChannelStateVersion);
     }
@@ -159,7 +160,7 @@ public class ChannelStateVersionTests
         var reused = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
         var before = device.ChannelStateVersion;
 
-        reused.IsEnabled = !reused.IsEnabled;
+        reused.SetEnabled(!reused.IsEnabled);
 
         Assert.Equal(before + 1, device.ChannelStateVersion);
     }
@@ -178,14 +179,14 @@ public class ChannelStateVersionTests
         var device = CreateDevice(analogCount: 2);
         var ai0 = Analog(device, 0);
         var ai1 = Analog(device, 1);
-        ai1.IsEnabled = true;
+        ai1.SetEnabled(true);
 
         device.StartStreaming();
         device.InvokeStreamMessage(Frame(1000, 5.0f));
         Assert.Equal(5.0, ai1.ActiveSample!.Value, 3);
         Assert.Null(ai0.ActiveSample);
 
-        ai0.IsEnabled = true;
+        ai0.SetEnabled(true);
         device.InvokeStreamMessage(Frame(2000, 1.0f, 2.0f));
 
         Assert.Equal(1.0, ai0.ActiveSample!.Value, 3);
@@ -200,7 +201,7 @@ public class ChannelStateVersionTests
     public void RepopulatingChannelsMidStream_TakesEffectOnTheNextFrame()
     {
         var device = CreateDevice(analogCount: 1);
-        Analog(device, 0).IsEnabled = true;
+        Analog(device, 0).SetEnabled(true);
 
         device.StartStreaming();
         device.InvokeStreamMessage(Frame(1000, 1.0f));
