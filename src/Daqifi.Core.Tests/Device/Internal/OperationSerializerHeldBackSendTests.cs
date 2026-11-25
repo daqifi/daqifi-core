@@ -122,11 +122,13 @@ public class OperationSerializerHeldBackSendTests
         };
     }
 
-    private sealed class HeldBackMessage : IHeldBackSend
+    private sealed class HeldBackMessage : ITrackedSend
     {
         public int Sent { get; private set; }
 
         public List<Exception?> NotSent { get; } = new();
+
+        public void GoOut(Action send) => throw new NotSupportedException();
 
         public void Replay(Action send)
         {
@@ -134,7 +136,7 @@ public class OperationSerializerHeldBackSendTests
             Sent++;
         }
 
-        void IHeldBackSend.NotSent(Exception? reason) => NotSent.Add(reason);
+        void ITrackedSend.NotSent(Exception? reason) => NotSent.Add(reason);
     }
 
     private sealed class StubHost(int cap, Action<string>? onSend) : IOperationSerializationHost

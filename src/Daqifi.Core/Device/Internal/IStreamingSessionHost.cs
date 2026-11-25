@@ -45,6 +45,9 @@ internal interface IStreamingSessionHost
     /// <inheritdoc cref="DaqifiDevice.SendsAreNeverHeldBack"/>
     bool SendsAreNeverHeldBack { get; }
 
+    /// <inheritdoc cref="DaqifiDevice.SendsAreHeldBack"/>
+    bool SendsAreHeldBack { get; }
+
     /// <inheritdoc cref="DaqifiDevice.PreserveActiveStream"/>
     bool PreserveActiveStream { get; }
 

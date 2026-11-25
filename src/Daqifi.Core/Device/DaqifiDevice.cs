@@ -2168,9 +2168,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// The body of <see cref="Send{T}"/>.
     /// </summary>
     /// <param name="message">The message to send.</param>
-    /// <param name="heldBack">Hears what becomes of the message if it is held back.</param>
+    /// <param name="tracked">Hears what becomes of the message.</param>
     /// <returns><c>true</c> when the message was held back; <c>false</c> when it went out.</returns>
-    private protected bool SendOrHoldBack<T>(IOutboundMessage<T> message, IHeldBackSend? heldBack)
+    private protected bool SendOrHoldBack<T>(IOutboundMessage<T> message, ITrackedSend? tracked)
     {
         EnsureConnected();
 
@@ -2188,12 +2188,20 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _lastExchangeTextCommand = textCommand.Data;
         }
 
-        if (_operations.TryDeferSend(message, heldBack))
+        if (_operations.TryDeferSend(message, tracked))
         {
             return true;
         }
 
-        SendNow(message);
+        if (tracked == null)
+        {
+            SendNow(message);
+        }
+        else
+        {
+            tracked.GoOut(() => SendNow(message));
+        }
+
         return false;
     }
 
@@ -2202,6 +2210,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// and so is what other flows' sends are held back behind.
     /// </summary>
     internal bool SendsAreNeverHeldBack => _operations.OwnsCurrentSession;
+
+    /// <summary>
+    /// Whether what this flow sends would be held back right now.
+    /// </summary>
+    internal bool SendsAreHeldBack => _operations.WouldDeferSend;
 
     /// <summary>
     /// The last text command a running text exchange enqueued, or <c>null</c> outside one and

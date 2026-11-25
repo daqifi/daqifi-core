@@ -113,7 +113,7 @@ public class StreamingSessionFrequencySourceTests
             session.StartStreaming();
         }
 
-        IHeldBackSend? heldBack = null;
+        ITrackedSend? heldBack = null;
         session.SendTracked(
             isStart ? "SYSTem:StartStreamData 100" : "SYSTem:StopStreamData",
             command =>
@@ -135,7 +135,7 @@ public class StreamingSessionFrequencySourceTests
     {
         var session = new StreamingSessionController(new FakeHost());
         session.StartStreaming();
-        IHeldBackSend? stop = null;
+        ITrackedSend? stop = null;
         session.SendTracked(
             "SYSTem:StopStreamData",
             command =>
@@ -198,6 +198,8 @@ public class StreamingSessionFrequencySourceTests
         }
 
         public bool SendsAreNeverHeldBack => false;
+
+        public bool SendsAreHeldBack => false;
 
         public bool PreserveActiveStream => false;
 

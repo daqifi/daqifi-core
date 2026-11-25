@@ -821,8 +821,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         while (true)
         {
             // Read before the count, which starts again when a held-back start goes out: until then
-            // the frames arriving are those of the stream before it.
-            var startHeldBack = _session.IsStartHeldBack(session);
+            // the frames arriving are those of the stream before it. So can those be that arrive
+            // right after a stop, which a held-back start can follow straight out.
+            var proveNothing = _session.IsStartHeldBack(session)
+                || _session.RemainingSettleTime(StoppedStreamSettleDelay) > TimeSpan.Zero;
             var admitted = _frameDecoder.AdmittedStreamFrameCount;
 
             // Checked after the count is read, so a frame of a later session cannot be taken for
@@ -830,9 +832,18 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             // start, so there is nothing to ask the device about either.
             ThrowIfSessionEnded(session);
 
-            if (!startHeldBack && admitted > framesBefore)
+            if (proveNothing)
+            {
+                framesBefore = admitted;
+            }
+            else if (admitted > framesBefore)
             {
                 return true;
+            }
+            else
+            {
+                // The count starts again when a held-back start goes out.
+                framesBefore = Math.Min(framesBefore, admitted);
             }
 
             if (Clock.GetElapsedTime(startedAt).TotalMilliseconds >= budgetMs)
@@ -988,7 +999,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     {
         if (message is IOutboundMessage<string> textCommand)
         {
-            _session.SendTracked(textCommand.Data, heldBack => SendOrHoldBack(message, heldBack));
+            _session.SendTracked(textCommand.Data, tracked => SendOrHoldBack(message, tracked));
         }
         else
         {
@@ -1980,6 +1991,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         ReaderRunsForHeldBackSend(nameof(StartStreaming), onNotSent);
 
     bool IStreamingSessionHost.SendsAreNeverHeldBack => SendsAreNeverHeldBack;
+
+    bool IStreamingSessionHost.SendsAreHeldBack => SendsAreHeldBack;
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 

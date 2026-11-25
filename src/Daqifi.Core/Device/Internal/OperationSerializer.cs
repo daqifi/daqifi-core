@@ -107,7 +107,7 @@ internal sealed class OperationSerializer : IDisposable
     /// One parked send. It leaves the backlog by being replayed, or through
     /// <see cref="DiscardDeferredSends"/>.
     /// </summary>
-    private readonly record struct DeferredSend(Action Send, IHeldBackSend? HeldBack);
+    private readonly record struct DeferredSend(Action Send, ITrackedSend? Tracked);
 
     /// <summary>Backing field for <see cref="DroppedDeferredSendCount"/>.</summary>
     private long _droppedDeferredSendCount;
@@ -173,6 +173,25 @@ internal sealed class OperationSerializer : IDisposable
             lock (_deferralGate)
             {
                 return _operationInFlight;
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when a send from this flow would be parked by <see cref="TryDeferSend{T}"/> right now.
+    /// </summary>
+    internal bool WouldDeferSend
+    {
+        get
+        {
+            if (OwnsCurrentSession)
+            {
+                return false;
+            }
+
+            lock (_deferralGate)
+            {
+                return _operationInFlight || _deferredSends != null;
             }
         }
     }
@@ -419,9 +438,9 @@ internal sealed class OperationSerializer : IDisposable
     {
         try
         {
-            if (deferred.HeldBack is { } heldBack)
+            if (deferred.Tracked is { } tracked)
             {
-                heldBack.Replay(deferred.Send);
+                tracked.Replay(deferred.Send);
             }
             else
             {
@@ -449,7 +468,7 @@ internal sealed class OperationSerializer : IDisposable
         {
             try
             {
-                deferred.HeldBack?.NotSent(reason);
+                deferred.Tracked?.NotSent(reason);
             }
             catch (Exception ex)
             {
@@ -559,12 +578,12 @@ internal sealed class OperationSerializer : IDisposable
     /// cannot turn a fire-and-forget send into a wait.
     /// </para>
     /// <para>
-    /// <paramref name="heldBack"/>, when given, decides on the replaying thread whether the message
+    /// <paramref name="tracked"/>, when given, decides on the replaying thread whether the message
     /// still goes out, and hears about it when the message will not. Stream starts and stops use it
     /// to keep what is recorded and what the device is doing the same.
     /// </para>
     /// </remarks>
-    internal bool TryDeferSend<T>(IOutboundMessage<T> message, IHeldBackSend? heldBack = null)
+    internal bool TryDeferSend<T>(IOutboundMessage<T> message, ITrackedSend? tracked = null)
     {
         if (OwnsCurrentSession)
         {
@@ -609,7 +628,7 @@ internal sealed class OperationSerializer : IDisposable
                 _deferralOverflowReported = true;
             }
 
-            backlog.Enqueue(new DeferredSend(() => _host.SendNow(message), heldBack));
+            backlog.Enqueue(new DeferredSend(() => _host.SendNow(message), tracked));
         }
 
         if (evicted != null)

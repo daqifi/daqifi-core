@@ -277,7 +277,9 @@ internal sealed class SdCardOperations
     /// A recording can end without this class: the device's own stop on re-initialization, a
     /// raw <c>StopStreamData</c>, a disconnect. Those end the stream session, so a
     /// <see cref="SdBusMode.Logging"/> record with no session behind it is released here
-    /// rather than left to refuse SD operations forever.
+    /// rather than left to refuse SD operations forever. And a stop that was held back behind
+    /// another operation can be dropped instead of sent: then the session comes back, and the bus
+    /// is claimed for it again here.
     /// </remarks>
     private bool IsBusHeldByLog()
     {
@@ -287,6 +289,10 @@ internal sealed class SdCardOperations
         if (BusMode == SdBusMode.Logging && !_host.IsLoggingToSdCard)
         {
             MoveBusMode(SdBusMode.Logging, SdBusMode.LanActive);
+        }
+        else if (BusMode is var released and (SdBusMode.LanActive or SdBusMode.SdBorrowed) && _host.IsLoggingToSdCard)
+        {
+            MoveBusMode(released, SdBusMode.Logging);
         }
 
         return BusMode is SdBusMode.LogStarting or SdBusMode.Logging or SdBusMode.LogEnding;

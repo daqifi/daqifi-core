@@ -90,6 +90,11 @@ internal sealed class StreamingSessionController
     /// start recorded behind a stop goes out behind one, if the device is still streaming.
     /// </para>
     /// <para>
+    /// Only the session is recorded ahead like that. The rest of what a start or a stop changes (the
+    /// rate, the decoder, when the last stop went out) changes when it goes out; see
+    /// <see cref="StartOrStop"/>.
+    /// </para>
+    /// <para>
     /// Replaced whole, so a teardown can end a session without waiting for anybody's send.
     /// </para>
     /// </remarks>
@@ -105,7 +110,7 @@ internal sealed class StreamingSessionController
     /// waits for sent something newer.
     /// </param>
     /// <param name="Last">The command that was recorded last, while it is held back.</param>
-    private sealed record State(StreamingSession Recorded, StreamingSession OnDevice, long Epoch, HeldBackCommand? Last)
+    private sealed record State(StreamingSession Recorded, StreamingSession OnDevice, long Epoch, StartOrStop? Last)
     {
         /// <summary>This state once <paramref name="session"/> is both recorded and on the device.</summary>
         internal State Settled(StreamingSession session) => new(session, session, Epoch + 1, null);
@@ -176,45 +181,81 @@ internal sealed class StreamingSessionController
     private readonly Lock _transitions = new();
 
     /// <summary>
-    /// The state before the typed start or stop that is being sent, for the <see cref="SendTracked"/>
-    /// underneath it. Guarded by <see cref="_transitions"/>.
+    /// The typed start or stop that is being sent, for the <see cref="SendTracked"/> underneath it.
+    /// Guarded by <see cref="_transitions"/>.
     /// </summary>
-    private State? _beforeTyped;
+    private TypedSend? _typedSend;
+
+    /// <param name="Before">The state it was sent in.</param>
+    /// <param name="Session">The session it records.</param>
+    /// <param name="Rate">The rate of a start.</param>
+    /// <param name="DecoderBegun">Whether the decoder has been set up for a start already.</param>
+    private sealed record TypedSend(State Before, StreamingSession Session, StartRate Rate, bool DecoderBegun);
 
     /// <summary>
-    /// Records <paramref name="next"/> and then sends the command for it: recorded first, so that a
-    /// connection that ends meanwhile ends the session. A command that cannot be sent leaves the
+    /// Records <paramref name="session"/> and then sends the command for it: recorded first, so that
+    /// a connection that ends meanwhile ends the session. A command that cannot be sent leaves the
     /// state as it was. Runs under <see cref="_transitions"/>.
     /// </summary>
     /// <returns><c>false</c>, with nothing sent, when the connection ended first.</returns>
-    private bool TryRecordAndSend(State before, StreamingSession next, IOutboundMessage<string> command)
+    private bool TryRecordAndSend(
+        State before, StreamingSession session, IOutboundMessage<string> command, StartRate rate = default)
     {
-        if (!TryChange(state => ReferenceEquals(state, before) ? before.Settled(next) : null))
+        // Before the session is recorded, because the frames that arrive from there on are decoded.
+        // Not while it waits for another operation: what arrives then is the stream before it, and
+        // the decoder is set up when the start goes out.
+        var begins = before.Recorded.Kind == StreamingSessionKind.None;
+        var beginDecoder = session.Kind != StreamingSessionKind.None
+            && (begins || IsStartHeldBack(before.Recorded))
+            && before.OnDevice.Kind == StreamingSessionKind.None
+            && !_host.SendsAreHeldBack;
+        if (beginDecoder)
+        {
+            BeginStreamingSession(rate.Hz);
+        }
+
+        if (!TryChange(state => ReferenceEquals(state, before) ? before.Settled(session) : null))
         {
             return false;
         }
 
-        _beforeTyped = before;
+        _typedSend = new TypedSend(before, session, rate, beginDecoder);
+        bool tracked;
         try
         {
             _host.Send(command);
         }
         catch
         {
-            TryChange(state => ReferenceEquals(state.Recorded, next) ? before with { Epoch = state.Epoch } : null);
+            TryChange(state => ReferenceEquals(state.Recorded, session) ? before with { Epoch = state.Epoch } : null);
             throw;
         }
         finally
         {
-            _beforeTyped = null;
+            tracked = _typedSend == null;
+            _typedSend = null;
         }
 
-        if (next.Kind == StreamingSessionKind.None)
+        if (!tracked)
         {
-            NoteStopSent();
+            // An override sent it some other way.
+            NoteOut(session, rate);
         }
 
         return true;
+    }
+
+    /// <summary>What a start or a stop changes besides the session, once it has gone out.</summary>
+    private void NoteOut(StreamingSession session, StartRate rate)
+    {
+        if (session.Kind == StreamingSessionKind.None)
+        {
+            NoteStopSent();
+        }
+        else
+        {
+            CommitRate(rate);
+        }
     }
 
     /// <summary>
@@ -264,13 +305,11 @@ internal sealed class StreamingSessionController
         {
             SendHeldBackStop();
 
-            var before = Volatile.Read(ref _state);
-            if (before.Recorded.Kind == StreamingSessionKind.None)
-            {
-                BeginStreamingSession(rateHz);
-            }
-
-            if (TryRecordAndSend(before, session, ScpiMessageProducer.StartStreaming(rateHz))
+            if (TryRecordAndSend(
+                    Volatile.Read(ref _state),
+                    session,
+                    ScpiMessageProducer.StartStreaming(rateHz),
+                    RateOfAStartAt(rateHz))
                 && ReferenceEquals(Current, session))
             {
                 return;
@@ -305,6 +344,7 @@ internal sealed class StreamingSessionController
         }
     }
 
+    /// <summary>Records when a stop went out, for <see cref="RemainingSettleTime"/>.</summary>
     private void NoteStopSent() => Volatile.Write(ref _stopSent, new StopSent(_host.Clock.GetTimestamp()));
 
     /// <summary>When a stop was last sent, or <c>null</c> when none has been.</summary>
@@ -436,6 +476,40 @@ internal sealed class StreamingSessionController
             lock (_frequencyLock)
             {
                 _streamingFrequency = value;
+                _frequencySource = FrequencySource.Chosen;
+                _rateChoices++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many times a caller has chosen a rate. Guarded by <see cref="_frequencyLock"/>.
+    /// </summary>
+    private long _rateChoices;
+
+    /// <summary>The rate of a start, and the <see cref="_rateChoices"/> it was sent with.</summary>
+    private readonly record struct StartRate(int Hz, long Choices);
+
+    private StartRate RateOfAStartAt(int hz)
+    {
+        lock (_frequencyLock)
+        {
+            return new StartRate(hz, _rateChoices);
+        }
+    }
+
+    /// <summary>
+    /// Takes the rate of a start that has gone out as this device's rate, unless a caller has chosen
+    /// another since it was sent. The rate a stream ran at counts as chosen: it is the one a
+    /// reconnect resumes it at, whatever the device reports afterwards.
+    /// </summary>
+    private void CommitRate(StartRate rate)
+    {
+        lock (_frequencyLock)
+        {
+            if (_rateChoices == rate.Choices)
+            {
+                _streamingFrequency = rate.Hz;
                 _frequencySource = FrequencySource.Chosen;
             }
         }
@@ -689,12 +763,10 @@ internal sealed class StreamingSessionController
         // One value for the decoder and the wire: re-reading the rate for each would let a
         // caller's change in between configure the decoder for one rate and start the device
         // at another, or send a rate the cap never saw.
-        var rateHz = ClampRateAndChooseItForThisStart(ceilingHz);
-
-        BeginStreamingSession(rateHz);
+        var rate = ClampRateForThisStart(ceilingHz);
 
         var session = new StreamingSession(StreamingSessionKind.LiveStream);
-        return TryRecordAndSend(before, session, ScpiMessageProducer.StartStreaming(rateHz)) ? session : null;
+        return TryRecordAndSend(before, session, ScpiMessageProducer.StartStreaming(rate.Hz), rate) ? session : null;
     }
 
     /// <summary>
@@ -722,7 +794,7 @@ internal sealed class StreamingSessionController
     /// handle, to arrive at the same rate this picks for them.
     /// </para>
     /// <para>
-    /// The adjusted value is assigned to the backing field rather than through the validating
+    /// The adjusted value is later assigned to the backing field rather than through the validating
     /// <see cref="StreamingFrequency"/> setter, for the reason
     /// <see cref="SendTracked"/> spells out: that setter re-reads
     /// <see cref="DeviceCapabilities.MaxSamplingRate"/>, and a cap already bounded by one read
@@ -731,33 +803,33 @@ internal sealed class StreamingSessionController
     /// </para>
     /// </remarks>
     /// <param name="ceilingHz">The most the enabled channel set can sustain, in Hz.</param>
-    /// <returns>The rate this start runs at, as committed.</returns>
-    private int ClampRateAndChooseItForThisStart(int ceilingHz)
+    /// <returns>
+    /// The rate this start runs at. It becomes this device's rate when the start goes out
+    /// (<see cref="CommitRate"/>).
+    /// </returns>
+    private StartRate ClampRateForThisStart(int ceilingHz)
     {
         // The ceiling was read first, outside the lock (that calls into the host); the rate it is
         // applied to is read inside, so a caller's change landing during the ceiling read is the
-        // rate that gets clamped rather than being overwritten by a clamp of the old one. The
-        // clamped rate is marked chosen in the same step: the rate a stream ran at is the one a
-        // reconnect resumes it at, whatever the device reports afterwards.
-        int newRateHz;
+        // rate that gets clamped rather than being overwritten by a clamp of the old one.
+        StartRate rate;
         int? adjustedFromHz;
         lock (_frequencyLock)
         {
-            (newRateHz, adjustedFromHz) = SampleRateCap.Enforce(_streamingFrequency, ceilingHz);
-            _streamingFrequency = newRateHz;
-            _frequencySource = FrequencySource.Chosen;
+            (var newRateHz, adjustedFromHz) = SampleRateCap.Enforce(_streamingFrequency, ceilingHz);
+            rate = new StartRate(newRateHz, _rateChoices);
         }
 
         if (!adjustedFromHz.HasValue)
         {
-            return newRateHz;
+            return rate;
         }
 
         SafeTrace(
             $"[{nameof(StartStreaming)}] Lowered the streaming frequency from {adjustedFromHz.Value} Hz "
-            + $"to {newRateHz} Hz, the most the enabled channel set can sustain. The device would have "
+            + $"to {rate.Hz} Hz, the most the enabled channel set can sustain. The device would have "
             + "refused the higher rate and streamed nothing.");
-        return newRateHz;
+        return rate;
     }
 
     /// <summary>
@@ -895,7 +967,7 @@ internal sealed class StreamingSessionController
     /// it is, which is <c>null</c> for a command that does not change the session. What it throws
     /// leaves the session as it was.
     /// </param>
-    internal void SendTracked(string? command, Func<IHeldBackSend?, bool> send)
+    internal void SendTracked(string? command, Func<ITrackedSend?, bool> send)
     {
         var effect = SessionCommandInterpreter.Interpret(command, _host.MaxSamplingRate);
 
@@ -904,8 +976,7 @@ internal sealed class StreamingSessionController
             case SessionCommandEffectKind.StopStreaming:
                 lock (_transitions)
                 {
-                    SendStartOrStop(StreamingSessionKind.None, 0, send);
-                    NoteStopSent();
+                    SendStartOrStop(StreamingSessionKind.None, default, send);
                 }
 
                 break;
@@ -913,12 +984,13 @@ internal sealed class StreamingSessionController
             case SessionCommandEffectKind.StartStreaming:
                 lock (_transitions)
                 {
-                    if (_beforeTyped == null)
+                    if (_typedSend == null)
                     {
                         SendHeldBackStop();
                     }
 
-                    SendStartOrStop(StreamingSessionKind.LiveStream, effect.StreamingFrequency, send);
+                    SendStartOrStop(
+                        StreamingSessionKind.LiveStream, RateOfAStartAt(effect.StreamingFrequency), send);
                 }
 
                 break;
@@ -931,8 +1003,7 @@ internal sealed class StreamingSessionController
                 break;
 
             case SessionCommandEffectKind.SetAdcEnableMask:
-                send(null);
-                ApplyAdcEnableMask(effect.AdcEnableMask);
+                SendAdcEnableMask(effect.AdcEnableMask, send);
                 break;
 
             default:
@@ -942,83 +1013,75 @@ internal sealed class StreamingSessionController
     }
 
     /// <summary>
-    /// Sends a start or a stop, and records what it does, whether it goes out or is held back. Runs
-    /// under <see cref="_transitions"/>.
+    /// Sends a start or a stop, and records the session it begins, whether it goes out or is held
+    /// back. Runs under <see cref="_transitions"/>.
     /// </summary>
-    private void SendStartOrStop(StreamingSessionKind kind, int rateHz, Func<IHeldBackSend?, bool> send)
+    private void SendStartOrStop(StreamingSessionKind kind, StartRate rate, Func<ITrackedSend?, bool> send)
     {
         // A typed start or stop has recorded its session already; a raw one does it here, once it
         // has been sent. A restart while already streaming is not a session boundary — the typed
         // API cannot even express it (StartStreaming returns early) — so there is nothing to
         // re-anchor and recording the new rate is all that is warranted.
-        var isTyped = _beforeTyped != null
-            && (kind == StreamingSessionKind.None) == (Current.Kind == StreamingSessionKind.None);
-        var typed = isTyped ? _beforeTyped : null;
-        if (isTyped)
+        var typed = _typedSend is { } pending
+            && (kind == StreamingSessionKind.None) == (pending.Session.Kind == StreamingSessionKind.None)
+                ? pending
+                : null;
+        if (typed != null)
         {
             // This one only: what an override sends from inside it is not the typed call's command.
-            _beforeTyped = null;
+            _typedSend = null;
         }
 
-        var before = typed ?? Volatile.Read(ref _state);
+        var before = typed?.Before ?? Volatile.Read(ref _state);
         var isRestart = kind != StreamingSessionKind.None && before.Recorded.Kind != StreamingSessionKind.None;
-        var session = typed != null ? Current
-            : isRestart ? before.Recorded
-            : new StreamingSession(kind);
+        var session = typed?.Session ?? (isRestart ? before.Recorded : new StreamingSession(kind));
 
-        var command = new HeldBackCommand(this, before, session, rateHz, typed != null);
+        var command = new StartOrStop(this, before, session, typed?.Rate ?? rate, typed);
         var heldBack = send(command);
-
-        if (kind != StreamingSessionKind.None)
-        {
-            // Frequency first: anything observing IsStreaming must never catch it true next to a
-            // rate belonging to a previous session.
-            lock (_frequencyLock)
-            {
-                _streamingFrequency = rateHz;
-                _frequencySource = FrequencySource.Chosen;
-            }
-
-            if (typed == null && !isRestart)
-            {
-                // A session is beginning, so it gets exactly the preparation StartStreaming would
-                // have given it. Ordering matches too: the state is ready before the flag flips.
-                BeginStreamingSession(rateHz);
-            }
-        }
 
         // Only while nothing has ended the session meanwhile. The epoch says so: the connection's
         // end moves it on, and a held-back command that will not be sent does not.
         var epoch = typed != null ? before.Epoch + 1 : before.Epoch;
         TryChange(state => state.Epoch != epoch ? null
-            : heldBack ? new State(session, typed?.OnDevice ?? state.OnDevice, before.Epoch, command)
+            : heldBack ? new State(session, typed?.Before.OnDevice ?? state.OnDevice, before.Epoch, command)
             : typed != null ? null
             : state.Settled(session));
     }
 
     /// <summary>
-    /// A start or a stop that was recorded when it was sent, and waits for an operation on another
-    /// flow before it goes out, if it does.
+    /// A start or a stop on its way to the device. Everything it changes besides the session
+    /// changes when it goes out.
     /// </summary>
     /// <param name="controller">The controller whose session it changes.</param>
     /// <param name="before">The state it was sent in.</param>
     /// <param name="session">The session a start is for, or the idle time a stop begins.</param>
-    /// <param name="rateHz">The rate of a start.</param>
-    /// <param name="typed">Whether it came from a typed call rather than from a raw command.</param>
-    private sealed class HeldBackCommand(
-        StreamingSessionController controller, State before, StreamingSession session, int rateHz, bool typed)
-        : IHeldBackSend
+    /// <param name="rate">The rate of a start.</param>
+    /// <param name="typed">The typed call it came from, if it did not come from a raw command.</param>
+    private sealed class StartOrStop(
+        StreamingSessionController controller, State before, StreamingSession session, StartRate rate, TypedSend? typed)
+        : ITrackedSend
     {
         private bool IsStart => session.Kind != StreamingSessionKind.None;
 
         private bool IsOvertaken => Volatile.Read(ref controller._state).Epoch != before.Epoch;
+
+        public void GoOut(Action send)
+        {
+            if (typed is not { DecoderBegun: true })
+            {
+                BeginDecoder(before.OnDevice);
+            }
+
+            send();
+            controller.NoteOut(session, rate);
+        }
 
         public void Replay(Action send)
         {
             // Outside the lock: starting the reader can raise an error to the application. A raw
             // capture stopped it on purpose, so a typed start could not check it before now, and
             // without it the stream would deliver nothing (issue #975).
-            if (IsStart && typed && !controller._host.ReaderRunsForHeldBackStart(NotSent))
+            if (IsStart && typed != null && !controller._host.ReaderRunsForHeldBackStart(NotSent))
             {
                 return;
             }
@@ -1034,22 +1097,20 @@ internal sealed class StreamingSessionController
                 }
 
                 var state = Volatile.Read(ref controller._state);
-                if (IsStart && !ReferenceEquals(state.OnDevice, session))
-                {
-                    // It was recorded behind a stop, which should have gone out by now. One that
-                    // was lost on the way goes out here.
-                    if (before.Recorded.Kind == StreamingSessionKind.None
-                        && state.OnDevice.Kind != StreamingSessionKind.None)
-                    {
-                        controller._host.SendNow(ScpiMessageProducer.StopStreaming);
-                    }
 
-                    // The stream before it may have been delivering until now, so the decoder starts
-                    // again. Before the session counts as out: what is counted from there is its own.
-                    if (ReferenceEquals(state.Recorded, session) && session.Kind == StreamingSessionKind.LiveStream)
-                    {
-                        controller.BeginStreamingSession(rateHz);
-                    }
+                // It was recorded behind a stop, which should have gone out by now. One that was
+                // lost on the way goes out here.
+                if (IsStart
+                    && before.Recorded.Kind == StreamingSessionKind.None
+                    && state.OnDevice.Kind != StreamingSessionKind.None
+                    && !ReferenceEquals(state.OnDevice, session))
+                {
+                    controller._host.SendNow(ScpiMessageProducer.StopStreaming);
+                }
+
+                if (ReferenceEquals(state.Recorded, session))
+                {
+                    BeginDecoder(state.OnDevice);
                 }
 
                 send();
@@ -1059,11 +1120,7 @@ internal sealed class StreamingSessionController
                     OnDevice = session,
                     Last = ReferenceEquals(now.Last, this) ? null : now.Last,
                 });
-
-                if (!IsStart)
-                {
-                    controller.NoteStopSent();
-                }
+                controller.NoteOut(session, rate);
             }
         }
 
@@ -1084,6 +1141,117 @@ internal sealed class StreamingSessionController
                 ? new State(state.OnDevice, state.OnDevice, state.Epoch, null)
                 : null);
         }
+
+        /// <summary>
+        /// Sets the decoder up for a live session that is not on the device yet. Ahead of the send,
+        /// and so ahead of the session counting as out: what is counted from here on is its own.
+        /// </summary>
+        private void BeginDecoder(StreamingSession onDevice)
+        {
+            if (session.Kind == StreamingSessionKind.LiveStream && !ReferenceEquals(onDevice, session))
+            {
+                controller.BeginStreamingSession(rate.Hz);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes each ADC mask one step: the command, and the channels it enables. Guards the two fields
+    /// below. Taken before the channels lock, and never with <see cref="_transitions"/> to follow.
+    /// </summary>
+    private readonly Lock _adcMaskLock = new();
+
+    /// <summary>The ADC mask that was sent last, while it is held back.</summary>
+    private AdcMaskCommand? _heldBackAdcMask;
+
+    /// <summary>What the device streams while one is held back.</summary>
+    private uint _adcMaskOnDevice;
+
+    /// <summary>
+    /// Sends an ADC enable mask and applies it to the channels. One that is held back is applied as
+    /// it is sent, like everything a caller sets on a channel, and taken back if it never goes out.
+    /// </summary>
+    private void SendAdcEnableMask(uint mask, Func<ITrackedSend?, bool> send)
+    {
+        lock (_adcMaskLock)
+        {
+            var command = new AdcMaskCommand(this, mask);
+            if (send(command))
+            {
+                // Read after the send, which may have dropped an older one from the backlog and
+                // taken it back.
+                if (_heldBackAdcMask == null)
+                {
+                    _adcMaskOnDevice = EnabledAdcMask();
+                }
+
+                _heldBackAdcMask = command;
+            }
+
+            ApplyAdcEnableMask(mask);
+            command.Enabled = EnabledAdcMask();
+        }
+    }
+
+    private sealed class AdcMaskCommand(StreamingSessionController controller, uint mask) : ITrackedSend
+    {
+        /// <summary>The channels it enabled: those of the mask that the device has.</summary>
+        internal uint Enabled { get; set; }
+
+        public void GoOut(Action send)
+        {
+            send();
+            controller._adcMaskOnDevice = mask;
+        }
+
+        public void Replay(Action send)
+        {
+            lock (controller._adcMaskLock)
+            {
+                send();
+                controller._adcMaskOnDevice = mask;
+                if (ReferenceEquals(controller._heldBackAdcMask, this))
+                {
+                    controller._heldBackAdcMask = null;
+                    controller.ApplyAdcEnableMask(mask);
+                }
+            }
+        }
+
+        public void NotSent(Exception? reason)
+        {
+            lock (controller._adcMaskLock)
+            {
+                if (!ReferenceEquals(controller._heldBackAdcMask, this))
+                {
+                    return;
+                }
+
+                controller._heldBackAdcMask = null;
+
+                // Unless something has changed the channels since.
+                if (controller.EnabledAdcMask() == Enabled)
+                {
+                    controller.ApplyAdcEnableMask(controller._adcMaskOnDevice);
+                }
+            }
+        }
+    }
+
+    private uint EnabledAdcMask()
+    {
+        var mask = 0u;
+        foreach (var channel in _host.SnapshotChannels())
+        {
+            if (channel.Type == ChannelType.Analog
+                && channel.ChannelNumber <= ChannelControlOperations.MaxAdcBitmaskChannel
+                && channel.IsEnabled)
+            {
+                mask |= 1u << channel.ChannelNumber;
+            }
+        }
+
+        return mask;
     }
 
     /// <summary>

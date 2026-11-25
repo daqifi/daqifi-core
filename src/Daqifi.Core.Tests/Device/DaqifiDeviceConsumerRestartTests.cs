@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Communication.Messages;
+using Microsoft.Extensions.Time.Testing;
 using System.Collections.Concurrent;
 using System.Reflection;
 
@@ -449,6 +450,164 @@ public class DaqifiDeviceConsumerRestartTests
     }
 
     [Fact]
+    public async Task ARateChangeEvictedFromTheBacklog_LeavesTheRateTheStreamRunsAt()
+    {
+        await ParkBehindAnOperationAsync(
+            device =>
+            {
+                device.StreamingFrequency = 100;
+                device.StartStreaming();
+            },
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.Send(ScpiMessageProducer.StartStreaming(200));
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device =>
+            {
+                Assert.True(device.IsStreaming);
+                Assert.Equal(100, device.StreamingFrequency);
+            });
+    }
+
+    [Fact]
+    public async Task ARateChangeHeldBack_IsReportedOnceItIsOut()
+    {
+        await ParkBehindAnOperationAsync(
+            device =>
+            {
+                device.StreamingFrequency = 100;
+                device.StartStreaming();
+            },
+            device =>
+            {
+                device.Send(ScpiMessageProducer.StartStreaming(200));
+                Assert.Equal(100, device.StreamingFrequency);
+            },
+            _ => { },
+            device => Assert.Equal(200, device.StreamingFrequency));
+    }
+
+    [Fact]
+    public async Task ARateChosenWhileARateChangeIsHeldBack_IsKept()
+    {
+        await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.Send(ScpiMessageProducer.StartStreaming(200));
+                device.StreamingFrequency = 300;
+            },
+            _ => { },
+            device => Assert.Equal(300, device.StreamingFrequency));
+    }
+
+    [Fact]
+    public async Task AStartEvictedFromTheBacklog_DoesNotLowerTheRate()
+    {
+        await ParkBehindAnOperationAsync(
+            device => device.StreamingFrequency = 1000,
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.Metadata.Capabilities.MaxSamplingRate = 500;
+                device.StartStreaming();
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device => Assert.Equal(1000, device.StreamingFrequency));
+    }
+
+    [Fact]
+    public async Task AStopAndAStartEvictedFromTheBacklog_LeaveTheDecoderOfTheStreamThatIsRunning()
+    {
+        // Reset under the running stream, it would anchor that stream's clock again half-way.
+        await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                for (var i = 0; i < 3; i++)
+                {
+                    device.DeliverFrame();
+                }
+
+                device.BacklogCap = 2;
+                device.StopStreaming();
+                device.StartStreaming();
+                Assert.Equal(3, AdmittedFrames(device));
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device => Assert.Equal(3, AdmittedFrames(device)));
+    }
+
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(1, true)]
+    public async Task AnAdcMaskEvictedFromTheBacklog_LeavesTheChannelsTheDeviceStreams(int fillers, bool isOut)
+    {
+        await ParkBehindAnOperationAsync(
+            device =>
+            {
+                device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
+                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
+            },
+            device =>
+            {
+                device.BacklogCap = 2;
+                // Bits without a channel make no difference.
+                device.Send(ScpiMessageProducer.EnableAdcChannels(6));
+                SendFillers(device, fillers);
+            },
+            _ => { },
+            device => Assert.Equal([!isOut, isOut], device.Channels.Select(channel => channel.IsEnabled)));
+    }
+
+    [Fact]
+    public async Task AdcMasksEvictedFromTheBacklogByOneAnother_LeaveTheChannelsTheDeviceStreams()
+    {
+        await ParkBehindAnOperationAsync(
+            device =>
+            {
+                device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
+                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
+            },
+            device =>
+            {
+                device.BacklogCap = 1;
+                device.Send(ScpiMessageProducer.EnableAdcChannels(2));
+                device.Send(ScpiMessageProducer.EnableAdcChannels(3));
+                SendFillers(device, 1);
+            },
+            _ => { },
+            device => Assert.Equal([true, false], device.Channels.Select(channel => channel.IsEnabled)));
+    }
+
+    [Fact]
+    public async Task AChannelChosenWhileAnAdcMaskIsHeldBack_IsKeptWhenThatMaskIsEvicted()
+    {
+        await ParkBehindAnOperationAsync(
+            device => device.PopulateChannelsFromStatus(
+                new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 }),
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
+                device.Channels[1].IsEnabled = true;
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device => Assert.All(device.Channels, channel => Assert.True(channel.IsEnabled)));
+    }
+
+    private static long AdmittedFrames(DaqifiDevice device) =>
+        ((StreamFrameDecoder)typeof(DaqifiStreamingDevice)
+            .GetField("_frameDecoder", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device)!).AdmittedStreamFrameCount;
+
+    [Fact]
     public async Task AStopAndAStartEvictedFromTheBacklog_LeaveTheStreamThatIsRunning()
     {
         var (written, isStreaming) = await ParkBehindAnOperationAsync(
@@ -563,8 +722,10 @@ public class DaqifiDeviceConsumerRestartTests
         // counts before the start has gone out.
         using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
         using var device = new StreamingConsumerRestartTestableDevice("Parking Device", transport);
+        var clock = new FakeTimeProvider();
+        device.SetTimeProviderForTesting(clock);
         device.Connect();
-        device.StreamingFrequency = 10;
+        device.StreamingFrequency = 1;
         device.StartStreaming();
 
         var inOperation = new TaskCompletionSource();
@@ -579,19 +740,32 @@ public class DaqifiDeviceConsumerRestartTests
         device.StopStreaming();
         var start = device.StartStreamingAsync();
         Assert.True(SpinWait.SpinUntil(() => device.IsStreaming, TimeSpan.FromSeconds(5)));
-        for (var i = 0; i < 10; i++)
-        {
-            device.DeliverFrame();
-        }
-
-        await Task.Delay(100);
+        await DeliverFramesAsync(10);
         Assert.False(start.IsCompleted);
 
+        // It follows the stop straight out, so the old stream's last frames are still to come.
         endOperation.SetResult();
         await operation;
-        device.DeliverFrame();
-        device.DeliverFrame();
+        await DeliverFramesAsync(5);
+        Assert.False(start.IsCompleted);
+
+        for (var i = 0; i < 50 && !start.IsCompleted; i++)
+        {
+            await DeliverFramesAsync(1);
+        }
+
         await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // One frame every 10 ms of the device's clock.
+        async Task DeliverFramesAsync(int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                device.DeliverFrame();
+                clock.Advance(TimeSpan.FromMilliseconds(10));
+                await Task.Delay(5);
+            }
+        }
     }
 
     /// <summary>
@@ -604,7 +778,7 @@ public class DaqifiDeviceConsumerRestartTests
     /// session is recorded.
     /// </returns>
     private static async Task<(string[] Written, bool IsStreaming)> ParkBehindAnOperationAsync(
-        Action<DaqifiStreamingDevice> first,
+        Action<StreamingConsumerRestartTestableDevice> first,
         Action<StreamingConsumerRestartTestableDevice> parked,
         Action<DaqifiStreamingDevice> operation,
         Action<DaqifiStreamingDevice>? afterwards = null)

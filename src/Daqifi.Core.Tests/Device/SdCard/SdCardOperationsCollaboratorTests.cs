@@ -489,6 +489,20 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task GetSdCardFilesAsync_ALogWhoseStopWasNeverSent_IsStillRunning()
+    {
+        // A stop held back behind another operation releases the card, and gives it back when it
+        // is dropped instead of sent: the device is still recording.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingAsync("test.bin");
+        await ops.StopSdCardLoggingAsync();
+        host.StartSdCardLogStream(100);
+
+        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardFilesAsync());
+    }
+
+    [Fact]
     public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheListingResult()
     {
         // Qodo review (#566): the resume runs in a finally, so a device that drops between the
