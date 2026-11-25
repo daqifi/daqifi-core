@@ -251,14 +251,16 @@ public class SdCardTimestampFrequencyTests
     #endregion
 
     private static SdCardDeviceConfiguration DeviceOverride(uint timestampFrequencyHz) =>
-        new(
-            AnalogPortCount: 2,
-            DigitalPortCount: 1,
-            TimestampFrequency: timestampFrequencyHz,
-            DeviceSerialNumber: "TEST123",
-            DevicePartNumber: "Nq1",
-            FirmwareVersion: "3.7.2",
-            CalibrationValues: null);
+        new()
+        {
+            AnalogPortCount = 2,
+            DigitalPortCount = 1,
+            TimestampFrequency = timestampFrequencyHz,
+            DeviceSerialNumber = "TEST123",
+            DevicePartNumber = "Nq1",
+            FirmwareVersion = "3.7.2",
+            CalibrationValues = null
+        };
 
     private static System.IO.Stream BuildTwoSampleLogWithoutFrequency()
     {

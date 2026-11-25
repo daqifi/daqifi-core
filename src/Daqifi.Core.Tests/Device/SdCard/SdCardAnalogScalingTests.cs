@@ -41,17 +41,19 @@ public class SdCardAnalogScalingTests
     private static SdCardDeviceConfiguration PerChannelConfig(
         IReadOnlyList<(double Slope, double Intercept)>? calibration = null,
         IReadOnlyList<double>? portRange = null,
-        IReadOnlyList<double>? internalScale = null) => new(
-        AnalogPortCount: 3,
-        DigitalPortCount: 0,
-        TimestampFrequency: 0u,
-        DeviceSerialNumber: null,
-        DevicePartNumber: null,
-        FirmwareVersion: null,
-        CalibrationValues: calibration ?? new[] { (2.0, 0.5), (3.0, -0.25), (4.0, 0.125) },
-        Resolution: 1000u,
-        PortRange: portRange ?? new[] { 10.0, 20.0, 40.0 },
-        InternalScaleM: internalScale ?? new[] { 1.0, 2.0, 0.5 });
+        IReadOnlyList<double>? internalScale = null) => new()
+        {
+            AnalogPortCount = 3,
+            DigitalPortCount = 0,
+            TimestampFrequency = 0u,
+            DeviceSerialNumber = null,
+            DevicePartNumber = null,
+            FirmwareVersion = null,
+            CalibrationValues = calibration ?? new[] { (2.0, 0.5), (3.0, -0.25), (4.0, 0.125) },
+            Resolution = 1000u,
+            PortRange = portRange ?? new[] { 10.0, 20.0, 40.0 },
+            InternalScaleM = internalScale ?? new[] { 1.0, 2.0, 0.5 }
+        };
 
     // Raw counts chosen so that raw/Resolution*PortRange is never exactly 1.0 on any channel:
     // at 1.0 the gain and the offset become interchangeable and a slope/intercept swap would

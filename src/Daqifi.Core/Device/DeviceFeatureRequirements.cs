@@ -60,13 +60,13 @@ internal static class DeviceFeatureRequirements
     /// SD reply to the requesting interface; before that the SD card and WiFi contend for the
     /// shared SPI bus, so these operations were USB-only.
     /// </summary>
-    internal static readonly FirmwareVersion SdOverWifiMinFirmware = new(3, 7, 0, null, 0);
+    internal static readonly FirmwareVersion SdOverWifiMinFirmware = new(3, 7, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware for the capability document (<c>CONFigure:CAPabilities:JSON?</c> /
     /// <c>:APIVersion?</c>), first released in v3.5.0 (firmware #327/#343).
     /// </summary>
-    internal static readonly FirmwareVersion CapabilityDocumentMinFirmware = new(3, 5, 0, null, 0);
+    internal static readonly FirmwareVersion CapabilityDocumentMinFirmware = new(3, 5, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware that appends the end-of-listing marker to
@@ -75,7 +75,7 @@ internal static class DeviceFeatureRequirements
     /// simply stops, so its absence says nothing; at or above it, its absence means the walk did
     /// not finish.
     /// </summary>
-    internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
+    internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware whose capability document advertises the PWM frequency floor it actually
@@ -83,20 +83,20 @@ internal static class DeviceFeatureRequirements
     /// firmware <c>#902</c>/<c>#1244</c>), first released in <b>v3.9.0</b>. Below this version the
     /// field is a fixed 1 Hz the hardware cannot produce.
     /// </summary>
-    internal static readonly FirmwareVersion PwmFrequencyFloorMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion PwmFrequencyFloorMinFirmware = new(3, 9, 0, 0, null, 0);
     /// <summary>
     /// Minimum firmware for CRC-protected SD writes (<c>SYSTem:STORage:SD:PROTect</c>, firmware
     /// <c>#1217</c>/<c>#1228</c>), first released in <b>v3.9.0</b>. Older firmware answers the
     /// command with <c>-113</c> (undefined header).
     /// </summary>
-    internal static readonly FirmwareVersion SdCardCrcProtectionMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion SdCardCrcProtectionMinFirmware = new(3, 9, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware for <c>SYSTem:IDENtify</c> / <c>SYSTem:IDENtify?</c> (firmware
     /// <c>#1220</c>), first released in <b>v3.9.0</b>. Older firmware answers either with
     /// <c>-113</c> "Undefined header".
     /// </summary>
-    internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion IdentifyMinFirmware = new(3, 9, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware for the live WiFi status queries (<c>SYSTem:COMMunicate:LAN:CONnected?</c>
@@ -104,7 +104,7 @@ internal static class DeviceFeatureRequirements
     /// released in <b>v3.9.0</b>. Below it <c>CONnected?</c> is an undefined header, and
     /// <c>NETType? 1</c> answers the <em>staged</em> mode before rejecting the argument.
     /// </summary>
-    internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion WifiLinkStatusMinFirmware = new(3, 9, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware that queues a SCPI error when <c>SYSTem:STORage:SD:GET</c> cannot open
@@ -112,14 +112,14 @@ internal static class DeviceFeatureRequirements
     /// first released in <b>v3.9.0</b>. Below it an open failure leaves the error queue reading
     /// "No error", exactly as a genuinely empty file does.
     /// </summary>
-    internal static readonly FirmwareVersion SdGetOpenFailureErrorMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion SdGetOpenFailureErrorMinFirmware = new(3, 9, 0, 0, null, 0);
 
     /// <summary>
     /// Minimum firmware that answers <c>SYSTem:STReam:START?</c> with the stored streaming rate
     /// (firmware <c>#1007</c>/<c>#1014</c>), first released in <b>v3.9.0</b>. Below this version
     /// the query is an undefined header.
     /// </summary>
-    internal static readonly FirmwareVersion StoredStreamingRateQueryMinFirmware = new(3, 9, 0, null, 0);
+    internal static readonly FirmwareVersion StoredStreamingRateQueryMinFirmware = new(3, 9, 0, 0, null, 0);
 
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);

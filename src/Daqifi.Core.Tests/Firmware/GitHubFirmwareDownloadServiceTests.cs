@@ -44,7 +44,7 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
 
         Assert.NotNull(result);
         Assert.Equal("v3.2.0", result.TagName);
-        Assert.Equal(new FirmwareVersion(3, 2, 0, null, 0), result.Version);
+        Assert.Equal(new FirmwareVersion(3, 2, 0, 0, null, 0), result.Version);
         Assert.Equal("firmware-3.2.0.hex", result.AssetFileName);
         Assert.False(result.IsPreRelease);
     }
@@ -162,7 +162,7 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
 
         Assert.True(result.UpdateAvailable);
         Assert.NotNull(result.DeviceVersion);
-        Assert.Equal(new FirmwareVersion(3, 1, 0, null, 0), result.DeviceVersion);
+        Assert.Equal(new FirmwareVersion(3, 1, 0, 0, null, 0), result.DeviceVersion);
         Assert.NotNull(result.LatestRelease);
         Assert.Equal("v3.2.0", result.LatestRelease.TagName);
         Assert.Equal(FirmwareUpdateStatus.UpdateAvailable, result.Status);

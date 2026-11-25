@@ -45,17 +45,19 @@ public sealed class SdCardCsvCalibrationByChannelTests
 
     private static readonly double[] InternalScale = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75];
 
-    private static SdCardDeviceConfiguration EightChannelConfig() => new(
-        AnalogPortCount: 8,
-        DigitalPortCount: 1,
-        TimestampFrequency: TickRate,
-        DeviceSerialNumber: "SN849",
-        DevicePartNumber: "Nyquist 1",
-        FirmwareVersion: "3.8.0",
-        CalibrationValues: Calibration,
-        Resolution: Resolution,
-        PortRange: PortRange,
-        InternalScaleM: InternalScale);
+    private static SdCardDeviceConfiguration EightChannelConfig() => new()
+    {
+        AnalogPortCount = 8,
+        DigitalPortCount = 1,
+        TimestampFrequency = TickRate,
+        DeviceSerialNumber = "SN849",
+        DevicePartNumber = "Nyquist 1",
+        FirmwareVersion = "3.8.0",
+        CalibrationValues = Calibration,
+        Resolution = Resolution,
+        PortRange = PortRange,
+        InternalScaleM = InternalScale
+    };
 
     /// <summary>
     /// The volts channel <paramref name="channel"/> gives for <paramref name="raw"/>:
@@ -164,18 +166,20 @@ public sealed class SdCardCsvCalibrationByChannelTests
             "1000,4095\n";
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
 
-        var config = new SdCardDeviceConfiguration(
-            AnalogPortCount: 8,
-            DigitalPortCount: 0,
-            TimestampFrequency: 1000u,
-            DeviceSerialNumber: null,
-            DevicePartNumber: "Nyquist 1",
-            FirmwareVersion: null,
-            CalibrationValues: [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0),
+        var config = new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = 8,
+            DigitalPortCount = 0,
+            TimestampFrequency = 1000u,
+            DeviceSerialNumber = null,
+            DevicePartNumber = "Nyquist 1",
+            FirmwareVersion = null,
+            CalibrationValues = [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0),
                                 (1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
-            Resolution: 4095u,
-            PortRange: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
-            InternalScaleM: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+            Resolution = 4095u,
+            PortRange = [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            InternalScaleM = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        };
 
         // Act
         var session = await new SdCardCsvFileParser().ParseAsync(

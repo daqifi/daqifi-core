@@ -361,14 +361,16 @@ internal sealed class SdCardCsvFileParser
             break;
         }
 
-        var config = new SdCardDeviceConfiguration(
-            AnalogPortCount: analogChannelCount,
-            DigitalPortCount: digitalChannelCount,
-            TimestampFrequency: timestampFreq,
-            DeviceSerialNumber: serialNumber,
-            DevicePartNumber: deviceName,
-            FirmwareVersion: null,
-            CalibrationValues: null);
+        var config = new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = analogChannelCount,
+            DigitalPortCount = digitalChannelCount,
+            TimestampFrequency = timestampFreq,
+            DeviceSerialNumber = serialNumber,
+            DevicePartNumber = deviceName,
+            FirmwareVersion = null,
+            CalibrationValues = null
+        };
 
         return new CsvHeader(
             sawAnyLine,
@@ -557,8 +559,12 @@ internal sealed class SdCardCsvFileParser
                 ? timestampReconstructor.Advance(rowTimestamp, baseTime)
                 : baseTime;
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
+            yield return new SdCardLogEntry
             {
+                Timestamp = absoluteTime,
+                AnalogValues = analogValues,
+                DigitalData = digitalData,
+                AnalogTimestamps = perChannelTimestamps,
                 HasDeviceTimestamp = hasDeviceTimestamp,
                 SourceAnalogValueUnit = valueUnit
             };
@@ -566,8 +572,11 @@ internal sealed class SdCardCsvFileParser
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)
             {
-                progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+                progress.Report(new SdCardParseProgress
                 {
+                    BytesRead = bytesRead,
+                    TotalBytes = totalBytes,
+                    MessagesRead = linesProcessed,
                     RowsSkipped = rowsSkipped,
                     TruncatedFinalRow = truncatedFinalRow
                 });
@@ -584,8 +593,11 @@ internal sealed class SdCardCsvFileParser
         // Final progress report. This one always goes out, so a caller that watches progress
         // learns the file's whole skipped-row count even when the file is shorter than the
         // reporting interval.
-        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+        progress?.Report(new SdCardParseProgress
         {
+            BytesRead = bytesRead,
+            TotalBytes = totalBytes,
+            MessagesRead = linesProcessed,
             RowsSkipped = rowsSkipped,
             TruncatedFinalRow = truncatedFinalRow
         });

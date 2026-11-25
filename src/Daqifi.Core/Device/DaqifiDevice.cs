@@ -250,7 +250,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// typed <see cref="FeatureNotSupportedException"/> via the wire-level <c>-113</c>
     /// "Undefined header" backstop, rather than a guarantee up front.
     /// </summary>
-    public static readonly FirmwareVersion MinSupportedFirmware = new(3, 5, 0, null, 0);
+    public static readonly FirmwareVersion MinSupportedFirmware = new(3, 5, 0, 0, null, 0);
 
     /// <summary>
     /// Gets a value indicating whether the connected device's reported firmware version meets

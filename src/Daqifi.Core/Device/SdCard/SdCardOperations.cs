@@ -2476,7 +2476,12 @@ internal sealed class SdCardOperations
             }
         }
 
-        return new SdCardDownloadResult(fileName, fileSize, clock.GetElapsedTime(startedAt));
+        return new SdCardDownloadResult
+        {
+            FileName = fileName,
+            SizeInBytes = fileSize,
+            Duration = clock.GetElapsedTime(startedAt)
+        };
     }
 
     /// <summary>
