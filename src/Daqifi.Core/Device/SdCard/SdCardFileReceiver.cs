@@ -141,7 +141,6 @@ internal sealed class SdCardFileReceiver
     /// The text of the device's answer to an SD <c>GET</c> when it believes no card is present,
     /// sent in place of the file (#1077).
     /// </summary>
-    internal const string NoSdCardAnswerText = "No SD Card Detected";
 
     /// <summary>
     /// How many bytes at the start of a transfer are held back from the destination stream while
@@ -153,6 +152,24 @@ internal sealed class SdCardFileReceiver
     /// real transfer, and its bytes are released and written as they arrive from then on.
     /// </remarks>
     internal const int ReplyHeadLimitBytes = 256;
+
+    /// <summary>
+    /// The most raw bytes the opening of a reply is ever inspected over, framing included. The
+    /// command echo carries the file name, which has no length limit of its own, so the limit
+    /// above counts only what follows the framing; this one bounds the whole probe.
+    /// </summary>
+    internal const int MaxReplyProbeBytes = 4096;
+
+    /// <summary>The device's no-card line, exactly as the firmware prints it.</summary>
+    private const string NoSdCardAnswerLine = "Error !! No SD Card Detected";
+
+    /// <summary>The prompt the firmware prints ahead of a command echo when echo is on.</summary>
+    private const string PromptPrefix = "DAQIFI>";
+
+    /// <summary>A SCPI error line as the firmware prints it: <c>**ERROR: -200, "Execution error"</c>.</summary>
+    private static readonly System.Text.RegularExpressions.Regex ScpiErrorLine = new(
+        @"^\*\*ERROR:\s*-?\d+\s*,\s*"".*""$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -369,6 +386,11 @@ internal sealed class SdCardFileReceiver
             listedEmpty ? ListedEmptyFileReplyFramingLimitBytes : ReplyHeadLimitBytes);
         var contentTarget = (Stream)heldContent;
 
+        // While the opening is still being inspected, nothing is released however much is held:
+        // the limit could otherwise be crossed (a long echoed file name, one-byte reads) before
+        // the answer's error line completes, and a retry would append the file to those bytes.
+        heldContent.HoldUntilReleased = true;
+
         // The raw bytes the reply opened with, kept until they settle whether it is the no-card
         // answer; null once they have settled that it is not.
         var replyHead = new MemoryStream();
@@ -423,8 +445,10 @@ internal sealed class SdCardFileReceiver
 
             // Whatever is still held back was content after all: it goes to the caller's stream,
             // as everything outside the marker window always has on a transfer that ended early.
-            // Not cancellable, because the token may be the very deadline that ended the transfer.
-            await heldContent.ReleaseHeldBytesAsync(CancellationToken.None).ConfigureAwait(false);
+            // Under the live token, so a destination that blocks cannot outlast the caller's
+            // cancellation; and not at all once the deadline has passed, rather than starting an
+            // unbounded write after it. At most the probe's few hundred bytes are lost that way.
+            await ReleaseHeldContentIfStillLiveAsync(heldContent, token, cancellationToken).ConfigureAwait(false);
 
             ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
@@ -518,7 +542,17 @@ internal sealed class SdCardFileReceiver
                 {
                     replyHead.Write(buffer, 0, bytesRead);
 
-                    switch (ClassifyReplyHead(replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length)))
+                    var (kind, framingBytes) = ClassifyReplyHead(replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length));
+
+                    // Bounded however the bytes arrive: past the limit after the framing, or past
+                    // the whole probe, the opening is not the answer.
+                    if (kind is ReplyHeadKind.Undecided or ReplyHeadKind.NoCardLine
+                        && (replyHead.Length - framingBytes > ReplyHeadLimitBytes || replyHead.Length > MaxReplyProbeBytes))
+                    {
+                        kind = ReplyHeadKind.Content;
+                    }
+
+                    switch (kind)
                     {
                         case ReplyHeadKind.NoCardAnswer:
                             throw NoCardAnswer(heldContent, replyHead);
@@ -526,16 +560,9 @@ internal sealed class SdCardFileReceiver
                             noCardAnswerSeen = true;
                             break;
                         case ReplyHeadKind.Content:
+                            noCardAnswerSeen = false;
                             replyHead.Dispose();
                             replyHead = null;
-                            break;
-                        default:
-                            if (replyHead.Length > ReplyHeadLimitBytes)
-                            {
-                                replyHead.Dispose();
-                                replyHead = null;
-                            }
-
                             break;
                     }
                 }
@@ -714,6 +741,13 @@ internal sealed class SdCardFileReceiver
                     trailingCount = combinedLen;
                 }
 
+                if (replyHead is null && heldContent.HoldUntilReleased)
+                {
+                    // The opening has been settled as content: from here the holder goes back to
+                    // its ordinary limit, and releases at once if it is already past it.
+                    await heldContent.StopHoldingAsync(token).ConfigureAwait(false);
+                }
+
                 progress?.Report(new SdCardTransferProgress { BytesReceived = totalBytesReceived, FileName = fileName });
             }
         }
@@ -726,7 +760,15 @@ internal sealed class SdCardFileReceiver
             // A transport failure or a cancellation part-way through: bytes held back only to
             // rule out the no-card answer were real content, and they reach the caller's stream
             // as they did before the hold existed. A no-card answer has been discarded already.
-            await heldContent.ReleaseHeldBytesAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await ReleaseHeldContentIfStillLiveAsync(heldContent, token, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The exception being handled is the one to report.
+            }
+
             throw;
         }
         finally
@@ -760,53 +802,73 @@ internal sealed class SdCardFileReceiver
     /// words further in is file content, so a text file whose first line is anything else is
     /// never mistaken for it.
     /// </remarks>
-    internal static ReplyHeadKind ClassifyReplyHead(ReadOnlySpan<byte> head)
+    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head)
     {
         var text = Encoding.ASCII.GetString(head);
         var seenNoCardLine = false;
         var lineStart = 0;
+        var framingBytes = 0;
 
         while (true)
         {
             var newline = text.IndexOf('\n', lineStart);
             if (newline < 0)
             {
-                return seenNoCardLine ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Undecided;
+                return (seenNoCardLine ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Undecided, framingBytes);
             }
 
             var line = text.AsSpan(lineStart, newline - lineStart).Trim();
             lineStart = newline + 1;
 
-            if (line.IsEmpty)
+            // The prompt can open any line when echo is on; what follows it is the line.
+            if (line.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                continue;
+                line = line[PromptPrefix.Length..].Trim();
             }
 
             if (seenNoCardLine)
             {
-                return line.StartsWith("**ERROR", StringComparison.Ordinal)
-                    ? ReplyHeadKind.NoCardAnswer
-                    : ReplyHeadKind.NoCardLine;
+                if (line.IsEmpty)
+                {
+                    continue;
+                }
+
+                return (ScpiErrorLine.IsMatch(line.ToString()) ? ReplyHeadKind.NoCardAnswer : ReplyHeadKind.Content, framingBytes);
             }
 
-            if (line.Contains(NoSdCardAnswerText, StringComparison.OrdinalIgnoreCase))
+            if (line.IsEmpty || line.Contains("SD:GET", StringComparison.OrdinalIgnoreCase))
+            {
+                framingBytes = lineStart;
+                continue;
+            }
+
+            if (line.Equals(NoSdCardAnswerLine, StringComparison.OrdinalIgnoreCase))
             {
                 seenNoCardLine = true;
                 continue;
             }
 
-            if (IsReplyFraming(line))
-            {
-                continue;
-            }
-
-            return ReplyHeadKind.Content;
+            return (ReplyHeadKind.Content, framingBytes);
         }
     }
 
-    private static bool IsReplyFraming(ReadOnlySpan<char> line) =>
-        line.StartsWith("DAQIFI>", StringComparison.OrdinalIgnoreCase)
-        || line.Contains("SD:GET", StringComparison.OrdinalIgnoreCase);
+    private static async Task ReleaseHeldContentIfStillLiveAsync(
+        HeldContentStream heldContent, CancellationToken transferToken, CancellationToken callerToken)
+    {
+        if (transferToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            await heldContent.ReleaseHeldBytesAsync(transferToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            // The deadline passed during the write; the transfer is reported for what ended it.
+        }
+    }
 
     private static SdCardNotPresentException NoCardAnswer(HeldContentStream heldContent, MemoryStream? replyHead)
     {
@@ -1145,6 +1207,23 @@ internal sealed class SdCardFileReceiver
         /// </summary>
         public bool HasReleasedContent { get; private set; }
 
+        /// <summary>
+        /// While set, nothing is released however much is held: the limit is suspended until
+        /// <see cref="StopHoldingAsync"/> or <see cref="ReleaseHeldBytesAsync"/>.
+        /// </summary>
+        public bool HoldUntilReleased { get; set; }
+
+        /// <summary>Puts the ordinary limit back, releasing at once if it is already crossed.</summary>
+        public async Task StopHoldingAsync(CancellationToken cancellationToken)
+        {
+            HoldUntilReleased = false;
+
+            if (_heldBytes is { } held && held.Length > _framingLimitBytes)
+            {
+                await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         public override bool CanRead => false;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -1200,7 +1279,7 @@ internal sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length <= _framingLimitBytes)
+            if (HoldUntilReleased || held.Length <= _framingLimitBytes)
             {
                 return;
             }
@@ -1226,7 +1305,7 @@ internal sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length > _framingLimitBytes)
+            if (!HoldUntilReleased && held.Length > _framingLimitBytes)
             {
                 await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
             }

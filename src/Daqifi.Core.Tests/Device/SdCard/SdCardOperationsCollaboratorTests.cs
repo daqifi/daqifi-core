@@ -1934,6 +1934,26 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_EchoedNoCardThenTheFile_NonSeekableDestinationHoldsOnlyTheFile()
+    {
+        // Review on #1078 (P1): the retry writes into the same stream, which cannot be rewound, so
+        // the attempt that got the no-card answer must have written nothing to it.
+        var name = new string('n', 183) + ".bin";
+        var echoed = Concat(Encoding.ASCII.GetBytes($"DAQIFI> SYSTem:STORage:SD:GET \"{name}\"\r\n"), NoCardReply);
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => new OneByteReads(ScriptedStream.Of(echoed, Concat(payload, EofMarker))),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new AppendOnlyStream();
+
+        await ops.DownloadSdCardFileAsync(name, destination);
+
+        Assert.Equal(payload, destination.Written.ToArray());
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_DeviceKeepsAnsweringNoCard_ThrowsNotPresentAfterThreeRechecks()
     {
         var host = new FakeHost
@@ -2514,6 +2534,58 @@ public partial class SdCardOperationsCollaboratorTests
     /// each successive <c>SYSTem:STORage:SD:GET</c> sees. A single <see cref="MemoryStream"/> cannot:
     /// the receiver reads greedily, so it would swallow a later segment into the same read.
     /// </summary>
+    /// <summary>Hands out one byte per read from an inner stream.</summary>
+    private sealed class OneByteReads(Stream inner) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, Math.Min(1, count));
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => inner.ReadAsync(buffer, offset, Math.Min(1, count), cancellationToken);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A write-only, non-seekable destination that records what reached it.</summary>
+    private sealed class AppendOnlyStream : Stream
+    {
+        public MemoryStream Written { get; } = new();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => Written.Write(buffer, offset, count);
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Written.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
     private sealed class ScriptedStream : Stream
     {
         private readonly IReadOnlyList<byte[]> _segments;

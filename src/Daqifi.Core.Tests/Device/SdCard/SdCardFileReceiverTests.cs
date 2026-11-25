@@ -134,6 +134,77 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_LogWhoseFirstLinesQuoteTheAnswer_DownloadsTheContent()
+    {
+        // Review on #1078: a line that merely contains the phrase, followed by a line that merely
+        // starts with **ERROR, is a diagnostic log, not the device's answer.
+        var content = Encoding.ASCII.GetBytes(
+            "Previous status: No SD Card Detected\r\n**ERROR summary from last run\r\nall good\r\n");
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), 4096);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var received = await receiver.ReceiveAsync(destination, "status.txt", listedFileSizeBytes: content.Length);
+
+        Assert.Equal(content.Length, received);
+        Assert.Equal(content, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NoCardReplyBehindALongEcho_OneByteReads_WritesNothing()
+    {
+        // Review on #1078 (P1): with echo on, a long name pushes the reply past the hold-back limit
+        // before the error line completes. Nothing may reach the stream, or a retry appends the file
+        // to the error text.
+        var name = new string('n', 183) + ".bin";
+        var reply = Combine(Encoding.ASCII.GetBytes($"DAQIFI> SYSTem:STORage:SD:GET \"{name}\"\r\n"), NoCardReply);
+        using var source = new ChunkedMemoryStream(reply, 1);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: 1);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10)));
+
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_AnswerLineFollowedByFileRowsAndAPause_DownloadsTheWholeFile()
+    {
+        // Review on #1078: a complete non-error line after the candidate makes it content. The
+        // short no-card window must not then cut a slow transfer off.
+        var head = Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\nrow,1\r\n");
+        var tail = Combine(Encoding.ASCII.GetBytes("row,2\r\n"), EofMarker);
+        using var source = new PausingStream(head, TimeSpan.FromMilliseconds(1500), tail);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromSeconds(20));
+
+        var received = await receiver.ReceiveAsync(destination, "odd.csv", timeout: TimeSpan.FromSeconds(30));
+
+        var expected = Combine(head, Encoding.ASCII.GetBytes("row,2\r\n"));
+        Assert.Equal(expected.Length, received);
+        Assert.Equal(expected, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_CancelledWhileFlushingHeldBytesToABlockedDestination_Unwinds()
+    {
+        // Review on #1078: the flush of held bytes after a stall must honour the caller's token.
+        using var source = new ThenSilentStream(new byte[40]);
+        using var destination = new BlockingDestinationStream();
+        var receiver = new SdCardFileReceiver(source, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromMilliseconds(200));
+        using var cts = new CancellationTokenSource();
+
+        var transfer = receiver.ReceiveAsync(destination, "stall.bin", timeout: TimeSpan.FromSeconds(30), cancellationToken: cts.Token);
+        await destination.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        var finished = await Task.WhenAny(transfer, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(transfer, finished);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transfer);
+    }
+
+    [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {
         // Arrange
@@ -1843,6 +1914,84 @@ public class SdCardFileReceiverTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Serves one payload, waits, then serves the next, as a slow device does.</summary>
+    private sealed class PausingStream : Stream
+    {
+        private readonly byte[] _first;
+        private readonly TimeSpan _pause;
+        private readonly byte[] _second;
+        private int _step;
+
+        public PausingStream(byte[] first, TimeSpan pause, byte[] second)
+        {
+            _first = first;
+            _pause = pause;
+            _second = second;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            switch (_step++)
+            {
+                case 0:
+                    Array.Copy(_first, 0, buffer, offset, _first.Length);
+                    return _first.Length;
+                case 1:
+                    await Task.Delay(_pause, cancellationToken);
+                    Array.Copy(_second, 0, buffer, offset, _second.Length);
+                    return _second.Length;
+                default:
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    return 0;
+            }
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A destination whose writes wait until their token is cancelled.</summary>
+    private sealed class BlockingDestinationStream : Stream
+    {
+        public TaskCompletionSource WriteStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            WriteStarted.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 
     #endregion
