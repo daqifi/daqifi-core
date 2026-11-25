@@ -196,12 +196,12 @@ Two caveats worth knowing: the device must be on firmware that advertises the se
 daqifi-nyquist-firmware#345), and some hardened corporate or guest networks filter multicast
 entirely — connect by IP address directly when they do.
 
-Need fine-grained control? Pass a `CancellationToken` or override the discovery port:
+The timeout is a normal end of the pass: you get whatever was found by then. Cancelling is not — it
+throws `OperationCanceledException`. Pass both to let a user abandon a pass early:
 
 ```csharp
-using var cts = new CancellationTokenSource();
-cts.CancelAfter(TimeSpan.FromSeconds(10));
-var devices = await wifiFinder.DiscoverAsync(cts.Token);
+using var cts = new CancellationTokenSource(); // cancelled by your "Stop" button
+var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(10), cts.Token);
 
 using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 ```

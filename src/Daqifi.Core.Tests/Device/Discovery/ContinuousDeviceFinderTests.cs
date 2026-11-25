@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Tests.TestSupport;
 
@@ -707,10 +708,8 @@ public class ContinuousDeviceFinderTests
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
 
         var ip = IPAddress.Parse("192.168.1.50");
-        var viaWifi = Wifi("AA:BB", ip: ip);
-        viaWifi.LocalInterfaceAddress = IPAddress.Parse("192.168.1.10");
-        var viaEthernet = Wifi("AA:BB", ip: ip);
-        viaEthernet.LocalInterfaceAddress = IPAddress.Parse("192.168.1.11");
+        var viaWifi = Wifi("AA:BB", ip: ip) with { LocalInterfaceAddress = IPAddress.Parse("192.168.1.10") };
+        var viaEthernet = Wifi("AA:BB", ip: ip) with { LocalInterfaceAddress = IPAddress.Parse("192.168.1.11") };
 
         finder.Reconcile(new IDeviceInfo[] { viaWifi });
         var changes = finder.Reconcile(new IDeviceInfo[] { viaEthernet });
@@ -733,10 +732,8 @@ public class ContinuousDeviceFinderTests
         var updated = new List<DeviceUpdatedEventArgs>();
         finder.DeviceUpdated += (_, e) => updated.Add(e);
 
-        var before = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.50"));
-        before.LocalInterfaceAddress = IPAddress.Parse("192.168.1.10");
-        var after = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.51"));
-        after.LocalInterfaceAddress = IPAddress.Parse("192.168.1.11");
+        var before = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.50")) with { LocalInterfaceAddress = IPAddress.Parse("192.168.1.10") };
+        var after = Wifi("AA:BB", ip: IPAddress.Parse("192.168.1.51")) with { LocalInterfaceAddress = IPAddress.Parse("192.168.1.11") };
 
         finder.Reconcile(new IDeviceInfo[] { before });
         finder.Reconcile(new IDeviceInfo[] { after });
@@ -1410,6 +1407,180 @@ public class ContinuousDeviceFinderTests
         Assert.False(inner.DisposedDuringPass);
     }
 
+    [Fact]
+    public async Task StopAsync_CancelledWhileThePassIsStuck_AbandonsTheWaitButNotTheStop()
+    {
+        var inner = new GatedDeviceFinder();
+        using var finder = NewStuckPassFinder(inner);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        using var cts = new CancellationTokenSource();
+        var stop = finder.StopAsync(cts.Token);
+        Assert.False(stop.IsCompleted, "the stuck pass should keep StopAsync waiting");
+
+        cts.Cancel();
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop.WaitAsync(WaitTimeout));
+        Assert.Equal(cts.Token, canceled.CancellationToken);
+
+        // The stop itself stands: the loop exits with its pass, and the finder can start again.
+        Assert.False(finder.IsRunning);
+        var secondStop = finder.StopAsync();
+        Assert.False(secondStop.IsCompleted, "the loop is still inside its pass");
+
+        inner.ReleaseFirstPass();
+        await secondStop.WaitAsync(WaitTimeout);
+        Assert.Equal(1, inner.PassesStarted);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted > 1, "the finder never ran again", WaitTimeout);
+        await finder.StopAsync();
+    }
+
+    [Fact]
+    public async Task StopAsync_WithACancelledToken_StillStopsTheLoop()
+    {
+        var inner = new StubDeviceFinder();
+        using var finder = NewFinder(inner);
+        finder.Start();
+
+        // Whether the loop exits before the token is looked at is a race, so either result is fine.
+        await Record.ExceptionAsync(() => finder.StopAsync(new CancellationToken(canceled: true)));
+
+        Assert.False(finder.IsRunning);
+        await finder.StopAsync().WaitAsync(WaitTimeout);
+
+        // Nothing left to wait for, so nothing for the token to cancel.
+        await finder.StopAsync(new CancellationToken(canceled: true));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WithInFlightPass_StopsPromptlyAndDisposesInnerFinder()
+    {
+        var inner = new BlockingDeviceFinder();
+        var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromSeconds(30),
+            Interval = TimeSpan.Zero
+        });
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted > 0, "the finder never started a pass", WaitTimeout);
+
+        await finder.DisposeAsync().AsTask().WaitAsync(WaitTimeout);
+
+        Assert.True(inner.Disposed); // inner finder disposed only after the loop stopped
+        Assert.Throws<ObjectDisposedException>(() => finder.Start());
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhileThePassIsStuck_DoesNotBlockTheCaller()
+    {
+        var inner = new GatedDeviceFinder();
+        var finder = NewStuckPassFinder(inner);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        // Were this to block, it would do so for the 30 s PassTimeout, with the gate still shut.
+        var dispose = finder.DisposeAsync().AsTask();
+        Assert.False(dispose.IsCompleted);
+        Assert.False(inner.Disposed);
+
+        inner.ReleaseFirstPass();
+        await dispose.WaitAsync(WaitTimeout);
+
+        Assert.Equal(1, inner.DisposeCount);
+        Assert.False(inner.DisposedDuringPass);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenThePassOutlastsItsWait_DisposesTheInnerFinderOnlyAfterThePassReturns()
+    {
+        var inner = new GatedDeviceFinder();
+        var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromMilliseconds(100),
+            Interval = TimeSpan.FromMilliseconds(10)
+        });
+
+        finder.Start();
+        await WaitUntil.ThatAsync(() => inner.PassesStarted == 1, "the finder never started a pass", WaitTimeout);
+
+        await finder.DisposeAsync().AsTask().WaitAsync(WaitTimeout);
+        Assert.False(inner.Disposed, "DisposeAsync disposed the inner finder while the pass was still inside it");
+
+        inner.ReleaseFirstPass();
+        await WaitUntil.ThatAsync(
+            () => inner.Disposed,
+            "the inner finder was never disposed after the pass returned",
+            WaitTimeout);
+        Assert.False(inner.DisposedDuringPass);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_IsIdempotent_AndLeavesInnerFinderOpenWhenConfigured()
+    {
+        var owned = new StubDeviceFinder();
+        var finder = NewFinder(owned, leaveInnerFinderOpen: false);
+        await finder.DisposeAsync();
+        await finder.DisposeAsync();
+        finder.Dispose();
+        Assert.Equal(1, owned.DisposeCount);
+
+        var shared = new StubDeviceFinder();
+        await NewFinder(shared, leaveInnerFinderOpen: true).DisposeAsync();
+        Assert.Equal(0, shared.DisposeCount);
+    }
+
+    [Fact]
+    public async Task Start_HidEnumerationTimesOut_DoesNotLoseTheDevice()
+    {
+        // HidDeviceFinder answers all at once or not at all, so a pass that times out in it returns
+        // an empty list. MissThreshold is 1: reading that list as a census would lose the device.
+        var enumerator = new HangingAfterFirstEnumerator(
+            new HidDeviceInfo(HidDeviceFinder.DefaultVendorId, HidDeviceFinder.DefaultProductId, "/dev/hid0", "SN1"));
+        var lost = 0;
+        await using var finder = new ContinuousDeviceFinder(
+            new HidDeviceFinder(enumerator),
+            new ContinuousDiscoveryOptions
+            {
+                MissThreshold = 1,
+                Interval = TimeSpan.FromMilliseconds(10),
+                PassTimeout = TimeSpan.FromMilliseconds(50)
+            });
+        finder.DeviceLost += (_, _) => Interlocked.Increment(ref lost);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => enumerator.Calls >= 4,
+            () => $"only {enumerator.Calls} passes started",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Equal(0, lost);
+        Assert.Single(finder.Devices);
+    }
+
+    private sealed class HangingAfterFirstEnumerator(HidDeviceInfo device) : IHidDeviceEnumerator
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public async Task<IReadOnlyList<HidDeviceInfo>> EnumerateAsync(
+            int? vendorId = null, int? productId = null, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _calls) > 1)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            return [device];
+        }
+    }
+
     #endregion
 
     #region Pass reports
@@ -1908,7 +2079,7 @@ public class ContinuousDeviceFinderTests
     /// Minimal finder used by tests that drive <see cref="ContinuousDeviceFinder.Reconcile"/>
     /// directly or that only need lifecycle behavior. Each pass returns no devices.
     /// </summary>
-    private sealed class StubDeviceFinder : IDeviceFinder, IDisposable
+    private sealed class StubDeviceFinder : IDeviceFinder
     {
         public int DisposeCount { get; private set; }
 
@@ -1919,11 +2090,8 @@ public class ContinuousDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
-
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
+        public Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<IDeviceInfo>>([]);
 
         public void Dispose() => DisposeCount++;
     }
@@ -1949,10 +2117,7 @@ public class ContinuousDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
-            => DiscoverAsync(TimeSpan.Zero);
-
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+        public Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
             if (ThrowOnEveryPass != null)
             {
@@ -1965,7 +2130,11 @@ public class ContinuousDeviceFinderTests
                 next = _passes.Count > 0 ? _passes.Dequeue() : Array.Empty<IDeviceInfo>();
             }
 
-            return Task.FromResult<IEnumerable<IDeviceInfo>>(next);
+            return Task.FromResult(next);
+        }
+
+        public void Dispose()
+        {
         }
     }
 
@@ -2033,7 +2202,7 @@ public class ContinuousDeviceFinderTests
     /// <see cref="ContinuousDeviceFinder"/> that absence from its list proves nothing.
     /// </summary>
     private sealed record PassStep(
-        Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Run,
+        Func<CancellationToken, Task<IReadOnlyList<IDeviceInfo>>> Run,
         bool ResultsArePartial = false);
 
     private sealed class ScriptedPassFinder : IDeviceFinder, IPartialResultReporter
@@ -2060,11 +2229,11 @@ public class ContinuousDeviceFinderTests
 
         /// <summary>A pass that answers with exactly these devices.</summary>
         public static PassStep Finds(params IDeviceInfo[] devices)
-            => new(_ => Task.FromResult<IEnumerable<IDeviceInfo>>(devices));
+            => new(_ => Task.FromResult<IReadOnlyList<IDeviceInfo>>(devices));
 
         /// <summary>
-        /// A pass that never answers on its own and throws when the pass timeout cancels it,
-        /// which is what a finder that honours cancellation does.
+        /// A pass that never answers on its own and throws when its timeout elapses: a finder that
+        /// breaks the <see cref="IDeviceFinder"/> contract, which the scan loop tolerates.
         /// </summary>
         public static PassStep TimesOut()
             => new(async token =>
@@ -2077,7 +2246,7 @@ public class ContinuousDeviceFinderTests
         /// A pass that listens until the pass token fires and then answers with everything it
         /// heard — a COMPLETE answer that always uses the whole pass budget. That is what
         /// <c>WiFiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
-        /// <c>DiscoverAsync(CancellationToken)</c> has no natural end, so the pass deadline is
+        /// <c>DiscoverAsync</c> has no natural end, so the pass deadline is
         /// what ends it, and the list it returns is still a census. A pass of this shape must be
         /// reported <see cref="DiscoveryPassOutcome.Completed"/> and must still age devices out,
         /// which is why the deadline alone can never stand in for partialness.
@@ -2088,7 +2257,7 @@ public class ContinuousDeviceFinderTests
         /// <summary>
         /// A pass that never answers on its own and, when the pass timeout cancels it, returns
         /// the part it had collected instead of throwing. That is what
-        /// <c>SerialDeviceFinder.DiscoverAsync(CancellationToken)</c> does: it catches the
+        /// <c>SerialDeviceFinder</c> does: it catches the
         /// cancellation and returns the port probes that already finished, so a timed-out pass
         /// arrives as a short list of real devices rather than as an exception.
         /// </summary>
@@ -2099,7 +2268,7 @@ public class ContinuousDeviceFinderTests
         public static PassStep Throws(Exception error)
             => new(_ => throw error);
 
-        private static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> WaitForCancellationThen(
+        private static Func<CancellationToken, Task<IReadOnlyList<IDeviceInfo>>> WaitForCancellationThen(
             IDeviceInfo[] answer)
             => async token =>
             {
@@ -2112,8 +2281,9 @@ public class ContinuousDeviceFinderTests
                 return answer;
             };
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
+            using var pass = DiscoveryPassToken.Create(timeout, cancellationToken);
             Interlocked.Increment(ref _passesStarted);
 
             PassStep step;
@@ -2128,11 +2298,12 @@ public class ContinuousDeviceFinderTests
             }
 
             Volatile.Write(ref _lastPassWasPartial, step.ResultsArePartial ? 1 : 0);
-            return step.Run(cancellationToken);
+            return await step.Run(pass.Token).ConfigureAwait(false);
         }
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => DiscoverAsync(CancellationToken.None);
+        public void Dispose()
+        {
+        }
     }
 
     /// <summary>
@@ -2157,8 +2328,9 @@ public class ContinuousDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
+            using var pass = DiscoveryPassToken.Create(timeout, cancellationToken);
             IReadOnlyList<IDeviceInfo> answer;
             lock (_passes)
             {
@@ -2171,7 +2343,7 @@ public class ContinuousDeviceFinderTests
             }
 
             var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            using (pass.Token.Register(() => cancelled.TrySetResult(true)))
             {
                 await cancelled.Task.ConfigureAwait(false);
             }
@@ -2179,16 +2351,16 @@ public class ContinuousDeviceFinderTests
             return answer;
         }
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => DiscoverAsync(CancellationToken.None);
+        public void Dispose()
+        {
+        }
     }
 
     /// <summary>
     /// Finder that answers one scripted pass and then never answers again: every later pass waits
     /// on the pass token and throws <see cref="OperationCanceledException"/> when it fires. That
-    /// is what a finder which honours cancellation does when
-    /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/> expires, so it is how a timed-out pass
-    /// is reproduced without a wall-clock sleep.
+    /// breaks the <see cref="IDeviceFinder"/> contract, which the scan loop tolerates, and it is how
+    /// a timed-out pass is reproduced without a wall-clock sleep.
     /// </summary>
     private sealed class TimingOutDeviceFinder : IDeviceFinder
     {
@@ -2207,19 +2379,21 @@ public class ContinuousDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
+            using var pass = DiscoveryPassToken.Create(timeout, cancellationToken);
             if (Interlocked.Increment(ref _passesStarted) == 1)
             {
                 return _firstPassResults;
             }
 
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            await Task.Delay(Timeout.Infinite, pass.Token);
             return Array.Empty<IDeviceInfo>();
         }
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => DiscoverAsync(CancellationToken.None);
+        public void Dispose()
+        {
+        }
     }
 
     /// <summary>
@@ -2227,7 +2401,7 @@ public class ContinuousDeviceFinderTests
     /// Used to verify that Stop/Dispose cancel an in-flight pass instead of waiting out a large
     /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/>.
     /// </summary>
-    private sealed class BlockingDeviceFinder : IDeviceFinder, IDisposable
+    private sealed class BlockingDeviceFinder : IDeviceFinder
     {
         private int _passesStarted;
 
@@ -2239,21 +2413,19 @@ public class ContinuousDeviceFinderTests
         public event EventHandler? DiscoveryCompleted;
 #pragma warning restore CS0067
 
-        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
+            using var pass = DiscoveryPassToken.Create(timeout, cancellationToken);
             Interlocked.Increment(ref _passesStarted);
 
             var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            using (pass.Token.Register(() => cancelled.TrySetResult(true)))
             {
                 await cancelled.Task.ConfigureAwait(false);
             }
 
             return Array.Empty<IDeviceInfo>();
         }
-
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => DiscoverAsync(CancellationToken.None);
 
         public void Dispose() => Disposed = true;
     }
@@ -2264,7 +2436,7 @@ public class ContinuousDeviceFinderTests
     /// later pass answers at once with nothing. It records how many passes were ever in flight
     /// together and whether it was disposed under one.
     /// </summary>
-    private sealed class GatedDeviceFinder : IDeviceFinder, IDisposable
+    private sealed class GatedDeviceFinder : IDeviceFinder
     {
         private readonly TaskCompletionSource _firstPassGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _passesStarted;
@@ -2286,7 +2458,7 @@ public class ContinuousDeviceFinderTests
 
         public void ReleaseFirstPass() => _firstPassGate.TrySetResult();
 
-        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
             var inFlight = Interlocked.Increment(ref _passesInFlight);
             int seen;
@@ -2310,9 +2482,6 @@ public class ContinuousDeviceFinderTests
                 Interlocked.Decrement(ref _passesInFlight);
             }
         }
-
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-            => DiscoverAsync(CancellationToken.None);
 
         public void Dispose()
         {

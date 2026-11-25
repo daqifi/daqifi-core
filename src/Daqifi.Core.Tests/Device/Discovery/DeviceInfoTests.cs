@@ -87,4 +87,17 @@ public class DeviceInfoTests
         Assert.Null(deviceInfo.LocationKey); // Default should be null
     }
 
+    [Fact]
+    public void DeviceInfo_With_LeavesTheOriginalUnchanged()
+    {
+        var original = new DeviceInfo { SerialNumber = "SN1", PortName = "COM3" };
+
+        var moved = original with { PortName = "COM7" };
+
+        Assert.Equal("COM3", original.PortName);
+        Assert.Equal("COM7", moved.PortName);
+        Assert.Equal("SN1", moved.SerialNumber);
+        Assert.NotEqual(original, moved);
+        Assert.Equal(original, moved with { PortName = "COM3" });
+    }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using static Daqifi.Core.Internal.DiagnosticGuard;
@@ -11,10 +12,11 @@ namespace Daqifi.Core.Device.Discovery;
 /// implementations (<see cref="HidDeviceFinder"/>, <see cref="SerialDeviceFinder"/>,
 /// <see cref="WiFiDeviceFinder"/>, <see cref="MDnsDeviceFinder"/>). Owns the discovery
 /// serialization semaphore, the <see cref="DeviceDiscovered"/>/<see cref="DiscoveryCompleted"/>
-/// events and their raisers, the disposed flag, and one consistent timeout/await/dispose
-/// policy so the boilerplate can no longer drift apart across copies (issue #343).
+/// events and their raisers, the disposed flag, and the one timeout/cancellation/dispose policy
+/// <see cref="IDeviceFinder.DiscoverAsync"/> documents, so it can no longer drift apart across
+/// copies (issue #343). A finder supplies only the body of a pass (<see cref="RunPassAsync"/>).
 /// </summary>
-public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
+public abstract class DeviceFinderBase : IDeviceFinder, IPartialResultReporter
 {
     /// <remarks>
     /// Deliberately never disposed. A pass that is running when the finder is disposed still
@@ -30,11 +32,9 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     // begins (see Dispose(bool)).
     private int _disposed;
 
-    /// <summary>
-    /// Serializes concurrent discovery passes on this instance. Derived finders
-    /// acquire it at the start of a discovery body and release it in a finally.
-    /// </summary>
-    protected SemaphoreSlim DiscoverySemaphore => _discoverySemaphore;
+    // 1 when the most recent pass answered with less than it set out to probe. Written by the pass
+    // and read by whoever consumes its result, so both go through Volatile/Interlocked.
+    private int _lastPassWasPartial;
 
     /// <inheritdoc />
     public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
@@ -43,34 +43,133 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     public event EventHandler? DiscoveryCompleted;
 
     /// <inheritdoc />
-    public abstract Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default);
-
-    /// <inheritdoc />
-    public virtual async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+    public virtual async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
     {
-        using var cts = new CancellationTokenSource(timeout);
+        ThrowIfInvalidTimeout(timeout);
+        ThrowIfDisposed();
+
+        // One token tells the pass to end, for either reason; which reason it was is decided here
+        // and nowhere else, so no finder can answer a timeout or a cancellation its own way.
+        using var passCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        passCts.CancelAfter(timeout ?? DefaultTimeout);
+
+        var entered = false;
         try
         {
-            return await DiscoverAsync(cts.Token).ConfigureAwait(false);
+            await _discoverySemaphore.WaitAsync(passCts.Token).ConfigureAwait(false);
+            entered = true;
+
+            // This pass's own completeness, not the last one's. Reset even if nobody took the
+            // previous value, so a pass that was cut short cannot vouch for the pass after it.
+            Volatile.Write(ref _lastPassWasPartial, 0);
+
+            var devices = await RunPassAsync(passCts.Token).ConfigureAwait(false);
+
+            // A pass that collects as it goes returns normally when its token fires.
+            cancellationToken.ThrowIfCancellationRequested();
+            return devices;
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        catch (OperationCanceledException) when (passCts.IsCancellationRequested)
         {
-            // The timeout elapsed — that is a normal terminal condition for a timed
-            // discovery, not a caller cancellation. Derived finders acquire the
-            // discovery semaphore with this token (see WiFi/Serial/Hid), so a timeout
-            // that fires while awaiting a concurrent pass would otherwise surface as
-            // OperationCanceledException; return an empty result instead so callers
-            // (e.g. DaqifiTools.GuardAsync, which rethrows OCE) see "found nothing"
-            // rather than a canceled call. This overload takes no caller token, so
-            // every cancellation here is timeout-originated.
-            //
-            // A timeout can interrupt a derived finder before it reaches its own
-            // OnDiscoveryCompleted() (e.g. HidDeviceFinder does not catch
-            // OperationCanceledException), so raise the end-of-pass signal here to
-            // keep it consistent with a normal timed pass. The raiser is already
-            // subscriber-isolated, so this cannot fault the timeout path.
-            OnDiscoveryCompleted();
-            return Array.Empty<IDeviceInfo>();
+            // Rethrown from here so the exception carries the caller's token, not the linked one.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // The timeout elapsed before the pass had anything to answer with — while it was
+            // queued behind another pass, or in an enumeration that cannot return a part of
+            // itself. "Found nothing" must not be read as "nothing is there".
+            MarkPassPartial();
+            return [];
+        }
+        catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancelling a pass can also break the transport under it. The caller asked for the
+            // cancellation, so that is the answer.
+            throw new OperationCanceledException("The discovery pass was cancelled.", ex, cancellationToken);
+        }
+        finally
+        {
+            try
+            {
+                OnDiscoveryCompleted();
+            }
+            finally
+            {
+                if (entered)
+                {
+                    _discoverySemaphore.Release();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs the body of one discovery pass. Passes on one instance never overlap: the caller holds
+    /// the finder's pass lock, and raises <see cref="DiscoveryCompleted"/> when this returns or throws.
+    /// </summary>
+    /// <param name="passToken">
+    /// Fires when the pass must end, because its timeout elapsed or because it was cancelled. A pass
+    /// that can return part of an answer returns what it has collected; one that cannot lets the
+    /// <see cref="OperationCanceledException"/> out. <see cref="DiscoverAsync"/> turns either into
+    /// what the caller asked for.
+    /// </param>
+    /// <returns>The devices found.</returns>
+    protected abstract Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken);
+
+    /// <summary>
+    /// How long a pass runs when the caller gives no timeout: to its natural end, unless a finder
+    /// that has none says otherwise.
+    /// </summary>
+    private protected virtual TimeSpan DefaultTimeout => Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// <see cref="DefaultTimeout"/> for a finder that only listens, and so would never return.
+    /// </summary>
+    private protected static readonly TimeSpan DefaultListenWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Records that the running pass is answering with less than it set out to probe
+    /// (<see cref="IPartialResultReporter"/>).
+    /// </summary>
+    private protected void MarkPassPartial() => Volatile.Write(ref _lastPassWasPartial, 1);
+
+    /// <summary>
+    /// Ends a pass whose transport failed as a whole: throws <paramref name="failure"/> when nothing
+    /// was found, because an empty list would read as "nothing is there", and otherwise records that
+    /// what was found is only part of the answer.
+    /// </summary>
+    private protected void EndFailedPass(Exception failure, int devicesFound)
+    {
+        if (devicesFound == 0)
+        {
+            ExceptionDispatchInfo.Throw(failure);
+        }
+
+        MarkPassPartial();
+    }
+
+    /// <inheritdoc />
+    bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()
+        => Interlocked.Exchange(ref _lastPassWasPartial, 0) == 1;
+
+    /// <summary>
+    /// Rejects a timeout no pass could honour, before anything is started.
+    /// </summary>
+    internal static void ThrowIfInvalidTimeout(TimeSpan? timeout)
+    {
+        if (timeout is not { } value || value == Timeout.InfiniteTimeSpan)
+        {
+            return;
+        }
+
+        // The upper limit is CancellationTokenSource.CancelAfter's.
+        if (value < TimeSpan.Zero || value.TotalMilliseconds > uint.MaxValue - 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                value,
+                "Timeout must be zero or positive, or Timeout.InfiniteTimeSpan, and no longer than a timer can run.");
         }
     }
 
@@ -140,8 +239,7 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
 
     /// <summary>
     /// Releases resources owned by the finder. Overrides must call the base
-    /// implementation so the shared discovery semaphore is disposed and the
-    /// disposed flag is set exactly once.
+    /// implementation so the disposed flag is set exactly once.
     /// </summary>
     /// <param name="disposing">
     /// <c>true</c> when called from <see cref="Dispose()"/>; <c>false</c> from a finalizer.

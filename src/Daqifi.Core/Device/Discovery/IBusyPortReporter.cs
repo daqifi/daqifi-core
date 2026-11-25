@@ -17,7 +17,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// </para>
 /// <para>
 /// This is deliberately a separate, internal seam rather than a change to
-/// <see cref="IDeviceFinder.DiscoverAsync(System.Threading.CancellationToken)"/>. A one-shot discovery has no prior identity to
+/// <see cref="IDeviceFinder.DiscoverAsync"/>. A one-shot discovery has no prior identity to
 /// reuse, so all it could say about a locked port is "something DAQiFi-shaped is here but busy" —
 /// which may or may not be worth promising in the public API, and is a decision this fix does not
 /// need to make. Continuous discovery does have the prior identity, which is what lets it resolve

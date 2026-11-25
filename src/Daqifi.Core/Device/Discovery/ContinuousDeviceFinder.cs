@@ -28,7 +28,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// ownership), one start/stop lifecycle and one live set; use separate instances
 /// when transports need any of those independently.
 /// </remarks>
-public class ContinuousDeviceFinder : IDisposable
+public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
 {
     #region Private Types
 
@@ -116,8 +116,8 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly Dictionary<string, TrackedDevice> _devices = new(StringComparer.Ordinal);
     private readonly Lock _devicesLock = new();
     /// <summary>
-    /// Guards <see cref="_lifecycle"/>, <see cref="_cts"/> and <see cref="_loopTask"/>. Only ever
-    /// held for those assignments, never across a wait on the loop.
+    /// Guards <see cref="_lifecycle"/>, <see cref="_cts"/>, <see cref="_loopTask"/> and
+    /// <see cref="_stopTask"/>. Only ever held for those assignments, never across a wait on the loop.
     /// </summary>
     private readonly Lock _lifecycleLock = new();
 
@@ -136,6 +136,13 @@ public class ContinuousDeviceFinder : IDisposable
     /// the loop that stop is waiting for.
     /// </summary>
     private Task? _loopTask;
+
+    /// <summary>
+    /// The most recent stop: what a later <see cref="StopAsync"/> waits for while
+    /// <see cref="_lifecycle"/> is <see cref="ScanLifecycle.Stopping"/>. It runs to its end whether
+    /// or not anyone is still waiting for it.
+    /// </summary>
+    private Task _stopTask = Task.CompletedTask;
 
     #endregion
 
@@ -307,60 +314,87 @@ public class ContinuousDeviceFinder : IDisposable
     /// </summary>
     /// <remarks>
     /// A call made while an earlier stop is still waiting waits for the same loop, so every
-    /// returned task completes only once the loop has actually exited.
+    /// returned task completes successfully only once the loop has actually exited.
     /// </remarks>
+    /// <param name="cancellationToken">
+    /// Abandons the wait, not the stop: the loop is cancelled all the same, and exits as soon as its
+    /// in-flight pass returns. Call again to wait for that.
+    /// </param>
     /// <returns>A task that completes once the loop has stopped.</returns>
-    public async Task StopAsync()
+    /// <exception cref="OperationCanceledException">
+    /// <paramref name="cancellationToken"/> was cancelled before the loop had exited.
+    /// </exception>
+    public Task StopAsync(CancellationToken cancellationToken = default)
     {
-        CancellationTokenSource? cts = null;
-        Task loopTask;
+        Task stopTask;
 
         lock (_lifecycleLock)
         {
             switch (_lifecycle)
             {
                 case ScanLifecycle.Running:
-                    cts = _cts;
+                    var cts = _cts!;
                     _cts = null;
-                    loopTask = _loopTask!;
                     TransitionTo(ScanLifecycle.Stopping);
+
+                    // CancelAsync runs the token's callbacks on the thread pool, so nothing of the
+                    // wrapped finder's runs on this thread or under this lock.
+                    stopTask = _stopTask = FinishStopAsync(cts, _loopTask!);
                     break;
 
                 case ScanLifecycle.Stopping:
-                    // An earlier stop has already cancelled this loop and owns its token source.
-                    loopTask = _loopTask!;
+                    stopTask = _stopTask;
                     break;
 
                 default:
-                    return;
+                    return Task.CompletedTask;
             }
         }
 
-        cts?.Cancel();
+        return stopTask.WaitAsync(cancellationToken);
+    }
 
-        try
-        {
-            await loopTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when the loop observes cancellation.
-        }
-        finally
-        {
-            cts?.Dispose();
+    /// <summary>
+    /// Ends the loop a stop has just claimed and settles the lifecycle.
+    /// </summary>
+    private async Task FinishStopAsync(CancellationTokenSource cts, Task loopTask)
+    {
+        await EndLoopAsync(cts, loopTask).ConfigureAwait(false);
 
-            lock (_lifecycleLock)
+        lock (_lifecycleLock)
+        {
+            // A Start during the wait has already moved on to a newer loop, and a Dispose has
+            // ended the lifecycle; either way this stop has nothing left to settle.
+            if (_lifecycle == ScanLifecycle.Stopping && ReferenceEquals(_loopTask, loopTask))
             {
-                // A Start during the wait has already moved on to a newer loop, and a Dispose has
-                // ended the lifecycle; either way this stop has nothing left to settle.
-                if (_lifecycle == ScanLifecycle.Stopping && ReferenceEquals(_loopTask, loopTask))
-                {
-                    _loopTask = null;
-                    TransitionTo(ScanLifecycle.Idle);
-                }
+                _loopTask = null;
+                TransitionTo(ScanLifecycle.Idle);
             }
         }
+    }
+
+    /// <summary>
+    /// Cancels and disposes <paramref name="cts"/>, when the caller owns one, and waits for
+    /// <paramref name="loopTask"/> to exit.
+    /// </summary>
+    /// <remarks>
+    /// Never throws: a fault in a cancellation callback is the wrapped finder's, and how the loop
+    /// ended does not matter to whoever is ending it. Never captures a context either, so a caller
+    /// may block on it.
+    /// </remarks>
+    private static async Task EndLoopAsync(CancellationTokenSource? cts, Task? loopTask)
+    {
+        if (cts != null)
+        {
+            await cts.CancelAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
+        if (loopTask != null)
+        {
+            await loopTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
+        cts?.Dispose();
     }
 
     /// <summary>
@@ -579,17 +613,17 @@ public class ContinuousDeviceFinder : IDisposable
         // applying them in order never sees an update for a device it has not been told about.
         foreach (var device in newlyDiscovered)
         {
-            SafeRaise(() => OnDeviceDiscovered(device));
+            SafeRaise(() => DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(device)));
         }
 
         foreach (var change in updated)
         {
-            SafeRaise(() => OnDeviceUpdated(change.Previous, change.Current));
+            SafeRaise(() => DeviceUpdated?.Invoke(this, new DeviceUpdatedEventArgs(change.Previous, change.Current)));
         }
 
         foreach (var device in lost)
         {
-            SafeRaise(() => OnDeviceLost(device));
+            SafeRaise(() => DeviceLost?.Invoke(this, new DeviceLostEventArgs(device)));
         }
 
         return new DiscoveryPassChanges(
@@ -731,48 +765,41 @@ public class ContinuousDeviceFinder : IDisposable
 
     /// <summary>
     /// Runs discovery passes until cancellation, reconciling the live set after each pass.
-    /// Each pass runs under a cancellation token linked to the loop token and cancelled
-    /// after <see cref="ContinuousDiscoveryOptions.PassTimeout"/>, so the timeout bounds the
-    /// pass and a stop/dispose interrupts an in-flight pass promptly.
+    /// Each pass gets <see cref="ContinuousDiscoveryOptions.PassTimeout"/> as its timeout and the
+    /// loop token as its cancellation token, so the timeout bounds the pass and a stop/dispose
+    /// interrupts an in-flight pass promptly.
     /// </summary>
     private async Task ScanLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            IReadOnlyCollection<IDeviceInfo>? results = null;
+            IReadOnlyList<IDeviceInfo>? results = null;
             var outcome = DiscoveryPassOutcome.Completed;
             var answeredNothing = false;
             var changes = default(DiscoveryPassChanges);
 
-            using (var passCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            try
             {
-                passCts.CancelAfter(_passTimeout);
-                try
+                results = await _finder.DiscoverAsync(_passTimeout, cancellationToken).ConfigureAwait(false) ?? [];
+            }
+            catch (OperationCanceledException)
+            {
+                // Loop-token cancellation means stop/dispose — exit the loop. A finder that
+                // answers its timeout by throwing, rather than returning what it collected, is
+                // treated as a skipped pass: leave results null so we don't fabricate losses.
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    var found = await _finder.DiscoverAsync(passCts.Token).ConfigureAwait(false);
-                    results = found == null
-                        ? Array.Empty<IDeviceInfo>()
-                        : found as IReadOnlyCollection<IDeviceInfo> ?? found.ToList();
+                    break;
                 }
-                catch (OperationCanceledException)
-                {
-                    // Outer-token cancellation means stop/dispose — exit the loop. A pass-timeout
-                    // cancellation (a finder that throws rather than returning what it collected) is
-                    // treated as a skipped pass: leave results null so we don't fabricate losses.
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
 
-                    // The pass ran out of time and the finder answered by throwing, so there is
-                    // no list at all. Nothing is reconciled, and the pass is degraded.
-                    answeredNothing = true;
-                }
-                catch (Exception ex)
-                {
-                    outcome = DiscoveryPassOutcome.Failed;
-                    SafeScanError(ex);
-                }
+                // The pass ran out of time and the finder answered by throwing, so there is
+                // no list at all. Nothing is reconciled, and the pass is degraded.
+                answeredNothing = true;
+            }
+            catch (Exception ex)
+            {
+                outcome = DiscoveryPassOutcome.Failed;
+                SafeScanError(ex);
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -783,8 +810,7 @@ public class ContinuousDeviceFinder : IDisposable
             // Whether the list is a census or only the part of the system the pass reached is
             // the FINDER's to report, never something to infer from the pass deadline having
             // elapsed. WiFiDeviceFinder and MDnsDeviceFinder have no natural end: their
-            // DiscoverAsync(CancellationToken) listens until the caller's token fires and then
-            // returns a COMPLETE answer, so for them the deadline elapses on every healthy pass.
+            // DiscoverAsync listens until the timeout elapses and then returns a COMPLETE answer, so for them the deadline elapses on every healthy pass.
             // Reading that as "incomplete" marked every pass partial, and a pass that is always
             // partial can never age a device out — DeviceLost stopped firing altogether for
             // every WiFi and mDNS device.
@@ -931,15 +957,6 @@ public class ContinuousDeviceFinder : IDisposable
 
     #region Event Raisers
 
-    /// <summary>
-    /// Raises the <see cref="DeviceDiscovered"/> event.
-    /// </summary>
-    /// <param name="deviceInfo">The newly discovered device.</param>
-    protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
-    {
-        DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
-    }
-
     /// <summary>How much a busy port can be trusted to speak for a tracked device.</summary>
     private enum BusyRescue
     {
@@ -1024,34 +1041,6 @@ public class ContinuousDeviceFinder : IDisposable
     }
 
     /// <summary>
-    /// Raises the <see cref="DeviceUpdated"/> event.
-    /// </summary>
-    /// <param name="previousDeviceInfo">The metadata the live set held before this pass.</param>
-    /// <param name="deviceInfo">The metadata the pass returned, now held by the live set.</param>
-    protected virtual void OnDeviceUpdated(IDeviceInfo previousDeviceInfo, IDeviceInfo deviceInfo)
-    {
-        DeviceUpdated?.Invoke(this, new DeviceUpdatedEventArgs(previousDeviceInfo, deviceInfo));
-    }
-
-    /// <summary>
-    /// Raises the <see cref="DeviceLost"/> event.
-    /// </summary>
-    /// <param name="deviceInfo">The device that was lost.</param>
-    protected virtual void OnDeviceLost(IDeviceInfo deviceInfo)
-    {
-        DeviceLost?.Invoke(this, new DeviceLostEventArgs(deviceInfo));
-    }
-
-    /// <summary>
-    /// Raises the <see cref="ScanError"/> event.
-    /// </summary>
-    /// <param name="exception">The exception thrown by the failed pass.</param>
-    protected virtual void OnScanError(Exception exception)
-    {
-        ScanError?.Invoke(this, new ContinuousDiscoveryErrorEventArgs(exception));
-    }
-
-    /// <summary>
     /// Invokes an event-raising action, routing any subscriber exception to
     /// <see cref="ScanError"/> so a single faulty handler can neither suppress sibling
     /// notifications nor terminate the scan loop.
@@ -1076,7 +1065,7 @@ public class ContinuousDeviceFinder : IDisposable
     {
         try
         {
-            OnScanError(exception);
+            ScanError?.Invoke(this, new ContinuousDiscoveryErrorEventArgs(exception));
         }
         catch
         {
@@ -1100,32 +1089,57 @@ public class ContinuousDeviceFinder : IDisposable
     }
 
     /// <summary>
-    /// Stops the scan loop and releases resources. Unless
+    /// Stops the scan loop and releases resources, without blocking the calling thread. Unless
     /// <see cref="ContinuousDiscoveryOptions.LeaveInnerFinderOpen"/> was set, the wrapped
     /// finder is also disposed.
     /// </summary>
     /// <remarks>
     /// Waits at most <see cref="ContinuousDiscoveryOptions.PassTimeout"/> for an in-flight pass to
-    /// return. A pass that ignores cancellation and outlasts that wait does not hold Dispose up,
+    /// return. A pass that ignores cancellation and outlasts that wait does not hold disposal up,
     /// and it does not have the wrapped finder disposed underneath it either: the finder is
     /// disposed when that pass returns.
     /// </remarks>
-    public void Dispose()
+    /// <returns>A task that completes when disposal has finished, or that wait has run out.</returns>
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await BeginDispose().WaitAsync(_passTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The pass is still inside the finder; the shutdown finishes when it comes back.
+        }
+    }
+
+    /// <summary>
+    /// Does what <see cref="DisposeAsync"/> does, blocking the calling thread for as long as that
+    /// would take. Prefer <see cref="DisposeAsync"/> on a thread that must not block, such as a UI
+    /// thread.
+    /// </summary>
+    /// <inheritdoc cref="DisposeAsync" path="/remarks"/>
+    public void Dispose() => BeginDispose().Wait(_passTimeout);
+
+    /// <summary>
+    /// Ends the lifecycle and starts the shutdown behind it, or returns a completed task when the
+    /// finder is already disposed.
+    /// </summary>
+    private Task BeginDispose()
     {
         CancellationTokenSource? cts;
         Task? loopTask;
 
         // Change the lifecycle under the lock so it cannot race with Start (which checks it under
-        // the same lock); also makes Dispose idempotent under concurrent calls.
+        // the same lock); also makes disposal idempotent under concurrent calls.
         //
         // During a stop the token source belongs to that stop (it has already cancelled it and
         // disposes it), so _cts is null here; the loop it is waiting for is still in _loopTask,
-        // and Dispose waits for it below like any other.
+        // and the shutdown waits for it like any other.
         lock (_lifecycleLock)
         {
             if (_lifecycle == ScanLifecycle.Disposed)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             cts = _cts;
@@ -1135,62 +1149,28 @@ public class ContinuousDeviceFinder : IDisposable
             TransitionTo(ScanLifecycle.Disposed);
         }
 
-        cts?.Cancel();
-
-        // Wait for the loop to stop before disposing the inner finder, so no pass is in-flight
-        // against a disposed finder. Cancelling the loop token also cancels the per-pass token,
-        // so a well-behaved finder returns promptly; the bound (scaled to PassTimeout) only
-        // guards against a finder that ignores cancellation, so Dispose can never hang. The loop
-        // uses ConfigureAwait(false) throughout, so the wait cannot deadlock on a captured context.
-        var loopExited = true;
-        if (loopTask != null)
-        {
-            try
-            {
-                loopExited = loopTask.Wait(_passTimeout);
-            }
-            catch
-            {
-                // A loop that faulted has exited; the fault itself is ignored during shutdown.
-            }
-        }
-
-        if (loopExited)
-        {
-            ReleaseAfterLoop(cts);
-            return;
-        }
-
-        // The pass is still inside the finder and ignoring cancellation. Dispose returns on time
-        // all the same, but the finder (and the token source its pass token is linked to) is
-        // released only once that pass has come back, so a slow probe never runs against a
-        // disposed transport. Only this path schedules the release, so it still happens once.
-        loopTask!.ContinueWith(
-            static (_, state) =>
-            {
-                var (owner, source) = ((ContinuousDeviceFinder, CancellationTokenSource?))state!;
-                owner.ReleaseAfterLoop(source);
-            },
-            (this, cts),
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        return ShutDownAsync(cts, loopTask);
     }
 
     /// <summary>
-    /// Releases what <see cref="Dispose"/> may only release once the scan loop has exited: the
-    /// loop's token source and, unless <see cref="ContinuousDiscoveryOptions.LeaveInnerFinderOpen"/>
-    /// was set, the wrapped finder.
+    /// Ends the scan loop and then, unless
+    /// <see cref="ContinuousDiscoveryOptions.LeaveInnerFinderOpen"/> was set, disposes the wrapped
+    /// finder.
     /// </summary>
-    private void ReleaseAfterLoop(CancellationTokenSource? cts)
+    /// <remarks>
+    /// Waits for the loop as long as it takes. Cancelling the loop token also cancels the pass, so a
+    /// well-behaved finder returns promptly; for one that does not, the disposing caller gives up
+    /// waiting and this carries on, so a slow probe never runs against a disposed transport.
+    /// </remarks>
+    private async Task ShutDownAsync(CancellationTokenSource? cts, Task? loopTask)
     {
-        cts?.Dispose();
+        await EndLoopAsync(cts, loopTask).ConfigureAwait(false);
 
-        if (!_leaveInnerFinderOpen && _finder is IDisposable disposableFinder)
+        if (!_leaveInnerFinderOpen)
         {
             try
             {
-                disposableFinder.Dispose();
+                _finder.Dispose();
             }
             catch
             {
