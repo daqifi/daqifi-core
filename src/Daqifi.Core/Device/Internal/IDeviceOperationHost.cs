@@ -46,15 +46,11 @@ internal interface IDeviceOperationHost
     bool IsStreaming { get; }
 
     /// <summary>
-    /// Records that the streaming session has been stopped. The SD operations defensively stop
-    /// streaming before they touch the card and must record that they did (issue #118).
+    /// Sends a stream stop whatever <see cref="IsStreaming"/> says, and ends the session, as one
+    /// step. The SD operations defensively stop streaming before they touch the card (issue #118).
     /// </summary>
-    void EndStreamingSession();
-
-    /// <summary>
-    /// Records that a start of the stream did not take effect, so no session is running.
-    /// </summary>
-    void MarkStreamingStartRefused();
+    /// <returns><see cref="IsStreaming"/> as it stood immediately before the stop.</returns>
+    bool SendStreamStop();
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
     int StreamingFrequency { get; }

@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.SdCard;
@@ -488,13 +489,26 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task GetSdCardFilesAsync_ALogWhoseStopWasNeverSent_IsStillRunning()
+    {
+        // A stop held back behind another operation releases the card, and gives it back when it
+        // is dropped instead of sent: the device is still recording.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingAsync("test.bin");
+        await ops.StopSdCardLoggingAsync();
+        host.StartSdCardLogStream(100);
+
+        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardFilesAsync());
+    }
+
+    [Fact]
     public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheListingResult()
     {
         // Qodo review (#566): the resume runs in a finally, so a device that drops between the
         // IsConnected check and the resume send must not turn a listing that already succeeded
-        // into a failure the caller never asked about. And DaqifiStreamingDevice.StartStreaming
-        // sets IsStreaming = true before it sends, so a failed resume must not leave that flag
-        // true for a stream that never actually came back — the fake reproduces that ordering.
+        // into a failure the caller never asked about, and must not report a stream that never
+        // came back.
         var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
         host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
         var ops = new SdCardOperations(host);
@@ -2631,12 +2645,17 @@ public partial class SdCardOperationsCollaboratorTests
 
         public bool IsLoggingToSdCard { get; private set; }
 
-        public void EndStreamingSession() => IsStreaming = false;
-
-        public void MarkStreamingStartRefused() => IsStreaming = false;
-
-        public void BeginSdCardLogSession()
+        public bool SendStreamStop()
         {
+            var wasStreaming = IsStreaming;
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
+            return wasStreaming;
+        }
+
+        public void StartSdCardLogStream(int rateHz)
+        {
+            Send(ScpiMessageProducer.StartStreaming(rateHz));
             IsStreaming = true;
             IsLoggingToSdCard = true;
         }
@@ -2964,11 +2983,7 @@ public partial class SdCardOperationsCollaboratorTests
 
             if (ThrowOnStartStreaming)
             {
-                // Mirrors DaqifiStreamingDevice.StartStreaming, which sets IsStreaming = true
-                // BEFORE sending the SCPI command — so a Send failure there leaves the flag true
-                // for a stream that never actually resumed, exactly what a caller of this fake
-                // needs to be able to reproduce.
-                IsStreaming = true;
+                // As DaqifiStreamingDevice.StartStreaming does, this leaves no session recorded.
                 throw new InvalidOperationException("Simulated StartStreaming failure.");
             }
 

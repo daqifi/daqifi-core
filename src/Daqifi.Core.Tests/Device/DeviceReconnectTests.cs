@@ -1627,7 +1627,7 @@ public class DeviceReconnectTests
         using var device = new ScriptedStreamingDevice("Logging Device", transport);
 
         ConnectAndInitialize(device);
-        ((ISdCardOperationHost)device).BeginSdCardLogSession();
+        ((ISdCardOperationHost)device).StartSdCardLogStream(100);
         Assert.True(device.IsLoggingToSdCard);
         Assert.True(device.IsStreaming);
 

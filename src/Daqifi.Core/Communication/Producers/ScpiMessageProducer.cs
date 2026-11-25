@@ -531,6 +531,14 @@ public static class ScpiMessageProducer
     public static IOutboundMessage<string> StopStreaming { get; } = new ScpiMessage(StopStreamingCommand);
 
     /// <summary>
+    /// Creates a query for whether the device is streaming. The device answers <c>1</c> or <c>0</c>.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:StreamData?
+    /// </remarks>
+    internal static IOutboundMessage<string> GetStreamingState { get; } = new ScpiMessage("SYSTem:StreamData?");
+
+    /// <summary>
     /// Creates a command message to set the stream format to Protocol Buffer.
     /// </summary>
     /// <remarks>

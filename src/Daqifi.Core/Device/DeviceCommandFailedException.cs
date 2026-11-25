@@ -1,18 +1,19 @@
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// Thrown by the confirming (<c>...Async</c>) device-administration commands when the device did
-/// not accept the command — or when it never said whether it did.
+/// Thrown by the confirming (<c>...Async</c>) device commands when the device did not accept the
+/// command — or when it never said whether it did.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The fire-and-forget administration commands (<see cref="IStreamingDevice.LoadAdcCalibration"/>
-/// and friends) return <c>void</c> and parse no reply, so a device that refuses the command is
-/// indistinguishable from one that carried it out. Bench evidence on a real Nyquist running
-/// firmware 3.7.2: <c>CONFigure:ADC:LOADcal</c> answers <c>-200,"Execution error"</c> on a unit
-/// whose user calibration bank was never written, and the caller learns nothing. The confirming
-/// variants close that gap by reading the device's SCPI error queue after the command and
-/// raising this exception rather than reporting a success the device never gave.
+/// A command that is sent and never asked about is indistinguishable from one the device refused.
+/// Bench evidence on a real Nyquist running firmware 3.7.2: <c>CONFigure:ADC:LOADcal</c> answers
+/// <c>-200,"Execution error"</c> on a unit whose user calibration bank was never written. The
+/// confirming commands ask: the calibration ones read the device's SCPI error queue, and
+/// <see cref="IStreamingDevice.StartStreamingAsync"/>,
+/// <see cref="IStreamingDevice.StopStreamingAsync"/> and
+/// <see cref="IStreamingDevice.RebootAsync"/> each state their own confirmation. All raise this
+/// exception rather than report a success the device never gave.
 /// </para>
 /// <para>
 /// <see cref="ErrorCode"/> and <see cref="DaqifiDeviceException.RawDeviceResponse"/> together say how
@@ -25,13 +26,14 @@ namespace Daqifi.Core.Device;
 /// </description></item>
 /// <item><description>
 /// <b>No code, but a response line</b> — the device answered, but with nothing carrying a readable
-/// code: a bare <c>ERROR</c>, or a queue reply whose code would not parse. The command is not
-/// confirmed, and the raw line is all there is to go on.
+/// code: a bare <c>ERROR</c>, a queue reply whose code would not parse, or a state that contradicts
+/// the command. The command is not confirmed, and the raw line is all there is to go on.
 /// </description></item>
 /// <item><description>
 /// <b>Neither</b> (no code and an empty response) — nothing readable came back at all, so
 /// whether the command was applied is <em>unknown</em>. Usually the link or the device needs
-/// attention before a retry is meaningful.
+/// attention before a retry is meaningful. A command that was never sent has neither too, and its
+/// message says so.
 /// </description></item>
 /// </list>
 /// <para>
@@ -108,6 +110,50 @@ public class DeviceCommandFailedException : DaqifiDeviceException
         Command = command;
         ErrorCode = null;
     }
+
+    /// <summary>
+    /// Initializes a new instance with a message of its own, for a command whose confirmation is
+    /// something other than the error queue.
+    /// </summary>
+    private DeviceCommandFailedException(
+        string command, string? deviceResponse, string message, Exception? innerException = null)
+        : base(message, ToLines(deviceResponse), innerException)
+    {
+        Command = command;
+        ErrorCode = null;
+    }
+
+    /// <summary>
+    /// The device gave no usable answer, so whether the command was applied is unknown.
+    /// </summary>
+    internal static DeviceCommandFailedException Unconfirmed(string command, string? deviceResponse)
+        => new(
+            command,
+            deviceResponse,
+            $"The device did not confirm '{command}'"
+            + (deviceResponse == null ? string.Empty : $"; it answered {deviceResponse}")
+            + ". The command was sent, so whether it was applied is unknown.");
+
+    /// <summary>
+    /// The device answered, and its answer says the command did not take effect.
+    /// </summary>
+    /// <param name="command">The SCPI command that was sent.</param>
+    /// <param name="what">What the device said, as a verb phrase following "The device".</param>
+    /// <param name="deviceResponse">The raw line it said that in.</param>
+    internal static DeviceCommandFailedException Contradicted(string command, string what, string deviceResponse)
+        => new(
+            command,
+            deviceResponse,
+            $"The device {what} after '{command}' (it answered {deviceResponse}). "
+            + "The command did not take effect.");
+
+    /// <summary>
+    /// The command never reached the device.
+    /// </summary>
+    /// <param name="command">The SCPI command.</param>
+    /// <param name="reason">Why it was not sent.</param>
+    internal static DeviceCommandFailedException NotSent(string command, Exception reason)
+        => new(command, null, $"'{command}' was not sent to the device. {reason.Message}", reason);
 
     private static string[]? ToLines(string? deviceResponse)
         => deviceResponse == null ? null : [deviceResponse];

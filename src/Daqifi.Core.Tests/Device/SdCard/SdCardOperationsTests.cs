@@ -356,6 +356,53 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
+    public async Task StartSdCardLoggingAsync_ConnectionEndsAsTheStartGoesOut_FailsAndReleasesTheCard()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        device.AfterSend = command =>
+        {
+            if (command.Contains("StartStreamData", StringComparison.Ordinal))
+            {
+                device.AfterSend = null;
+                device.Disconnect();
+            }
+        };
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.StartSdCardLoggingAsync("test.bin"));
+
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.False(device.IsStreaming);
+
+        // The bus claim went with it: a start on the next connection is admitted.
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        Assert.True(device.IsLoggingToSdCard);
+    }
+
+    [Fact]
+    public async Task StartSdCardLoggingAsync_StartCannotBeSent_LeavesTheLiveStreamRecorded()
+    {
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.Connect();
+        device.StartStreaming();
+        var sawSdSession = false;
+        device.AfterSend = command =>
+        {
+            if (command.Contains("StartStreamData", StringComparison.Ordinal) && !sawSdSession)
+            {
+                sawSdSession = device.IsLoggingToSdCard;
+                throw new IOException("gone");
+            }
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => device.StartSdCardLoggingAsync("test.bin"));
+
+        Assert.False(device.IsLoggingToSdCard);
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
     public async Task StartSdCardLoggingAsync_SetsIsLoggingToTrue()
     {
         // Arrange
@@ -3452,7 +3499,19 @@ public partial class SdCardOperationsTests
             {
                 base.Send(message);
             }
+            else if (!IsConnected)
+            {
+                throw new DeviceNotConnectedException();
+            }
+
+            if (message is IOutboundMessage<string> sent)
+            {
+                AfterSend?.Invoke(sent.Data);
+            }
         }
+
+        /// <summary>Runs after a command was sent.</summary>
+        public Action<string>? AfterSend { get; set; }
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
