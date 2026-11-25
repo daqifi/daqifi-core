@@ -227,14 +227,16 @@ internal sealed class SdCardJsonFileParser
             }
         }
 
-        var config = new SdCardDeviceConfiguration(
-            AnalogPortCount: analogChannelCount,
-            DigitalPortCount: 0,  // The firmware's log states no digital port count.
-            TimestampFrequency: timestampFrequency,
-            DeviceSerialNumber: serialNumber,
-            DevicePartNumber: deviceName,
-            FirmwareVersion: null,
-            CalibrationValues: null);
+        var config = new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = analogChannelCount,
+            DigitalPortCount = 0,  // The firmware's log states no digital port count.
+            TimestampFrequency = timestampFrequency,
+            DeviceSerialNumber = serialNumber,
+            DevicePartNumber = deviceName,
+            FirmwareVersion = null,
+            CalibrationValues = null
+        };
 
         return new JsonHeader(sawAnyObject, config);
     }
@@ -287,8 +289,12 @@ internal sealed class SdCardJsonFileParser
                     ? timestampReconstructor.Advance(sample.Timestamp, baseTime)
                     : baseTime;
 
-                yield return new SdCardLogEntry(absoluteTime, analogValues, sample.DigitalData, null)
+                yield return new SdCardLogEntry
                 {
+                    Timestamp = absoluteTime,
+                    AnalogValues = analogValues,
+                    DigitalData = sample.DigitalData,
+                    AnalogTimestamps = null,
                     HasDeviceTimestamp = hasDeviceTimestamp
                 };
 
@@ -297,13 +303,23 @@ internal sealed class SdCardJsonFileParser
                 // Report progress every 100 samples for efficiency
                 if (samplesProduced % 100 == 0 && progress != null)
                 {
-                    progress.Report(new SdCardParseProgress(bytesRead, totalBytes, samplesProduced));
+                    progress.Report(new SdCardParseProgress
+                    {
+                        BytesRead = bytesRead,
+                        TotalBytes = totalBytes,
+                        MessagesRead = samplesProduced
+                    });
                 }
             }
         }
 
         // Final progress report
-        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, samplesProduced));
+        progress?.Report(new SdCardParseProgress
+        {
+            BytesRead = bytesRead,
+            TotalBytes = totalBytes,
+            MessagesRead = samplesProduced
+        });
     }
 
     /// <summary>The device context a <c>"meta"</c> header states.</summary>

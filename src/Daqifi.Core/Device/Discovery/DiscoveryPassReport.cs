@@ -63,47 +63,57 @@ public enum DiscoveryPassOutcome
 /// discovery to stop, so it knows why the reports end.
 /// </para>
 /// </remarks>
-/// <param name="Outcome">How the pass ended.</param>
-/// <param name="DevicesSeen">
-/// How many distinct devices the pass returned, counted by identity, so a device the pass listed
-/// twice counts once. Zero for a pass that returned nothing. A pass that ran out of time reports
-/// the part it had collected, which can be fewer devices than are live.
-/// </param>
-/// <param name="NewDevices">
-/// How many of those devices were not in the live set before this pass. Each one also raised
-/// <see cref="ContinuousDeviceFinder.DeviceDiscovered"/>.
-/// </param>
-/// <param name="MetadataUpdates">
-/// How many devices the live set already held came back with different metadata — a new IP
-/// address, a new port name, a new power state, and so on. Each one also raised
-/// <see cref="ContinuousDeviceFinder.DeviceUpdated"/>, which is what a consumer redrawing one
-/// row binds to; this count is the summary of them.
-/// </param>
-/// <param name="LostDevices">
-/// How many devices this pass removed from the live set, after
-/// <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive misses. Each one also
-/// raised <see cref="ContinuousDeviceFinder.DeviceLost"/>. Always zero for a pass that did not
-/// finish: a pass that ran out of time counts no miss, because a device missing from an
-/// unfinished list may simply be one the pass never reached.
-/// </param>
-/// <param name="LiveDeviceCount">
-/// How many devices the live set holds now that the pass is folded in: the size of
-/// <see cref="ContinuousDeviceFinder.Devices"/> at the moment of the report. A pass that did not
-/// finish still reports this, because the devices found earlier are still live. That is why it
-/// can exceed <see cref="DevicesSeen"/> on a timed-out pass.
-/// </param>
-/// <param name="NextPassDelay">
-/// The pause before the next pass starts, which is
-/// <see cref="ContinuousDiscoveryOptions.Interval"/>. A bounded retry can say "this was the last
-/// attempt" with a zero delay; a continuous loop cannot, because an interval of zero is a
-/// legitimate setting and a pass always follows. A consumer learns that discovery stopped by
-/// stopping it, and the reports then end.
-/// </param>
-public readonly record struct DiscoveryPassReport(
-    DiscoveryPassOutcome Outcome,
-    int DevicesSeen,
-    int NewDevices,
-    int MetadataUpdates,
-    int LostDevices,
-    int LiveDeviceCount,
-    TimeSpan NextPassDelay);
+public readonly record struct DiscoveryPassReport
+{
+    /// <summary>
+    /// Gets how the pass ended.
+    /// </summary>
+    public required DiscoveryPassOutcome Outcome { get; init; }
+
+    /// <summary>
+    /// Gets how many distinct devices the pass returned, counted by identity, so a device the pass listed
+    /// twice counts once. Zero for a pass that returned nothing. A pass that ran out of time reports
+    /// the part it had collected, which can be fewer devices than are live.
+    /// </summary>
+    public required int DevicesSeen { get; init; }
+
+    /// <summary>
+    /// Gets how many of those devices were not in the live set before this pass. Each one also raised
+    /// <see cref="ContinuousDeviceFinder.DeviceDiscovered"/>.
+    /// </summary>
+    public required int NewDevices { get; init; }
+
+    /// <summary>
+    /// Gets how many devices the live set already held came back with different metadata — a new IP
+    /// address, a new port name, a new power state, and so on. Each one also raised
+    /// <see cref="ContinuousDeviceFinder.DeviceUpdated"/>, which is what a consumer redrawing one
+    /// row binds to; this count is the summary of them.
+    /// </summary>
+    public required int MetadataUpdates { get; init; }
+
+    /// <summary>
+    /// Gets how many devices this pass removed from the live set, after
+    /// <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive misses. Each one also
+    /// raised <see cref="ContinuousDeviceFinder.DeviceLost"/>. Always zero for a pass that did not
+    /// finish: a pass that ran out of time counts no miss, because a device missing from an
+    /// unfinished list may simply be one the pass never reached.
+    /// </summary>
+    public required int LostDevices { get; init; }
+
+    /// <summary>
+    /// Gets how many devices the live set holds now that the pass is folded in: the size of
+    /// <see cref="ContinuousDeviceFinder.Devices"/> at the moment of the report. A pass that did not
+    /// finish still reports this, because the devices found earlier are still live. That is why it
+    /// can exceed <see cref="DevicesSeen"/> on a timed-out pass.
+    /// </summary>
+    public required int LiveDeviceCount { get; init; }
+
+    /// <summary>
+    /// Gets the pause before the next pass starts, which is
+    /// <see cref="ContinuousDiscoveryOptions.Interval"/>. A bounded retry can say "this was the last
+    /// attempt" with a zero delay; a continuous loop cannot, because an interval of zero is a
+    /// legitimate setting and a pass always follows. A consumer learns that discovery stopped by
+    /// stopping it, and the reports then end.
+    /// </summary>
+    public required TimeSpan NextPassDelay { get; init; }
+}

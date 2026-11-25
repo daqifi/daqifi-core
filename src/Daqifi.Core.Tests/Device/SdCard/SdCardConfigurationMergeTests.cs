@@ -15,14 +15,16 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// </remarks>
 public class SdCardConfigurationMergeTests
 {
-    private static SdCardDeviceConfiguration Empty() => new(
-        AnalogPortCount: 0,
-        DigitalPortCount: 0,
-        TimestampFrequency: 0u,
-        DeviceSerialNumber: null,
-        DevicePartNumber: null,
-        FirmwareVersion: null,
-        CalibrationValues: null);
+    private static SdCardDeviceConfiguration Empty() => new()
+    {
+        AnalogPortCount = 0,
+        DigitalPortCount = 0,
+        TimestampFrequency = 0u,
+        DeviceSerialNumber = null,
+        DevicePartNumber = null,
+        FirmwareVersion = null,
+        CalibrationValues = null
+    };
 
     [Fact]
     public void Merge_WithNullOverride_ReturnsTheParsedConfigurationItself()

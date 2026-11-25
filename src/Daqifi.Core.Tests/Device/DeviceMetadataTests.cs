@@ -1,6 +1,7 @@
 using System;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.Capabilities;
 using Google.Protobuf;
 using Xunit;
@@ -253,8 +254,8 @@ public class DeviceMetadataTests
         Assert.Equal("TestNetwork", metadata.Ssid);
         Assert.Equal("daqifi-001", metadata.HostName);
         Assert.Equal(9760, metadata.DevicePort);
-        Assert.Equal(3u, metadata.WifiSecurityMode);
-        Assert.Equal(1u, metadata.WifiInfrastructureMode);
+        Assert.Equal(WifiSecurityType.WpaPskPhrase, metadata.WifiSecurityMode);
+        Assert.Equal(WifiMode.ExistingNetwork, metadata.WifiInfrastructureMode);
     }
 
     [Fact]
@@ -263,15 +264,15 @@ public class DeviceMetadataTests
         // #986: an open network is security mode 0, which proto3 drops on the wire. Round-trip
         // the SYSInfoPB-shaped status through the encoder so field 60 is genuinely absent.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 1, infMode: 1));
-        Assert.Equal(1u, metadata.WifiSecurityMode);
+        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 3, infMode: 1));
+        Assert.Equal(WifiSecurityType.WpaPskPhrase, metadata.WifiSecurityMode);
 
         var openStatus = DaqifiOutMessage.Parser.ParseFrom(
             SysInfoStatus(securityMode: 0, infMode: 4).ToByteArray());
         metadata.UpdateFromProtobuf(openStatus);
 
-        Assert.Equal(0u, metadata.WifiSecurityMode);
-        Assert.Equal(4u, metadata.WifiInfrastructureMode);
+        Assert.Equal(WifiSecurityType.None, metadata.WifiSecurityMode);
+        Assert.Equal(WifiMode.SelfHosted, metadata.WifiInfrastructureMode);
     }
 
     [Theory]
@@ -315,8 +316,58 @@ public class DeviceMetadataTests
 
         metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(message.ToByteArray()));
 
-        Assert.Equal(3u, metadata.WifiSecurityMode);
-        Assert.Equal(1u, metadata.WifiInfrastructureMode);
+        Assert.Equal(WifiSecurityType.WpaPskPhrase, metadata.WifiSecurityMode);
+        Assert.Equal(WifiMode.ExistingNetwork, metadata.WifiInfrastructureMode);
+    }
+
+    [Fact]
+    public void WifiSettings_BeforeAnyStatus_AreNull()
+    {
+        // Not reported must not read as "open network" (#1039).
+        var metadata = new DeviceMetadata();
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", DeviceFwRev = "3.9.1" });
+
+        Assert.Null(metadata.WifiSecurityMode);
+        Assert.Null(metadata.WifiInfrastructureMode);
+    }
+
+    [Theory]
+    [InlineData(0u, WifiSecurityType.None)]
+    [InlineData(3u, WifiSecurityType.WpaPskPhrase)]
+    [InlineData(4u, WifiSecurityType.WpaPskPhrase)] // WPA_DEPRECATED, the older number for 3
+    [InlineData(1u, null)] // WEP_40
+    [InlineData(99u, null)]
+    public void UpdateFromProtobuf_SecurityMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiSecurityType? expected)
+    {
+        // Start from a type the case does not expect, so a kept old value fails.
+        var metadata = new DeviceMetadata
+        {
+            WifiSecurityMode = expected == WifiSecurityType.None ? WifiSecurityType.WpaPskPhrase : WifiSecurityType.None
+        };
+
+        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(
+            SysInfoStatus(securityMode: wireValue, infMode: 1).ToByteArray()));
+
+        Assert.Equal(expected, metadata.WifiSecurityMode);
+    }
+
+    [Theory]
+    [InlineData(1u, WifiMode.ExistingNetwork)]
+    [InlineData(4u, WifiMode.SelfHosted)]
+    [InlineData(2u, null)]
+    [InlineData(99u, null)]
+    public void UpdateFromProtobuf_InfrastructureMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiMode? expected)
+    {
+        var metadata = new DeviceMetadata
+        {
+            WifiInfrastructureMode = expected == WifiMode.SelfHosted ? WifiMode.ExistingNetwork : WifiMode.SelfHosted
+        };
+
+        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(
+            SysInfoStatus(securityMode: 3, infMode: wireValue).ToByteArray()));
+
+        Assert.Equal(expected, metadata.WifiInfrastructureMode);
     }
 
     /// <summary>
@@ -588,8 +639,8 @@ public class DeviceMetadataTests
             HostName = "daqifi-001",
             FriendlyName = "My Device",
             DevicePort = 9760,
-            WifiSecurityMode = 3,
-            WifiInfrastructureMode = 1
+            WifiSecurityMode = WifiSecurityType.WpaPskPhrase,
+            WifiInfrastructureMode = WifiMode.ExistingNetwork
         };
         var target = new DeviceMetadata();
 

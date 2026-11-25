@@ -1420,9 +1420,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     #region INetworkConfigurable
 
     /// <inheritdoc />
-    public NetworkConfiguration NetworkConfiguration => _networkOperations.NetworkConfiguration;
-
-    /// <inheritdoc />
     /// <remarks>
     /// Runs under <see cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>:
     /// the reconfiguration is a dozen sends that only make sense as one sequence — another
@@ -1450,12 +1447,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <inheritdoc />
     public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
         => _networkOperations.FactoryResetNetworkAsync(cancellationToken);
-
-    /// <inheritdoc />
-    public void PrepareSdInterface() => _sdCardOperations.PrepareSdInterface();
-
-    /// <inheritdoc />
-    public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
 
     #endregion
 
@@ -1547,6 +1538,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         IProgress<SdCardTransferProgress>? progress = null,
         CancellationToken cancellationToken = default)
         => _sdCardOperations.DownloadSdCardFileAsync(fileName, progress, cancellationToken);
+
+    /// <inheritdoc />
+    public void PrepareSdInterface() => _sdCardOperations.PrepareSdInterface();
+
+    /// <inheritdoc />
+    public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
 
     /// <summary>
     /// Raises the <see cref="LowSdSpaceWarning"/> event.

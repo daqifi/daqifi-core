@@ -399,15 +399,16 @@ internal sealed class WifiModuleUpdater
         // firmware. The loop itself is public API (issue #269) so consumers share one
         // implementation of it rather than each hand-rolling their own; see
         // GetLanChipInfoWithRetryAsync for what it does and why.
-        var (chipInfo, wasLanNotInitialized) = await lanChipInfoProvider
+        var probe = await lanChipInfoProvider
             .GetLanChipInfoWithRetryAsync(BuildLanChipInfoRetryOptions(), Logger, cancellationToken)
             .ConfigureAwait(false);
+        var chipInfo = probe.ChipInfo;
         if (chipInfo == null)
         {
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
-                Reason = wasLanNotInitialized
+                Reason = probe.WasLanNotInitialized
                     ? WifiFirmwareStatusReason.LanNotInitialized
                     : WifiFirmwareStatusReason.ChipInfoUnavailable,
                 MinimumSupportedVersion = minimumSupported,

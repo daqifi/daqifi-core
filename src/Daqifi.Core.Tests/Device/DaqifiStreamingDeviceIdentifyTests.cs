@@ -44,7 +44,7 @@ public class DaqifiStreamingDeviceIdentifyTests
             () => device.SetIdentifyAsync(true));
 
         Assert.Equal(DeviceFeature.Identify, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), ex.RequiredVersion);
         Assert.Empty(device.SentCommands);
     }
 
@@ -82,7 +82,7 @@ public class DaqifiStreamingDeviceIdentifyTests
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetIdentifyAsync());
 
         Assert.Equal(DeviceFeature.Identify, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), ex.RequiredVersion);
     }
 
     [Fact]

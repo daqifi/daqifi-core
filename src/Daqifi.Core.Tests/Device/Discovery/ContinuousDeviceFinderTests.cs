@@ -1610,7 +1610,16 @@ public class ContinuousDeviceFinderTests
         int metadataUpdates = 0,
         int lostDevices = 0,
         int liveDeviceCount = 0)
-        => new(outcome, devicesSeen, newDevices, metadataUpdates, lostDevices, liveDeviceCount, ReportInterval);
+        => new()
+        {
+            Outcome = outcome,
+            DevicesSeen = devicesSeen,
+            NewDevices = newDevices,
+            MetadataUpdates = metadataUpdates,
+            LostDevices = lostDevices,
+            LiveDeviceCount = liveDeviceCount,
+            NextPassDelay = ReportInterval
+        };
 
     [Fact]
     public async Task Start_WithEveryKindOfPassInARow_ReportsThemInOrder()

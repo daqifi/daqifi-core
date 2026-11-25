@@ -22,11 +22,9 @@ namespace Daqifi.Core.Tests.Device.Network;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <c>NetworkConfigurableTests</c> already covers what each configuration command puts on the wire
-/// and how the facade's local <see cref="NetworkConfiguration"/> snapshot ends up, driven end-to-end
-/// through a testable <see cref="DaqifiStreamingDevice"/> subclass. That file is deliberately
-/// untouched: it is the evidence the extraction changed nothing observable, and re-testing the same
-/// ground here would only duplicate it.
+/// <c>NetworkConfigurableTests</c> already covers what each configuration command puts on the wire,
+/// driven end-to-end through a testable <see cref="DaqifiStreamingDevice"/> subclass. Re-testing the
+/// same ground here would only duplicate it.
 /// </para>
 /// <para>
 /// What a direct test adds is what only the seam-level fake makes cheap to pin down: the exact
@@ -62,7 +60,7 @@ public class NetworkConfigurationOperationsTests
     /// <see cref="System.Threading.Tasks.Task.Delay">2-second module-restart wait</see> instead of
     /// paying it. The collaborator already treats a token that goes canceled during that wait as
     /// "the device already committed" and completes normally rather than throwing (see
-    /// <see cref="UpdateNetworkConfigurationAsync_CanceledDuringTheRestartWait_CompletesAndUpdatesLocalState"/>),
+    /// <see cref="UpdateNetworkConfigurationAsync_CanceledDuringTheRestartWait_Completes"/>),
     /// so this changes nothing about what a test using it observes — only how long it takes.
     /// </summary>
     private static void SkipRestartDelay(FakeHost host, CancellationTokenSource cts)
@@ -297,12 +295,11 @@ public class NetworkConfigurationOperationsTests
     }
 
     [Fact]
-    public async Task UpdateNetworkConfigurationAsync_CanceledDuringTheRestartWait_CompletesAndUpdatesLocalState()
+    public async Task UpdateNetworkConfigurationAsync_CanceledDuringTheRestartWait_Completes()
     {
         // Past the save/apply the device has already committed. An already-canceled token at that
-        // point makes Task.Delay throw synchronously; the collaborator swallows it and still updates
-        // the cached NetworkConfiguration, because reporting "canceled" here would be a lie about
-        // what the device actually did.
+        // point makes Task.Delay throw synchronously; the collaborator swallows it, because reporting
+        // "canceled" here would be a lie about what the device actually did.
         using var cts = new CancellationTokenSource();
         var host = new FakeHost { SendHook = call => { if (call == "send:" + ApplyLan) cts.Cancel(); } };
         var ops = new NetworkConfigurationOperations(host);
@@ -313,50 +310,6 @@ public class NetworkConfigurationOperationsTests
 
         Assert.Contains("send:" + SaveLan, host.Calls);
         Assert.Contains("send:" + ApplyLan, host.Calls);
-        Assert.Equal("NewNetwork", ops.NetworkConfiguration.Ssid);
-    }
-
-    #endregion
-
-    #region NetworkConfiguration snapshot
-
-    [Fact]
-    public void NetworkConfiguration_ReturnsAFreshCloneEachTime()
-    {
-        var host = new FakeHost();
-        var ops = new NetworkConfigurationOperations(host);
-
-        var first = ops.NetworkConfiguration;
-        var second = ops.NetworkConfiguration;
-        first.Ssid = "Mutated";
-
-        Assert.NotSame(first, second);
-        Assert.NotEqual("Mutated", second.Ssid);
-    }
-
-    [Fact]
-    public async Task UpdateNetworkConfigurationAsync_NullStaticFieldsOnASecondCall_PreserveThePreviouslyCachedValues()
-    {
-        using var cts = new CancellationTokenSource();
-        var host = new FakeHost();
-        SkipRestartDelay(host, cts);
-        var ops = new NetworkConfigurationOperations(host);
-        var staticIp = IPAddress.Parse("10.0.0.5");
-        var subnet = IPAddress.Parse("255.255.255.0");
-        var gateway = IPAddress.Parse("10.0.0.1");
-        await ops.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "Net", "Pass", staticIp, subnet, gateway), cts.Token);
-
-        // A fresh token: the first call already canceled the one above, and cancellation checked at
-        // the top of the method must not reject this second, otherwise-independent call.
-        using var cts2 = new CancellationTokenSource();
-        SkipRestartDelay(host, cts2);
-        await ops.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "OtherNet", "OtherPass"), cts2.Token);
-
-        Assert.Equal(staticIp, ops.NetworkConfiguration.StaticIP);
-        Assert.Equal(subnet, ops.NetworkConfiguration.SubnetMask);
-        Assert.Equal(gateway, ops.NetworkConfiguration.Gateway);
     }
 
     #endregion

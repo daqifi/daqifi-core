@@ -182,26 +182,28 @@ public sealed class AcquisitionStatistics : IDisposable
             foreach (var pair in _channels)
             {
                 var state = pair.Value;
-                channels.Add(new ChannelAcquisitionStatistics(
-                    pair.Key.Type,
-                    pair.Key.Number,
-                    state.Name,
-                    state.SampleCount,
-                    state.EarliestTimestamp,
-                    state.LatestTimestamp,
-                    state.FirstReceivedAt,
-                    state.LastReceivedAt,
-                    new TimeSpan(state.MinIntervalTicks),
-                    new TimeSpan(state.MaxIntervalTicks),
-                    state.OutOfOrderCount,
-                    state.MinValue,
-                    state.MaxValue,
+                channels.Add(new ChannelAcquisitionStatistics
+                {
+                    ChannelType = pair.Key.Type,
+                    ChannelNumber = pair.Key.Number,
+                    Name = state.Name,
+                    SampleCount = state.SampleCount,
+                    EarliestSampleTimestamp = state.EarliestTimestamp,
+                    LatestSampleTimestamp = state.LatestTimestamp,
+                    FirstReceivedAt = state.FirstReceivedAt,
+                    LastReceivedAt = state.LastReceivedAt,
+                    MinSampleInterval = new TimeSpan(state.MinIntervalTicks),
+                    MaxSampleInterval = new TimeSpan(state.MaxIntervalTicks),
+                    OutOfOrderSampleCount = state.OutOfOrderCount,
+                    MinValue = state.MinValue,
+                    MaxValue = state.MaxValue,
 
                     // An entry exists only because a sample created it, and every sample
                     // increments ValueSampleCount, so it is never zero here.
-                    state.ValueSum / state.ValueSampleCount,
-                    state.Scaling?.Unit,
-                    state.ValueSampleCount));
+                    MeanValue = state.ValueSum / state.ValueSampleCount,
+                    Unit = state.Scaling?.Unit,
+                    ValueSampleCount = state.ValueSampleCount
+                });
             }
 
             // Device order — analog first, then digital, ascending within each — so a caller
@@ -216,15 +218,17 @@ public sealed class AcquisitionStatistics : IDisposable
             });
 
             var hasSamples = _totalSampleCount > 0;
-            return new AcquisitionStatisticsSnapshot(
-                _startedAt,
-                _totalSampleCount,
-                hasSamples ? _firstReceivedAt : DateTime.MinValue,
-                hasSamples ? _lastReceivedAt : DateTime.MinValue,
-                hasSamples ? new TimeSpan(_minLatencyTicks) : TimeSpan.Zero,
-                hasSamples ? new TimeSpan(_maxLatencyTicks) : TimeSpan.Zero,
-                hasSamples ? new TimeSpan((long)(_latencyTicksSum / _totalSampleCount)) : TimeSpan.Zero,
-                channels);
+            return new AcquisitionStatisticsSnapshot
+            {
+                StartedAt = _startedAt,
+                TotalSampleCount = _totalSampleCount,
+                FirstReceivedAt = hasSamples ? _firstReceivedAt : DateTime.MinValue,
+                LastReceivedAt = hasSamples ? _lastReceivedAt : DateTime.MinValue,
+                MinLatency = hasSamples ? new TimeSpan(_minLatencyTicks) : TimeSpan.Zero,
+                MaxLatency = hasSamples ? new TimeSpan(_maxLatencyTicks) : TimeSpan.Zero,
+                MeanLatency = hasSamples ? new TimeSpan((long)(_latencyTicksSum / _totalSampleCount)) : TimeSpan.Zero,
+                Channels = channels
+            };
         }
     }
 
