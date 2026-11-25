@@ -6,27 +6,27 @@ namespace Daqifi.Core.Firmware;
 public sealed class FirmwareUpdateProgress
 {
     /// <summary>
-    /// Gets or sets the active firmware update state.
+    /// Gets the active firmware update state.
     /// </summary>
-    public FirmwareUpdateState State { get; set; }
+    public FirmwareUpdateState State { get; init; }
 
     /// <summary>
-    /// Gets or sets the completion percentage in the range 0-100.
+    /// Gets the completion percentage in the range 0-100.
     /// </summary>
-    public double PercentComplete { get; set; }
+    public double PercentComplete { get; init; }
 
     /// <summary>
-    /// Gets or sets a human-readable description of the current operation.
+    /// Gets a human-readable description of the current operation.
     /// </summary>
-    public string CurrentOperation { get; set; } = string.Empty;
+    public string CurrentOperation { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the number of bytes written so far.
+    /// Gets the number of bytes written so far.
     /// </summary>
-    public long BytesWritten { get; set; }
+    public long BytesWritten { get; init; }
 
     /// <summary>
-    /// Gets or sets the total number of bytes expected for the operation.
+    /// Gets the total number of bytes expected for the operation.
     /// </summary>
-    public long TotalBytes { get; set; }
+    public long TotalBytes { get; init; }
 }

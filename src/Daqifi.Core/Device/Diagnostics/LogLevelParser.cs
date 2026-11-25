@@ -50,8 +50,8 @@ internal static partial class LogLevelParser
         result = new LogLevelSetting
         {
             Module = match.Groups["module"].Value,
-            Level = level,
-            Ceiling = ceiling,
+            Level = (DeviceLogLevel)level,
+            Ceiling = (DeviceLogLevel)ceiling,
         };
         return true;
     }

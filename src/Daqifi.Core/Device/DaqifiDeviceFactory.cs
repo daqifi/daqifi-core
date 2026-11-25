@@ -150,7 +150,7 @@ public static class DaqifiDeviceFactory
         cancellationToken.ThrowIfCancellationRequested();
 
         var effectiveOptions = options ?? DeviceConnectionOptions.Default;
-        var transport = new SerialStreamTransport(portName, baudRate);
+        var transport = new SerialStreamTransport(portName, new SerialTransportOptions { BaudRate = baudRate });
 
         return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken)
             .ConfigureAwait(false);

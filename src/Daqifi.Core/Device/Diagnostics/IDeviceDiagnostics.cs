@@ -46,15 +46,15 @@ public interface IDeviceDiagnostics
     /// Sets the runtime log level for a single firmware module (<c>SYSTem:LOG:LEVel</c>).
     /// </summary>
     /// <param name="module">The module name (e.g. <c>STREAM</c>, <c>WIFI</c>, <c>SD</c>). Case-insensitive on the device.</param>
-    /// <param name="level">The log level: 0 = None, 1 = Error, 2 = Info, 3 = Debug.</param>
+    /// <param name="level">The log level.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>The level actually applied, as echoed by the device (may be capped by the module's ceiling).</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="System.ArgumentException">Thrown when <paramref name="module"/> is null, empty, or contains invalid characters.</exception>
-    /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="level"/> is outside 0–3.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="level"/> is not a defined <see cref="DeviceLogLevel"/>.</exception>
     /// <exception cref="DeviceDiagnosticsException">Thrown when the device rejected the request or returned an unparseable response.</exception>
     /// <exception cref="DeviceDiagnosticsCorruptedResponseException">Thrown when the reply arrived corrupted by an active stream's frames; stop streaming and query again.</exception>
-    Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default);
+    Task<LogLevelSetting> SetLogLevelAsync(string module, DeviceLogLevel level, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reads the device's recent SCPI command history (<c>SYSTem:LOG:CMDHistory?</c>).

@@ -462,7 +462,7 @@ public class DaqifiStreamingDeviceDecodeTests
         device.StartStreaming();
 
         DaqifiOutMessage? classified = null;
-        device.StreamMessageReceived += m => classified = m;
+        device.StreamMessageReceived += (_, e) => classified = e.Message;
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
         frame.AnalogInDataFloat.Add(1f);
@@ -483,7 +483,7 @@ public class DaqifiStreamingDeviceDecodeTests
         ai0.IsEnabled = true;
         device.StartStreaming();
 
-        device.StreamMessageReceived += _ => throw new InvalidOperationException("boom");
+        device.StreamMessageReceived += (_, _) => throw new InvalidOperationException("boom");
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
         frame.AnalogInDataFloat.Add(1f);
@@ -677,12 +677,9 @@ public class DaqifiStreamingDeviceDecodeTests
         device.StartStreaming();
 
         var rawFrames = new List<DaqifiOutMessage>();
-        device.MessageReceived += (_, e) =>
-        {
-            if (e.Message.Data is DaqifiOutMessage frame) rawFrames.Add(frame);
-        };
+        device.MessageReceived += (_, e) => rawFrames.Add(e.Message);
         var classified = 0;
-        device.StreamMessageReceived += _ => classified++;
+        device.StreamMessageReceived += (_, _) => classified++;
 
         var warmup = new DaqifiOutMessage { MsgTimeStamp = 1 };
         warmup.AnalogInDataFloat.Add(0.1f);
@@ -805,7 +802,7 @@ public class DaqifiStreamingDeviceDecodeTests
         device.StartStreaming();
 
         var rawFrames = new List<object?>();
-        device.MessageReceived += (_, e) => rawFrames.Add(e.Message.Data);
+        device.MessageReceived += (_, e) => rawFrames.Add(e.Message);
         var discards = 0;
         device.StreamFrameDiscarded += (_, _) => discards++;
 

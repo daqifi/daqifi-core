@@ -153,7 +153,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     }
 
     /// <inheritdoc />
-    public async Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(
+    public async Task<WifiFirmwareDownloadResult?> DownloadWifiFirmwareAsync(
         string destinationDirectory,
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
@@ -223,7 +223,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         File.Delete(zipFilePath);
         progress?.Report(100);
 
-        return (extractPath, release.TagName);
+        return new WifiFirmwareDownloadResult { ExtractedPath = extractPath, Version = release.TagName };
     }
 
     /// <inheritdoc />

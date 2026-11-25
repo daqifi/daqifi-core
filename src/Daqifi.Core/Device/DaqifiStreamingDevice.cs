@@ -1575,7 +1575,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _administration.LoadFactoryAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+    public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default)
         => _administration.UseAdcCalibrationAsync(bank, cancellationToken);
 
     /// <inheritdoc />
@@ -1833,7 +1833,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _diagnosticsOperations.ClearSystemLogAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default)
+    public Task<LogLevelSetting> SetLogLevelAsync(string module, DeviceLogLevel level, CancellationToken cancellationToken = default)
         => _diagnosticsOperations.SetLogLevelAsync(module, level, cancellationToken);
 
     /// <inheritdoc />

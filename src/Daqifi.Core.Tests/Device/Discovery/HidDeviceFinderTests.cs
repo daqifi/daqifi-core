@@ -16,8 +16,8 @@ public class HidDeviceFinderTests
 
         var devices = (await finder.DiscoverAsync()).ToList();
 
-        Assert.Equal(HidDeviceFinder.DefaultVendorId, enumerator.LastVendorId);
-        Assert.Equal(HidDeviceFinder.DefaultProductId, enumerator.LastProductId);
+        Assert.Equal(DaqifiUsbIds.VendorId, enumerator.LastVendorId);
+        Assert.Equal(DaqifiUsbIds.BootloaderProductId, enumerator.LastProductId);
         Assert.Single(devices);
 
         var device = Assert.IsType<DeviceInfo>(devices[0]);
@@ -111,7 +111,7 @@ public class HidDeviceFinderTests
     }
 
     private static HidDeviceInfo Hid(string path)
-        => new(HidDeviceFinder.DefaultVendorId, HidDeviceFinder.DefaultProductId, path);
+        => new(DaqifiUsbIds.VendorId, DaqifiUsbIds.BootloaderProductId, path);
 
     [Fact]
     public async Task DiscoverAsync_RaisesDiscoveryCompletedEvent()

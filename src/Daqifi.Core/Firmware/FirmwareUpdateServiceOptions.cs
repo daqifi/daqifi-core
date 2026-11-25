@@ -1,4 +1,5 @@
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Core.Firmware;
 
@@ -10,12 +11,12 @@ public sealed class FirmwareUpdateServiceOptions
     /// <summary>
     /// DAQiFi PIC32 bootloader USB vendor identifier.
     /// </summary>
-    public int BootloaderVendorId { get; set; } = 0x04D8;
+    public int BootloaderVendorId { get; set; } = DaqifiUsbIds.VendorId;
 
     /// <summary>
     /// DAQiFi PIC32 bootloader USB product identifier.
     /// </summary>
-    public int BootloaderProductId { get; set; } = 0x003C;
+    public int BootloaderProductId { get; set; } = DaqifiUsbIds.BootloaderProductId;
 
     /// <summary>
     /// Poll interval used while waiting for bootloader and serial re-enumeration.
@@ -377,7 +378,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// fact rather than a tuning knob, so Core owns the value instead of leaving every
     /// consumer to hard-code its own copy.
     /// </summary>
-    public const string DefaultMinimumSupportedWifiFirmwareVersion = "19.7.7";
+    public static readonly FirmwareVersion DefaultMinimumSupportedWifiFirmwareVersion = new(19, 7, 7, 0, null, 0);
 
     /// <summary>
     /// Minimum WINC firmware version treated as supported, used to populate
@@ -395,9 +396,9 @@ public sealed class FirmwareUpdateServiceOptions
     ///
     /// Raising this rejects modules Core would otherwise accept, so it is a policy
     /// decision; it is settable so a manufacturing line can raise the bar without waiting
-    /// on a Core release. Must parse as a <see cref="FirmwareVersion"/>.
+    /// on a Core release.
     /// </remarks>
-    public string MinimumSupportedWifiFirmwareVersion { get; set; } = DefaultMinimumSupportedWifiFirmwareVersion;
+    public FirmwareVersion MinimumSupportedWifiFirmwareVersion { get; set; } = DefaultMinimumSupportedWifiFirmwareVersion;
 
     /// <summary>
     /// Gets the configured timeout for a given firmware update state.
@@ -523,16 +524,6 @@ public sealed class FirmwareUpdateServiceOptions
         // unconditionally so a misconfiguration surfaces even if a flag is
         // toggled on later without re-touching this value.
         ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));
-
-        // Rejected here rather than silently ignored at compare time: a typo'd minimum
-        // would otherwise degrade the check back to "no version opinion" invisibly, which
-        // is precisely the failure this option exists to remove.
-        if (!FirmwareVersion.TryParse(MinimumSupportedWifiFirmwareVersion, out _))
-        {
-            throw new ArgumentException(
-                $"Minimum supported WiFi firmware version '{MinimumSupportedWifiFirmwareVersion}' is not a parseable version.",
-                nameof(MinimumSupportedWifiFirmwareVersion));
-        }
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {

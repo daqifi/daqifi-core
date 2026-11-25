@@ -5,9 +5,9 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// <c>SYSTem:LOG:LEVel module,level</c> command.
 /// </summary>
 /// <remarks>
-/// Log levels are: 0 = None, 1 = Error, 2 = Info, 3 = Debug. The <see cref="Level"/> actually
-/// applied can be lower than the requested value when the module's compile-time
-/// <see cref="Ceiling"/> caps it.
+/// The <see cref="Level"/> actually applied can be lower than the requested value when the module's
+/// compile-time <see cref="Ceiling"/> caps it. Both are the device's own numbers: a level newer than
+/// the ones <see cref="DeviceLogLevel"/> names arrives as that number rather than being dropped.
 /// </remarks>
 public sealed record LogLevelSetting
 {
@@ -17,13 +17,13 @@ public sealed record LogLevelSetting
     public required string Module { get; init; }
 
     /// <summary>
-    /// Gets the log level now in effect for the module (0 = None, 1 = Error, 2 = Info, 3 = Debug).
+    /// Gets the log level now in effect for the module.
     /// </summary>
-    public required int Level { get; init; }
+    public required DeviceLogLevel Level { get; init; }
 
     /// <summary>
     /// Gets the compile-time ceiling for the module. The effective <see cref="Level"/> can never
     /// exceed this value.
     /// </summary>
-    public required int Ceiling { get; init; }
+    public required DeviceLogLevel Ceiling { get; init; }
 }

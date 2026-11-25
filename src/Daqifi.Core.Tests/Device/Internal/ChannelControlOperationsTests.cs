@@ -282,7 +282,7 @@ public class ChannelControlOperationsTests
     }
 
     [Theory]
-    [InlineData(ChannelDirection.Unknown)]
+    [InlineData((ChannelDirection)2)]
     public void SetDioDirection_InvalidDirection_Throws(ChannelDirection direction)
     {
         var digital = new DigitalChannel(channelNumber: 0);

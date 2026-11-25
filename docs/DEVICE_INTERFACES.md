@@ -806,7 +806,7 @@ A single failed read never disconnects anything. Escalation requires a *run* of 
 successful transfer in between, so a stream that glitches and recovers stays connected. A read or
 write *timeout* is not a failure at all — it is what an idle or momentarily busy device looks
 like. To disable the serial presence poll and rely on I/O escalation alone, construct the transport
-with `livenessCheckInterval: TimeSpan.Zero`.
+with `new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero }`.
 
 When a drop is detected the transport closes its handle, so `IsConnected` already reads `false` by
 the time `StateChanged` fires. The device's message consumer and producer are *not* stopped
@@ -1097,7 +1097,8 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 var sampleCount = 0;
 device.MessageReceived += (sender, e) =>
 {
-    if (e.Message.Data is DaqifiOutMessage msg && msg.AnalogInData.Count > 0)
+    DaqifiOutMessage msg = e.Message;
+    if (msg.AnalogInData.Count > 0)
     {
         sampleCount++;
         Console.WriteLine($"Sample {sampleCount}: {string.Join(", ", msg.AnalogInData)}");
@@ -1281,9 +1282,8 @@ IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
 foreach (var entry in log) Console.WriteLine(entry.Message);
 await device.ClearSystemLogAsync();
 
-// Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
-// setting reflects the level actually applied, which a module's ceiling may cap.
-LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", 2);
+// Runtime log levels. The returned setting reflects the level actually applied, which a module's ceiling may cap.
+LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info);
 Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
 
 // SCPI command history (oldest first — the device numbers lines backwards from

@@ -60,8 +60,8 @@ public interface IFirmwareDownloadService
     /// <param name="destinationDirectory">Directory to extract files to.</param>
     /// <param name="progress">Optional progress reporter (0-100).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Tuple of (extracted folder path, version string), or null if not found.</returns>
-    Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(
+    /// <returns>Where the package was extracted to and its version, or null if not found.</returns>
+    Task<WifiFirmwareDownloadResult?> DownloadWifiFirmwareAsync(
         string destinationDirectory,
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default);

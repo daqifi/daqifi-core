@@ -1,11 +1,11 @@
 namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
-/// Known USB Vendor / Product identifiers for DAQiFi devices in normal
-/// (non-bootloader) operating mode. Used by <see cref="SerialDeviceFinder"/>
-/// to filter serial ports before probing — only ports matching one of these
+/// Known USB Vendor / Product identifiers for DAQiFi devices. <see cref="SerialDeviceFinder"/>
+/// uses the CDC ones to filter serial ports before probing — only ports matching one of these
 /// IDs are opened, eliminating accidental SCPI traffic to other vendors'
-/// COM ports (Bluetooth radios, GPS receivers, Arduinos, etc.).
+/// COM ports (Bluetooth radios, GPS receivers, Arduinos, etc.). <see cref="HidDeviceFinder"/> and
+/// the firmware updater look for a device in its bootloader by <see cref="BootloaderProductId"/>.
 /// </summary>
 public static class DaqifiUsbIds
 {
@@ -17,10 +17,15 @@ public static class DaqifiUsbIds
 
     /// <summary>
     /// USB product ID for DAQiFi devices in normal USB CDC serial mode
-    /// (Nyquist1, Nyquist3). Bootloader mode uses a different PID
-    /// (<c>0x003C</c>, see <c>FirmwareUpdateServiceOptions.BootloaderProductId</c>).
+    /// (Nyquist1, Nyquist3). Bootloader mode uses a different PID,
+    /// <see cref="BootloaderProductId"/>.
     /// </summary>
     public const int CdcProductId = 0xF794;
+
+    /// <summary>
+    /// USB product ID for DAQiFi devices in HID bootloader mode.
+    /// </summary>
+    public const int BootloaderProductId = 0x003C;
 
     /// <summary>
     /// Returns true if the supplied descriptor matches a known DAQiFi USB

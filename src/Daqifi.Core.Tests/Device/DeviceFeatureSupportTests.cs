@@ -44,11 +44,12 @@ public class DeviceFeatureSupportTests
         Assert.All(members, feature => Assert.Contains(feature, defined));
     }
 
-    [Fact]
-    public void Supports_WhenFeatureHasNoTableEntry_ThrowsArgumentOutOfRange()
+    [Theory]
+    [InlineData((DeviceFeature)9999)]
+    [InlineData(default(DeviceFeature))] // a feature nobody set is not AnalogOutput (issue #1049)
+    public void Supports_WhenFeatureHasNoTableEntry_ThrowsArgumentOutOfRange(DeviceFeature undefined)
     {
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0");
-        var undefined = (DeviceFeature)9999;
 
         Assert.Throws<ArgumentOutOfRangeException>(() => device.Supports(undefined));
     }

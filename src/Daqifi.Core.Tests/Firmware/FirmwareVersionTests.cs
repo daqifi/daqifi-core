@@ -570,4 +570,39 @@ public class FirmwareVersionTests
         Assert.True(c < a);
         Assert.True(a >= c);
     }
+
+    [Theory]
+    [InlineData(-1, 0, 0, 0, 0)]
+    [InlineData(0, -1, 0, 0, 0)]
+    [InlineData(0, 0, -1, 0, 0)]
+    [InlineData(0, 0, 0, -1, 0)]
+    [InlineData(0, 0, 0, 0, -1)]
+    public void Constructor_NegativeComponent_Throws(int major, int minor, int patch, int revision, int preNumber)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new FirmwareVersion(major, minor, patch, revision, null, preNumber));
+    }
+
+    [Fact]
+    public void With_NegativeComponent_Throws()
+    {
+        var version = new FirmwareVersion(19, 7, 7, 0, null, 0);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => version with { Major = -1 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => version with { Minor = -1 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => version with { Patch = -1 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => version with { Revision = -1 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => version with { PreNumber = -1 });
+    }
+
+    [Fact]
+    public void Constructor_ThreePartSystemVersion_IsRejectedRatherThanRankedBelowItsPreRelease()
+    {
+        // System.Version says "no fourth part" with -1. Taken as it is, that ranked 19.7.7 below
+        // 19.7.7rc1, so a pre-release met a stable minimum (PR #1072 review).
+        var system = new Version("19.7.7");
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new FirmwareVersion(system.Major, system.Minor, system.Build, system.Revision, null, 0));
+    }
 }

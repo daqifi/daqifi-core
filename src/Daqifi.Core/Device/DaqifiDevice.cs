@@ -1142,7 +1142,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// the status/stream classification don't have to re-run <c>CanHandle</c> /
     /// <c>DetectMessageType</c> over the same frame themselves.
     /// </summary>
-    public event Action<DaqifiOutMessage>? StatusMessageReceived;
+    public event EventHandler<MessageReceivedEventArgs>? StatusMessageReceived;
 
     /// <summary>
     /// Occurs when an inbound protobuf message is classified as a streaming data message by
@@ -1151,7 +1151,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// the status/stream classification don't have to re-run <c>CanHandle</c> /
     /// <c>DetectMessageType</c> over the same frame themselves.
     /// </summary>
-    public event Action<DaqifiOutMessage>? StreamMessageReceived;
+    public event EventHandler<MessageReceivedEventArgs>? StreamMessageReceived;
 
     /// <summary>
     /// Occurs when channels have been populated from a device status message.
@@ -3369,33 +3369,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Raises the <see cref="MessageReceived"/> event when a message is received from the device.
     /// </summary>
     /// <remarks>
-    /// Not called for a device frame while <see cref="MessageReceived"/> has no subscribers: the
-    /// frame would have to be wrapped in an <see cref="IInboundMessage{T}"/> to be passed here,
-    /// and on a streaming device that is an allocation per frame with nowhere to go
-    /// (issue #490). An override that must see every frame regardless should use
-    /// <see cref="StatusMessageReceived"/>/<see cref="StreamMessageReceived"/> or override
-    /// <see cref="OnStatusMessageReceived"/>/<see cref="OnStreamMessageReceived"/>, which are
-    /// unconditional.
+    /// Called for every device frame. The event arguments are only created while
+    /// <see cref="MessageReceived"/> has a subscriber, because on a streaming device they would
+    /// otherwise be an allocation per frame with nowhere to go (issue #490).
     /// </remarks>
     /// <param name="message">The message received from the device.</param>
-    protected virtual void OnMessageReceived(IInboundMessage<object> message)
+    protected virtual void OnMessageReceived(DaqifiOutMessage message)
     {
         MessageReceived?.Invoke(this, new MessageReceivedEventArgs(message));
-    }
-
-    /// <summary>
-    /// Wraps <paramref name="message"/> and hands it to <see cref="OnMessageReceived"/>, but
-    /// only when <see cref="MessageReceived"/> actually has a subscriber to receive it.
-    /// </summary>
-    /// <param name="message">The device frame to re-raise.</param>
-    private void RaiseUndifferentiatedMessage(DaqifiOutMessage message)
-    {
-        if (MessageReceived is null)
-        {
-            return;
-        }
-
-        OnMessageReceived(new ProtobufMessage(message));
     }
 
     /// <summary>
@@ -4850,7 +4831,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         RaiseClassifiedEvent(StatusMessageReceived, message, nameof(StatusMessageReceived));
 
         // Raise event for external consumers
-        RaiseUndifferentiatedMessage(message);
+        OnMessageReceived(message);
     }
 
     /// <summary>
@@ -4864,7 +4845,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// escaping a classified-event subscriber must not skip that remaining work for the frame.
     /// </para>
     /// <para>
-    /// A plain <c>try { handler(message); }</c> around the whole multicast delegate only isolates
+    /// A plain <c>try { handler(this, args); }</c> around the whole multicast delegate only isolates
     /// the device from the subscriber list as a whole — .NET invokes a multicast delegate's
     /// invocation list in order and stops at the first exception, so a throwing subscriber
     /// silently starves every subscriber added after it for the life of the connection (issue #560).
@@ -4885,16 +4866,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="handler">The event delegate to invoke, or <c>null</c> if unsubscribed.</param>
     /// <param name="message">The message to pass to subscribers.</param>
     /// <param name="eventName">The event name, for the trace log if a subscriber throws.</param>
-    private void RaiseClassifiedEvent(Action<DaqifiOutMessage>? handler, DaqifiOutMessage message, string eventName)
+    private void RaiseClassifiedEvent(EventHandler<MessageReceivedEventArgs>? handler, DaqifiOutMessage message, string eventName)
     {
         if (handler == null)
         {
             return;
         }
 
+        var args = new MessageReceivedEventArgs(message);
         foreach (var subscriber in handler.GetInvocationList())
         {
-            InvokeClassifiedSubscriber((Action<DaqifiOutMessage>)subscriber, message, eventName);
+            InvokeClassifiedSubscriber((EventHandler<MessageReceivedEventArgs>)subscriber, args, eventName);
         }
     }
 
@@ -4903,13 +4885,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// cannot stop sibling subscribers (or the device) from seeing the frame.
     /// </summary>
     /// <param name="subscriber">The single subscriber delegate to invoke.</param>
-    /// <param name="message">The message to pass to the subscriber.</param>
+    /// <param name="args">The event arguments to pass to the subscriber.</param>
     /// <param name="eventName">The event name, for the trace log if the subscriber throws.</param>
-    private void InvokeClassifiedSubscriber(Action<DaqifiOutMessage> subscriber, DaqifiOutMessage message, string eventName)
+    private void InvokeClassifiedSubscriber(EventHandler<MessageReceivedEventArgs> subscriber, MessageReceivedEventArgs args, string eventName)
     {
         try
         {
-            subscriber(message);
+            subscriber(this, args);
         }
         catch (Exception ex)
         {
@@ -5274,7 +5256,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         RaiseClassifiedEvent(StreamMessageReceived, message, nameof(StreamMessageReceived));
 
         // Raise event for external consumers
-        RaiseUndifferentiatedMessage(message);
+        OnMessageReceived(message);
     }
 
     /// <summary>

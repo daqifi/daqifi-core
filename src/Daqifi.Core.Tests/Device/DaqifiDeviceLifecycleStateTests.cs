@@ -79,9 +79,9 @@ public class DaqifiDeviceLifecycleStateTests
 
         using var received = new ManualResetEventSlim(false);
         const string marker = "from-the-current-stream";
-        device.StatusMessageReceived += message =>
+        device.StatusMessageReceived += (_, e) =>
         {
-            if (message.DevicePn == marker)
+            if (e.Message.DevicePn == marker)
             {
                 received.Set();
             }

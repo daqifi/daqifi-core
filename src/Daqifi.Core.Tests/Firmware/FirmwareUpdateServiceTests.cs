@@ -4304,34 +4304,20 @@ public class FirmwareUpdateServiceTests
         // 19.7.7 is a firmware-contract fact (#269), not a tuning default. Pinned here so a
         // change to it is a deliberate edit to this assertion rather than a silent drift that
         // would start accepting or rejecting modules in the field.
-        Assert.Equal("19.7.7", FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, 0, null, 0), FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion);
         Assert.Equal(
             FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion,
             new FirmwareUpdateServiceOptions().MinimumSupportedWifiFirmwareVersion);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("not-a-version")]
-    public void Constructor_WithUnparseableMinimumSupportedWifiFirmwareVersion_Throws(string minimum)
+    [Fact]
+    public void BootloaderIds_DefaultToTheOnesDiscoveryLooksFor()
     {
-        // A typo'd minimum must fail loudly at construction. If it were ignored at compare
-        // time instead, the check would silently degrade to "no version opinion" — exactly
-        // the state this option exists to remove — and the degradation would be invisible.
-        var options = CreateFastOptions();
-        options.MinimumSupportedWifiFirmwareVersion = minimum;
+        var options = new FirmwareUpdateServiceOptions();
+        using var finder = new HidDeviceFinder();
 
-        var ex = Assert.Throws<ArgumentException>(() => new FirmwareUpdateService(
-            new FakeHidTransport(),
-            new FakeFirmwareDownloadService(),
-            new FakeExternalProcessRunner(),
-            NullLogger<FirmwareUpdateService>.Instance,
-            new FakeBootloaderProtocol([[0xA1, 0x01]]),
-            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
-            options));
-
-        Assert.Equal(nameof(FirmwareUpdateServiceOptions.MinimumSupportedWifiFirmwareVersion), ex.ParamName);
+        Assert.Equal(finder.VendorIdFilter, options.BootloaderVendorId);
+        Assert.Equal(finder.ProductIdFilter, options.BootloaderProductId);
     }
 
     [Fact]
@@ -4485,7 +4471,7 @@ public class FirmwareUpdateServiceTests
         // A manufacturing line raising the bar must actually move the verdict; a device that
         // passes the shipped default has to fail a higher configured minimum.
         var options = CreateFastOptions();
-        options.MinimumSupportedWifiFirmwareVersion = "19.9.0";
+        options.MinimumSupportedWifiFirmwareVersion = new FirmwareVersion(19, 9, 0, 0, null, 0);
 
         var device = new FakeLanChipInfoStreamingDevice("COM45", chipInfo: new LanChipInfo
         {
@@ -5015,7 +5001,7 @@ public class FirmwareUpdateServiceTests
         public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
@@ -5139,7 +5125,7 @@ public class FirmwareUpdateServiceTests
         public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
@@ -6049,7 +6035,7 @@ public class FirmwareUpdateServiceTests
         public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 

@@ -5,12 +5,13 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 public class UsbPortDescriptorTests
 {
     [Fact]
-    public void DaqifiUsbIds_VendorAndCdcProductId_MatchExpectedValues()
+    public void DaqifiUsbIds_Constants_MatchExpectedValues()
     {
         // Locks the published constants. If these change without
         // explicit intent, every consumer's USB filter breaks.
         Assert.Equal(0x04D8, DaqifiUsbIds.VendorId);
         Assert.Equal(0xF794, DaqifiUsbIds.CdcProductId);
+        Assert.Equal(0x003C, DaqifiUsbIds.BootloaderProductId);
     }
 
     [Fact]

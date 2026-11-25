@@ -6,7 +6,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// Event args raised when a previously discovered device disappears from the
 /// live set maintained by <see cref="ContinuousDeviceFinder"/>.
 /// </summary>
-public class DeviceLostEventArgs : EventArgs
+public sealed class DeviceLostEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="DeviceLostEventArgs"/> class.
