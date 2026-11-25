@@ -675,8 +675,8 @@ public class ChannelControlOperationsTests
             host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
         }
 
-        host.Metadata.ApplyCapabilityDocument(DocumentWithPwmFloors(
-            new[] { 0, 3, 4, 5, 6, 7 }.Select(id => (id, floorHz)).ToArray()));
+        host.UpdateMetadata(metadata => metadata.WithCapabilityDocument(DocumentWithPwmFloors(
+            new[] { 0, 3, 4, 5, 6, 7 }.Select(id => (id, floorHz)).ToArray())));
         return host;
     }
 
@@ -767,7 +767,7 @@ public class ChannelControlOperationsTests
         // higher one is accepted by both.
         var host = new FakeHost();
         host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
-        host.Metadata.ApplyCapabilityDocument(DocumentWithPwmFloors((0, 5), (3, 9), (4, 7)));
+        host.UpdateMetadata(metadata => metadata.WithCapabilityDocument(DocumentWithPwmFloors((0, 5), (3, 9), (4, 7))));
         var ops = new ChannelControlOperations(host);
 
         Assert.Equal(9, ops.PwmFrequencyFloorHz);
@@ -778,7 +778,7 @@ public class ChannelControlOperationsTests
     {
         var host = new FakeHost();
         host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
-        host.Metadata.ApplyCapabilityDocument(new CapabilityDocument
+        host.UpdateMetadata(metadata => metadata.WithCapabilityDocument(new CapabilityDocument
         {
             SchemaVersion = 2,
             Channels = new[]
@@ -795,7 +795,7 @@ public class ChannelControlOperationsTests
                     PwmMinimumFrequencyHz = 40
                 }
             }
-        });
+        }));
         var ops = new ChannelControlOperations(host);
 
         Assert.Equal(7, ops.PwmFrequencyFloorHz);
@@ -1298,7 +1298,9 @@ public class ChannelControlOperationsTests
         /// <summary>
         /// Real metadata, read only for the capability document that carries the PWM floor.
         /// </summary>
-        public DeviceMetadata Metadata { get; } = new();
+        public DeviceMetadata Metadata { get; private set; } = new();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => Metadata = change(Metadata);
 
         // Outside this collaborator's remit — reaching for any of these is a regression.
         public void StopStreaming() => throw new NotSupportedException();

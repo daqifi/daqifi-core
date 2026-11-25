@@ -1132,9 +1132,12 @@ public partial class SdCardOperationsTests
     private static RetryableSdCardStreamingDevice MarkerCapableDevice()
     {
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.8.0";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.8.0",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         return device;
     }
 
@@ -1225,9 +1228,12 @@ public partial class SdCardOperationsTests
         // absence carries no information. Throwing here would turn the normal state of an
         // empty card on most released firmware into a fault.
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.7.2";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.7.2",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.ResponseSequence.Enqueue(new List<string>());
         device.Connect();
 
@@ -1357,9 +1363,12 @@ public partial class SdCardOperationsTests
         // Below v3.8.0 the device never emits a marker, so its absence says nothing. Both
         // paths go on accepting a terminated listing with no marker, in one exchange each.
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.7.2";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.7.2",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.ResponseSequence.Enqueue(new List<string> { "Daqifi/a.bin 100", "Daqifi/b.bin 200" });
         device.ResponseSequence.Enqueue(new List<string> { "Daqifi/b.bin 200" });
         device.Connect();
@@ -2006,8 +2015,11 @@ public partial class SdCardOperationsTests
         // all (e.g. it predates the version that introduced it) — a distinct, typed failure
         // from a generic SdCardOperationException.
         var device = new RetryableSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.4.3";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = "3.4.3",
+            DeviceType = DeviceType.Nyquist1
+        });
         device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
         device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
         device.Connect();
@@ -2224,7 +2236,7 @@ public partial class SdCardOperationsTests
         // A below-minimum reported version gets the typed, actionable feature exception —
         // superseding the old blanket "only supported over USB" InvalidOperationException.
         var device = new TestableNonUsbStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.6.3";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.6.3" });
         device.Connect();
         using var stream = new MemoryStream();
 
@@ -2257,7 +2269,7 @@ public partial class SdCardOperationsTests
     public async Task GetSdCardFilesAsync_OverWifi_AtOrAboveMinFirmware_Succeeds(string firmware)
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmware;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmware });
         // The marker is what v3.8.0 firmware actually appends (#794/#796); on the two older
         // versions it is simply absent from the real reply and harmless in this one, since the
         // parser treats it as framing either way.
@@ -2321,7 +2333,7 @@ public partial class SdCardOperationsTests
     public async Task GetSdCardFilesAsync_OverWifi_BelowMinOrUnparseableFirmware_ThrowsFeatureNotSupported(string firmware)
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmware;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmware });
         device.Connect();
 
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
@@ -2341,7 +2353,7 @@ public partial class SdCardOperationsTests
         // Over USB the SD file ops are available on all SD-capable firmware — the WiFi gate
         // must NOT apply, even for firmware far below v3.7.0.
         var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = oldFirmware;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = oldFirmware });
         device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
         device.Connect();
 
@@ -2354,7 +2366,7 @@ public partial class SdCardOperationsTests
     public async Task DownloadSdCardFileAsync_OverWifi_AtMinFirmware_Succeeds()
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.7.0";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.7.0" });
         device.CannedFileData = Encoding.ASCII.GetBytes("hello");
         device.Connect();
         using var stream = new MemoryStream();
@@ -2368,7 +2380,7 @@ public partial class SdCardOperationsTests
     public async Task DeleteSdCardFileAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported()
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.6.3";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.6.3" });
         device.Connect();
 
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
@@ -2380,7 +2392,7 @@ public partial class SdCardOperationsTests
     public async Task DeleteSdCardFileAsync_OverWifi_AtMinFirmware_Succeeds()
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.7.2";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.7.2" });
         device.Connect();
 
         // Passes the gate and completes (no FeatureNotSupportedException).
@@ -2397,7 +2409,7 @@ public partial class SdCardOperationsTests
         // The storage-space query drives the SD card through the same transport-aware interface
         // prep, so it carries the same SD-over-WiFi firmware requirement and must be gated too.
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmware;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmware });
         device.Connect();
 
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
@@ -2417,7 +2429,7 @@ public partial class SdCardOperationsTests
         new Random(599).NextBytes(fileData);
 
         var device = new ChunkedWifiDownloadDevice("TestDevice", fileData, chunkSize: 1024);
-        device.Metadata.FirmwareVersion = "3.7.2";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.7.2" });
         device.Connect();
         using var destination = new MemoryStream();
 
@@ -2437,7 +2449,7 @@ public partial class SdCardOperationsTests
         {
             IdleTimeoutOverride = TimeSpan.FromMilliseconds(200)
         };
-        device.Metadata.FirmwareVersion = "3.7.2";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.7.2" });
         device.Connect();
         using var destination = new MemoryStream();
 
@@ -2646,9 +2658,12 @@ public partial class SdCardOperationsTests
         // End to end through the device's real error-queue drain (#959): the open failure the
         // firmware queued is read with SYSTem:ERRor?, and the queue is read until it is empty.
         var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.9.0";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.9.0",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.ErrorQueuedByGet = "-256,\"File name not found\"";
         device.Connect();
         using var destinationStream = new MemoryStream();
@@ -2675,9 +2690,12 @@ public partial class SdCardOperationsTests
         // the error queue the moment a capture ends must wait until the download has read the
         // GET's error, not take it first.
         var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.9.0";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.9.0",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.ErrorQueuedByGet = "-256,\"File name not found\"";
         device.Connect();
 
@@ -2715,9 +2733,12 @@ public partial class SdCardOperationsTests
         // Firmware before v3.9.0 queues nothing for an open failure, so the download behaves as
         // it always has: no exchange spent on the error queue.
         var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = "3.8.0";
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.8.0",
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.Connect();
         using var destinationStream = new MemoryStream();
 

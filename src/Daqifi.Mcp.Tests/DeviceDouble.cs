@@ -120,7 +120,10 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             });
         }
 
-        device.Metadata.Capabilities.MaxSamplingRate = HardwareMaximumRateHz;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            Capabilities = metadata.Capabilities with { MaxSamplingRate = HardwareMaximumRateHz }
+        });
         device.Connect();
         device.ApplyCapabilityDocumentForCurrentChannels();
         device.ClearSent();
@@ -297,6 +300,9 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
         return Task.CompletedTask;
     }
 
+    /// <summary>Opens the device's protected metadata update to the tests.</summary>
+    public new void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => base.UpdateMetadata(change);
+
     private CapabilityDocument ApplyCapabilityDocumentForCurrentChannels()
     {
         var enabledAnalog = GetChannelsSnapshot()
@@ -313,7 +319,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             },
         };
 
-        Metadata.ApplyCapabilityDocument(document);
+        UpdateMetadata(metadata => metadata with { CapabilityDocument = document });
 
         // Both halves of what the real ReadCapabilityDocumentAsync does: the document is the only
         // place a device describes its DACs, so applying it without this sync would leave the

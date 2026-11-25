@@ -154,10 +154,13 @@ public class CapabilityDocumentSlowLinkTests(ITestOutputHelper output)
         var device = new SlowLinkDevice(transport);
         await device.ConnectAsync();
         // Firmware 3.8.0: the capability exchange asks APIVersion? and JSON? only.
-        device.Metadata.FirmwareVersion = "3.8.0";
-        device.Metadata.PartNumber = "Nq1";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = "3.8.0",
+            PartNumber = "Nq1",
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         return device;
     }
 

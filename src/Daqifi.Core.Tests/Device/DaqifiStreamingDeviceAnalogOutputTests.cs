@@ -174,8 +174,8 @@ public class DaqifiStreamingDeviceAnalogOutputTests
         // Reconnecting this instance to a different known board drops the capability
         // document it read from the previous one — and the DAC channels that document
         // described must not linger as another board's outputs.
-        device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
-        device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" }));
+        device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" }));
         Assert.Null(device.Metadata.CapabilityDocument);
 
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
@@ -195,8 +195,8 @@ public class DaqifiStreamingDeviceAnalogOutputTests
 
         // The same board repeating its part number is not a board change, so the document —
         // and the channels it described — survive.
-        device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
-        device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+        device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" }));
+        device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" }));
         Assert.NotNull(device.Metadata.CapabilityDocument);
 
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
@@ -528,7 +528,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
     {
         using var device = new CapturingAnalogOutputDevice();
         device.Connect();
-        device.Metadata.DeviceType = board;
+        device.UpdateMetadata(metadata => metadata with { DeviceType = board });
         device.SentCommands.Clear();
 
         var setError = Assert.Throws<FeatureNotSupportedException>(() => device.SetAnalogOutput(0, 1.0));
@@ -556,7 +556,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
     {
         using var device = new CapturingAnalogOutputDevice();
         device.Connect();
-        device.Metadata.DeviceType = board;
+        device.UpdateMetadata(metadata => metadata with { DeviceType = board });
         device.CannedTextResponse.Add("1.25");
         device.SentCommands.Clear();
 
@@ -575,7 +575,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
 
         var device = new CapturingAnalogOutputDevice();
         device.Connect();
-        device.Metadata.ApplyCapabilityDocument(document!);
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(document!));
         device.SentCommands.Clear();
         return device;
     }

@@ -12,7 +12,7 @@ namespace Daqifi.Core.Device.Capabilities;
 /// This is the live counterpart to <see cref="DeviceCapabilities.FromDeviceType"/>. It does not
 /// replace it: the board-derived table stays the bootstrap (it answers before the device has been
 /// asked anything, and for firmware that cannot answer at all) and the permanent fallback for
-/// anything the document omits. <see cref="MergeInto"/> overlays only the fields the document
+/// anything the document omits. <see cref="OverlayOnto"/> overlays only the fields the document
 /// actually stated — see ADR 0001, <c>docs/adr/0001-firmware-feature-gating.md</c>.
 /// </para>
 /// <para>
@@ -101,12 +101,12 @@ public sealed class CapabilityDocument
     }
 
     /// <summary>
-    /// Overlays this document's values onto board-derived <see cref="DeviceCapabilities"/>,
-    /// leaving every field the document did not state untouched.
+    /// Returns board-derived <see cref="DeviceCapabilities"/> with this document's values overlaid,
+    /// leaving every field the document did not state as it was.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Merge, not replace. The caller's instance keeps its board-derived values as the floor, so a
+    /// Merge, not replace. The board-derived values stay as the floor, so a
     /// device that answers partially — or a firmware whose schema drops a field we used to read —
     /// degrades to the static table rather than to zeros. This is also what preserves the
     /// "<see cref="DeviceType.Unknown"/> means not-yet-known, not absent" rule that
@@ -137,41 +137,36 @@ public sealed class CapabilityDocument
     /// </remarks>
     /// <param name="capabilities">The board-derived capabilities to overlay onto.</param>
     /// <exception cref="ArgumentNullException"><paramref name="capabilities"/> is <c>null</c>.</exception>
-    internal void MergeInto(DeviceCapabilities capabilities)
+    internal DeviceCapabilities OverlayOnto(DeviceCapabilities capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
 
-        if (SdSupported.HasValue)
-        {
-            capabilities.HasSdCard = SdSupported.Value;
-        }
+        var hasChannels = Channels.Count > 0;
 
-        if (UsbSupported.HasValue)
+        return capabilities with
         {
-            capabilities.HasUsb = UsbSupported.Value;
-        }
+            HasSdCard = SdSupported ?? capabilities.HasSdCard,
+            HasUsb = UsbSupported ?? capabilities.HasUsb,
+            HasWiFi = WifiSupported ?? capabilities.HasWiFi,
+            AnalogInputChannels = hasChannels
+                ? CountChannels(CapabilityChannelKind.AnalogInput)
+                : capabilities.AnalogInputChannels,
+            AnalogOutputChannels = hasChannels
+                ? CountChannels(CapabilityChannelKind.AnalogOutput)
+                : capabilities.AnalogOutputChannels,
+            DigitalChannels = hasChannels
+                ? CountChannels(CapabilityChannelKind.DigitalIo)
+                : capabilities.DigitalChannels,
 
-        if (WifiSupported.HasValue)
-        {
-            capabilities.HasWiFi = WifiSupported.Value;
-        }
-
-        if (Channels.Count > 0)
-        {
-            capabilities.AnalogInputChannels = CountChannels(CapabilityChannelKind.AnalogInput);
-            capabilities.AnalogOutputChannels = CountChannels(CapabilityChannelKind.AnalogOutput);
-            capabilities.DigitalChannels = CountChannels(CapabilityChannelKind.DigitalIo);
-        }
-
-        // The absolute ISR ceiling, not the current or conservative rate: MaxSamplingRate is the
-        // board's upper bound (DaqifiStreamingDevice validates the requested frequency against it),
-        // and the other two figures move with the enabled channel set. A client that needs the
-        // achievable rate for a specific configuration reads CurrentMaximumRateHz or evaluates
-        // RateModel; the device rejects an over-ask outright, so this bound is a sanity check
-        // rather than the authority.
-        if (Streaming?.MaximumSampleRateHz > 0)
-        {
-            capabilities.MaxSamplingRate = Streaming.MaximumSampleRateHz.Value;
-        }
+            // The absolute ISR ceiling, not the current or conservative rate: MaxSamplingRate is
+            // the board's upper bound (DaqifiStreamingDevice validates the requested frequency
+            // against it), and the other two figures move with the enabled channel set. A client
+            // that needs the achievable rate for a specific configuration reads
+            // CurrentMaximumRateHz or evaluates RateModel; the device rejects an over-ask outright,
+            // so this bound is a sanity check rather than the authority.
+            MaxSamplingRate = Streaming?.MaximumSampleRateHz is > 0 and var maximumHz
+                ? maximumHz
+                : capabilities.MaxSamplingRate
+        };
     }
 }

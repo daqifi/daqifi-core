@@ -322,6 +322,15 @@ every flag it states (SD, WiFi, USB) and supplies the channel counts (16 analog 
 the device's `22000` — and it is the disagreement this reader exists to resolve: that literal
 predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528).
 
+### Implementation note (2026-11-25, issue [#1048](https://github.com/daqifi/daqifi-core/issues/1048))
+
+In 2.0 `DeviceMetadata`, `DeviceCapabilities` and `DeviceHealth` are immutable records, and the
+device replaces its whole `Metadata` snapshot on each status message, so nothing outside the
+device can change what `Supports` evaluates. The steps named above are now `internal` and return a
+new snapshot: `UpdateFromProtobuf` is `DeviceMetadata.WithStatus`, `ApplyCapabilityDocument` is
+`WithCapabilityDocument`, and `CapabilityDocument.MergeInto` is `OverlayOnto`. The rules they
+implement are unchanged.
+
 ## Alternatives considered
 
 | Option | Why not (alone) |

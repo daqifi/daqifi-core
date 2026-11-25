@@ -184,11 +184,43 @@
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.AnalogInputChannels.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.AnalogOutputChannels.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.Clone() -> Daqifi.Core.Device.DeviceCapabilities!
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.DigitalChannels.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasSdCard.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasUsb.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasWiFi.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasWincWifiModule.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.MaxSamplingRate.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.SupportsStreaming.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceCommandFailedException.DeviceResponse.get -> string?
 *REMOVED*Daqifi.Core.Device.DeviceErrorSource.StatusNotification = 4 -> Daqifi.Core.Device.DeviceErrorSource
+*REMOVED*Daqifi.Core.Device.DeviceHealth.BatteryPercent.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceHealth.BoardTemperatureCelsius.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceHealth.Clone() -> Daqifi.Core.Device.DeviceHealth!
+*REMOVED*Daqifi.Core.Device.DeviceHealth.DeviceStatus.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceHealth.PowerStatus.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.ApplyCapabilityDocument(Daqifi.Core.Device.Capabilities.CapabilityDocument! document) -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.Capabilities.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.CopyFrom(Daqifi.Core.Device.DeviceMetadata! source) -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.DevicePort.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.DeviceType.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.FirmwareVersion.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.FriendlyName.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.HardwareRevision.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.Health.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.HostName.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.IpAddress.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.MacAddress.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.PartNumber.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.SerialNumber.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.Ssid.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(DaqifiOutMessage! message) -> void
 *REMOVED*Daqifi.Core.Device.DeviceMetadata.WifiInfrastructureMode.get -> uint
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.WifiInfrastructureMode.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceMetadata.WifiSecurityMode.get -> uint
+*REMOVED*Daqifi.Core.Device.DeviceMetadata.WifiSecurityMode.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceState.Error = 6 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.DeviceStatusEventArgs
@@ -852,16 +884,51 @@ Daqifi.Core.Device.ChannelAcquisitionStatistics.ChannelAcquisitionStatistics() -
 Daqifi.Core.Device.DaqifiDevice.StateChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStateChangedEventArgs!>?
 Daqifi.Core.Device.DaqifiDevice.StatusMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
 Daqifi.Core.Device.DaqifiDevice.StreamMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
+Daqifi.Core.Device.DaqifiDevice.UpdateMetadata(System.Func<Daqifi.Core.Device.DeviceMetadata!, Daqifi.Core.Device.DeviceMetadata!>! change) -> void
 Daqifi.Core.Device.DaqifiDeviceException
 Daqifi.Core.Device.DaqifiDeviceException.DaqifiDeviceException(string! message, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null, System.Exception? innerException = null) -> void
 Daqifi.Core.Device.DaqifiDeviceException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardMinimumFreeSpaceAsync(long bytes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardRecording!>!
 Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
+Daqifi.Core.Device.DeviceCapabilities.<Clone>$() -> Daqifi.Core.Device.DeviceCapabilities!
+Daqifi.Core.Device.DeviceCapabilities.AnalogInputChannels.init -> void
+Daqifi.Core.Device.DeviceCapabilities.AnalogOutputChannels.init -> void
+Daqifi.Core.Device.DeviceCapabilities.DigitalChannels.init -> void
+Daqifi.Core.Device.DeviceCapabilities.Equals(Daqifi.Core.Device.DeviceCapabilities? other) -> bool
+Daqifi.Core.Device.DeviceCapabilities.HasSdCard.init -> void
+Daqifi.Core.Device.DeviceCapabilities.HasUsb.init -> void
+Daqifi.Core.Device.DeviceCapabilities.HasWiFi.init -> void
+Daqifi.Core.Device.DeviceCapabilities.HasWincWifiModule.init -> void
+Daqifi.Core.Device.DeviceCapabilities.MaxSamplingRate.init -> void
+Daqifi.Core.Device.DeviceCapabilities.SupportsStreaming.init -> void
 Daqifi.Core.Device.DeviceErrorSource.StateNotification = 4 -> Daqifi.Core.Device.DeviceErrorSource
-Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+Daqifi.Core.Device.DeviceHealth.<Clone>$() -> Daqifi.Core.Device.DeviceHealth!
+Daqifi.Core.Device.DeviceHealth.BatteryPercent.init -> void
+Daqifi.Core.Device.DeviceHealth.BoardTemperatureCelsius.init -> void
+Daqifi.Core.Device.DeviceHealth.DeviceStatus.init -> void
+Daqifi.Core.Device.DeviceHealth.Equals(Daqifi.Core.Device.DeviceHealth? other) -> bool
+Daqifi.Core.Device.DeviceHealth.PowerStatus.init -> void
+Daqifi.Core.Device.DeviceMetadata.<Clone>$() -> Daqifi.Core.Device.DeviceMetadata!
+Daqifi.Core.Device.DeviceMetadata.Capabilities.init -> void
+Daqifi.Core.Device.DeviceMetadata.CapabilityDocument.init -> void
+Daqifi.Core.Device.DeviceMetadata.DevicePort.init -> void
+Daqifi.Core.Device.DeviceMetadata.DeviceType.init -> void
+Daqifi.Core.Device.DeviceMetadata.Equals(Daqifi.Core.Device.DeviceMetadata? other) -> bool
+Daqifi.Core.Device.DeviceMetadata.FirmwareVersion.init -> void
+Daqifi.Core.Device.DeviceMetadata.FriendlyName.init -> void
+Daqifi.Core.Device.DeviceMetadata.HardwareRevision.init -> void
+Daqifi.Core.Device.DeviceMetadata.Health.init -> void
+Daqifi.Core.Device.DeviceMetadata.HostName.init -> void
+Daqifi.Core.Device.DeviceMetadata.IpAddress.init -> void
+Daqifi.Core.Device.DeviceMetadata.MacAddress.init -> void
+Daqifi.Core.Device.DeviceMetadata.PartNumber.init -> void
+Daqifi.Core.Device.DeviceMetadata.SerialNumber.init -> void
+Daqifi.Core.Device.DeviceMetadata.Ssid.init -> void
 Daqifi.Core.Device.DeviceMetadata.WifiInfrastructureMode.get -> Daqifi.Core.Device.Network.WifiMode?
+Daqifi.Core.Device.DeviceMetadata.WifiInfrastructureMode.init -> void
 Daqifi.Core.Device.DeviceMetadata.WifiSecurityMode.get -> Daqifi.Core.Device.Network.WifiSecurityType?
+Daqifi.Core.Device.DeviceMetadata.WifiSecurityMode.init -> void
 Daqifi.Core.Device.DeviceState.Disconnecting = 6 -> Daqifi.Core.Device.DeviceState
 Daqifi.Core.Device.DeviceState.Disposed = 10 -> Daqifi.Core.Device.DeviceState
 Daqifi.Core.Device.DeviceState.Failed = 9 -> Daqifi.Core.Device.DeviceState
@@ -1111,6 +1178,15 @@ const Daqifi.Core.Export.SampleValueUnits.Volts = "V" -> string!
 const Daqifi.Core.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!
 override Daqifi.Core.Communication.Messages.DaqifiOutMessage.GetHashCode() -> int
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+override Daqifi.Core.Device.DeviceCapabilities.Equals(object? obj) -> bool
+override Daqifi.Core.Device.DeviceCapabilities.GetHashCode() -> int
+override Daqifi.Core.Device.DeviceCapabilities.ToString() -> string!
+override Daqifi.Core.Device.DeviceHealth.Equals(object? obj) -> bool
+override Daqifi.Core.Device.DeviceHealth.GetHashCode() -> int
+override Daqifi.Core.Device.DeviceHealth.ToString() -> string!
+override Daqifi.Core.Device.DeviceMetadata.Equals(object? obj) -> bool
+override Daqifi.Core.Device.DeviceMetadata.GetHashCode() -> int
+override Daqifi.Core.Device.DeviceMetadata.ToString() -> string!
 override Daqifi.Core.Device.Discovery.DeviceInfo.Equals(object? obj) -> bool
 override Daqifi.Core.Device.Discovery.DeviceInfo.GetHashCode() -> int
 override Daqifi.Core.Device.Discovery.HidDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
@@ -1140,6 +1216,12 @@ static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(i
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiMode(Daqifi.Core.Device.Network.WifiMode mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurity(Daqifi.Core.Device.Network.WifiSecurityType securityType) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Device.DeviceCapabilities.operator !=(Daqifi.Core.Device.DeviceCapabilities? left, Daqifi.Core.Device.DeviceCapabilities? right) -> bool
+static Daqifi.Core.Device.DeviceCapabilities.operator ==(Daqifi.Core.Device.DeviceCapabilities? left, Daqifi.Core.Device.DeviceCapabilities? right) -> bool
+static Daqifi.Core.Device.DeviceHealth.operator !=(Daqifi.Core.Device.DeviceHealth? left, Daqifi.Core.Device.DeviceHealth? right) -> bool
+static Daqifi.Core.Device.DeviceHealth.operator ==(Daqifi.Core.Device.DeviceHealth? left, Daqifi.Core.Device.DeviceHealth? right) -> bool
+static Daqifi.Core.Device.DeviceMetadata.operator !=(Daqifi.Core.Device.DeviceMetadata? left, Daqifi.Core.Device.DeviceMetadata? right) -> bool
+static Daqifi.Core.Device.DeviceMetadata.operator ==(Daqifi.Core.Device.DeviceMetadata? left, Daqifi.Core.Device.DeviceMetadata? right) -> bool
 static Daqifi.Core.Device.DeviceStateExtensions.IsConnected(this Daqifi.Core.Device.DeviceState state) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator !=(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator ==(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool

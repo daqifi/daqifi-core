@@ -2953,6 +2953,8 @@ public partial class SdCardOperationsCollaboratorTests
 
         // Outside the SD block's remit — reaching for any of these is a regression, not a refinement.
         public DeviceMetadata Metadata => throw new NotSupportedException();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
 

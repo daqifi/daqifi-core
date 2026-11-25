@@ -112,7 +112,7 @@ public class DaqifiStreamingDeviceRateCapTests
 
         // The cap dropped under the live rate, but a restart is not a session boundary and the
         // early return must stay an early return.
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(500));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(500)));
         device.StartStreaming();
 
         Assert.Equal(1000, device.StreamingFrequency);
@@ -416,10 +416,12 @@ public class DaqifiStreamingDeviceRateCapTests
 
     private static void PrepareDevice(DaqifiStreamingDevice device, int? currentMaximumRateHz)
     {
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        device.Metadata.Capabilities.MaxSamplingRate = BoardCeilingHz;
-        device.Metadata.FirmwareVersion = "3.8.0";
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaxSamplingRate = BoardCeilingHz },
+            FirmwareVersion = "3.8.0"
+        });
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 16,
@@ -429,7 +431,7 @@ public class DaqifiStreamingDeviceRateCapTests
 
         if (currentMaximumRateHz.HasValue)
         {
-            device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz.Value));
+            device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz.Value)));
         }
     }
 
@@ -544,7 +546,7 @@ public class DaqifiStreamingDeviceRateCapTests
 
             if (CapabilityDocumentOnRead != null)
             {
-                Metadata.ApplyCapabilityDocument(CapabilityDocumentOnRead);
+                UpdateMetadata(metadata => metadata.WithCapabilityDocument(CapabilityDocumentOnRead));
             }
 
             return Task.FromResult(CapabilityDocumentOnRead);

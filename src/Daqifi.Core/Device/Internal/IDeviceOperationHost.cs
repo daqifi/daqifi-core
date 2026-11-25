@@ -87,12 +87,15 @@ internal interface IDeviceOperationHost
     bool HasDeferredSends => false;
 
     /// <inheritdoc cref="DaqifiDevice.Metadata"/>
-    /// <remarks>
-    /// The device's own metadata object, not a copy: the friendly-name write updates
-    /// <see cref="DeviceMetadata.FriendlyName"/> optimistically on it, because the firmware does
-    /// not echo the new name back and may not stream another status frame for a while.
-    /// </remarks>
     DeviceMetadata Metadata { get; }
+
+    /// <inheritdoc cref="DaqifiDevice.UpdateMetadata"/>
+    /// <remarks>
+    /// The friendly-name write updates <see cref="DeviceMetadata.FriendlyName"/> optimistically
+    /// through this, because the firmware does not echo the new name back and may not stream
+    /// another status frame for a while.
+    /// </remarks>
+    void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change);
 
     /// <inheritdoc cref="DaqifiDevice.Disconnect"/>
     /// <remarks>
