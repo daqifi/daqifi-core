@@ -907,14 +907,16 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
             return;
         }
 
-        var report = new DiscoveryPassReport(
-            outcome,
-            changes.DevicesSeen,
-            changes.NewDevices,
-            changes.MetadataUpdates,
-            changes.LostDevices,
-            CurrentDeviceCount,
-            _interval);
+        var report = new DiscoveryPassReport
+        {
+            Outcome = outcome,
+            DevicesSeen = changes.DevicesSeen,
+            NewDevices = changes.NewDevices,
+            MetadataUpdates = changes.MetadataUpdates,
+            LostDevices = changes.LostDevices,
+            LiveDeviceCount = CurrentDeviceCount,
+            NextPassDelay = _interval
+        };
 
         try
         {

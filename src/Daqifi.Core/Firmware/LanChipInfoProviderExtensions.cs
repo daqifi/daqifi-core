@@ -95,42 +95,55 @@ public sealed record LanChipInfoRetryOptions
 /// One attempt of a bounded chip-info probe that did not produce chip info, reported to
 /// <see cref="LanChipInfoRetryOptions.Progress"/> so a caller can render "retrying".
 /// </summary>
-/// <param name="Attempt">The 1-based number of the attempt that just failed.</param>
-/// <param name="MaxAttempts">
-/// The total number of attempts the probe is allowed, after the normalization
-/// <see cref="LanChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
-/// <paramref name="Attempt"/> on the last one.
-/// </param>
-/// <param name="WasLanNotInitialized">
-/// Whether <i>this</i> attempt failed with <see cref="LanNotInitializedException"/> — the device
-/// reporting its WINC state machine has not reached INITIALIZED (SCPI <c>-200</c>). False for a
-/// null answer or any other failure, so it describes the attempt being reported rather than the
-/// worst one seen so far.
-/// </param>
-/// <param name="RetryDelay">
-/// The pause that follows before the next attempt, after the normalization
-/// <see cref="LanChipInfoRetryOptions.RetryDelay"/> documents.
-/// <see cref="TimeSpan.Zero"/> on the last attempt, because no retry follows it — which is also
-/// how a caller tells "retrying" from "that was the last try".
-/// </param>
-public readonly record struct LanChipInfoProbeProgress(
-    int Attempt,
-    int MaxAttempts,
-    bool WasLanNotInitialized,
-    TimeSpan RetryDelay);
+public readonly record struct LanChipInfoProbeProgress
+{
+    /// <summary>
+    /// Gets the 1-based number of the attempt that just failed.
+    /// </summary>
+    public required int Attempt { get; init; }
+
+    /// <summary>
+    /// Gets the total number of attempts the probe is allowed, after the normalization
+    /// <see cref="LanChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
+    /// <see cref="Attempt"/> on the last one.
+    /// </summary>
+    public required int MaxAttempts { get; init; }
+
+    /// <summary>
+    /// Whether <i>this</i> attempt failed with <see cref="LanNotInitializedException"/> — the device
+    /// reporting its WINC state machine has not reached INITIALIZED (SCPI <c>-200</c>). False for a
+    /// null answer or any other failure, so it describes the attempt being reported rather than the
+    /// worst one seen so far.
+    /// </summary>
+    public required bool WasLanNotInitialized { get; init; }
+
+    /// <summary>
+    /// Gets the pause that follows before the next attempt, after the normalization
+    /// <see cref="LanChipInfoRetryOptions.RetryDelay"/> documents.
+    /// <see cref="TimeSpan.Zero"/> on the last attempt, because no retry follows it — which is also
+    /// how a caller tells "retrying" from "that was the last try".
+    /// </summary>
+    public required TimeSpan RetryDelay { get; init; }
+}
 
 /// <summary>
 /// The outcome of a bounded chip-info probe: what was read, and — when nothing was — whether the
 /// device was specifically reporting an uninitialized WINC state machine.
 /// </summary>
-/// <param name="ChipInfo">The chip info that was read, or <see langword="null"/> if the probe never got one.</param>
-/// <param name="WasLanNotInitialized">
-/// Whether the <i>final</i> failure was a <see cref="LanNotInitializedException"/>. Reset by any
-/// other kind of failure, so it describes the terminal condition rather than an earlier attempt.
-/// Meaningless when <see cref="ChipInfo"/> is non-null.
-/// </param>
-public readonly record struct LanChipInfoProbeResult(LanChipInfo? ChipInfo, bool WasLanNotInitialized)
+public readonly record struct LanChipInfoProbeResult
 {
+    /// <summary>
+    /// Gets the chip info that was read, or <see langword="null"/> if the probe never got one.
+    /// </summary>
+    public required LanChipInfo? ChipInfo { get; init; }
+
+    /// <summary>
+    /// Whether the <i>final</i> failure was a <see cref="LanNotInitializedException"/>. Reset by any
+    /// other kind of failure, so it describes the terminal condition rather than an earlier attempt.
+    /// Meaningless when <see cref="ChipInfo"/> is non-null.
+    /// </summary>
+    public required bool WasLanNotInitialized { get; init; }
+
     /// <summary>Gets a value indicating whether the probe read the chip info.</summary>
     public bool Succeeded => ChipInfo is not null;
 }
@@ -231,7 +244,7 @@ public static class LanChipInfoProviderExtensions
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
+                return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
             }
 
             try
@@ -246,7 +259,7 @@ public static class LanChipInfoProviderExtensions
                             attempt,
                             maxAttempts);
                     }
-                    return new LanChipInfoProbeResult(chipInfo, false);
+                    return new LanChipInfoProbeResult { ChipInfo = chipInfo, WasLanNotInitialized = false };
                 }
                 lastFailureWasLanNotInitialized = false;
                 log.LogDebug(
@@ -261,7 +274,7 @@ public static class LanChipInfoProviderExtensions
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
+                return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
             }
             catch (LanNotInitializedException ex)
             {
@@ -312,11 +325,13 @@ public static class LanChipInfoProviderExtensions
             ReportAttemptFailed(
                 effectiveOptions.Progress,
                 log,
-                new LanChipInfoProbeProgress(
-                    attempt,
-                    maxAttempts,
-                    lastFailureWasLanNotInitialized,
-                    attempt < maxAttempts ? retryDelay : TimeSpan.Zero));
+                new LanChipInfoProbeProgress
+                {
+                    Attempt = attempt,
+                    MaxAttempts = maxAttempts,
+                    WasLanNotInitialized = lastFailureWasLanNotInitialized,
+                    RetryDelay = attempt < maxAttempts ? retryDelay : TimeSpan.Zero
+                });
 
             if (attempt < maxAttempts)
             {
@@ -331,7 +346,7 @@ public static class LanChipInfoProviderExtensions
                         totalTimeout,
                         attempt,
                         maxAttempts);
-                    return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
+                    return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
                 }
             }
         }
@@ -340,7 +355,7 @@ public static class LanChipInfoProviderExtensions
             "LAN chip-info query exhausted {Max} attempts; reporting the module as unreadable (not-initialized: {NotInitialized}).",
             maxAttempts,
             lastFailureWasLanNotInitialized);
-        return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
+        return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
     }
 
     /// <summary>

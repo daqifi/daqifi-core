@@ -20,24 +20,12 @@ public class NetworkConfigurableTests
     /// <see cref="Task.Delay(int, CancellationToken)">2-second module-restart wait</see> instead
     /// of paying it. The collaborator already treats a token that goes canceled during that wait
     /// as "the device has already committed" and completes normally rather than throwing — pinned
-    /// by <see cref="UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_CompletesAndUpdatesLocalState"/>
+    /// by <see cref="UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_Completes"/>
     /// — so this changes nothing about what a test using it observes, only how long it takes.
     /// The same trick is used at the seam level in <c>NetworkConfigurationOperationsTests</c>.
     /// </summary>
     private static void SkipRestartWait(TestableDaqifiStreamingDevice device, CancellationTokenSource cts)
         => device.CancelOnApply = cts;
-
-    [Fact]
-    public void NetworkConfiguration_InitializedOnConstruction()
-    {
-        // Act
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Assert
-        Assert.NotNull(device.NetworkConfiguration);
-        Assert.Equal(WifiMode.SelfHosted, device.NetworkConfiguration.Mode);
-        Assert.Equal(WifiSecurityType.WpaPskPhrase, device.NetworkConfiguration.SecurityType);
-    }
 
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithNullConfiguration_ThrowsArgumentNullException()
@@ -136,31 +124,6 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public async Task UpdateNetworkConfigurationAsync_UpdatesLocalConfiguration()
-    {
-        // Arrange
-        var device = new TestableDaqifiStreamingDevice("TestDevice");
-        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
-        using var cts = new CancellationTokenSource();
-        SkipRestartWait(device, cts);
-        device.Connect();
-        var config = new NetworkConfiguration(
-            WifiMode.ExistingNetwork,
-            WifiSecurityType.WpaPskPhrase,
-            "UpdatedNetwork",
-            "UpdatedPassword");
-
-        // Act
-        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
-
-        // Assert
-        Assert.Equal(WifiMode.ExistingNetwork, device.NetworkConfiguration.Mode);
-        Assert.Equal(WifiSecurityType.WpaPskPhrase, device.NetworkConfiguration.SecurityType);
-        Assert.Equal("UpdatedNetwork", device.NetworkConfiguration.Ssid);
-        Assert.Equal("UpdatedPassword", device.NetworkConfiguration.Password);
-    }
-
-    [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithStaticIP_SendsAddressMaskGatewayBeforeApply()
     {
         // Arrange
@@ -254,76 +217,6 @@ public class NetworkConfigurableTests
         Assert.Contains("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\"", sentCommands);
         Assert.DoesNotContain(sentCommands, c => c.StartsWith("SYSTem:COMMunicate:LAN:MASK "));
         Assert.DoesNotContain(sentCommands, c => c.StartsWith("SYSTem:COMMunicate:LAN:GATEway "));
-    }
-
-    [Fact]
-    public async Task UpdateNetworkConfigurationAsync_WithNullStaticFields_PreservesPreviouslyCachedValues()
-    {
-        // Arrange — first call seeds the cache with a known static IP.
-        var device = new TestableDaqifiStreamingDevice("TestDevice");
-        device.Connect();
-        var originalStaticIP = IPAddress.Parse("10.0.0.5");
-        var originalSubnet = IPAddress.Parse("255.255.255.0");
-        var originalGateway = IPAddress.Parse("10.0.0.1");
-
-        // Skip the 2-second module-restart wait; this test asserts the cached static IP fields,
-        // not timing. A source per call, because each call leaves its own canceled and the next
-        // call's entry check would throw on a reused one.
-        using var firstCts = new CancellationTokenSource();
-        SkipRestartWait(device, firstCts);
-        await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork,
-            WifiSecurityType.WpaPskPhrase,
-            "Net",
-            "Pass",
-            originalStaticIP,
-            originalSubnet,
-            originalGateway), firstCts.Token);
-
-        // Act — second call only changes WiFi settings; static IP fields are
-        // null which means "leave unchanged". The cache must not be cleared.
-        using var secondCts = new CancellationTokenSource();
-        SkipRestartWait(device, secondCts);
-        await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork,
-            WifiSecurityType.WpaPskPhrase,
-            "OtherNet",
-            "OtherPass"), secondCts.Token);
-
-        // Assert
-        Assert.Equal(originalStaticIP, device.NetworkConfiguration.StaticIP);
-        Assert.Equal(originalSubnet, device.NetworkConfiguration.SubnetMask);
-        Assert.Equal(originalGateway, device.NetworkConfiguration.Gateway);
-    }
-
-    [Fact]
-    public async Task UpdateNetworkConfigurationAsync_WithStaticIP_UpdatesLocalConfiguration()
-    {
-        // Arrange
-        var device = new TestableDaqifiStreamingDevice("TestDevice");
-        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
-        using var cts = new CancellationTokenSource();
-        SkipRestartWait(device, cts);
-        device.Connect();
-        var staticIP = IPAddress.Parse("10.0.0.5");
-        var subnet = IPAddress.Parse("255.255.255.0");
-        var gateway = IPAddress.Parse("10.0.0.1");
-        var config = new NetworkConfiguration(
-            WifiMode.ExistingNetwork,
-            WifiSecurityType.WpaPskPhrase,
-            "Net",
-            "Pass",
-            staticIP,
-            subnet,
-            gateway);
-
-        // Act
-        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
-
-        // Assert
-        Assert.Equal(staticIP, device.NetworkConfiguration.StaticIP);
-        Assert.Equal(subnet, device.NetworkConfiguration.SubnetMask);
-        Assert.Equal(gateway, device.NetworkConfiguration.Gateway);
     }
 
     [Fact]
@@ -491,12 +384,11 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public async Task UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_CompletesAndUpdatesLocalState()
+    public async Task UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_Completes()
     {
         // Past the save/apply the device has already committed. Cancelling during the restart
         // wait must end the wait rather than fail the call — surfacing "canceled" here would
-        // tell the caller nothing happened while the device sits on the new configuration, and
-        // would strand NetworkConfiguration holding the old values.
+        // tell the caller nothing happened while the device sits on the new configuration.
         using var cts = new CancellationTokenSource();
         var device = new CancelOnCommandDaqifiStreamingDevice(
             "TestDevice", cancelAfterCommand: "SYSTem:COMMunicate:LAN:APPLY", cts: cts);
@@ -513,10 +405,6 @@ public class NetworkConfigurableTests
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:COMMunicate:LAN:SAVE", sentCommands);
         Assert.Contains("SYSTem:COMMunicate:LAN:APPLY", sentCommands);
-
-        // Local state must reflect what the device actually committed.
-        Assert.Equal("NewNetwork", device.NetworkConfiguration.Ssid);
-        Assert.Equal(WifiMode.ExistingNetwork, device.NetworkConfiguration.Mode);
     }
 
     [Fact]
@@ -584,22 +472,6 @@ public class NetworkConfigurableTests
         var sent = device.SentMessages.Select(m => m.Data).ToList();
         Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // no EnableNetworkLan
         Assert.Contains("SYSTem:STORage:SD:ENAble 0", sent);             // SD disabled
-    }
-
-    [Fact]
-    public void NetworkConfiguration_ReturnsClone_PreventingExternalModification()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var config1 = device.NetworkConfiguration;
-        var config2 = device.NetworkConfiguration;
-
-        // Act - modify the returned configuration
-        config1.Ssid = "ModifiedSSID";
-
-        // Assert - device's internal state should be unchanged
-        Assert.NotSame(config1, config2); // Different instances
-        Assert.NotEqual("ModifiedSSID", config2.Ssid); // Original unchanged
     }
 
     [Fact]

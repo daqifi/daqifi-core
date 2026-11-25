@@ -115,14 +115,16 @@ public class DeviceMetadata
     public int DevicePort { get; set; }
 
     /// <summary>
-    /// Gets or sets the WiFi security mode.
+    /// Gets or sets the WiFi security type the device reported. It is <c>null</c> until a status
+    /// message reports the WiFi settings, and when the device reports a type Core does not know.
     /// </summary>
-    public uint WifiSecurityMode { get; set; }
+    public WifiSecurityType? WifiSecurityMode { get; set; }
 
     /// <summary>
-    /// Gets or sets the WiFi infrastructure mode.
+    /// Gets or sets the WiFi mode the device reported. It is <c>null</c> until a status message
+    /// reports the WiFi settings, and when the device reports a mode Core does not know.
     /// </summary>
-    public uint WifiInfrastructureMode { get; set; }
+    public WifiMode? WifiInfrastructureMode { get; set; }
 
     /// <summary>
     /// Copies all field values from another <see cref="DeviceMetadata"/> instance into this one.
@@ -261,12 +263,12 @@ public class DeviceMetadata
         // firmware version but neither WiFi field, so they keep the last known mode (#986).
         if (message.WifiSecurityMode > 0 || message.WifiInfMode > 0)
         {
-            WifiSecurityMode = message.WifiSecurityMode;
+            WifiSecurityMode = ToWifiSecurityType(message.WifiSecurityMode);
         }
 
         if (message.WifiInfMode > 0)
         {
-            WifiInfrastructureMode = message.WifiInfMode;
+            WifiInfrastructureMode = ToWifiMode(message.WifiInfMode);
         }
 
         var ip = NetworkAddressHelper.GetIpAddressString(message);
@@ -330,4 +332,30 @@ public class DeviceMetadata
             Health.DeviceStatus = message.DeviceStatus;
         }
     }
+
+    /// <summary>
+    /// Maps a wire security mode to its type. A mode Core does not know becomes <c>null</c> rather
+    /// than keeping the last known type, which the device has just said is no longer in use.
+    /// </summary>
+    private static WifiSecurityType? ToWifiSecurityType(uint wireValue) => wireValue switch
+    {
+        (uint)WifiSecurityType.None => WifiSecurityType.None,
+        (uint)WifiSecurityType.WpaPskPhrase => WifiSecurityType.WpaPskPhrase,
+
+        // WPA_DEPRECATED: the firmware's older number for the same passphrase mode. Its SCPI
+        // queries report it as 3, but the status message carries the stored number.
+        4 => WifiSecurityType.WpaPskPhrase,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Maps a wire infrastructure mode to its WiFi mode; a mode Core does not know becomes
+    /// <c>null</c>, for the same reason as in <see cref="ToWifiSecurityType"/>.
+    /// </summary>
+    private static WifiMode? ToWifiMode(uint wireValue) => wireValue switch
+    {
+        (uint)WifiMode.ExistingNetwork => WifiMode.ExistingNetwork,
+        (uint)WifiMode.SelfHosted => WifiMode.SelfHosted,
+        _ => null,
+    };
 }

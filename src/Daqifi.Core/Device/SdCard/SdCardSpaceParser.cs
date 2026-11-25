@@ -51,7 +51,7 @@ internal static class SdCardSpaceParser
             return false;
         }
 
-        result = new SdCardStorageInfo(free, total);
+        result = new SdCardStorageInfo { FreeBytes = free, TotalBytes = total };
         return true;
     }
 

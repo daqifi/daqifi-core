@@ -497,10 +497,25 @@ public class SdCardLogSampleSourceTests
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private static SdCardLogEntry Entry(int secondsFromT0, uint digital, params double[] analog) =>
-        new(T0.AddSeconds(secondsFromT0), analog, digital, null);
+        new()
+        {
+            Timestamp = T0.AddSeconds(secondsFromT0),
+            AnalogValues = analog,
+            DigitalData = digital,
+            AnalogTimestamps = null
+        };
 
     private static SdCardDeviceConfiguration Config(int analogPorts, string? serial) =>
-        new(analogPorts, DigitalPortCount: 1, TimestampFrequency: 50000, serial, null, null, null);
+        new()
+        {
+            AnalogPortCount = analogPorts,
+            DigitalPortCount = 1,
+            TimestampFrequency = 50000,
+            DeviceSerialNumber = serial,
+            DevicePartNumber = null,
+            FirmwareVersion = null,
+            CalibrationValues = null
+        };
 
     private static SdCardLogSession Session(
         SdCardDeviceConfiguration? config,

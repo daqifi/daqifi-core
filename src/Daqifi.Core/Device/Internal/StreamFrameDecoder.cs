@@ -80,7 +80,7 @@ internal sealed class StreamFrameDecoder
     /// frame is armed; from this version on it is not, because the frame it looks for cannot
     /// arrive and the hold would delay every first sample by a sample period for nothing.
     /// </remarks>
-    private static readonly FirmwareVersion FirstFirmwareWithoutFrameLatch = new(3, 6, 0, null, 0);
+    private static readonly FirmwareVersion FirstFirmwareWithoutFrameLatch = new(3, 6, 0, 0, null, 0);
 
     private readonly IDeviceOperationHost _host;
 

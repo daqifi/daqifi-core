@@ -334,7 +334,12 @@ internal sealed class SdCardFileParser
                 carry = Array.Empty<byte>();
             }
 
-            progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
+            progress?.Report(new SdCardParseProgress
+            {
+                BytesRead = totalBytesRead,
+                TotalBytes = totalBytes,
+                MessagesRead = messagesRead
+            });
         }
 
         // Try to parse any remaining carry bytes (may contain a partial final message)
@@ -363,7 +368,12 @@ internal sealed class SdCardFileParser
                 yield return frame!;
             }
 
-            progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
+            progress?.Report(new SdCardParseProgress
+            {
+                BytesRead = totalBytesRead,
+                TotalBytes = totalBytes,
+                MessagesRead = messagesRead
+            });
         }
     }
 
@@ -493,8 +503,12 @@ internal sealed class SdCardFileParser
                     ? msg.AnalogInDataTs.ToArray()
                     : null;
 
-                yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps)
+                yield return new SdCardLogEntry
                 {
+                    Timestamp = timestamp,
+                    AnalogValues = analogValues,
+                    DigitalData = digitalData,
+                    AnalogTimestamps = analogTimestamps,
                     HasDeviceTimestamp = hasDeviceTimestamp
                 };
             }
@@ -686,17 +700,19 @@ internal sealed class SdCardFileParser
                 return null;
             }
 
-            return new SdCardDeviceConfiguration(
-                AnalogPortCount: (int)_analogPortNum,
-                DigitalPortCount: (int)_digitalPortNum,
-                TimestampFrequency: _timestampFreq,
-                DeviceSerialNumber: _deviceSn != 0 ? _deviceSn.ToString() : null,
-                DevicePartNumber: _devicePn,
-                FirmwareVersion: _fwRev,
-                CalibrationValues: _calibration,
-                Resolution: _resolution,
-                PortRange: _portRange,
-                InternalScaleM: _internalScaleM);
+            return new SdCardDeviceConfiguration
+            {
+                AnalogPortCount = (int)_analogPortNum,
+                DigitalPortCount = (int)_digitalPortNum,
+                TimestampFrequency = _timestampFreq,
+                DeviceSerialNumber = _deviceSn != 0 ? _deviceSn.ToString() : null,
+                DevicePartNumber = _devicePn,
+                FirmwareVersion = _fwRev,
+                CalibrationValues = _calibration,
+                Resolution = _resolution,
+                PortRange = _portRange,
+                InternalScaleM = _internalScaleM
+            };
         }
     }
 
@@ -713,21 +729,23 @@ internal sealed class SdCardFileParser
             return scanned;
         }
 
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: primary.AnalogPortCount != 0 ? primary.AnalogPortCount : scanned.AnalogPortCount,
-            DigitalPortCount: primary.DigitalPortCount != 0 ? primary.DigitalPortCount : scanned.DigitalPortCount,
-            TimestampFrequency: primary.TimestampFrequency != 0 ? primary.TimestampFrequency : scanned.TimestampFrequency,
-            DeviceSerialNumber: primary.DeviceSerialNumber ?? scanned.DeviceSerialNumber,
-            DevicePartNumber: !string.IsNullOrEmpty(primary.DevicePartNumber)
+        return new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = primary.AnalogPortCount != 0 ? primary.AnalogPortCount : scanned.AnalogPortCount,
+            DigitalPortCount = primary.DigitalPortCount != 0 ? primary.DigitalPortCount : scanned.DigitalPortCount,
+            TimestampFrequency = primary.TimestampFrequency != 0 ? primary.TimestampFrequency : scanned.TimestampFrequency,
+            DeviceSerialNumber = primary.DeviceSerialNumber ?? scanned.DeviceSerialNumber,
+            DevicePartNumber = !string.IsNullOrEmpty(primary.DevicePartNumber)
                 ? primary.DevicePartNumber
                 : scanned.DevicePartNumber,
-            FirmwareVersion: !string.IsNullOrEmpty(primary.FirmwareVersion)
+            FirmwareVersion = !string.IsNullOrEmpty(primary.FirmwareVersion)
                 ? primary.FirmwareVersion
                 : scanned.FirmwareVersion,
-            CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues,
-            Resolution: primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
-            PortRange: primary.PortRange ?? scanned.PortRange,
-            InternalScaleM: primary.InternalScaleM ?? scanned.InternalScaleM);
+            CalibrationValues = primary.CalibrationValues ?? scanned.CalibrationValues,
+            Resolution = primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
+            PortRange = primary.PortRange ?? scanned.PortRange,
+            InternalScaleM = primary.InternalScaleM ?? scanned.InternalScaleM
+        };
     }
 
     /// <summary>
@@ -757,17 +775,19 @@ internal sealed class SdCardFileParser
             ? statusMessage.AnalogInIntScaleM.Select(v => (double)v).ToArray()
             : null;
 
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: (int)statusMessage.AnalogInPortNum,
-            DigitalPortCount: (int)statusMessage.DigitalPortNum,
-            TimestampFrequency: statusMessage.TimestampFreq,
-            DeviceSerialNumber: statusMessage.DeviceSn != 0 ? statusMessage.DeviceSn.ToString() : null,
-            DevicePartNumber: statusMessage.DevicePn,
-            FirmwareVersion: statusMessage.DeviceFwRev,
-            CalibrationValues: calibration,
-            Resolution: statusMessage.AnalogInRes,
-            PortRange: portRange,
-            InternalScaleM: internalScaleM);
+        return new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = (int)statusMessage.AnalogInPortNum,
+            DigitalPortCount = (int)statusMessage.DigitalPortNum,
+            TimestampFrequency = statusMessage.TimestampFreq,
+            DeviceSerialNumber = statusMessage.DeviceSn != 0 ? statusMessage.DeviceSn.ToString() : null,
+            DevicePartNumber = statusMessage.DevicePn,
+            FirmwareVersion = statusMessage.DeviceFwRev,
+            CalibrationValues = calibration,
+            Resolution = statusMessage.AnalogInRes,
+            PortRange = portRange,
+            InternalScaleM = internalScaleM
+        };
     }
 
     /// <summary>

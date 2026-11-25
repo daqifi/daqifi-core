@@ -14,10 +14,9 @@ namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>
 /// The <see cref="ISdCardOperations"/> implementation, extracted from
-/// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it. Also owns
+/// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it. That includes
 /// the shared-SPI-bus handover (<see cref="PrepareSdInterface"/> /
-/// <see cref="PrepareLanInterface"/>) that <see cref="Network.INetworkConfigurable"/> exposes,
-/// because every operation here depends on it.
+/// <see cref="PrepareLanInterface"/>), which every operation here depends on.
 /// </summary>
 /// <remarks>
 /// Holds the SD-scoped device state — whether a logging session is running, the most recent
@@ -2476,7 +2475,12 @@ internal sealed class SdCardOperations
             }
         }
 
-        return new SdCardDownloadResult(fileName, fileSize, clock.GetElapsedTime(startedAt));
+        return new SdCardDownloadResult
+        {
+            FileName = fileName,
+            SizeInBytes = fileSize,
+            Duration = clock.GetElapsedTime(startedAt)
+        };
     }
 
     /// <summary>
