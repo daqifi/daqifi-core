@@ -28,14 +28,14 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// hardware tops out at ±10V differential ranges; 50 leaves generous headroom while still
     /// rejecting nonsensical values.
     /// </summary>
-    public const double MaxPortRangeVolts = 50.0;
+    public const double MaximumPortRangeVolts = 50.0;
 
     /// <summary>
     /// Largest absolute magnitude accepted for the multiplicative/offset calibration coefficients
     /// (<see cref="CalibrationM"/>, <see cref="CalibrationB"/>, <see cref="InternalScaleM"/>). Values
     /// beyond this indicate a corrupted coefficient rather than a real calibration.
     /// </summary>
-    public const double MaxCalibrationMagnitude = 1_000_000.0;
+    public const double MaximumCalibrationMagnitude = 1_000_000.0;
 
     private readonly Lock _lock = new();
     private IDataSample? _activeSample;
@@ -134,12 +134,12 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the minimum value for the channel range.
     /// </summary>
-    public double MinValue
+    public double MinimumValue
     {
         get { lock (_lock) { return _minValue; } }
         set
         {
-            RequireFinite(value, nameof(MinValue));
+            RequireFinite(value, nameof(MinimumValue));
             lock (_lock) { _minValue = value; }
         }
     }
@@ -147,20 +147,20 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the maximum value for the channel range.
     /// </summary>
-    public double MaxValue
+    public double MaximumValue
     {
         get { lock (_lock) { return _maxValue; } }
         set
         {
-            RequireFinite(value, nameof(MaxValue));
+            RequireFinite(value, nameof(MaximumValue));
             lock (_lock) { _maxValue = value; }
         }
     }
 
     /// <summary>
-    /// Gets whether the configured display range (<see cref="MinValue"/>..<see cref="MaxValue"/>) is
+    /// Gets whether the configured display range (<see cref="MinimumValue"/>..<see cref="MaximumValue"/>) is
     /// bipolar — i.e. spans negative voltages, as the ±1V/±5V/±10V differential ranges do — rather
-    /// than unipolar (0V-and-up). Derived purely from <see cref="MinValue"/>, which a consumer sets
+    /// than unipolar (0V-and-up). Derived purely from <see cref="MinimumValue"/>, which a consumer sets
     /// when selecting a range; lets range-selection UI branch on polarity without hardcoding
     /// per-device assumptions.
     /// </summary>
@@ -366,47 +366,47 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
 
     /// <summary>
     /// Validates that <paramref name="value"/> is a physically reasonable port (voltage) range:
-    /// finite, positive, and no larger than <see cref="MaxPortRangeVolts"/>.
+    /// finite, positive, and no larger than <see cref="MaximumPortRangeVolts"/>.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid range.</exception>
     internal static void ValidatePortRange(double value, string paramName)
     {
-        if (!double.IsFinite(value) || value <= 0.0 || value > MaxPortRangeVolts)
+        if (!double.IsFinite(value) || value <= 0.0 || value > MaximumPortRangeVolts)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Port range must be a finite value in (0, {MaxPortRangeVolts}] volts.");
+                $"Port range must be a finite value in (0, {MaximumPortRangeVolts}] volts.");
         }
     }
 
     /// <summary>
     /// Validates a multiplicative scale factor (<see cref="CalibrationM"/>/<see cref="InternalScaleM"/>):
-    /// finite, non-zero, and within ±<see cref="MaxCalibrationMagnitude"/>. Negative factors are allowed
+    /// finite, non-zero, and within ±<see cref="MaximumCalibrationMagnitude"/>. Negative factors are allowed
     /// (they invert the signal); zero is not (it discards the measurement entirely).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid scale factor.</exception>
     internal static void ValidateScaleFactor(double value, string paramName)
     {
-        if (!double.IsFinite(value) || value == 0.0 || Math.Abs(value) > MaxCalibrationMagnitude)
+        if (!double.IsFinite(value) || value == 0.0 || Math.Abs(value) > MaximumCalibrationMagnitude)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Scale factor must be a finite, non-zero value within ±{MaxCalibrationMagnitude}.");
+                $"Scale factor must be a finite, non-zero value within ±{MaximumCalibrationMagnitude}.");
         }
     }
 
     /// <summary>
     /// Validates a calibration offset (<see cref="CalibrationB"/>): finite and within
-    /// ±<see cref="MaxCalibrationMagnitude"/>. Zero is a valid offset.
+    /// ±<see cref="MaximumCalibrationMagnitude"/>. Zero is a valid offset.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid offset.</exception>
     internal static void ValidateOffset(double value, string paramName)
     {
-        if (!double.IsFinite(value) || Math.Abs(value) > MaxCalibrationMagnitude)
+        if (!double.IsFinite(value) || Math.Abs(value) > MaximumCalibrationMagnitude)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Calibration offset must be a finite value within ±{MaxCalibrationMagnitude}.");
+                $"Calibration offset must be a finite value within ±{MaximumCalibrationMagnitude}.");
         }
     }
 

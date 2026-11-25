@@ -134,7 +134,7 @@ internal interface IDeviceOperationHost
     /// the entry they pop afterwards is their own command's and not an older one's.
     /// </remarks>
     Task<IReadOnlyList<string>> DrainErrorQueueAsync(
-        int maxIterations = 256,
+        int maximumIterations = 256,
         CancellationToken cancellationToken = default);
 
     /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>

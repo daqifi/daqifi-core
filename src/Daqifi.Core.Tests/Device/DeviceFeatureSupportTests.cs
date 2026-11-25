@@ -186,7 +186,7 @@ public class DeviceFeatureSupportTests
         // guarantees, so that is the version the typed exception reports.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdStorageQuery);
 
-        Assert.Equal(DaqifiDevice.MinSupportedFirmware, requirement.MinVersion);
+        Assert.Equal(DaqifiDevice.MinimumSupportedFirmware, requirement.MinVersion);
     }
 
     // ---- Firmware-version axis ------------------------------------------------------------

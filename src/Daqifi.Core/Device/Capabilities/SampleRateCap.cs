@@ -138,7 +138,7 @@ public static class SampleRateCap
                 // enabled" check downstream reads it as a live configuration.
                 modelCapHz = 0;
             }
-            else if (model.TryComputeMaxRateHz(simultaneousCount, totalCount, out var predictedHz))
+            else if (model.TryComputeMaximumRateHz(simultaneousCount, totalCount, out var predictedHz))
             {
                 modelCapHz = predictedHz;
             }
@@ -171,7 +171,7 @@ public static class SampleRateCap
     /// <summary>
     /// Counts the enabled analog <i>input</i> channels, and how many of those the capability
     /// document marks as dedicated-converter ("simultaneous") channels — the two figures
-    /// <see cref="CapabilityRateModel.TryComputeMaxRateHz"/> takes.
+    /// <see cref="CapabilityRateModel.TryComputeMaximumRateHz"/> takes.
     /// </summary>
     /// <remarks>
     /// Digital I/O is excluded because its cost is amortized into the model's per-tick overhead, and

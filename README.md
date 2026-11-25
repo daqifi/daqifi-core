@@ -132,7 +132,7 @@ var options = new DeviceConnectionOptions
     DeviceName = "My DAQiFi",
     ConnectionRetry = new ConnectionRetryOptions
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
     InitializeDevice = true
@@ -228,7 +228,7 @@ foreach (var channel in snapshot.Channels)
     Console.WriteLine(
         $"{channel.Name}: {channel.SampleCount} samples, " +
         $"{channel.MeasuredSampleRateHz:F1} Hz measured vs {channel.DeviceClockSampleRateHz:F1} Hz by the device clock, " +
-        $"{channel.MinValue:F3}..{channel.MaxValue:F3} V, worst gap {channel.MaxSampleInterval.TotalMilliseconds:F2} ms");
+        $"{channel.MinimumValue:F3}..{channel.MaximumValue:F3} V, worst gap {channel.MaximumSampleInterval.TotalMilliseconds:F2} ms");
 }
 ```
 

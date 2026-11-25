@@ -42,9 +42,9 @@ public class DeviceReconnectTests
     private static ReconnectOptions FastPolicy(int maxAttempts = 4) => new()
     {
         Enabled = true,
-        MaxAttempts = maxAttempts,
+        MaximumAttempts = maxAttempts,
         InitialDelay = TimeSpan.FromMilliseconds(10),
-        MaxDelay = TimeSpan.FromMilliseconds(60),
+        MaximumDelay = TimeSpan.FromMilliseconds(60),
         BackoffMultiplier = 2.0
     };
 
@@ -661,7 +661,7 @@ public class DeviceReconnectTests
         {
             Assert.Equal(3, attempts.Count);
             Assert.Equal(new[] { 1, 2, 3 }, attempts.Select(a => a.AttemptNumber));
-            Assert.All(attempts, a => Assert.Equal(5, a.MaxAttempts));
+            Assert.All(attempts, a => Assert.Equal(5, a.MaximumAttempts));
 
             // Backing off, not hammering: each wait is longer than the last.
             Assert.True(attempts[1].Delay > attempts[0].Delay);
@@ -794,7 +794,7 @@ public class DeviceReconnectTests
         using var device = new ScriptedStreamingDevice("Abandoned Device", transport);
         var policy = FastPolicy(maxAttempts: 20);
         policy.InitialDelay = TimeSpan.FromSeconds(30);
-        policy.MaxDelay = TimeSpan.FromSeconds(30);
+        policy.MaximumDelay = TimeSpan.FromSeconds(30);
         device.ReconnectOptions = policy;
 
         ConnectAndInitialize(device);
@@ -828,7 +828,7 @@ public class DeviceReconnectTests
         using var device = new ScriptedStreamingDevice("Departing Device", transport);
         var policy = FastPolicy(maxAttempts: 20);
         policy.InitialDelay = TimeSpan.FromSeconds(30);
-        policy.MaxDelay = TimeSpan.FromSeconds(30);
+        policy.MaximumDelay = TimeSpan.FromSeconds(30);
         device.ReconnectOptions = policy;
 
         ConnectAndInitialize(device);
@@ -1455,13 +1455,13 @@ public class DeviceReconnectTests
     private static ReconnectOptions ShippingLadder() => new()
     {
         Enabled = true,
-        MaxAttempts = 7,
+        MaximumAttempts = 7,
         InitialDelay = TimeSpan.FromSeconds(1),
-        MaxDelay = TimeSpan.FromSeconds(30),
+        MaximumDelay = TimeSpan.FromSeconds(30),
         BackoffMultiplier = 2.0
     };
 
-    /// <summary>The delays <see cref="ShippingLadder"/> should produce, saturating at MaxDelay.</summary>
+    /// <summary>The delays <see cref="ShippingLadder"/> should produce, saturating at MaximumDelay.</summary>
     private static readonly TimeSpan[] ExpectedLadder =
     {
         TimeSpan.FromSeconds(1),
@@ -1477,7 +1477,7 @@ public class DeviceReconnectTests
     public async Task TheShippingBackoffLadder_IsWalkedInFullIncludingItsCeiling()
     {
         // 91 seconds of device time in a few milliseconds of real time. The ladder's saturation at
-        // MaxDelay — attempts 6 and 7, where 32s and 64s are both clamped to 30s — is the part no
+        // MaximumDelay — attempts 6 and 7, where 32s and 64s are both clamped to 30s — is the part no
         // existing test reaches: every other reconnect test runs a millisecond-scale stand-in
         // policy and asserts only that each wait is longer than the last, which a ladder that
         // never capped would satisfy just as well.
@@ -1524,7 +1524,7 @@ public class DeviceReconnectTests
         {
             Assert.Equal(ExpectedLadder, attempts.Select(a => a.Delay));
             Assert.Equal(Enumerable.Range(1, 7), attempts.Select(a => a.AttemptNumber));
-            Assert.All(attempts, a => Assert.Equal(7, a.MaxAttempts));
+            Assert.All(attempts, a => Assert.Equal(7, a.MaximumAttempts));
         }
     }
 

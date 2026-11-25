@@ -52,7 +52,7 @@ internal sealed class DeviceAdministrationOperations
         if (!ScpiMessageProducer.IsFriendlyNameValid(name))
         {
             throw new ArgumentException(
-                $"Device name must be 1-{ScpiMessageProducer.MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                $"Device name must be 1-{ScpiMessageProducer.MaximumFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
                 nameof(name));
         }
 

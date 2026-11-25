@@ -358,8 +358,8 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// </summary>
     public int PwmFrequencyHz => DaqifiStreamingDevice.DefaultPwmFrequencyHz;
 
-    /// <summary>Always <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>.</summary>
-    public int PwmFrequencyFloorHz => DaqifiStreamingDevice.MinPwmFrequencyHz;
+    /// <summary>Always <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>.</summary>
+    public int PwmFrequencyFloorHz => DaqifiStreamingDevice.MinimumPwmFrequencyHz;
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>

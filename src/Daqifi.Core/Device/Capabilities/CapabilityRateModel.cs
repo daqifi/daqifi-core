@@ -51,7 +51,7 @@ public sealed class CapabilityRateModel
     /// factor in — digital cost is amortized into <see cref="PerTickOverhead"/>, and analog output
     /// is not streamed.
     /// </param>
-    /// <param name="maxRateHz">The predicted ceiling in Hz, when the model can be evaluated.</param>
+    /// <param name="maximumRateHz">The predicted ceiling in Hz, when the model can be evaluated.</param>
     /// <returns>
     /// <c>true</c> when the document supplied enough constants to evaluate at least one term of the
     /// formula; otherwise <c>false</c>, and the caller should fall back to
@@ -62,7 +62,7 @@ public sealed class CapabilityRateModel
     /// exceeds <paramref name="totalChannelCount"/> — a selection that cannot exist, and one that
     /// would otherwise silently produce a too-high ceiling.
     /// </exception>
-    public bool TryComputeMaxRateHz(int simultaneousChannelCount, int totalChannelCount, out int maxRateHz)
+    public bool TryComputeMaximumRateHz(int simultaneousChannelCount, int totalChannelCount, out int maximumRateHz)
     {
         if (simultaneousChannelCount < 0)
         {
@@ -110,7 +110,7 @@ public sealed class CapabilityRateModel
             }
         }
 
-        maxRateHz = ceiling ?? 0;
+        maximumRateHz = ceiling ?? 0;
         return ceiling.HasValue;
     }
 }

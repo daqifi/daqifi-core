@@ -20,9 +20,9 @@ public enum DeviceFeature
 
     /// <summary>
     /// SD card storage capacity query (<c>SYSTem:STORage:SD:SPACe?</c>). Introduced in
-    /// firmware v3.4.6b1 — below the <see cref="DaqifiDevice.MinSupportedFirmware"/> floor,
+    /// firmware v3.4.6b1 — below the <see cref="DaqifiDevice.MinimumSupportedFirmware"/> floor,
     /// so every supported device already has it. The typed-exception backstop only fires
-    /// against below-floor devices, and reports <see cref="DaqifiDevice.MinSupportedFirmware"/>
+    /// against below-floor devices, and reports <see cref="DaqifiDevice.MinimumSupportedFirmware"/>
     /// (not v3.4.6b1) as the required version, since that floor — not the command's original
     /// introduction version — is what daqifi-core actually guarantees.
     /// </summary>
@@ -73,7 +73,7 @@ public enum DeviceFeature
     /// Like <see cref="SdListingEndMarker"/>, this does not decide whether to send a command; it
     /// decides whether a value the device reports can be believed. Earlier firmware advertises
     /// a fixed 1 Hz that the hardware cannot produce, so there Core keeps
-    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
+    /// <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/> as the floor. See
     /// <see cref="IStreamingDevice.PwmFrequencyFloorHz"/>.
     /// </remarks>
     PwmFrequencyFloor = 6,

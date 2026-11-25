@@ -28,7 +28,7 @@ public class WifiChipInfoProviderExtensionsTests
         bool kickWifiApply = true,
         IProgress<WifiChipInfoProbeProgress>? progress = null) => new()
         {
-            MaxAttempts = maxAttempts,
+            MaximumAttempts = maxAttempts,
             RetryDelay = FastRetryDelay,
             TotalTimeout = TimeSpan.FromSeconds(30),
             KickWifiApplyOnNotInitialized = kickWifiApply,
@@ -211,7 +211,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("slow and broken"));
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 50,
+            MaximumAttempts = 50,
             RetryDelay = TimeSpan.FromMilliseconds(20),
             TotalTimeout = TimeSpan.FromMilliseconds(120),
         };
@@ -282,7 +282,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 1,
+            MaximumAttempts = 1,
             RetryDelay = TimeSpan.FromSeconds(10),
             TotalTimeout = TimeSpan.FromSeconds(30),
         };
@@ -307,7 +307,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 3,
+            MaximumAttempts = 3,
             RetryDelay = TimeSpan.FromMilliseconds(5),
             TotalTimeout = TimeSpan.FromSeconds(-5),
         };
@@ -328,7 +328,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 3,
+            MaximumAttempts = 3,
             RetryDelay = TimeSpan.FromMilliseconds(5),
             TotalTimeout = Timeout.InfiniteTimeSpan,
         };
@@ -350,7 +350,7 @@ public class WifiChipInfoProviderExtensionsTests
             SampleChipInfo);
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 3,
+            MaximumAttempts = 3,
             RetryDelay = TimeSpan.FromSeconds(-1),
             TotalTimeout = TimeSpan.FromSeconds(30),
         };
@@ -371,7 +371,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 2,
+            MaximumAttempts = 2,
             RetryDelay = Timeout.InfiniteTimeSpan,
             TotalTimeout = Timeout.InfiniteTimeSpan,
         };
@@ -394,7 +394,7 @@ public class WifiChipInfoProviderExtensionsTests
         // read would sleep RetryDelay (2s) before the next attempt; this fact never calls the probe.
         var defaults = new WifiChipInfoRetryOptions();
 
-        Assert.Equal(3, defaults.MaxAttempts);
+        Assert.Equal(3, defaults.MaximumAttempts);
         Assert.Equal(TimeSpan.FromSeconds(2), defaults.RetryDelay);
         Assert.Equal(TimeSpan.FromSeconds(8), defaults.TotalTimeout);
         Assert.True(defaults.KickWifiApplyOnNotInitialized);
@@ -432,7 +432,7 @@ public class WifiChipInfoProviderExtensionsTests
         // Pins the retry budget's attempt count to the record's own default rather than to a
         // literal, so a change to the shipped default cannot slip past this file. The delay and
         // the ceiling are overridden to keep the test fast; the attempt count is not.
-        var defaultAttempts = new WifiChipInfoRetryOptions().MaxAttempts;
+        var defaultAttempts = new WifiChipInfoRetryOptions().MaximumAttempts;
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
         var options = new WifiChipInfoRetryOptions
         {
@@ -641,7 +641,7 @@ public class WifiChipInfoProviderExtensionsTests
         var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("slow and broken"));
         var options = new WifiChipInfoRetryOptions
         {
-            MaxAttempts = 50,
+            MaximumAttempts = 50,
             RetryDelay = TimeSpan.FromMilliseconds(20),
             TotalTimeout = TimeSpan.FromMilliseconds(120),
             Progress = progress,
@@ -656,7 +656,7 @@ public class WifiChipInfoProviderExtensionsTests
         Assert.Equal(
             Enumerable.Range(1, progress.Reports.Count),
             progress.Reports.Select(report => report.Attempt));
-        Assert.All(progress.Reports, report => Assert.Equal(50, report.MaxAttempts));
+        Assert.All(progress.Reports, report => Assert.Equal(50, report.MaximumAttempts));
     }
 
     [Fact]
@@ -688,7 +688,7 @@ public class WifiChipInfoProviderExtensionsTests
         int attempt, int maxAttempts, bool wasWifiNotInitialized, TimeSpan retryDelay) => new()
         {
             Attempt = attempt,
-            MaxAttempts = maxAttempts,
+            MaximumAttempts = maxAttempts,
             WasWifiNotInitialized = wasWifiNotInitialized,
             RetryDelay = retryDelay
         };

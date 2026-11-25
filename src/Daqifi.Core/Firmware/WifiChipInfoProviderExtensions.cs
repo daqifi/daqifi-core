@@ -11,7 +11,7 @@ namespace Daqifi.Core.Firmware;
 /// </summary>
 /// <remarks>
 /// The defaults are the ones Core's own WiFi firmware-status check uses
-/// (<see cref="FirmwareUpdateServiceOptions.WifiChipInfoMaxAttempts"/> and friends), so a consumer
+/// (<see cref="FirmwareUpdateServiceOptions.WifiChipInfoMaximumAttempts"/> and friends), so a consumer
 /// that just wants "what Core does" can pass nothing at all.
 /// </remarks>
 public sealed record WifiChipInfoRetryOptions
@@ -20,7 +20,7 @@ public sealed record WifiChipInfoRetryOptions
     /// Gets the maximum number of chip-info queries to make. Values below 1 are treated as 1 —
     /// the probe always makes at least one attempt.
     /// </summary>
-    public int MaxAttempts { get; init; } = 3;
+    public int MaximumAttempts { get; init; } = 3;
 
     /// <summary>
     /// Gets the pause between attempts. Not applied after the final attempt. Negative values —
@@ -29,7 +29,7 @@ public sealed record WifiChipInfoRetryOptions
     /// <remarks>
     /// Unlike <see cref="TotalTimeout"/>, <see cref="Timeout.InfiniteTimeSpan"/> is not honored
     /// here: an infinite <i>pause</i> inside a bounded retry has no meaning, and with an equally
-    /// unbounded budget nothing would ever release it. Use <see cref="MaxAttempts"/> = 1 to say
+    /// unbounded budget nothing would ever release it. Use <see cref="MaximumAttempts"/> = 1 to say
     /// "don't retry".
     /// </remarks>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(2);
@@ -39,7 +39,7 @@ public sealed record WifiChipInfoRetryOptions
     /// timeouts and the retry delays.
     /// </summary>
     /// <remarks>
-    /// Needed because <see cref="MaxAttempts"/> × the device's own response timeout plus the
+    /// Needed because <see cref="MaximumAttempts"/> × the device's own response timeout plus the
     /// delays can far exceed what the caller intended to spend — and this probe usually runs
     /// while an operation lock is held. Expiry ends the probe with the same "unavailable"
     /// result as an exhausted attempt count rather than throwing; only the caller's own
@@ -68,7 +68,7 @@ public sealed record WifiChipInfoRetryOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The probe can occupy roughly ten seconds with the defaults (<see cref="MaxAttempts"/>
+    /// The probe can occupy roughly ten seconds with the defaults (<see cref="MaximumAttempts"/>
     /// attempts, <see cref="RetryDelay"/> apart, on top of the device's own per-query timeout),
     /// and the module it waits on is legitimately unready for seconds at a time (#144, #203).
     /// Without this, the only per-attempt signal is <see cref="Microsoft.Extensions.Logging.ILogger"/>
@@ -104,10 +104,10 @@ public readonly record struct WifiChipInfoProbeProgress
 
     /// <summary>
     /// Gets the total number of attempts the probe is allowed, after the normalization
-    /// <see cref="WifiChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
+    /// <see cref="WifiChipInfoRetryOptions.MaximumAttempts"/> documents. Equal to
     /// <see cref="Attempt"/> on the last one.
     /// </summary>
-    public required int MaxAttempts { get; init; }
+    public required int MaximumAttempts { get; init; }
 
     /// <summary>
     /// Whether <i>this</i> attempt failed with <see cref="WifiNotInitializedException"/> — the device
@@ -213,7 +213,7 @@ public static class WifiChipInfoProviderExtensions
         // normalized into something the loop can spend rather than passed straight to a BCL call
         // that would throw — this probe's contract is that failures come back as an unavailable
         // result, and that has to hold for a misconfigured budget too.
-        var maxAttempts = Math.Max(1, effectiveOptions.MaxAttempts);
+        var maxAttempts = Math.Max(1, effectiveOptions.MaximumAttempts);
         var retryDelay = NormalizeRetryDelay(effectiveOptions.RetryDelay);
         var totalTimeout = NormalizeTotalTimeout(effectiveOptions.TotalTimeout);
 
@@ -328,7 +328,7 @@ public static class WifiChipInfoProviderExtensions
                 new WifiChipInfoProbeProgress
                 {
                     Attempt = attempt,
-                    MaxAttempts = maxAttempts,
+                    MaximumAttempts = maxAttempts,
                     WasWifiNotInitialized = lastFailureWasWifiNotInitialized,
                     RetryDelay = attempt < maxAttempts ? retryDelay : TimeSpan.Zero
                 });
@@ -390,7 +390,7 @@ public static class WifiChipInfoProviderExtensions
                 ex,
                 "A LAN chip-info progress handler threw on attempt {Attempt}/{Max}; ignoring it and continuing the probe.",
                 report.Attempt,
-                report.MaxAttempts);
+                report.MaximumAttempts);
         }
     }
 

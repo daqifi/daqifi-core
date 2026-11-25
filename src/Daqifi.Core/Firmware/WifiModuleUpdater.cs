@@ -544,7 +544,7 @@ internal sealed class WifiModuleUpdater
     /// </remarks>
     private WifiChipInfoRetryOptions BuildWifiChipInfoRetryOptions() => new()
     {
-        MaxAttempts = Options.WifiChipInfoMaxAttempts,
+        MaximumAttempts = Options.WifiChipInfoMaximumAttempts,
         RetryDelay = Options.WifiChipInfoRetryDelay,
         TotalTimeout = Options.WifiChipInfoTotalTimeout,
         KickWifiApplyOnNotInitialized = Options.KickWifiApplyOnNotInitialized,

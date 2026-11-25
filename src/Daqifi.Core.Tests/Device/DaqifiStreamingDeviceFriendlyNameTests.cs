@@ -64,7 +64,7 @@ public class DaqifiStreamingDeviceFriendlyNameTests
     {
         var device = new CapturingStreamingDevice();
         device.Connect();
-        var name = new string('a', 31); // exactly MaxFriendlyNameLength
+        var name = new string('a', 31); // exactly MaximumFriendlyNameLength
 
         await device.SetFriendlyNameAsync(name);
 

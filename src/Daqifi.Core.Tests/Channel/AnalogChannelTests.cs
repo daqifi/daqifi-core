@@ -298,8 +298,8 @@ public class AnalogChannelTests
         // Act
         channel.Name = "Temperature";
         channel.IsEnabled = true;
-        channel.MinValue = -100.0;
-        channel.MaxValue = 100.0;
+        channel.MinimumValue = -100.0;
+        channel.MaximumValue = 100.0;
         channel.CalibrationM = 2.0;
         channel.CalibrationB = 1.5;
         channel.InternalScaleM = 0.5;
@@ -308,8 +308,8 @@ public class AnalogChannelTests
         // Assert
         Assert.Equal("Temperature", channel.Name);
         Assert.True(channel.IsEnabled);
-        Assert.Equal(-100.0, channel.MinValue);
-        Assert.Equal(100.0, channel.MaxValue);
+        Assert.Equal(-100.0, channel.MinimumValue);
+        Assert.Equal(100.0, channel.MaximumValue);
         Assert.Equal(2.0, channel.CalibrationM);
         Assert.Equal(1.5, channel.CalibrationB);
         Assert.Equal(0.5, channel.InternalScaleM);
@@ -340,7 +340,7 @@ public class AnalogChannelTests
     [Theory]
     [InlineData(0.0)]                        // zero range
     [InlineData(-5.0)]                       // negative range
-    [InlineData(AnalogChannel.MaxPortRangeVolts + 0.1)] // beyond max
+    [InlineData(AnalogChannel.MaximumPortRangeVolts + 0.1)] // beyond max
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
     public void PortRange_WithInvalidValue_ThrowsException(double value)
@@ -353,7 +353,7 @@ public class AnalogChannelTests
     [InlineData(0.0)]  // zero scale factor discards the measurement
     [InlineData(double.NaN)]
     [InlineData(double.NegativeInfinity)]
-    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
+    [InlineData(AnalogChannel.MaximumCalibrationMagnitude * 2)]
     public void CalibrationM_WithInvalidValue_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
@@ -371,7 +371,7 @@ public class AnalogChannelTests
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
+    [InlineData(AnalogChannel.MaximumCalibrationMagnitude * 2)]
     public void CalibrationB_WithInvalidValue_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
@@ -399,26 +399,26 @@ public class AnalogChannelTests
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.NegativeInfinity)]
-    public void MinValue_WithNonFinite_ThrowsException(double value)
+    public void MinimumValue_WithNonFinite_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MinValue = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MinimumValue = value);
     }
 
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    public void MaxValue_WithNonFinite_ThrowsException(double value)
+    public void MaximumValue_WithNonFinite_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MaxValue = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MaximumValue = value);
     }
 
     [Fact]
     public void PortRange_AtMaxBoundary_IsAccepted()
     {
-        var channel = new AnalogChannel(0) { PortRange = AnalogChannel.MaxPortRangeVolts };
-        Assert.Equal(AnalogChannel.MaxPortRangeVolts, channel.PortRange);
+        var channel = new AnalogChannel(0) { PortRange = AnalogChannel.MaximumPortRangeVolts };
+        Assert.Equal(AnalogChannel.MaximumPortRangeVolts, channel.PortRange);
     }
 
     // ---------------------------------------------------------------------
@@ -436,8 +436,8 @@ public class AnalogChannelTests
             CalibrationM = 1.0,
             CalibrationB = 0.0,
             InternalScaleM = 1.0,
-            MinValue = -10.0,
-            MaxValue = 10.0
+            MinimumValue = -10.0,
+            MaximumValue = 10.0
         };
 
         // -full scale -> -PortRange
@@ -499,10 +499,10 @@ public class AnalogChannelTests
     [Fact]
     public void IsBipolar_ReflectsConfiguredMinValue()
     {
-        var bipolar = new AnalogChannel(0) { MinValue = -10.0, MaxValue = 10.0 };
+        var bipolar = new AnalogChannel(0) { MinimumValue = -10.0, MaximumValue = 10.0 };
         Assert.True(bipolar.IsBipolar);
 
-        var unipolar = new AnalogChannel(0) { MinValue = 0.0, MaxValue = 10.0 };
+        var unipolar = new AnalogChannel(0) { MinimumValue = 0.0, MaximumValue = 10.0 };
         Assert.False(unipolar.IsBipolar);
     }
 

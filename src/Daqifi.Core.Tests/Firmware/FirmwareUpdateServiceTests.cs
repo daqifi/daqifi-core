@@ -128,7 +128,7 @@ public class FirmwareUpdateServiceTests
                 _ => true,
                 CancellationToken.None));
 
-        Assert.Equal("maxAttempts", ex.ParamName);
+        Assert.Equal("maximumAttempts", ex.ParamName);
         Assert.False(actionRan);
     }
 
@@ -4833,7 +4833,7 @@ public class FirmwareUpdateServiceTests
             transientFailuresBeforeSuccess: 2);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5); // Keep test fast
 
         var service = new FirmwareUpdateService(
@@ -4855,7 +4855,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task CheckWifiFirmwareStatusAsync_WhenWifiChipInfoFailsAllAttempts_ReturnsChipInfoUnavailable()
     {
-        // After exhausting WifiChipInfoMaxAttempts the planning method must
+        // After exhausting WifiChipInfoMaximumAttempts the planning method must
         // fall through to ChipInfoUnavailable, NOT hang or surface the
         // raw exception. This preserves the "couldn't check, default to
         // running update" semantics for genuinely-broken devices.
@@ -4870,7 +4870,7 @@ public class FirmwareUpdateServiceTests
             transientFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -4913,7 +4913,7 @@ public class FirmwareUpdateServiceTests
             wifiNotInitializedFailuresBeforeSuccess: 2);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
         options.KickWifiApplyOnNotInitialized = true;
 
@@ -4952,7 +4952,7 @@ public class FirmwareUpdateServiceTests
             wifiNotInitializedFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
         options.KickWifiApplyOnNotInitialized = true;
 
@@ -4987,7 +4987,7 @@ public class FirmwareUpdateServiceTests
             wifiNotInitializedFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
         options.KickWifiApplyOnNotInitialized = false;
 
@@ -5016,7 +5016,7 @@ public class FirmwareUpdateServiceTests
         var device = new CancelingWifiChipInfoStreamingDevice("COM25", cts);
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
         options.KickWifiApplyOnNotInitialized = true;
 
@@ -5144,7 +5144,7 @@ public class FirmwareUpdateServiceTests
     public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
     {
         // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
-        // compound with retry delays, so a high MaxAttempts × non-trivial
+        // compound with retry delays, so a high MaximumAttempts × non-trivial
         // per-attempt latency could block far beyond the configured retry
         // budget while holding _operationLock. The total-timeout cap caps
         // wall-clock time independent of attempt counts.
@@ -5159,7 +5159,7 @@ public class FirmwareUpdateServiceTests
             attemptLatency: TimeSpan.FromMilliseconds(200));
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 10;
+        options.WifiChipInfoMaximumAttempts = 10;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(100);
         options.WifiChipInfoTotalTimeout = TimeSpan.FromMilliseconds(100);
 
@@ -5291,7 +5291,7 @@ public class FirmwareUpdateServiceTests
             });
 
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
         options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(

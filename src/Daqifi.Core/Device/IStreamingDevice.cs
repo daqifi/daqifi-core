@@ -305,7 +305,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Sets the PWM frequency, in hertz, for the whole device.
     /// </summary>
     /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000. The floor is
-    /// 6 Hz (<see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
+    /// 6 Hz (<see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
     /// floor the device advertises (<see cref="PwmFrequencyFloorHz"/>). Values below it
     /// are rejected because the firmware's 16-bit period register silently wraps for them, producing a
     /// kilohertz-range output.</param>
@@ -333,7 +333,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// capability document read, this is the floor the device advertises
     /// (<see cref="Capabilities.CapabilityChannel.PwmMinimumFrequencyHz"/>), which the firmware
     /// computes from its actual peripheral clock and enforces itself. Otherwise it is
-    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
+    /// <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
     /// Read it when bounding a frequency input rather than hard-coding the constant.
     /// </remarks>
     int PwmFrequencyFloorHz { get; }

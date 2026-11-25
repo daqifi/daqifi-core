@@ -149,9 +149,9 @@ internal sealed class StatusChannelPopulator
             // validating setters (killing channel population mid-stream) or silently propagate
             // garbage into every scaled sample. Fall back to safe defaults and log instead —
             // mirroring the analog_in_res=0 handling above.
-            calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
-            calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
-            internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
+            calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
+            calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
+            internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
             portRange = (float)SanitizePortRange(portRange, i);
 
             if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
@@ -204,11 +204,11 @@ internal sealed class StatusChannelPopulator
     /// <summary>
     /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
     /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
-    /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
+    /// or beyond <see cref="AnalogChannel.MaximumPortRangeVolts"/>.
     /// </summary>
     private double SanitizePortRange(double value, int channelIndex)
     {
-        if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
+        if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaximumPortRangeVolts)
         {
             SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid portRange={Value} for analog channel {ChannelIndex}; substituting 1.0. Scaled samples on this channel may be affected.", _deviceName(), value, channelIndex));
             return 1.0;

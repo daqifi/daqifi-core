@@ -236,9 +236,9 @@ public class SerialStreamTransportTests
         var options = new ConnectionRetryOptions
         {
             Enabled = true,
-            MaxAttempts = 3,
+            MaximumAttempts = 3,
             InitialDelay = TimeSpan.Zero,
-            MaxDelay = TimeSpan.Zero
+            MaximumDelay = TimeSpan.Zero
         };
         var failures = 0;
         transport.StatusChanged += (_, e) => { if (!e.IsConnected) failures++; };

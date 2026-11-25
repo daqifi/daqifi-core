@@ -133,5 +133,5 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// It may blame what it reads afterwards on the GET only when that drain reached
     /// "No error". A drain that stopped early may have left an older <c>-256</c> behind.
     /// </remarks>
-    Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(int maxIterations, CancellationToken cancellationToken = default);
+    Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(int maximumIterations, CancellationToken cancellationToken = default);
 }

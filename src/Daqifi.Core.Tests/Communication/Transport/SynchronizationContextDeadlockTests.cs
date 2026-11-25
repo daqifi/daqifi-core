@@ -161,9 +161,9 @@ public class SynchronizationContextDeadlockTests
         var retry = new ConnectionRetryOptions
         {
             Enabled = true,
-            MaxAttempts = 2,
+            MaximumAttempts = 2,
             InitialDelay = TimeSpan.FromMilliseconds(50),
-            MaxDelay = TimeSpan.FromMilliseconds(50),
+            MaximumDelay = TimeSpan.FromMilliseconds(50),
             BackoffMultiplier = 1.0,
             ConnectionTimeout = TimeSpan.FromSeconds(1)
         };
@@ -190,9 +190,9 @@ public class SynchronizationContextDeadlockTests
         var retry = new ConnectionRetryOptions
         {
             Enabled = true,
-            MaxAttempts = 2,
+            MaximumAttempts = 2,
             InitialDelay = TimeSpan.FromMilliseconds(50),
-            MaxDelay = TimeSpan.FromMilliseconds(50),
+            MaximumDelay = TimeSpan.FromMilliseconds(50),
             BackoffMultiplier = 1.0,
             ConnectionTimeout = TimeSpan.FromSeconds(1)
         };

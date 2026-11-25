@@ -339,31 +339,31 @@ internal sealed class FirmwareUpdateContext
     }
 
     /// <summary>
-    /// Runs <paramref name="action"/>, retrying up to <paramref name="maxAttempts"/> times while
+    /// Runs <paramref name="action"/>, retrying up to <paramref name="maximumAttempts"/> times while
     /// <paramref name="isTransient"/> classifies the failure as retryable.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="maxAttempts"/> is less than 1. Rejected rather than clamped: a caller asking
+    /// <paramref name="maximumAttempts"/> is less than 1. Rejected rather than clamped: a caller asking
     /// for zero attempts has a bug, and silently returning success would skip a flash-critical step
     /// (erase, program, verify) with no failure signal at all.
     /// </exception>
     internal async Task ExecuteWithRetryAsync(
         string operation,
-        int maxAttempts,
+        int maximumAttempts,
         TimeSpan retryDelay,
         Func<CancellationToken, Task> action,
         Func<Exception, bool> isTransient,
         CancellationToken cancellationToken)
     {
-        if (maxAttempts < 1)
+        if (maximumAttempts < 1)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(maxAttempts),
-                maxAttempts,
+                nameof(maximumAttempts),
+                maximumAttempts,
                 $"Operation '{operation}' requires at least one attempt.");
         }
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -372,14 +372,14 @@ internal sealed class FirmwareUpdateContext
                 await action(cancellationToken).ConfigureAwait(false);
                 return;
             }
-            catch (Exception ex) when (attempt < maxAttempts && isTransient(ex))
+            catch (Exception ex) when (attempt < maximumAttempts && isTransient(ex))
             {
                 Logger.LogWarning(
                     ex,
                     "Operation '{Operation}' failed on attempt {Attempt}/{MaxAttempts}; retrying in {DelayMs} ms.",
                     operation,
                     attempt,
-                    maxAttempts,
+                    maximumAttempts,
                     retryDelay.TotalMilliseconds);
 
                 await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);

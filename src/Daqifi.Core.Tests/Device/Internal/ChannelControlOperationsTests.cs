@@ -632,7 +632,7 @@ public class ChannelControlOperationsTests
         var ops = new ChannelControlOperations(host);
 
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => ops.SetPwmFrequency(DaqifiStreamingDevice.MinPwmFrequencyHz - 1));
+            () => ops.SetPwmFrequency(DaqifiStreamingDevice.MinimumPwmFrequencyHz - 1));
         Assert.Empty(host.Calls);
     }
 
@@ -669,7 +669,7 @@ public class ChannelControlOperationsTests
                     Kind = CapabilityChannelKind.DigitalIo,
                     SupportsPwm = true,
                     PwmMinimumFrequencyHz = pin.FloorHz,
-                    PwmMaximumFrequencyHz = DaqifiStreamingDevice.MaxPwmFrequencyHz
+                    PwmMaximumFrequencyHz = DaqifiStreamingDevice.MaximumPwmFrequencyHz
                 })
                 .ToArray()
         };
@@ -685,7 +685,7 @@ public class ChannelControlOperationsTests
         Assert.Equal(floorHz, ops.PwmFrequencyFloorHz);
 
         var refused = Assert.Throws<ArgumentOutOfRangeException>(() => ops.SetPwmFrequency(floorHz - 1));
-        Assert.Contains($"{floorHz}-{DaqifiStreamingDevice.MaxPwmFrequencyHz} Hz", refused.Message);
+        Assert.Contains($"{floorHz}-{DaqifiStreamingDevice.MaximumPwmFrequencyHz} Hz", refused.Message);
         Assert.Empty(host.Calls);
 
         ops.SetPwmFrequency(floorHz);
@@ -701,9 +701,9 @@ public class ChannelControlOperationsTests
         var host = HostAdvertisingPwmFloor(1, floorTrusted: false);
         var ops = new ChannelControlOperations(host);
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, ops.PwmFrequencyFloorHz);
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => ops.SetPwmFrequency(DaqifiStreamingDevice.MinPwmFrequencyHz - 1));
+            () => ops.SetPwmFrequency(DaqifiStreamingDevice.MinimumPwmFrequencyHz - 1));
         Assert.Empty(host.Calls);
     }
 
@@ -714,7 +714,7 @@ public class ChannelControlOperationsTests
         host.SupportedFeatures.Add(DeviceFeature.PwmFrequencyFloor);
         var ops = new ChannelControlOperations(host);
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, ops.PwmFrequencyFloorHz);
     }
 
     [Fact]
@@ -723,19 +723,19 @@ public class ChannelControlOperationsTests
         var host = HostAdvertisingPwmFloor(null, floorTrusted: true);
         var ops = new ChannelControlOperations(host);
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, ops.PwmFrequencyFloorHz);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(DaqifiStreamingDevice.MaxPwmFrequencyHz + 1)]
+    [InlineData(DaqifiStreamingDevice.MaximumPwmFrequencyHz + 1)]
     public void PwmFrequencyFloorHz_AdvertisedValueCoreCannotCommand_IsIgnored(int advertised)
     {
         var host = HostAdvertisingPwmFloor(advertised, floorTrusted: true);
         var ops = new ChannelControlOperations(host);
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, ops.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, ops.PwmFrequencyFloorHz);
     }
 
     [Fact]

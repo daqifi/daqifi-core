@@ -725,7 +725,7 @@ public class WifiModuleUpdaterTests : IDisposable
     public async Task CheckStatus_RereadsTheRetryBudgetOnEveryProbe()
     {
         var options = CreateFastOptions();
-        options.WifiChipInfoMaxAttempts = 1;
+        options.WifiChipInfoMaximumAttempts = 1;
 
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner());
         var device = new FakeWifiChipInfoDevice("COM7");
@@ -736,7 +736,7 @@ public class WifiModuleUpdaterTests : IDisposable
 
         // A host that widens the budget between calls gets the budget it asked for; a cached
         // projection would keep spending the old one.
-        options.WifiChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
 
         var second = await updater.CheckStatusAsync(device, CancellationToken.None);
         Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, second.Reason);

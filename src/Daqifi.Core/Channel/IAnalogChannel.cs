@@ -8,15 +8,15 @@ public interface IAnalogChannel : IChannel
     /// <summary>
     /// Gets the minimum value for the channel range.
     /// </summary>
-    double MinValue { get; set; }
+    double MinimumValue { get; set; }
 
     /// <summary>
     /// Gets the maximum value for the channel range.
     /// </summary>
-    double MaxValue { get; set; }
+    double MaximumValue { get; set; }
 
     /// <summary>
-    /// Gets whether the configured display range (<see cref="MinValue"/>..<see cref="MaxValue"/>) is
+    /// Gets whether the configured display range (<see cref="MinimumValue"/>..<see cref="MaximumValue"/>) is
     /// bipolar (spans negative voltages, as ±1V/±5V/±10V differential ranges do) rather than unipolar
     /// (0V-and-up). Lets range-selection UI branch on polarity without hardcoding per-device assumptions.
     /// </summary>

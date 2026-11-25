@@ -52,7 +52,7 @@ public class DaqifiDeviceFactoryTests
 
         // Assert
         Assert.NotNull(options.ConnectionRetry);
-        Assert.Equal(ConnectionRetryOptions.Fast.MaxAttempts, options.ConnectionRetry.MaxAttempts);
+        Assert.Equal(ConnectionRetryOptions.Fast.MaximumAttempts, options.ConnectionRetry.MaximumAttempts);
         Assert.Equal(ConnectionRetryOptions.Fast.InitialDelay, options.ConnectionRetry.InitialDelay);
         Assert.Equal(ConnectionRetryOptions.Fast.ConnectionTimeout, options.ConnectionRetry.ConnectionTimeout);
         Assert.True(options.InitializeDevice);
@@ -66,7 +66,7 @@ public class DaqifiDeviceFactoryTests
 
         // Assert
         Assert.NotNull(options.ConnectionRetry);
-        Assert.Equal(ConnectionRetryOptions.Resilient.MaxAttempts, options.ConnectionRetry.MaxAttempts);
+        Assert.Equal(ConnectionRetryOptions.Resilient.MaximumAttempts, options.ConnectionRetry.MaximumAttempts);
         Assert.Equal(ConnectionRetryOptions.Resilient.InitialDelay, options.ConnectionRetry.InitialDelay);
         Assert.Equal(ConnectionRetryOptions.Resilient.ConnectionTimeout, options.ConnectionRetry.ConnectionTimeout);
         Assert.True(options.InitializeDevice);

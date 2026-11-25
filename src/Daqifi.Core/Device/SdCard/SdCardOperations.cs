@@ -1001,7 +1001,7 @@ internal sealed class SdCardOperations
     /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
     /// <exception cref="FeatureNotSupportedException">
     /// Thrown when the device's firmware does not recognize the storage query (SCPI -113
-    /// "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>;
+    /// "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinimumSupportedFirmware"/>;
     /// or, over a WiFi/TCP transport, when the firmware predates SD-over-WiFi support
     /// (<see cref="DeviceFeature.SdFileTransferOverWifi"/>) — the storage query drives the SD
     /// card through the same transport gate as the file operations.
@@ -1182,8 +1182,8 @@ internal sealed class SdCardOperations
                 var lines = await _host.ExecuteTextCommandAsync(
                     () =>
                     {
-                        _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
-                        _host.Send(ScpiMessageProducer.GetSdMinFreeSpace);
+                        _host.Send(ScpiMessageProducer.SetSdMinimumFreeSpace(bytes));
+                        _host.Send(ScpiMessageProducer.GetSdMinimumFreeSpace);
                     },
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 

@@ -181,7 +181,7 @@ var options = new DeviceConnectionOptions
     DeviceName = "My DAQiFi",           // Device identifier
     ConnectionRetry = new ConnectionRetryOptions
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
     InitializeDevice = true,             // Run init sequence after connect
@@ -551,7 +551,7 @@ using Daqifi.Core.Communication.Transport;
 // Create and connect transport manually. Every step takes a CancellationToken, so a user who
 // cancels stops the attempt where it stands instead of waiting out the retries.
 var transport = new TcpStreamTransport("192.168.1.100", 9760);
-await transport.ConnectAsync(new ConnectionRetryOptions { MaxAttempts = 3 }, cancellationToken);
+await transport.ConnectAsync(new ConnectionRetryOptions { MaximumAttempts = 3 }, cancellationToken);
 
 // Create device with transport
 await using var device = new DaqifiDevice("My Device", transport);
@@ -934,9 +934,9 @@ for.
 device.ReconnectOptions = new ReconnectOptions
 {
     Enabled = true,
-    MaxAttempts = 10,
+    MaximumAttempts = 10,
     InitialDelay = TimeSpan.FromSeconds(2),
-    MaxDelay = TimeSpan.FromMinutes(1),
+    MaximumDelay = TimeSpan.FromMinutes(1),
     ResumeStreaming = true
 };
 ```
@@ -1393,7 +1393,7 @@ other threads' text queries wait. Keep bodies short, and do not start background
 a `Task.Run` launched from the body inherits the flow's ownership of the lock, so its commands would
 *not* be deferred and could still interleave.
 
-The deferred backlog is capped at `DaqifiDevice.DefaultMaxDeferredSends` (1024) messages and
+The deferred backlog is capped at `DaqifiDevice.DefaultMaximumDeferredSends` (1024) messages and
 overflows **drop-oldest**. This only matters for the genuinely long exclusive operations — an SD card
 download is allowed thirty minutes, a firmware update longer — where a UI or agent polling at even
 10 Hz would otherwise park tens of thousands of commands and then fire all of them at the device at

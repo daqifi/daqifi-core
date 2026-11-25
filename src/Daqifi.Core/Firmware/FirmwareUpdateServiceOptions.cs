@@ -298,13 +298,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// Each attempt also incurs the per-attempt timeout from the device
     /// implementation (e.g., <c>DaqifiStreamingDevice.GetWifiChipInfoAsync</c>
     /// uses 2s). Total wall-clock budget is therefore
-    /// <c>sum(attempt durations) + (MaxAttempts-1) * RetryDelay</c>; with the
+    /// <c>sum(attempt durations) + (MaximumAttempts-1) * RetryDelay</c>; with the
     /// 2s device default, 3 attempts and 2s delay sum to ~10s in the worst
     /// case. The retry loop holds <c>_operationLock</c>, so use
     /// <see cref="WifiChipInfoTotalTimeout"/> to cap the actual wall-clock
     /// time independent of attempt counts.
     /// </remarks>
-    public int WifiChipInfoMaxAttempts { get; set; } = 3;
+    public int WifiChipInfoMaximumAttempts { get; set; } = 3;
 
     /// <summary>
     /// Delay between LAN chip-info retry attempts (cancellation-aware).
@@ -508,11 +508,11 @@ public sealed class FirmwareUpdateServiceOptions
                 "Flash write retry count must be at least 1.");
         }
 
-        if (WifiChipInfoMaxAttempts < 1)
+        if (WifiChipInfoMaximumAttempts < 1)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(WifiChipInfoMaxAttempts),
-                WifiChipInfoMaxAttempts,
+                nameof(WifiChipInfoMaximumAttempts),
+                WifiChipInfoMaximumAttempts,
                 "LAN chip-info max attempts must be at least 1.");
         }
 

@@ -947,7 +947,7 @@ public class DaqifiDeviceConsumerRestartTests
 
         public ConcurrentQueue<string> SentCommands { get; } = new();
 
-        public int BacklogCap { get; set; } = DefaultMaxDeferredSends;
+        public int BacklogCap { get; set; } = DefaultMaximumDeferredSends;
 
         internal override int MaxDeferredSends => BacklogCap;
 

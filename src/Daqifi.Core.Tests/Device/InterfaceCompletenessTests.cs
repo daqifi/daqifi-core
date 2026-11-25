@@ -66,7 +66,7 @@ public class InterfaceCompletenessTests
                 ScpiMessageProducer.UpdateDacOutputs.Data,
             },
             concrete.Sent);
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, device.PwmFrequencyFloorHz);
     }
 
     [Fact]

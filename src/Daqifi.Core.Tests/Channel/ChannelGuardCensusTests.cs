@@ -21,7 +21,7 @@ namespace Daqifi.Core.Tests.Channel;
 /// <para>
 /// A guard here is not the same thing as a public entry point. Five of the twelve throw sites live
 /// in shared private validators reached from more than one property or parameter — the
-/// <c>MinValue</c> and <c>MaxValue</c> setters both land on <c>RequireFinite</c>, and each passes
+/// <c>MinimumValue</c> and <c>MaximumValue</c> setters both land on <c>RequireFinite</c>, and each passes
 /// its own <c>ParamName</c>. The census walks entry points, because <c>ParamName</c> is decided at
 /// the call site and that is what the caller reads. The completeness check below still compares
 /// like with like: it identifies a throw site by the sentence the guard actually produced, so two
@@ -132,13 +132,13 @@ public class ChannelGuardCensusTests
         // same way the guard does, so the two agree under any culture.
         var resolutionRange =
             $"Resolution must be a plausible ADC max-count between {AnalogChannel.MinResolution} and {AnalogChannel.MaxResolution}.";
-        var portRange = $"Port range must be a finite value in (0, {AnalogChannel.MaxPortRangeVolts}] volts.";
-        var scaleFactor = $"Scale factor must be a finite, non-zero value within ±{AnalogChannel.MaxCalibrationMagnitude}.";
-        var calibrationOffset = $"Calibration offset must be a finite value within ±{AnalogChannel.MaxCalibrationMagnitude}.";
+        var portRange = $"Port range must be a finite value in (0, {AnalogChannel.MaximumPortRangeVolts}] volts.";
+        var scaleFactor = $"Scale factor must be a finite, non-zero value within ±{AnalogChannel.MaximumCalibrationMagnitude}.";
+        var calibrationOffset = $"Calibration offset must be a finite value within ±{AnalogChannel.MaximumCalibrationMagnitude}.";
         var dacBits =
-            $"DAC resolution must be between {AnalogOutputChannel.MinResolutionBits} and {AnalogOutputChannel.MaxResolutionBits} bits.";
+            $"DAC resolution must be between {AnalogOutputChannel.MinimumResolutionBits} and {AnalogOutputChannel.MaximumResolutionBits} bits.";
         var rangeEndpoint =
-            $"An output range endpoint must be finite and within +/-{AnalogOutputChannel.MaxRangeMagnitudeVolts} V.";
+            $"An output range endpoint must be finite and within +/-{AnalogOutputChannel.MaximumRangeMagnitudeVolts} V.";
 
         const string NonNegative = "Channel number must be non-negative.";
         const double TooBig = 1e9;
@@ -164,27 +164,27 @@ public class ChannelGuardCensusTests
                 resolutionRange,
                 () => _ = new AnalogChannel(0, resolution: 0)),
 
-            // MinValue and MaxValue share one throw site and differ only in the ParamName each
+            // MinimumValue and MaximumValue share one throw site and differ only in the ParamName each
             // passes it. Both are censused: the caller sees two different guards, and a copy-paste
-            // slip that made the MaxValue setter report "MinValue" would be invisible to a census
+            // slip that made the MaximumValue setter report "MinimumValue" would be invisible to a census
             // that only walked throw sites.
             new GuardSite(
-                "AnalogChannel.MinValue",
+                "AnalogChannel.MinimumValue",
                 "AnalogChannel.cs",
-                Setter(typeof(AnalogChannel), nameof(AnalogChannel.MinValue)),
-                nameof(AnalogChannel.MinValue),
+                Setter(typeof(AnalogChannel), nameof(AnalogChannel.MinimumValue)),
+                nameof(AnalogChannel.MinimumValue),
                 double.PositiveInfinity,
                 "Value must be a finite number.",
-                () => new AnalogChannel(0).MinValue = double.PositiveInfinity),
+                () => new AnalogChannel(0).MinimumValue = double.PositiveInfinity),
 
             new GuardSite(
-                "AnalogChannel.MaxValue",
+                "AnalogChannel.MaximumValue",
                 "AnalogChannel.cs",
-                Setter(typeof(AnalogChannel), nameof(AnalogChannel.MaxValue)),
-                nameof(AnalogChannel.MaxValue),
+                Setter(typeof(AnalogChannel), nameof(AnalogChannel.MaximumValue)),
+                nameof(AnalogChannel.MaximumValue),
                 double.PositiveInfinity,
                 "Value must be a finite number.",
-                () => new AnalogChannel(0).MaxValue = double.PositiveInfinity),
+                () => new AnalogChannel(0).MaximumValue = double.PositiveInfinity),
 
             new GuardSite(
                 "AnalogChannel.CalibrationM",
@@ -370,7 +370,7 @@ public class ChannelGuardCensusTests
         // census could only ever check the guards it already knows about.
         //
         // Compared per file as DISTINCT OBSERVED SENTENCES against throw lines. Several entries can
-        // cover one throw site (the MinValue/MaxValue pair), so entry count is the wrong number —
+        // cover one throw site (the MinimumValue/MaximumValue pair), so entry count is the wrong number —
         // but so is any count of labels the table hands itself, since a mislabelled or duplicated
         // entry could pad a file's total and hide a guard that no entry reaches. A distinct sentence
         // has to be earned by actually reaching a distinct throw.

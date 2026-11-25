@@ -1265,7 +1265,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// direction on some units. Firmware v3.9.0 and newer report the real value; use
     /// <see cref="PwmFrequencyFloorHz"/> for the floor that applies to the connected device.
     /// </remarks>
-    public const int MinPwmFrequencyHz = 6;
+    public const int MinimumPwmFrequencyHz = 6;
 
     /// <inheritdoc />
     public int PwmFrequencyFloorHz => _channelControl.PwmFrequencyFloorHz;
@@ -1274,7 +1274,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// The highest PWM frequency the device advertises (full duty resolution is retained
     /// well past this, so the advertised cap is the binding limit).
     /// </summary>
-    public const int MaxPwmFrequencyHz = 50_000;
+    public const int MaximumPwmFrequencyHz = 50_000;
 
     /// <summary>
     /// Default device-wide PWM frequency, in hertz, used until a frequency has been
@@ -1771,9 +1771,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
             keepBlankLines, cancellationToken);
 
     Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
-        int maxIterations,
+        int maximumIterations,
         CancellationToken cancellationToken)
-        => DrainErrorQueueAsync(maxIterations, cancellationToken);
+        => DrainErrorQueueAsync(maximumIterations, cancellationToken);
 
     Task IDeviceOperationHost.ExecuteRawCaptureAsync(
         Func<Stream, CancellationToken, Task> rawAction,
@@ -1822,9 +1822,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     void ISdCardOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
     Task<ErrorQueueDrainResult> ISdCardOperationHost.DrainErrorQueueUntilEmptyAsync(
-        int maxIterations,
+        int maximumIterations,
         CancellationToken cancellationToken)
-        => DrainErrorQueueUntilEmptyAsync(maxIterations, cancellationToken);
+        => DrainErrorQueueUntilEmptyAsync(maximumIterations, cancellationToken);
 
     void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
         => RaiseStreamFrameDiscarded(e);

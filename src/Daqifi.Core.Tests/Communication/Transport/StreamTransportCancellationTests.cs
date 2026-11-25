@@ -25,7 +25,7 @@ public class StreamTransportCancellationTests
         var options = new ConnectionRetryOptions
         {
             Enabled = false,
-            MaxAttempts = 1,
+            MaximumAttempts = 1,
             ConnectionTimeout = TimeSpan.FromSeconds(30)
         };
 
@@ -73,7 +73,7 @@ public class StreamTransportCancellationTests
         var options = new ConnectionRetryOptions
         {
             Enabled = false,
-            MaxAttempts = 1,
+            MaximumAttempts = 1,
             ConnectionTimeout = TimeSpan.FromMilliseconds(250)
         };
 
@@ -152,7 +152,7 @@ public class StreamTransportCancellationTests
         };
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transport.ConnectAsync(
-            new ConnectionRetryOptions { MaxAttempts = 5, InitialDelay = TimeSpan.Zero }, cts.Token));
+            new ConnectionRetryOptions { MaximumAttempts = 5, InitialDelay = TimeSpan.Zero }, cts.Token));
 
         Assert.Equal(1, attempts);
     }
@@ -331,9 +331,9 @@ public class StreamTransportCancellationTests
         serial.Transport.StatusChanged += (_, _) => failed.TrySetResult();
         var connect = serial.Transport.ConnectAsync(new ConnectionRetryOptions
         {
-            MaxAttempts = 2,
+            MaximumAttempts = 2,
             InitialDelay = TimeSpan.FromMinutes(1),
-            MaxDelay = TimeSpan.FromMinutes(1)
+            MaximumDelay = TimeSpan.FromMinutes(1)
         });
         (await serial.NextOpenAsync()).Release(new IOException("not yet"));
         await failed.Task.WaitAsync(Budget);
@@ -461,7 +461,7 @@ public class StreamTransportCancellationTests
     /// <summary>Several attempts with no backoff between them.</summary>
     private static ConnectionRetryOptions RetryAtOnce => new()
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         InitialDelay = TimeSpan.Zero,
         ConnectionTimeout = TimeSpan.FromMinutes(1)
     };

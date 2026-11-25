@@ -232,11 +232,11 @@ Call-site pattern (e.g. `GetSdCardStorageAsync`):
 ```csharp
 // optional up-front gate (no round-trip) — lets desktop disable the control:
 if (!Capabilities.Supports(DeviceFeature.SdStorageQuery))
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinimumSupportedFirmware, FirmwareVersion);
 
 // … issue command … the wire backstop is the authoritative signal:
 if (ResponseHasUndefinedHeader(lines))   // **ERROR: -113
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinimumSupportedFirmware, FirmwareVersion);
 ```
 
 (`CommandRename`/version-selected emit from earlier drafts is **dropped** — Decision 1 makes
@@ -251,7 +251,7 @@ The seam shipped. Two details differ from the sketch above, both settled during 
   firmware version, so it structurally cannot answer a version gate. `Supports(DeviceFeature)` and
   `EnsureSupported(DeviceFeature)` are therefore on
   [`DaqifiDevice`](../../src/Daqifi.Core/Device/DaqifiDevice.cs), which already owns
-  `MinSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
+  `MinimumSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
   evaluation rule above is unchanged and now enforced by test. Since 2.0 `Supports` is a member of
   `IDevice`, so no cast is needed to ask.
 - **The two axes fail differently.** The firmware-version axis **fails closed** — absent or
@@ -364,7 +364,7 @@ their place.** Both have now earned it — see the implementation notes under De
   version. The backstop keeps that honest (it's correct even if the entry is missing).
 
 **Follow-up implementation issues**
-1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
+1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinimumSupportedFirmware = v3.5.0`
    + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
    deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)): **done**.
 2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the

@@ -30,21 +30,21 @@ public static class ScpiMessageProducer
     /// <summary>
     /// Maximum length, in characters, of a device friendly name accepted by firmware.
     /// </summary>
-    public const int MaxFriendlyNameLength = 31;
+    public const int MaximumFriendlyNameLength = 31;
 
     /// <summary>
     /// Validates a candidate device friendly name against firmware's acceptance rule.
     /// </summary>
     /// <param name="name">The candidate name. <c>null</c> is always invalid.</param>
     /// <remarks>
-    /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaxFriendlyNameLength"/>
+    /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaximumFriendlyNameLength"/>
     /// printable ASCII characters (0x20-0x7E), excluding <c>"</c> and <c>\</c> (which would break the
     /// SCPI string literal and the JSON info-message encoding).
     /// </remarks>
     /// <returns><c>true</c> if <paramref name="name"/> would be accepted by the device; otherwise <c>false</c>.</returns>
     public static bool IsFriendlyNameValid(string? name)
     {
-        if (name is null || name.Length is 0 or > MaxFriendlyNameLength)
+        if (name is null || name.Length is 0 or > MaximumFriendlyNameLength)
         {
             return false;
         }
@@ -64,7 +64,7 @@ public static class ScpiMessageProducer
     /// Creates a command message to set the device's friendly name.
     /// </summary>
     /// <param name="name">
-    /// 1-<see cref="MaxFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
+    /// 1-<see cref="MaximumFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
     /// <c>"</c> or <c>\</c>. See <see cref="IsFriendlyNameValid"/>. <c>null</c> is always invalid.
     /// </param>
     /// <remarks>
@@ -78,7 +78,7 @@ public static class ScpiMessageProducer
         if (!IsFriendlyNameValid(name))
         {
             throw new ArgumentException(
-                $"Device name must be 1-{MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                $"Device name must be 1-{MaximumFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
                 nameof(name));
         }
 
@@ -301,7 +301,7 @@ public static class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize bytes
     /// </remarks>
-    public static IOutboundMessage<string> SetSdMaxFileSize(long bytes)
+    public static IOutboundMessage<string> SetSdMaximumFileSize(long bytes)
     {
         if (bytes < 0)
         {
@@ -317,7 +317,7 @@ public static class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize?
     /// </remarks>
-    public static IOutboundMessage<string> GetSdMaxFileSize { get; } = new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
+    public static IOutboundMessage<string> GetSdMaximumFileSize { get; } = new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
 
     /// <summary>
     /// Creates a query message to get the free and total byte counts of the SD card.
@@ -342,7 +342,7 @@ public static class ScpiMessageProducer
     /// user-facing low-space warning (see <see cref="Device.SdCard.SdCardSpaceCheck"/>).
     /// Command: SYSTem:STORage:SD:MINFree bytes
     /// </remarks>
-    public static IOutboundMessage<string> SetSdMinFreeSpace(long bytes)
+    public static IOutboundMessage<string> SetSdMinimumFreeSpace(long bytes)
     {
         if (bytes < 0)
         {
@@ -357,10 +357,10 @@ public static class ScpiMessageProducer
     /// The reply is one whole number of bytes; 0 means the gate is off.
     /// </summary>
     /// <remarks>
-    /// Available on every supported firmware (v3.5.0+), like <see cref="SetSdMinFreeSpace"/>.
+    /// Available on every supported firmware (v3.5.0+), like <see cref="SetSdMinimumFreeSpace"/>.
     /// Command: SYSTem:STORage:SD:MINFree?
     /// </remarks>
-    public static IOutboundMessage<string> GetSdMinFreeSpace { get; } = new ScpiMessage("SYSTem:STORage:SD:MINFree?");
+    public static IOutboundMessage<string> GetSdMinimumFreeSpace { get; } = new ScpiMessage("SYSTem:STORage:SD:MINFree?");
 
     /// <summary>
     /// Creates a command message to turn CRC-protected SD card writes on or off.
