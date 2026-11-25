@@ -7,7 +7,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// how long each scan pass may run, and how many consecutive missed passes a
 /// device must be absent before it is reported lost.
 /// </summary>
-public class ContinuousDiscoveryOptions
+public sealed class ContinuousDiscoveryOptions
 {
     /// <summary>
     /// Gets or sets the delay between the end of one discovery pass and the start

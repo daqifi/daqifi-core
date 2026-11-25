@@ -17,7 +17,7 @@ public interface ISdCardOperations
     /// will not fit. The warning is advisory: it does not block logging. Subscribers can surface a
     /// confirmable prompt and let the user proceed.
     /// </summary>
-    event EventHandler<LowSdSpaceWarningEventArgs> LowSdSpaceWarning;
+    event EventHandler<LowSdSpaceWarningEventArgs>? LowSdSpaceWarning;
 
     /// <summary>
     /// Gets a value indicating whether the device is currently logging data to the SD card.

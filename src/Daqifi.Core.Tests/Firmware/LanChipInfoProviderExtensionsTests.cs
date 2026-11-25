@@ -862,7 +862,7 @@ public class LanChipInfoProviderExtensionsTests
         public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }

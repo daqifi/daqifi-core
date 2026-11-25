@@ -7,7 +7,7 @@ namespace Daqifi.Core.Device;
 /// Raised once per attempt, before the backoff wait, so a UI can show both which attempt is
 /// running and how long it will be until anything happens.
 /// </remarks>
-public class ReconnectAttemptEventArgs : EventArgs
+public sealed class ReconnectAttemptEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ReconnectAttemptEventArgs"/> class.
@@ -26,7 +26,7 @@ public class ReconnectAttemptEventArgs : EventArgs
         MaxAttempts = maxAttempts;
         Delay = delay;
         PreviousError = previousError;
-        Timestamp = DateTime.UtcNow;
+        Timestamp = DateTimeOffset.UtcNow;
     }
 
     /// <summary>Gets the 1-based number of the attempt about to be made.</summary>
@@ -45,5 +45,5 @@ public class ReconnectAttemptEventArgs : EventArgs
     public Exception? PreviousError { get; }
 
     /// <summary>Gets the UTC time at which the attempt was scheduled.</summary>
-    public DateTime Timestamp { get; }
+    public DateTimeOffset Timestamp { get; }
 }

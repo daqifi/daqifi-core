@@ -60,7 +60,7 @@ internal sealed class DeviceAdministrationOperations
 
         _host.Send(ScpiMessageProducer.SetDeviceName(name));
         _host.Send(ScpiMessageProducer.SaveDeviceName);
-        _host.Metadata.FriendlyName = name;
+        _host.UpdateMetadata(metadata => metadata with { FriendlyName = name });
 
         return Task.CompletedTask;
     }
@@ -194,7 +194,7 @@ internal sealed class DeviceAdministrationOperations
         => SendConfirmedAsync(ScpiMessageProducer.LoadFactoryAdcCalibration, cancellationToken);
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync" />
-    internal Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+    internal Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default)
     {
         ValidateBank(bank);
 
@@ -403,11 +403,11 @@ internal sealed class DeviceAdministrationOperations
         }
     }
 
-    private static void ValidateBank(int bank)
+    private static void ValidateBank(AdcCalibrationBank bank)
     {
-        if (bank is < 0 or > 1)
+        if (!Enum.IsDefined(bank))
         {
-            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be Factory or User.");
         }
     }
 }

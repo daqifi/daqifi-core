@@ -67,7 +67,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// path whose timing the SCPI exchanges depend on.
 /// </para>
 /// </remarks>
-public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
+public sealed class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 {
     /// <summary>
     /// Default cadence at which an established connection is checked for the continued presence of
@@ -78,13 +78,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         TransportConnectionWatchdog.DefaultPresencePollInterval;
 
     private readonly string _portName;
-    private readonly int _baudRate;
-    private readonly Parity _parity;
-    private readonly int _dataBits;
-    private readonly StopBits _stopBits;
-    private readonly bool _enableDtr;
-    private readonly bool _enableRts;
-    private readonly TimeSpan _livenessCheckInterval;
+    private readonly SerialTransportOptions _options;
     private readonly TransportConnectionWatchdog _watchdog;
     private SerialPort? _serialPort;
 
@@ -182,38 +176,11 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// Initializes a new instance of the SerialStreamTransport class.
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM1", "/dev/ttyUSB0").</param>
-    /// <param name="baudRate">The baud rate for the connection.</param>
-    /// <param name="parity">The parity setting.</param>
-    /// <param name="dataBits">The number of data bits.</param>
-    /// <param name="stopBits">The stop bits setting.</param>
-    /// <param name="enableDtr">Whether to enable Data Terminal Ready (DTR) signal. Default is true.</param>
-    /// <param name="enableRts">Whether to enable Request To Send (RTS) signal. Default is false.</param>
-    /// <param name="livenessCheckInterval">
-    /// How often an established connection re-checks that its port is still present. Defaults to
-    /// <see cref="DefaultLivenessCheckInterval"/>; pass <see cref="TimeSpan.Zero"/> to disable the
-    /// check and rely on I/O fault escalation alone.
-    /// </param>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown when <paramref name="livenessCheckInterval"/> is negative.
-    /// </exception>
-    public SerialStreamTransport(string portName, int baudRate = 9600, Parity parity = Parity.None,
-        int dataBits = 8, StopBits stopBits = StopBits.One, bool enableDtr = true, bool enableRts = false,
-        TimeSpan? livenessCheckInterval = null)
+    /// <param name="options">How to open and watch the port, or <see langword="null"/> for the defaults.</param>
+    public SerialStreamTransport(string portName, SerialTransportOptions? options = null)
     {
         _portName = portName ?? throw new ArgumentNullException(nameof(portName));
-        _baudRate = baudRate;
-        _parity = parity;
-        _dataBits = dataBits;
-        _stopBits = stopBits;
-        _enableDtr = enableDtr;
-        _enableRts = enableRts;
-
-        _livenessCheckInterval = livenessCheckInterval ?? DefaultLivenessCheckInterval;
-        if (_livenessCheckInterval < TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(livenessCheckInterval), _livenessCheckInterval,
-                "Liveness check interval cannot be negative. Use TimeSpan.Zero to disable the check.");
-        }
+        _options = options ?? new SerialTransportOptions();
 
         _watchdog = new TransportConnectionWatchdog(
             $"Serial transport ({_portName})",
@@ -322,7 +289,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             if (!IsConnected)
                 return $"Serial: Disconnected ({_portName})";
 
-            return $"Serial: {_portName} @ {_baudRate} baud";
+            return $"Serial: {_portName} @ {_options.BaudRate} baud";
         }
     }
 
@@ -428,12 +395,12 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 attemptToken.ThrowIfCancellationRequested();
 
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
-                var port = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
+                var port = new SerialPort(_portName, _options.BaudRate, Parity.None, dataBits: 8, StopBits.One)
                 {
                     ReadTimeout = timeout,
                     WriteTimeout = timeout,
-                    DtrEnable = _enableDtr,
-                    RtsEnable = _enableRts
+                    DtrEnable = _options.EnableDtr,
+                    RtsEnable = _options.EnableRts
                 };
 
                 await OpenAsync(port, attemptToken).ConfigureAwait(false);
@@ -737,7 +704,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     private void StartPresencePolling()
     {
-        if (_livenessCheckInterval <= TimeSpan.Zero)
+        if (_options.LivenessCheckInterval <= TimeSpan.Zero)
         {
             return;
         }
@@ -765,7 +732,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         _watchdog.StartPresencePolling(
             IsPortPresent,
             $"Serial port {_portName} is no longer present; the device appears to have been disconnected.",
-            _livenessCheckInterval);
+            _options.LivenessCheckInterval);
     }
 
     /// <summary>
@@ -961,7 +928,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     /// <param name="isConnected">The current connection status.</param>
     /// <param name="error">Any error that occurred, if applicable.</param>
-    protected virtual void OnStatusChanged(bool isConnected, Exception? error)
+    private void OnStatusChanged(bool isConnected, Exception? error)
     {
         StatusChanged?.Invoke(this, new TransportStatusEventArgs(isConnected, ConnectionInfo, error));
     }

@@ -49,14 +49,23 @@ public enum FirmwareUpdateState
     JumpingToApp = 7,
 
     /// <summary>
-    /// Update finished successfully.
+    /// Re-establishing the serial transport after a fully flashed and verified WiFi (WINC)
+    /// module image, and restoring the device's LAN configuration.
     /// </summary>
-    Complete = 8,
+    /// <remarks>
+    /// A failure in this state is benign and environmental: the firmware flashed and verified
+    /// successfully, and only the host's re-enumeration of the serial port timed out. It is
+    /// deliberately distinct from <see cref="Verifying"/>, which is a genuine flash failure —
+    /// the two used to share <see cref="Verifying"/>, leaving a consumer to discriminate on a
+    /// human-readable progress string and users of a successful WiFi flash being told their
+    /// flash CRC mismatched (#398 gap 4).
+    /// </remarks>
+    ReconnectingAfterFlash = 8,
 
     /// <summary>
-    /// Update terminated with an error or cancellation.
+    /// Update finished successfully.
     /// </summary>
-    Failed = 9,
+    Complete = 9,
 
     /// <summary>
     /// Recovering from a failure by re-erasing the application flash so the
@@ -77,16 +86,7 @@ public enum FirmwareUpdateState
     Recovered = 11,
 
     /// <summary>
-    /// Re-establishing the serial transport after a fully flashed and verified WiFi (WINC)
-    /// module image, and restoring the device's LAN configuration.
+    /// Update terminated with an error or cancellation.
     /// </summary>
-    /// <remarks>
-    /// A failure in this state is benign and environmental: the firmware flashed and verified
-    /// successfully, and only the host's re-enumeration of the serial port timed out. It is
-    /// deliberately distinct from <see cref="Verifying"/>, which is a genuine flash failure —
-    /// the two used to share <see cref="Verifying"/>, leaving a consumer to discriminate on a
-    /// human-readable progress string and users of a successful WiFi flash being told their
-    /// flash CRC mismatched (#398 gap 4).
-    /// </remarks>
-    ReconnectingAfterFlash = 12
+    Failed = 12
 }

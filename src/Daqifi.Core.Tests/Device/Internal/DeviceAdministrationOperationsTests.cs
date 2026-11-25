@@ -83,7 +83,7 @@ public class DeviceAdministrationOperationsTests
     public async Task SetFriendlyNameAsync_WhenTheSaveSendFails_LeavesMetadataUnchanged()
     {
         var host = new FakeHost { IsConnected = true, FailSendAt = 2 };
-        host.Metadata.FriendlyName = "Original";
+        host.UpdateMetadata(metadata => metadata with { FriendlyName = "Original" });
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => new DeviceAdministrationOperations(host).SetFriendlyNameAsync("Bench01"));
@@ -95,7 +95,7 @@ public class DeviceAdministrationOperationsTests
     public async Task SetFriendlyNameAsync_AlreadyCancelled_SendsNothingAndLeavesMetadataUnchanged()
     {
         var host = new FakeHost { IsConnected = true };
-        host.Metadata.FriendlyName = "Original";
+        host.UpdateMetadata(metadata => metadata with { FriendlyName = "Original" });
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -302,8 +302,8 @@ public class DeviceAdministrationOperationsTests
         yield return Site("LoadFactoryAdcCalibrationAsync", "CONFigure:ADC:LOADFcal", (a, t) => a.LoadFactoryAdcCalibrationAsync(t));
         yield return Site("SaveVoltagePrecisionAsync", "CONFigure:VOLTage:SAVE", (a, t) => a.SaveVoltagePrecisionAsync(t));
         yield return Site("LoadVoltagePrecisionAsync", "CONFigure:VOLTage:LOAD", (a, t) => a.LoadVoltagePrecisionAsync(t));
-        yield return Site("UseAdcCalibrationAsync(0)", "CONFigure:ADC:USECal 0", (a, t) => a.UseAdcCalibrationAsync(0, t));
-        yield return Site("UseAdcCalibrationAsync(1)", "CONFigure:ADC:USECal 1", (a, t) => a.UseAdcCalibrationAsync(1, t));
+        yield return Site("UseAdcCalibrationAsync(0)", "CONFigure:ADC:USECal 0", (a, t) => a.UseAdcCalibrationAsync(AdcCalibrationBank.Factory, t));
+        yield return Site("UseAdcCalibrationAsync(1)", "CONFigure:ADC:USECal 1", (a, t) => a.UseAdcCalibrationAsync(AdcCalibrationBank.User, t));
         yield return Site("SetAdcCalibrationSlopeAsync", "CONFigure:ADC:chanCALM ", (a, t) => a.SetAdcCalibrationSlopeAsync(2, 1.0025, t));
         yield return Site("SetAdcCalibrationOffsetAsync", "CONFigure:ADC:chanCALB ", (a, t) => a.SetAdcCalibrationOffsetAsync(3, -0.0031, t));
 
@@ -598,9 +598,9 @@ public class DeviceAdministrationOperationsTests
     }
 
     [Theory]
-    [InlineData(-1)]
-    [InlineData(2)]
-    public async Task UseAdcCalibrationAsync_InvalidBank_ThrowsBeforeTouchingTheDevice(int bank)
+    [InlineData((AdcCalibrationBank)(-1))]
+    [InlineData((AdcCalibrationBank)2)]
+    public async Task UseAdcCalibrationAsync_InvalidBank_ThrowsBeforeTouchingTheDevice(AdcCalibrationBank bank)
     {
         var host = new FakeHost { IsConnected = true };
 
@@ -650,7 +650,9 @@ public class DeviceAdministrationOperationsTests
 
         public bool IsConnected { get; set; }
 
-        public DeviceMetadata Metadata { get; } = new();
+        public DeviceMetadata Metadata { get; private set; } = new();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => Metadata = change(Metadata);
 
         /// <summary>1-based index of the send that should throw, or 0 for none.</summary>
         public int FailSendAt { get; set; }

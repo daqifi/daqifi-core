@@ -182,7 +182,7 @@ public class DeviceErrorSurfaceTests
         };
 
         var rawFrames = 0;
-        device.StreamMessageReceived += _ => Interlocked.Increment(ref rawFrames);
+        device.StreamMessageReceived += (_, _) => Interlocked.Increment(ref rawFrames);
 
         device.StartStreaming();
 

@@ -81,7 +81,7 @@ public class TextExchangeSingleReaderTests
         await device.QueryAsync("*IDN?");
 
         var statuses = new ConcurrentQueue<DaqifiOutMessage>();
-        device.StatusMessageReceived += statuses.Enqueue;
+        device.StatusMessageReceived += (_, e) => statuses.Enqueue(e.Message);
         transport.Wire.PushToHost(StatusReplyBytes(Status("after-exchange")));
 
         WaitUntil.That(
@@ -202,7 +202,7 @@ public class TextExchangeSingleReaderTests
         await device.InitializeAsync();
 
         var statuses = new ConcurrentQueue<DaqifiOutMessage>();
-        device.StatusMessageReceived += statuses.Enqueue;
+        device.StatusMessageReceived += (_, e) => statuses.Enqueue(e.Message);
 
         await device.DisconnectAsync();
         await device.ConnectAsync();
@@ -237,9 +237,9 @@ public class TextExchangeSingleReaderTests
 
         using var inSubscriber = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
-        device.StatusMessageReceived += status =>
+        device.StatusMessageReceived += (_, e) =>
         {
-            if (status.DevicePn == "slow")
+            if (e.Message.DevicePn == "slow")
             {
                 inSubscriber.Set();
                 release.Wait(TimeSpan.FromSeconds(5));

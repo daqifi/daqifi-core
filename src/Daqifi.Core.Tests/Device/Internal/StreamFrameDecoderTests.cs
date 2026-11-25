@@ -822,7 +822,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_ALatchedFrame_DoesNotAnchorTheSessionClock()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var samples = Collect(ai0);
         var decoder = new StreamFrameDecoder(host);
@@ -854,7 +854,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_ALatchedFrame_IsReportedAndWithheldFromRawConsumers()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         host.AddAnalog(0, enabled: true);
         StreamFrameDiscardedEventArgs? reported = null;
         host.OnDiscard = e => reported = e;
@@ -879,7 +879,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_WithNothingLatched_AnchorsOnItsOwnFirstFrame()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var samples = Collect(ai0);
         var decoder = new StreamFrameDecoder(host);
@@ -908,7 +908,7 @@ public class StreamFrameDecoderTests
     public void SecondSession_ALatchedFrame_StillDoesNotAnchorTheSessionClock()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var decoder = new StreamFrameDecoder(host);
 
@@ -948,7 +948,7 @@ public class StreamFrameDecoderTests
     public void NewInstanceAfterAReconnect_IsGuardedLikeAnyOtherFirstSession()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         var ai0 = host.AddAnalog(0, enabled: true);
 
         var beforeTheDrop = new StreamFrameDecoder(host);
@@ -985,7 +985,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_OnFirmwareWithoutTheLatch_DeliversItsFirstFrameImmediately(string firmware)
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = firmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var decoder = new StreamFrameDecoder(host);
         decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
@@ -1006,7 +1006,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_OnFirmwareWithTheLatch_HoldsItsFirstFrame(string firmware)
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = firmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var decoder = new StreamFrameDecoder(host);
         decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
@@ -1025,7 +1025,7 @@ public class StreamFrameDecoderTests
     public void FirstSession_DiscardsAreBounded()
     {
         var host = new FakeHost { IsStreaming = true };
-        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.UpdateMetadata(metadata => metadata with { FirmwareVersion = LatchingFirmware });
         var ai0 = host.AddAnalog(0, enabled: true);
         var samples = Collect(ai0);
         var decoder = new StreamFrameDecoder(host);
@@ -1150,7 +1150,9 @@ public class StreamFrameDecoderTests
         /// what every test that is not about the latch wants: no first-frame hold, so a session's
         /// first frame is delivered as it arrives. A test about the latch sets it lower.
         /// </summary>
-        public DeviceMetadata Metadata { get; } = new() { FirmwareVersion = "3.8.0" };
+        public DeviceMetadata Metadata { get; private set; } = new() { FirmwareVersion = "3.8.0" };
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => Metadata = change(Metadata);
 
         public AnalogChannel AddAnalog(int number, bool enabled)
         {

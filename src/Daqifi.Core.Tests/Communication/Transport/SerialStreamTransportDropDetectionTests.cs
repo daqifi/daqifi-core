@@ -22,7 +22,7 @@ public class SerialStreamTransportDropDetectionTests
     public void WhenThePortStopsBeingPresent_TransportReportsTheDrop()
     {
         var present = true;
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: FastInterval)
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = FastInterval })
         {
             PortPresenceProbe = _ => Volatile.Read(ref present)
         };
@@ -60,7 +60,7 @@ public class SerialStreamTransportDropDetectionTests
     {
         // A single hiccup in the enumeration is not an unplug.
         var present = 1;
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.FromHours(1))
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.FromHours(1) })
         {
             // Alternates absent/present on every poll, so the miss run never reaches the threshold.
             PortPresenceProbe = _ => Interlocked.Increment(ref present) % 2 == 0
@@ -93,7 +93,7 @@ public class SerialStreamTransportDropDetectionTests
     {
         // A platform (or port-name spelling) the probe cannot see must disable the check rather
         // than report a drop on every poll. I/O fault escalation still covers such a port.
-        using var transport = new SerialStreamTransport("COM-not-enumerated", livenessCheckInterval: FastInterval)
+        using var transport = new SerialStreamTransport("COM-not-enumerated", new SerialTransportOptions { LivenessCheckInterval = FastInterval })
         {
             PortPresenceProbe = _ => false
         };
@@ -127,7 +127,7 @@ public class SerialStreamTransportDropDetectionTests
         // "absent", so two transient enumeration failures looked like two consecutive misses and
         // closed a healthy connection.
         var firstCall = true;
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.FromHours(1))
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.FromHours(1) })
         {
             PortPresenceProbe = _ =>
             {
@@ -169,7 +169,7 @@ public class SerialStreamTransportDropDetectionTests
     {
         // No baseline observation means nothing to compare later polls against, so the check stays
         // off — and the failure must not escape into the caller's successful connect.
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: FastInterval)
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = FastInterval })
         {
             PortPresenceProbe = _ => throw new UnauthorizedAccessException("the probe could not run")
         };
@@ -206,7 +206,7 @@ public class SerialStreamTransportDropDetectionTests
     [Fact]
     public void WhenTheLivenessIntervalIsZero_TheCheckIsDisabled()
     {
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.Zero)
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero })
         {
             PortPresenceProbe = _ => true
         };
@@ -224,7 +224,7 @@ public class SerialStreamTransportDropDetectionTests
         // Releasing the port makes it stop being "ours"; that must never be re-reported as a loss
         // on top of the disconnect the caller asked for.
         var present = true;
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.FromHours(1))
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.FromHours(1) })
         {
             PortPresenceProbe = _ => Volatile.Read(ref present)
         };
@@ -258,7 +258,7 @@ public class SerialStreamTransportDropDetectionTests
     [Fact]
     public void PersistentIoFaults_ReportTheDrop_ButABlipDoesNot()
     {
-        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
 
         var drops = 0;
         TransportStatusEventArgs? captured = null;
@@ -331,10 +331,10 @@ public class SerialStreamTransportDropDetectionTests
     }
 
     [Fact]
-    public void Constructor_WithNegativeLivenessInterval_Throws()
+    public void Options_WithNegativeLivenessInterval_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.FromSeconds(-1)));
+            new SerialStreamTransport("/dev/ttyTest382", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.FromSeconds(-1) }));
     }
 
     [Fact]

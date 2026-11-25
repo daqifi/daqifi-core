@@ -17,7 +17,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <see cref="DeviceInfo"/> so a consumer holding a row keyed by something that just changed —
 /// a port name, say — can still find the row this update belongs to (#725).
 /// </remarks>
-public class DeviceUpdatedEventArgs : EventArgs
+public sealed class DeviceUpdatedEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="DeviceUpdatedEventArgs"/> class.

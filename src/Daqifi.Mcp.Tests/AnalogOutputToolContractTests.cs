@@ -178,7 +178,7 @@ public class AnalogOutputToolContractTests
         // The failure this prevents: Nyquist 1 firmware rejects the DAC command internally, Core
         // never reads the error queue back, and the agent is told the write succeeded.
         var (agent, device) = AgentHarness.WithConnectedDevice();
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.UpdateMetadata(metadata => metadata with { DeviceType = DeviceType.Nyquist1 });
         device.ClearSent();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(

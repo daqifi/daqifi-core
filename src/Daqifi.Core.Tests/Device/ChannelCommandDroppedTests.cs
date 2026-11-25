@@ -220,7 +220,7 @@ public class ChannelCommandDroppedTests
 
             var device = new HeldDevice(backlogCap);
             await device.ConnectAsync();
-            device.Metadata.ApplyCapabilityDocument(document!);
+            device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(document!));
             device.SyncAnalogOutputChannelsFromCapabilities();
             device.PopulateChannelsFromStatus(Status(analogEnabled: 0b001));
             device.SetPwmEnabled(device.Digital(4), true);

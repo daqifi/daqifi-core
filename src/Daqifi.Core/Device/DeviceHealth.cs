@@ -2,8 +2,9 @@ namespace Daqifi.Core.Device;
 
 /// <summary>
 /// Health/telemetry values decoded from a device status message: battery charge,
-/// board temperature, and the raw power/device status codes. These update as new
-/// status messages arrive, so a snapshot reflects the most recent reading Core has seen.
+/// board temperature, and the raw power/device status codes. An immutable reading: read
+/// <see cref="DeviceMetadata.Health"/> from the device again to get the most recent one Core has
+/// seen.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,26 +27,26 @@ namespace Daqifi.Core.Device;
 /// reading when a partial status frame omits a field, each value is <b>sticky</b>: it holds
 /// the last value the device actually reported until a new in-contract reading replaces it.
 /// <see cref="BatteryPercent"/> and <see cref="BoardTemperatureCelsius"/> are therefore
-/// nullable — <c>null</c> means "never reported since this instance was created" — and the raw
+/// nullable — <c>null</c> means "never reported since the device object was created" — and the raw
 /// <see cref="PowerStatus"/> and <see cref="DeviceStatus"/> codes default to <c>0</c>.
 /// </para>
 /// </remarks>
-public class DeviceHealth
+public sealed record DeviceHealth
 {
     /// <summary>
-    /// Gets or sets the battery charge as a percentage (1-100). This is the last in-contract
+    /// Gets the battery charge as a percentage (1-100). This is the last in-contract
     /// reading the device reported (a value may therefore be older than the most recent status
     /// message, which can omit the field), or <c>null</c> if the device has not reported a valid
-    /// battery level since this instance was created. Out-of-range readings are ignored rather
+    /// battery level since the device object was created. Out-of-range readings are ignored rather
     /// than surfaced.
     /// </summary>
-    public int? BatteryPercent { get; set; }
+    public int? BatteryPercent { get; init; }
 
     /// <summary>
-    /// Gets or sets the board temperature in degrees Celsius. This is the last value the device
+    /// Gets the board temperature in degrees Celsius. This is the last value the device
     /// reported (which may be older than the most recent status message, since a frame can omit
-    /// the field), or <c>null</c> if the device has not reported a temperature since this instance
-    /// was created.
+    /// the field), or <c>null</c> if the device has not reported a temperature since the device
+    /// object was created.
     /// </summary>
     /// <remarks>
     /// <b>No shipping firmware populates this.</b> The encoder's <c>temp_status</c> case is empty,
@@ -54,32 +55,17 @@ public class DeviceHealth
     /// is <c>null</c> and cannot be anything else; it is kept because the wire field exists and a
     /// future firmware may fill it (issue #535).
     /// </remarks>
-    public int? BoardTemperatureCelsius { get; set; }
+    public int? BoardTemperatureCelsius { get; init; }
 
     /// <summary>
-    /// Gets or sets the raw power/charging status code as reported by the device
+    /// Gets the raw power/charging status code as reported by the device
     /// (<c>PwrStatus</c>). Semantics are firmware-defined; <c>0</c> is the default/unreported value.
     /// </summary>
-    public uint PowerStatus { get; set; }
+    public uint PowerStatus { get; init; }
 
     /// <summary>
-    /// Gets or sets the raw device status code as reported by the device
+    /// Gets the raw device status code as reported by the device
     /// (<c>DeviceStatus</c>). Semantics are firmware-defined; <c>0</c> is the default/unreported value.
     /// </summary>
-    public uint DeviceStatus { get; set; }
-
-    /// <summary>
-    /// Creates a deep copy of this <see cref="DeviceHealth"/> instance.
-    /// </summary>
-    /// <returns>A new <see cref="DeviceHealth"/> instance with the same values.</returns>
-    public DeviceHealth Clone()
-    {
-        return new DeviceHealth
-        {
-            BatteryPercent = BatteryPercent,
-            BoardTemperatureCelsius = BoardTemperatureCelsius,
-            PowerStatus = PowerStatus,
-            DeviceStatus = DeviceStatus
-        };
-    }
+    public uint DeviceStatus { get; init; }
 }

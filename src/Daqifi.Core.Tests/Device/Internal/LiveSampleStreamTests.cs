@@ -506,6 +506,8 @@ public class LiveSampleStreamTests
         public bool SendStreamStop() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public void Send<T>(IOutboundMessage<T> message) => throw new NotSupportedException();

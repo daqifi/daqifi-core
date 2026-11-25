@@ -11,8 +11,8 @@ public class LogLevelParserTests
 
         Assert.True(ok);
         Assert.Equal("STREAM", setting!.Module);
-        Assert.Equal(2, setting.Level);
-        Assert.Equal(3, setting.Ceiling);
+        Assert.Equal(DeviceLogLevel.Info, setting.Level);
+        Assert.Equal(DeviceLogLevel.Debug, setting.Ceiling);
     }
 
     [Fact]
@@ -22,8 +22,8 @@ public class LogLevelParserTests
 
         Assert.True(ok);
         Assert.Equal("WIFI", setting!.Module);
-        Assert.Equal(1, setting.Level);
-        Assert.Equal(3, setting.Ceiling);
+        Assert.Equal(DeviceLogLevel.Error, setting.Level);
+        Assert.Equal(DeviceLogLevel.Debug, setting.Ceiling);
     }
 
     [Theory]
@@ -66,8 +66,8 @@ public class LogLevelParserTests
 
         Assert.True(ok);
         Assert.Equal("ADC", setting!.Module);
-        Assert.Equal(1, setting.Level);
-        Assert.Equal(3, setting.Ceiling);
+        Assert.Equal(DeviceLogLevel.Error, setting.Level);
+        Assert.Equal(DeviceLogLevel.Debug, setting.Ceiling);
     }
 
     [Fact]
@@ -76,8 +76,8 @@ public class LogLevelParserTests
         var ok = LogLevelParser.TryParse("STREAM: 2147483647 (ceiling 2147483647)", out var setting);
 
         Assert.True(ok);
-        Assert.Equal(int.MaxValue, setting!.Level);
-        Assert.Equal(int.MaxValue, setting.Ceiling);
+        Assert.Equal((DeviceLogLevel)int.MaxValue, setting!.Level);
+        Assert.Equal((DeviceLogLevel)int.MaxValue, setting.Ceiling);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class LogLevelParserTests
 
         Assert.True(ok);
         Assert.Equal("ADC", setting!.Module);
-        Assert.Equal(0, setting.Level);
+        Assert.Equal(DeviceLogLevel.None, setting.Level);
     }
 
     [Fact]

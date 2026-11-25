@@ -134,7 +134,7 @@ public class SampleRateCapTests
     public void ComputeForDevice_WithTheDevicesOwnCap_ReportsIt()
     {
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518)));
 
         Assert.Equal(3518, device.MaximumStreamingFrequencyHz);
     }
@@ -144,7 +144,7 @@ public class SampleRateCapTests
     {
         // What the bench NQ1 actually answers when the document is read with nothing enabled.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 0));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 0)));
 
         Assert.Equal(0, device.MaximumStreamingFrequencyHz);
     }
@@ -155,7 +155,7 @@ public class SampleRateCapTests
         // The formula the bench NQ1 publishes, for four muxed channels:
         // min(22000, -, 110000/(6+4)) = 11000 Hz.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         EnableAnalog(device, 0, 1, 2, 3);
 
         Assert.Equal(11000, device.MaximumStreamingFrequencyHz);
@@ -167,7 +167,7 @@ public class SampleRateCapTests
         // Channels 4 and 8 are the document's dedicated-converter ("simultaneous") channels, so
         // this selection is 2 of 3: min(22000, 55000/2, 110000/(6+3)) = 12222 Hz.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         EnableAnalog(device, 4, 8, 1);
 
         Assert.Equal(12222, device.MaximumStreamingFrequencyHz);
@@ -186,7 +186,7 @@ public class SampleRateCapTests
         // inputs and digital pins from 0 independently, so a lookup by id alone would find the
         // digital entry — which is never "simultaneous" — and silently report the muxed answer.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(new CapabilityDocument
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(new CapabilityDocument
         {
             SchemaVersion = 2,
             Channels = new[]
@@ -206,7 +206,7 @@ public class SampleRateCapTests
                     PerTickOverhead = 0
                 }
             }
-        });
+        }));
         EnableAnalog(device, 0, 1);
 
         Assert.Equal(20000, device.MaximumStreamingFrequencyHz);
@@ -219,7 +219,7 @@ public class SampleRateCapTests
         // min(22000, -, 110000/(6+2)) = 13750 Hz. Digital cost is amortized into the model's
         // per-tick overhead, so counting the digital channels here would report 110000/24 = 4583.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         EnableAnalog(device, 0, 1);
         foreach (var digital in device.Channels.Where(c => c.Type == ChannelType.Digital))
         {
@@ -236,7 +236,7 @@ public class SampleRateCapTests
         // against the set that is enabled right now rather than the set that was enabled when the
         // document was read.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
 
         EnableAnalog(device, 0);
         Assert.Equal(15714, device.MaximumStreamingFrequencyHz);
@@ -253,7 +253,7 @@ public class SampleRateCapTests
         // selected the per-tick overhead term alone yields 110000/(6+0) = 18333 Hz, a healthy rate
         // for a device that is not going to stream anything.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
 
         Assert.Equal(0, device.MaximumStreamingFrequencyHz);
     }
@@ -265,7 +265,7 @@ public class SampleRateCapTests
         // Digital costs are amortized into the model's overhead rather than counted, so "no analog
         // inputs" and "nothing to stream" are the same statement.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         foreach (var digital in device.Channels.Where(c => c.Type == ChannelType.Digital))
         {
             digital.SetEnabled(true);
@@ -281,7 +281,7 @@ public class SampleRateCapTests
         // document at all: neither zero nor a model prediction is available, so the board ceiling
         // stands rather than a number invented for the occasion.
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(new CapabilityDocument { SchemaVersion = 2 });
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(new CapabilityDocument { SchemaVersion = 2 }));
 
         Assert.Equal(22000, device.MaximumStreamingFrequencyHz);
     }
@@ -302,7 +302,7 @@ public class SampleRateCapTests
         // The setter checks only the board ceiling, so "set the rate, then enable the
         // channels" keeps working; lowering to the cap is StartStreaming's job (#899).
         var device = CreateDevice();
-        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518)));
 
         device.StreamingFrequency = 7746;
 
@@ -320,9 +320,11 @@ public class SampleRateCapTests
     private static TestableStreamingDevice CreateDevice()
     {
         var device = new TestableStreamingDevice("BenchNq1");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        device.Metadata.Capabilities.MaxSamplingRate = 22000;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaxSamplingRate = 22000 }
+        });
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 16,

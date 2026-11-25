@@ -7,7 +7,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// fails. The continuous scan loop survives the failure and continues with the next
 /// pass; this event exists so callers can surface or log the underlying error.
 /// </summary>
-public class ContinuousDiscoveryErrorEventArgs : EventArgs
+public sealed class ContinuousDiscoveryErrorEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ContinuousDiscoveryErrorEventArgs"/> class.

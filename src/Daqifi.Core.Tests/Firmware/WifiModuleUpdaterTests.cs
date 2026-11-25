@@ -722,33 +722,6 @@ public class WifiModuleUpdaterTests : IDisposable
     // ---------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task CheckStatus_WhenTheMinimumSupportedVersionIsUnparseable_HasNoMinimumOpinion()
-    {
-        // FirmwareUpdateService's constructor rejects this value, but the options object is
-        // settable afterwards — and a read-only probe must degrade to "no opinion" rather than
-        // throw out of it.
-        var options = CreateFastOptions();
-        options.MinimumSupportedWifiFirmwareVersion = "not-a-version";
-
-        var download = new FakeFirmwareDownloadService
-        {
-            LatestWifiRelease = Release("19.7.7")
-        };
-        var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner(), download);
-
-        var device = new FakeLanChipInfoDevice("COM7")
-        {
-            DefaultChipInfoResponse = () => ChipInfo("19.7.7")
-        };
-
-        var status = await updater.CheckStatusAsync(device, CancellationToken.None);
-
-        Assert.Null(status.MinimumSupportedVersion);
-        Assert.Null(status.MeetsMinimumSupportedVersion);
-        Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
-    }
-
-    [Fact]
     public async Task CheckStatus_RereadsTheRetryBudgetOnEveryProbe()
     {
         var options = CreateFastOptions();
@@ -828,7 +801,7 @@ public class WifiModuleUpdaterTests : IDisposable
     public async Task CheckStatus_WhenTheDeviceCannotAnswerLanQueries_StillStatesTheBarItJudgedAgainst()
     {
         var options = CreateFastOptions();
-        options.MinimumSupportedWifiFirmwareVersion = "19.7.7";
+        options.MinimumSupportedWifiFirmwareVersion = new FirmwareVersion(19, 7, 7, 0, null, 0);
 
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner());
 

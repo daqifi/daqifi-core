@@ -8,7 +8,7 @@ namespace Daqifi.Core.Device;
 /// configuration — and the stream, if one was running and the policy resumes it — have been
 /// re-applied. By the time this fires, samples are flowing again.
 /// </remarks>
-public class ReconnectedEventArgs : EventArgs
+public sealed class ReconnectedEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ReconnectedEventArgs"/> class.
@@ -21,7 +21,7 @@ public class ReconnectedEventArgs : EventArgs
         AttemptNumber = attemptNumber;
         Outage = outage;
         StreamingResumed = streamingResumed;
-        Timestamp = DateTime.UtcNow;
+        Timestamp = DateTimeOffset.UtcNow;
     }
 
     /// <summary>Gets the 1-based number of the attempt that succeeded.</summary>
@@ -41,5 +41,5 @@ public class ReconnectedEventArgs : EventArgs
     public bool StreamingResumed { get; }
 
     /// <summary>Gets the UTC time at which the session was restored.</summary>
-    public DateTime Timestamp { get; }
+    public DateTimeOffset Timestamp { get; }
 }

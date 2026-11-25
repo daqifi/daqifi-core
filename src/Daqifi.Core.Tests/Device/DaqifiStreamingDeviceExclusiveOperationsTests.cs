@@ -48,7 +48,7 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
         nameof(DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync) => device.SetAdcCalibrationOffsetAsync(0, 0.0),
         nameof(DaqifiStreamingDevice.SaveFactoryAdcCalibrationAsync) => device.SaveFactoryAdcCalibrationAsync(),
         nameof(DaqifiStreamingDevice.LoadFactoryAdcCalibrationAsync) => device.LoadFactoryAdcCalibrationAsync(),
-        nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync) => device.UseAdcCalibrationAsync(1),
+        nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync) => device.UseAdcCalibrationAsync(AdcCalibrationBank.User),
         nameof(DaqifiStreamingDevice.SaveVoltagePrecisionAsync) => device.SaveVoltagePrecisionAsync(),
         nameof(DaqifiStreamingDevice.LoadVoltagePrecisionAsync) => device.LoadVoltagePrecisionAsync(),
         _ => throw new ArgumentOutOfRangeException(nameof(method), method, null),
@@ -126,7 +126,7 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
             {
                 nameof(DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync) => () => device.SetAdcCalibrationSlopeAsync(invalidArgument, 1.0, cts.Token),
                 nameof(DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync) => () => device.SetAdcCalibrationOffsetAsync(invalidArgument, 0.0, cts.Token),
-                nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync) => () => device.UseAdcCalibrationAsync(invalidArgument, cts.Token),
+                nameof(DaqifiStreamingDevice.UseAdcCalibrationAsync) => () => device.UseAdcCalibrationAsync((AdcCalibrationBank)invalidArgument, cts.Token),
                 _ => throw new ArgumentOutOfRangeException(nameof(method), method, null),
             };
 

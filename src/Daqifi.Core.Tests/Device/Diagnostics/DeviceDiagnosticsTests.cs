@@ -110,12 +110,12 @@ public class DeviceDiagnosticsTests
         };
         device.Connect();
 
-        var setting = await device.SetLogLevelAsync("STREAM", 2);
+        var setting = await device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info);
 
         Assert.Contains("SYSTem:LOG:LEVel STREAM,2", device.SentCommands);
         Assert.Equal("STREAM", setting.Module);
-        Assert.Equal(2, setting.Level);
-        Assert.Equal(3, setting.Ceiling);
+        Assert.Equal(DeviceLogLevel.Info, setting.Level);
+        Assert.Equal(DeviceLogLevel.Debug, setting.Ceiling);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class DeviceDiagnosticsTests
         device.Connect();
 
         var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(
-            () => device.SetLogLevelAsync("STREAM", 2));
+            () => device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         Assert.NotEmpty(ex.RawDeviceResponse);
     }
 
@@ -139,8 +139,8 @@ public class DeviceDiagnosticsTests
         // not InvalidOperationException (state), matching other setters.
         var device = new TestableDiagnosticsDevice("TestDevice");
 
-        await Assert.ThrowsAsync<ArgumentException>(() => device.SetLogLevelAsync("", 1));
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => device.SetLogLevelAsync("STREAM", 9));
+        await Assert.ThrowsAsync<ArgumentException>(() => device.SetLogLevelAsync("", DeviceLogLevel.Error));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => device.SetLogLevelAsync("STREAM", (DeviceLogLevel)9));
     }
 
     [Fact]
@@ -344,7 +344,7 @@ public class DeviceDiagnosticsTests
         device.Connect();
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
-            () => device.SetLogLevelAsync("STREAM", 2));
+            () => device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
     }
 
     [Fact]
@@ -358,7 +358,7 @@ public class DeviceDiagnosticsTests
         };
         device.Connect();
 
-        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.SetLogLevelAsync("STREAM", 2));
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         Assert.IsNotType<DeviceDiagnosticsCorruptedResponseException>(ex);
     }
 

@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Sockets;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device;
+using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Communication.Producers;
@@ -632,7 +634,7 @@ public static class ScpiMessageProducer
     {
         ValidateChannel(channel);
 
-        // Mapped by name, not cast: ChannelDirection is not a wire enum (it has an Unknown member).
+        // Mapped by name, not cast: ChannelDirection's numbering is not the wire's.
         var wireDirection = direction switch
         {
             ChannelDirection.Input => 0,
@@ -960,21 +962,21 @@ public static class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to select which ADC calibration bank the device applies.
     /// </summary>
-    /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
+    /// <param name="bank">The calibration bank.</param>
     /// <remarks>
     /// <b>Persisted.</b> The choice is written to NVM and the runtime coefficients are immediately reloaded from the
     /// selected bank; the same bank is then loaded automatically on every subsequent boot. Firmware rejects any value
     /// other than 0 or 1, so this method validates the argument before producing a command.
     /// Command: CONFigure:ADC:USECal bank
     /// </remarks>
-    public static IOutboundMessage<string> UseAdcCalibration(int bank)
+    public static IOutboundMessage<string> UseAdcCalibration(AdcCalibrationBank bank)
     {
-        if (bank is < 0 or > 1)
+        if (!Enum.IsDefined(bank))
         {
-            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be Factory or User.");
         }
 
-        return new ScpiMessage($"CONFigure:ADC:USECal {bank}");
+        return new ScpiMessage($"CONFigure:ADC:USECal {(int)bank}");
     }
 
     /// <summary>
@@ -1319,14 +1321,14 @@ public static class ScpiMessageProducer
     /// </summary>
     /// <param name="module">The module name (e.g. <c>STREAM</c>, <c>WIFI</c>, <c>SD</c>, <c>USB</c>, <c>SCPI</c>,
     /// <c>ADC</c>, <c>DAC</c>, <c>POWER</c>, <c>ENCODER</c>, <c>GENERAL</c>). Case-insensitive on the device.</param>
-    /// <param name="level">The log level: 0 = None, 1 = Error, 2 = Info, 3 = Debug.</param>
+    /// <param name="level">The log level.</param>
     /// <remarks>
     /// The device echoes the applied level and the compile-time ceiling
     /// (<c>MODULE: &lt;level&gt; (ceiling &lt;ceiling&gt;)</c>); the applied level may be lower than requested
     /// when a module's ceiling is below it.
     /// Command: SYSTem:LOG:LEVel module,level
     /// </remarks>
-    public static IOutboundMessage<string> SetLogLevel(string module, int level)
+    public static IOutboundMessage<string> SetLogLevel(string module, DeviceLogLevel level)
     {
         if (string.IsNullOrWhiteSpace(module))
         {
@@ -1343,12 +1345,12 @@ public static class ScpiMessageProducer
                 nameof(module));
         }
 
-        if (level < 0 || level > 3)
+        if (!Enum.IsDefined(level))
         {
-            throw new ArgumentOutOfRangeException(nameof(level), level, "Log level must be between 0 (None) and 3 (Debug).");
+            throw new ArgumentOutOfRangeException(nameof(level), level, "Log level must be None, Error, Info or Debug.");
         }
 
-        return new ScpiMessage($"SYSTem:LOG:LEVel {module},{level}");
+        return new ScpiMessage($"SYSTem:LOG:LEVel {module},{(int)level}");
     }
 
     /// <summary>

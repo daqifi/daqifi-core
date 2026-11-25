@@ -454,8 +454,14 @@ public class DeviceReconnectTests
             // possible, so it changes between the two reads.
             while (!stop.IsCancellationRequested)
             {
-                device.Metadata.Capabilities.MaxSamplingRate = 1000;
-                device.Metadata.Capabilities.MaxSamplingRate = 1;
+                device.UpdateMetadata(metadata => metadata with
+                {
+                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 1000 }
+                });
+                device.UpdateMetadata(metadata => metadata with
+                {
+                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 1 }
+                });
             }
         });
 

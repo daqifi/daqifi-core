@@ -18,6 +18,10 @@ namespace Daqifi.Core.Firmware;
 /// reports the raw label text the device sent, and so does <see cref="ToString"/>, which
 /// normalizes only the leading <c>v</c> and the separator before the label: <c>3.8.0-rc1</c>
 /// prints as <c>3.8.0rc1</c>.
+/// <para>
+/// No numeric part can be negative, so every value ranks like one that was parsed. A
+/// <see cref="System.Version"/> uses -1 for a part it does not have; pass zero for it here.
+/// </para>
 /// </remarks>
 /// <param name="Major">The first version part.</param>
 /// <param name="Minor">The second version part.</param>
@@ -28,6 +32,7 @@ namespace Daqifi.Core.Firmware;
 /// </param>
 /// <param name="PreLabel">The raw pre-release label text, or <see langword="null"/> for a release.</param>
 /// <param name="PreNumber">The number after the pre-release label, or zero when it has none.</param>
+/// <exception cref="ArgumentOutOfRangeException">Thrown when a numeric part is negative.</exception>
 public readonly record struct FirmwareVersion(
     int Major,
     int Minor,
@@ -49,6 +54,62 @@ public readonly record struct FirmwareVersion(
                   \s*$
         """,
         RegexOptions.Compiled);
+
+    private readonly int _major = RequireNonNegative(Major, nameof(Major));
+    private readonly int _minor = RequireNonNegative(Minor, nameof(Minor));
+    private readonly int _patch = RequireNonNegative(Patch, nameof(Patch));
+    private readonly int _revision = RequireNonNegative(Revision, nameof(Revision));
+    private readonly int _preNumber = RequireNonNegative(PreNumber, nameof(PreNumber));
+
+    /// <summary>
+    /// The first version part.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
+    public int Major
+    {
+        get => _major;
+        init => _major = RequireNonNegative(value, nameof(Major));
+    }
+
+    /// <summary>
+    /// The second version part.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
+    public int Minor
+    {
+        get => _minor;
+        init => _minor = RequireNonNegative(value, nameof(Minor));
+    }
+
+    /// <summary>
+    /// The third version part.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
+    public int Patch
+    {
+        get => _patch;
+        init => _patch = RequireNonNegative(value, nameof(Patch));
+    }
+
+    /// <summary>
+    /// The fourth, build-number part of a four-part version. Zero for a three-part version.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
+    public int Revision
+    {
+        get => _revision;
+        init => _revision = RequireNonNegative(value, nameof(Revision));
+    }
+
+    /// <summary>
+    /// The number after the pre-release label, or zero when it has none.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
+    public int PreNumber
+    {
+        get => _preNumber;
+        init => _preNumber = RequireNonNegative(value, nameof(PreNumber));
+    }
 
     /// <summary>
     /// Whether this version is a pre-release (alpha, beta, rc, etc.).
@@ -169,6 +230,12 @@ public readonly record struct FirmwareVersion(
     public static bool operator <=(FirmwareVersion left, FirmwareVersion right) => left.CompareTo(right) <= 0;
     /// <inheritdoc />
     public static bool operator >=(FirmwareVersion left, FirmwareVersion right) => left.CompareTo(right) >= 0;
+
+    private static int RequireNonNegative(int value, string name)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value, name);
+        return value;
+    }
 
     private static int GetPrecedenceRank(string? label)
     {

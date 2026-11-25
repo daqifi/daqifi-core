@@ -80,6 +80,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Messages.IInboundMessage`1</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
     <Target>T:Daqifi.Core.Communication.Messages.ProtobufMessage</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -465,6 +472,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>F:Daqifi.Core.Channel.ChannelDirection.Unknown</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>F:Daqifi.Core.Device.DeviceErrorSource.StatusNotification</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -480,6 +494,27 @@
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
     <Target>F:Daqifi.Core.Device.DeviceState.Streaming</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.Discovery.HidDeviceFinder.DefaultProductId</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.Discovery.HidDeviceFinder.DefaultVendorId</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>F:Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -682,6 +717,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.MessageSendFailedEventArgs`1.get_Timestamp</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.#ctor</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -752,7 +794,21 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetLogLevel(System.String,System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Producers.ScpiMessageProducer.UseAdcCalibration(System.Int32)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -885,6 +941,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Transport.SerialStreamTransport.#ctor(System.String,System.Int32,System.IO.Ports.Parity,System.Int32,System.IO.Ports.StopBits,System.Boolean,System.Boolean,System.Nullable{System.TimeSpan})</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Communication.Transport.SerialStreamTransport.Connect</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -927,6 +990,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Transport.SerialStreamTransport.OnStatusChanged(System.Boolean,System.Exception)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Communication.Transport.TcpStreamTransport.Connect</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -963,6 +1033,13 @@
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Communication.Transport.TcpStreamTransport.DisconnectAsync</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Communication.Transport.TcpStreamTransport.OnStatusChanged(System.Boolean,System.Exception)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1109,6 +1186,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.BootloaderSessionDevice.UseAdcCalibrationAsync(System.Int32,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.Capabilities.CapabilityDocument.MergeInto(Daqifi.Core.Device.DeviceCapabilities)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -1173,6 +1257,13 @@
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.DaqifiDevice.get_Status</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DaqifiDevice.OnMessageReceived(Daqifi.Core.Communication.Messages.IInboundMessage{System.Object})</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1431,6 +1522,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DaqifiStreamingDevice.SetLogLevelAsync(System.String,System.Int32,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.DaqifiStreamingDevice.SetPwmDutyCycle(Daqifi.Core.Channel.IChannel,System.Int32)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -1508,7 +1606,140 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DaqifiStreamingDevice.UseAdcCalibrationAsync(System.Int32,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.Clone</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_AnalogInputChannels(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_AnalogOutputChannels(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_DigitalChannels(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_HasSdCard(System.Boolean)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_HasUsb(System.Boolean)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_HasWiFi(System.Boolean)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_HasWincWifiModule(System.Boolean)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_MaxSamplingRate(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceCapabilities.set_SupportsStreaming(System.Boolean)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.DeviceCommandFailedException.get_DeviceResponse</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceErrorEventArgs.get_Timestamp</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceHealth.Clone</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceHealth.set_BatteryPercent(System.Nullable{System.Int32})</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceHealth.set_BoardTemperatureCelsius(System.Nullable{System.Int32})</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceHealth.set_DeviceStatus(System.UInt32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceHealth.set_PowerStatus(System.UInt32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.ApplyCapabilityDocument(Daqifi.Core.Device.Capabilities.CapabilityDocument)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.CopyFrom(Daqifi.Core.Device.DeviceMetadata)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1529,7 +1760,133 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_Capabilities(Daqifi.Core.Device.DeviceCapabilities)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_DevicePort(System.Int32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_DeviceType(Daqifi.Core.Device.DeviceType)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_FirmwareVersion(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_FriendlyName(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_HardwareRevision(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_Health(Daqifi.Core.Device.DeviceHealth)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_HostName(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_IpAddress(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_MacAddress(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_PartNumber(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_SerialNumber(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_Ssid(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_WifiInfrastructureMode(System.UInt32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.DeviceMetadata.set_WifiSecurityMode(System.UInt32)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(DaqifiOutMessage)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.Diagnostics.IDeviceDiagnostics.SetLogLevelAsync(System.String,System.Int32,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.Diagnostics.LogLevelSetting.get_Ceiling</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.Diagnostics.LogLevelSetting.get_Level</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1753,6 +2110,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(System.Int32,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.IDevice.add_StatusChanged(System.EventHandler{Daqifi.Core.Device.DeviceStatusEventArgs})</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -1963,6 +2327,20 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.MessageReceivedEventArgs.#ctor(Daqifi.Core.Communication.Messages.IInboundMessage{System.Object})</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.MessageReceivedEventArgs.get_Message</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.Network.INetworkConfigurable.get_NetworkConfiguration</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -1978,6 +2356,27 @@
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.Network.INetworkConfigurable.PrepareSdInterface</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.ReconnectAttemptEventArgs.get_Timestamp</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.ReconnectedEventArgs.get_Timestamp</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.ReconnectFailedEventArgs.get_Timestamp</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -2187,6 +2586,41 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateProgress.set_BytesWritten(System.Int64)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateProgress.set_CurrentOperation(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateProgress.set_PercentComplete(System.Double)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateProgress.set_State(Daqifi.Core.Firmware.FirmwareUpdateState)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateProgress.set_TotalBytes(System.Int64)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Firmware.FirmwareUpdateService.#ctor(Daqifi.Core.Communication.Transport.IHidTransport,Daqifi.Core.Firmware.IFirmwareDownloadService,Daqifi.Core.Firmware.IExternalProcessRunner,Microsoft.Extensions.Logging.ILogger{Daqifi.Core.Firmware.FirmwareUpdateService},Daqifi.Core.Firmware.IBootloaderProtocol,Daqifi.Core.Communication.Transport.IHidDeviceEnumerator,Daqifi.Core.Firmware.FirmwareUpdateServiceOptions,Daqifi.Core.Device.Discovery.IUsbLocationProvider)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -2222,6 +2656,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.get_MinimumSupportedWifiFirmwareVersion</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.get_WifiBridgeActivationCallback</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -2237,6 +2678,20 @@
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Firmware.FirmwareVersion.Deconstruct(System.Int32@,System.Int32@,System.Int32@,System.String@,System.Int32@)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.GitHubFirmwareDownloadService.DownloadWifiFirmwareAsync(System.String,System.IProgress{System.Int32},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.IFirmwareDownloadService.DownloadWifiFirmwareAsync(System.String,System.IProgress{System.Int32},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -2341,7 +2796,21 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.Diagnostics.IDeviceDiagnostics.SetLogLevelAsync(System.String,Daqifi.Core.Device.Diagnostics.DeviceLogLevel,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.Nullable{System.TimeSpan},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(Daqifi.Core.Device.AdcCalibrationBank,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -2418,6 +2887,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:Daqifi.Core.Firmware.IFirmwareDownloadService.DownloadWifiFirmwareAsync(System.String,System.IProgress{System.Int32},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:Daqifi.Core.Firmware.IFirmwareUpdateService.UpdateFirmwareAsync(Daqifi.Core.Device.IStreamingDevice,System.String,Daqifi.Core.Firmware.FirmwareUpdateTarget,System.IProgress{Daqifi.Core.Firmware.FirmwareUpdateProgress},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -2453,6 +2929,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Channel.SampleReceivedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
     <Target>T:Daqifi.Core.Communication.Messages.ScpiMessage</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -2467,7 +2950,91 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Transport.ConnectionRetryOptions</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Transport.SerialStreamTransport</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Transport.TcpStreamTransport</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Communication.Transport.TransportStatusEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.ChannelsPopulatedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.DeviceCapabilities</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.DeviceErrorEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.DeviceHealth</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.DeviceMetadata</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
     <Target>T:Daqifi.Core.Device.Discovery.ContinuousDeviceFinder</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.ContinuousDiscoveryErrorEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.DeviceDiscoveredEventArgs</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -2481,7 +3048,133 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.DeviceLostEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.DeviceUpdatedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.Discovery.HidDeviceFinder</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.MessageReceivedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.ReconnectAttemptEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.ReconnectedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.ReconnectFailedEventArgs</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
     <Target>T:Daqifi.Core.Device.SdCard.SdCardFileInfo</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.AnalogOutput</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.CapabilityDocument</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.Identify</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.PwmFrequencyFloor</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.SdCardCrcProtection</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.SdFileTransferOverWifi</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.SdGetOpenFailureError</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.SdListingEndMarker</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.SdStorageQuery</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.StoredStreamingRateQuery</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Device.DeviceFeature.WifiLinkStatus</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -2496,6 +3189,27 @@
   <Suppression>
     <DiagnosticId>CP0011</DiagnosticId>
     <Target>F:Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Pending</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Firmware.FirmwareUpdateState.Complete</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Firmware.FirmwareUpdateState.Failed</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0011</DiagnosticId>
+    <Target>F:Daqifi.Core.Firmware.FirmwareUpdateState.ReconnectingAfterFlash</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>

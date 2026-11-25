@@ -127,7 +127,7 @@ public class SerialStreamTransportTests
     {
         // A drop detector already running for the old port when a reconnect replaced it can
         // deliver its verdict afterwards. It must not take down, or report as lost, the new port.
-        using var transport = new SerialStreamTransport("COM1", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("COM1", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
         var oldPort = new DisposalTrackingSerialPort();
         var newPort = new DisposalTrackingSerialPort();
         transport.SetSerialPortForTesting(oldPort);

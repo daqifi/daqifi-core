@@ -489,7 +489,7 @@ public class StreamTransportCancellationTests
 
         public HeldSerialTransport()
         {
-            Transport = new SerialStreamTransport(PortName, livenessCheckInterval: TimeSpan.Zero)
+            Transport = new SerialStreamTransport(PortName, new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero })
             {
                 PortOpener = port =>
                 {

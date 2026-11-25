@@ -182,7 +182,7 @@ public class DeviceIdTests
         string connectedSerial, string requestedSerial)
     {
         var device = FakeStreamingDevice.CreateConnected();
-        device.Metadata.SerialNumber = connectedSerial;
+        device.UpdateMetadata(metadata => metadata with { SerialNumber = connectedSerial });
         return (new DaqifiDeviceRegistry(), device, Serial(requestedSerial));
     }
 
@@ -190,8 +190,7 @@ public class DeviceIdTests
         string requestedSerial, string connectedSerial, string connectedMac)
     {
         var device = FakeStreamingDevice.CreateConnected();
-        device.Metadata.SerialNumber = connectedSerial;
-        device.Metadata.MacAddress = connectedMac;
+        device.UpdateMetadata(metadata => metadata with { SerialNumber = connectedSerial, MacAddress = connectedMac });
         return (new DaqifiDeviceRegistry(), device, WiFi(requestedSerial));
     }
 

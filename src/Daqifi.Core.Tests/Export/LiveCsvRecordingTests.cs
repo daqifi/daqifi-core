@@ -375,7 +375,7 @@ public class LiveCsvRecordingTests
         // cannot show that — the frame-to-timestamp relationship is the decoder's, not the adapter's.
         using var device = new LiveStreamDevice("RealPath");
         device.Connect();
-        device.Metadata.SerialNumber = "SN-REAL";
+        device.UpdateMetadata(metadata => metadata with { SerialNumber = "SN-REAL" });
         device.PopulateChannelsFromStatus(StatusWithAnalogChannels(2));
         var channels = device.GetChannelsSnapshot();
         foreach (var channel in channels)
@@ -429,7 +429,7 @@ public class LiveCsvRecordingTests
     {
         var device = new ScriptedLiveDevice("Scripted");
         device.Connect();
-        device.Metadata.SerialNumber = "SN-1";
+        device.UpdateMetadata(metadata => metadata with { SerialNumber = "SN-1" });
         device.PopulateChannelsFromStatus(StatusWithAnalogChannels(analogCount));
         return device;
     }
