@@ -90,6 +90,22 @@ public class DeviceStateChangedIsolationTests
     }
 
     [Fact]
+    public void AThrowingSubscriber_DoesNotKeepTheChangeFromTheOthers()
+    {
+        using var transport = new DroppableTransport();
+        using var device = new DaqifiDevice("Badly Observed Device", transport);
+        var heard = new List<DeviceState>();
+
+        device.StateChanged += (_, _) => throw new InvalidOperationException("the calling thread cannot access this object");
+        device.StateChanged += (_, e) => heard.Add(e.CurrentState);
+
+        device.Connect();
+        transport.SimulateDrop();
+
+        Assert.Equal([DeviceState.Connecting, DeviceState.Connected, DeviceState.Lost], heard);
+    }
+
+    [Fact]
     public void AThrowingErrorSubscriber_OnTopOfAThrowingStatusSubscriber_StillDoesNotEscape()
     {
         // The report of a failed notification must not itself become an escaping failure.

@@ -1012,7 +1012,19 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
-            _stateChanges.Publish(change);
+            if (change.Current is DeviceState.Connecting or DeviceState.Disconnecting)
+            {
+                // The start of a connect or a disconnect. Raised while it runs: told afterwards,
+                // these two would say nothing. Nothing else is raised with them.
+                _stateChanges.PublishAlone(change);
+                _lifecycleGate.RunOnceReleased(_stateChanges.Deliver);
+            }
+            else
+            {
+                // Every other change made during one is its outcome, and waits until the next may
+                // start: a handler may block on a connect or disconnect made from another thread.
+                _lifecycleGate.RunOnceReleased(() => _stateChanges.Publish(change));
+            }
         }
     }
 
@@ -1068,7 +1080,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Raised with no lock held, one event at a time, on an arbitrary thread: usually the one that
+    /// Raised one event at a time, on an arbitrary thread: usually the one that
     /// made the change — for a drop, a background watchdog or reader thread — or the one already
     /// raising an earlier event. A change made while a handler runs, by that handler or by another
     /// thread, is raised after the handler returns, so a handler must not wait for a later event,
@@ -1076,19 +1088,25 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <see cref="DeviceStateChangedEventArgs.CurrentState"/>.
     /// </para>
     /// <para>
+    /// <see cref="DeviceState.Connecting"/> and <see cref="DeviceState.Disconnecting"/> are raised by
+    /// a connect or disconnect that is still running, which waits for the handler. Another one
+    /// started elsewhere waits for that operation to finish, so a handler of these two must not block
+    /// on it; calling <see cref="Connect"/> or <see cref="Disconnect"/> itself is fine. Every other
+    /// event is raised with no operation in progress on the thread raising it and no lock held.
+    /// </para>
+    /// <para>
     /// A subscriber that throws (a UI framework's cross-thread
-    /// <see cref="InvalidOperationException"/> is the usual one) is isolated: the exception is
-    /// reported on <see cref="ErrorOccurred"/> as
-    /// <see cref="DeviceErrorSource.StateNotification"/> and the transition completes
-    /// regardless.
+    /// <see cref="InvalidOperationException"/> is the usual one) is isolated, from the
+    /// transition and from the other subscribers: the exception is reported on
+    /// <see cref="ErrorOccurred"/> as <see cref="DeviceErrorSource.StateNotification"/> and the
+    /// transition completes regardless.
     /// </para>
     /// </remarks>
     public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
 
     /// <summary>
-    /// Raises <see cref="StateChanged"/>, isolating everything downstream of the transition
-    /// from a subscriber that throws — the same guarantee <see cref="RaiseDeviceError"/>,
-    /// <see cref="RaiseReconnectEvent{TArgs}"/> and <c>SendFailed</c> already give.
+    /// Reports a <see cref="StateChanged"/> subscriber that threw. Logs and raises
+    /// <see cref="ErrorOccurred"/>, both isolated: a state change is never allowed to fail.
     /// </summary>
     /// <remarks>
     /// The drop path is what makes this load-bearing (issue #494). A drop runs
@@ -1101,19 +1119,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// process exited. It then vanished into a background loop's catch, so the consumer saw a
     /// dead, unreconnectable device with no error at all.
     /// </remarks>
-    private void RaiseStateChanged(DeviceStateChangedEventArgs args)
-    {
-        try
-        {
-            StateChanged?.Invoke(this, args);
-        }
-        catch (Exception ex)
-        {
-            // Logs and raises ErrorOccurred, both isolated: a state change is never allowed to
-            // fail, so this must not throw either.
-            RaiseDeviceError(DeviceErrorSource.StateNotification, ex);
-        }
-    }
+    private void ReportStateSubscriberError(Exception error) =>
+        RaiseDeviceError(DeviceErrorSource.StateNotification, error);
 
     /// <summary>
     /// Occurs when a message is received from the device.
@@ -1285,7 +1292,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         _textExchange = new TextExchangeEngine(this);
         _operations = new OperationSerializer(this);
         _reconnect = new ReconnectSupervisor(this);
-        _stateChanges = new StateChangeQueue(RaiseStateChanged);
+        _stateChanges = new StateChangeQueue(this, () => StateChanged, ReportStateSubscriberError);
     }
 
     /// <summary>

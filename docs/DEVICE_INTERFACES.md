@@ -717,10 +717,14 @@ await device.InitializeAsync();  // Connected -> Initializing -> Ready
 `DaqifiDeviceFactory` connects and initializes before it hands a device over, so a handler attached
 to one of its devices starts from `Ready`.
 
-Events arrive one at a time, in the order the changes were made, on an arbitrary thread and with no
-lock held. A change made while a handler runs, by that handler or by another thread, is raised after
-the handler returns. So a handler must not wait for a later event, and `device.State` may already be
-further on than `args.CurrentState`.
+Events arrive one at a time, in the order the changes were made, on an arbitrary thread. A change made
+while a handler runs, by that handler or by another thread, is raised after the handler returns. So a
+handler must not wait for a later event, and `device.State` may already be further on than
+`args.CurrentState`.
+
+`Connecting` and `Disconnecting` are raised by a connect or disconnect that is still running and waits
+for the handler. A handler of these two must not block on another connect or disconnect made from
+another thread, which cannot start until this one ends. For every other event it may.
 
 ### Detecting a dropped connection
 
@@ -772,9 +776,8 @@ Because that callback runs on a background thread, a UI handler that touches a b
 throws — so the raise is isolated. A `StateChanged` subscriber that throws cannot stop the
 transition, cannot stop automatic reconnection from starting, and cannot keep the transport from
 releasing its handle; the exception is reported on `ErrorOccurred` as
-`DeviceErrorSource.StateNotification` and written to the device logger. Isolation is per raise, not
-per subscriber: the first handler to throw ends that one notification for the rest of the invocation
-list.
+`DeviceErrorSource.StateNotification` and written to the device logger. Each subscriber is isolated on
+its own, so the others still hear about the change.
 
 Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
 reader and writer loops report every read/write outcome to a transport that does.

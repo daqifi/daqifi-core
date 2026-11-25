@@ -9,8 +9,8 @@ namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
 /// Issue #1035: <see cref="IDevice.StateChanged"/> is raised for every change of
-/// <see cref="IDevice.State"/>, with both values, in the order the changes were made, and with no
-/// lock held.
+/// <see cref="IDevice.State"/>, with both values, in the order the changes were made, and, but for
+/// the two that announce an operation in progress, with no lock held.
 /// </summary>
 public class DeviceStateEventOrderTests
 {
@@ -314,7 +314,7 @@ public class DeviceStateEventOrderTests
     }
 
     [Fact]
-    public void AHandlerRunsWithNoLockHeld()
+    public void AChangeFromAnotherThreadInsideAHandler_DoesNotWaitForIt()
     {
         using var transport = new ReopeningTransport();
         using var device = new TestableDaqifiDevice("Device", transport);
@@ -323,8 +323,6 @@ public class DeviceStateEventOrderTests
         {
             if (e.CurrentState == DeviceState.Connected)
             {
-                // A lock held across the event would leave this waiting for the handler, and the
-                // handler waiting for it.
                 movedFromAnotherThread.Add(
                     Task.Run(transport.SimulateDrop).Wait(WaitUntil.DefaultTimeout));
             }
@@ -339,6 +337,168 @@ public class DeviceStateEventOrderTests
             DeviceState.Connecting,
             DeviceState.Connected,
             DeviceState.Lost);
+    }
+
+    /// <summary>
+    /// Every outcome of a connect or a disconnect, and the states initialization goes through: a
+    /// handler may block on a connect or disconnect made from a thread that is not part of this one.
+    /// </summary>
+    [Theory]
+    [InlineData(DeviceState.Connected, false)]
+    [InlineData(DeviceState.Connected, true)]
+    [InlineData(DeviceState.Initializing, false)]
+    [InlineData(DeviceState.Ready, false)]
+    [InlineData(DeviceState.Lost, false)]
+    [InlineData(DeviceState.Disconnected, false)]
+    [InlineData(DeviceState.Disconnected, true)]
+    public async Task AHandlerMayBlockOnALifecycleCallFromAnotherThread(DeviceState during, bool useAsync)
+    {
+        using var transport = new ReopeningTransport();
+        using var device = new TestableDaqifiDevice("Device", transport);
+        bool? finished = null;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == during && finished == null)
+            {
+                finished = false;
+                finished = IndependentThread(() =>
+                {
+                    if (during is DeviceState.Lost or DeviceState.Disconnected)
+                    {
+                        device.Connect();
+                    }
+                    else
+                    {
+                        device.Disconnect();
+                    }
+                }).Wait(StallLimit);
+            }
+        };
+
+        await (useAsync ? device.ConnectAsync() : Task.Run(device.Connect));
+        if (during is not DeviceState.Connected)
+        {
+            await Record.ExceptionAsync(() => device.InitializeAsync());
+            if (during is DeviceState.Lost)
+            {
+                transport.SimulateDrop();
+            }
+
+            if (useAsync)
+            {
+                await device.DisconnectAsync();
+            }
+            else if (during is DeviceState.Disconnected)
+            {
+                device.Disconnect();
+            }
+        }
+
+        Assert.True(finished, $"the call made inside the {during} handler could not finish");
+        Assert.Equal(during is DeviceState.Lost or DeviceState.Disconnected, transport.IsConnected);
+    }
+
+    [Fact]
+    public void AFailedConnectsHandler_MayBlockOnAConnectFromAnotherThread()
+    {
+        using var transport = new ReopeningTransport { FailNextConnects = 1 };
+        using var device = new TestableDaqifiDevice("Device", transport);
+        bool? finished = null;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == DeviceState.Disconnected && finished == null)
+            {
+                finished = false;
+                finished = IndependentThread(device.Connect).Wait(StallLimit);
+            }
+        };
+
+        Assert.Throws<IOException>(() => device.Connect());
+
+        Assert.True(finished);
+        Assert.Equal(DeviceState.Connected, device.State);
+    }
+
+    [Fact]
+    public async Task AReconnectsHandlers_MayBlockOnADisconnectFromAnotherThread()
+    {
+        foreach (var during in new[] { DeviceState.Retrying, DeviceState.Connected, DeviceState.Failed })
+        {
+            using var transport = new ReopeningTransport();
+            using var device = new TestableDaqifiDevice("Device", transport) { ReconnectOptions = FastReconnect(1) };
+            device.Connect();
+            await device.InitializeAsync();
+            transport.FailNextConnects = during == DeviceState.Failed ? 1 : 0;
+
+            var finished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            device.StateChanged += (_, e) =>
+            {
+                if (e.CurrentState == during)
+                {
+                    finished.TrySetResult(IndependentThread(device.Disconnect).Wait(StallLimit));
+                }
+            };
+
+            transport.SimulateDrop();
+
+            Assert.True(await finished.Task.WaitAsync(WaitUntil.DefaultTimeout), $"stalled in the {during} handler");
+        }
+    }
+
+    /// <summary>
+    /// The two that are raised while their operation runs: another one waits for it, so for the
+    /// handler too.
+    /// </summary>
+    [Theory]
+    [InlineData(DeviceState.Connecting)]
+    [InlineData(DeviceState.Disconnecting)]
+    public async Task DuringConnectingAndDisconnecting_ACallFromAnotherThreadWaitsForTheHandler(DeviceState during)
+    {
+        using var transport = new ReopeningTransport();
+        using var device = new TestableDaqifiDevice("Device", transport);
+        Task? fromElsewhere = null;
+        bool? finishedInside = null;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == during && fromElsewhere == null)
+            {
+                fromElsewhere = IndependentThread(device.Disconnect);
+                finishedInside = fromElsewhere.Wait(TimeSpan.FromMilliseconds(200));
+            }
+        };
+
+        device.Connect();
+        device.Disconnect();
+
+        Assert.False(finishedInside);
+        await fromElsewhere!.WaitAsync(WaitUntil.DefaultTimeout);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+    }
+
+    [Fact]
+    public async Task AChangeMadeElsewhereDuringAConnectingHandler_IsRaisedOnceThatConnectIsOver()
+    {
+        // A disconnect that gives up waiting for a connect settles the device without it, and leaves
+        // its event to the thread that is raising Connecting, in the middle of that connect.
+        using var transport = new ReopeningTransport();
+        using var device = new TestableDaqifiDevice("Device", transport);
+        bool? finished = null;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == DeviceState.Connecting)
+            {
+                IndependentThread(() => device.TryTransition(DeviceState.Disconnected)).Wait(StallLimit);
+            }
+            else if (e.CurrentState == DeviceState.Disconnected)
+            {
+                finished = IndependentThread(device.Disconnect).Wait(StallLimit);
+            }
+        };
+
+        await device.ConnectAsync().WaitAsync(WaitUntil.DefaultTimeout);
+
+        Assert.True(finished);
+        Assert.False(transport.IsConnected);
     }
 
     [Fact]
@@ -434,6 +594,37 @@ public class DeviceStateEventOrderTests
     }
 
     [Fact]
+    public async Task AReconnectMadeDirectlyInADisconnectingHandler_IsNotTornDownEither()
+    {
+        using var transport = new ReopeningTransport();
+        using var device = new TestableDaqifiDevice("Device", transport);
+        device.Connect();
+        var log = new StateLog(device);
+        var rebuilt = false;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == DeviceState.Disconnecting && !rebuilt)
+            {
+                rebuilt = true;
+                device.Disconnect();
+                device.Connect();
+            }
+        };
+
+        device.Disconnect();
+
+        log.AssertWalked(
+            DeviceState.Connected,
+            DeviceState.Disconnecting,
+            DeviceState.Disconnected,
+            DeviceState.Connecting,
+            DeviceState.Connected);
+        Assert.True(transport.IsConnected);
+        await device.InitializeAsync();
+        Assert.Equal(DeviceState.Ready, device.State);
+    }
+
+    [Fact]
     public async Task AFailedInitialization_ReleasesASecondCallerBeforeItsHandlersRun()
     {
         using var transport = new ReopeningTransport();
@@ -463,6 +654,19 @@ public class DeviceStateEventOrderTests
     }
 
     #endregion
+
+    /// <summary>Well short of the 10 and 30 second waits a lifecycle call gives up after.</summary>
+    private static readonly TimeSpan StallLimit = TimeSpan.FromSeconds(5);
+
+    /// <summary>A thread that inherits nothing from this one, as a UI thread or another service has.</summary>
+    private static Task IndependentThread(Action action)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            return Task.Factory.StartNew(
+                action, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+    }
 
     private static ReconnectOptions FastReconnect(int maxAttempts) => new()
     {

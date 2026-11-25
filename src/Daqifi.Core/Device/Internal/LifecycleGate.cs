@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using static Daqifi.Core.Internal.DiagnosticGuard;
@@ -53,7 +54,7 @@ internal enum LifecycleContention
 /// A semaphore rather than a monitor because <see cref="DaqifiDevice.ConnectAsync"/> and
 /// <see cref="DaqifiDevice.DisconnectAsync"/> hold it across <c>await</c>, which a monitor
 /// cannot do — its continuation may resume on a different thread. Semaphores are not reentrant,
-/// so re-entry is tracked separately by <see cref="_isInsideLifecycleOperation"/>.
+/// so re-entry is tracked separately by <see cref="_operation"/>.
 /// </para>
 /// <para>
 /// The semaphore is deliberately never disposed, matching the device's own resource teardown,
@@ -76,18 +77,62 @@ internal sealed class LifecycleGate
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
 
     /// <summary>
-    /// True while the current logical flow already holds <see cref="_lifecycleLock"/>.
+    /// The operation holding <see cref="_lifecycleLock"/> that the current logical flow is part of,
+    /// if any.
     /// </summary>
     /// <remarks>
-    /// Both connect and disconnect raise <see cref="DaqifiDevice.StateChanged"/> from inside
-    /// their critical section, and a consumer handler calling
-    /// <see cref="DaqifiDevice.Disconnect"/> from there is re-entry on the same flow — which
-    /// runs nested today with no lock at all and must keep working rather than deadlock against
-    /// a non-reentrant semaphore. <see cref="AsyncLocal{T}"/> rather than a thread id so it
+    /// Connect raises <see cref="DaqifiDevice.StateChanged"/> for
+    /// <see cref="DeviceState.Connecting"/>, and disconnect for
+    /// <see cref="DeviceState.Disconnecting"/>, from inside their critical section, and a consumer
+    /// handler calling <see cref="DaqifiDevice.Disconnect"/> from there is re-entry on the same flow
+    /// — which runs nested today with no lock at all and must keep working rather than deadlock
+    /// against a non-reentrant semaphore. <see cref="AsyncLocal{T}"/> rather than a thread id so it
     /// survives an <c>await</c> resuming on another thread, the same technique
-    /// <c>_isInsideTextExchange</c> already uses on the device.
+    /// <c>_isInsideTextExchange</c> already uses on the device. A flow started from inside the
+    /// operation inherits the value and may outlive it, so it counts only while
+    /// <see cref="Operation.IsRunning"/>.
     /// </remarks>
-    private readonly AsyncLocal<bool> _isInsideLifecycleOperation = new();
+    private readonly AsyncLocal<Operation?> _operation = new();
+
+    /// <summary>One holding of the lock, and what is to be done when it ends.</summary>
+    private sealed class Operation
+    {
+        private readonly Lock _lock = new();
+        private List<Action>? _afterRelease = new();
+
+        /// <summary>Whether the lock is still held for this operation.</summary>
+        internal bool IsRunning
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _afterRelease != null;
+                }
+            }
+        }
+
+        /// <summary>Takes <paramref name="action"/> for later, or refuses it because the operation is over.</summary>
+        internal bool TryDefer(Action action)
+        {
+            lock (_lock)
+            {
+                _afterRelease?.Add(action);
+                return _afterRelease != null;
+            }
+        }
+
+        /// <summary>Ends the operation and hands over what it deferred, in order.</summary>
+        internal List<Action> End()
+        {
+            lock (_lock)
+            {
+                var actions = _afterRelease ?? new List<Action>();
+                _afterRelease = null;
+                return actions;
+            }
+        }
+    }
 
     /// <summary>
     /// Creates a gate that logs against the owning device and reads its contention timeouts.
@@ -186,6 +231,22 @@ internal sealed class LifecycleGate
             timeout.TotalSeconds));
 
     /// <summary>
+    /// Runs <paramref name="action"/> once the current flow does not hold the gate: right away, or
+    /// when the outermost operation it is inside of has released the lock, whether that operation
+    /// succeeded or not.
+    /// </summary>
+    /// <param name="action">What to run. Must not throw.</param>
+    internal void RunOnceReleased(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        if (_operation.Value?.TryDefer(action) != true)
+        {
+            action();
+        }
+    }
+
+    /// <summary>
     /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
     /// See <see cref="ContentionWait"/> for the per-policy semantics.
     /// </summary>
@@ -205,9 +266,9 @@ internal sealed class LifecycleGate
         // entry-point guards on the sibling collaborators.
         ArgumentNullException.ThrowIfNull(operation);
 
-        // Re-entry from inside the critical section (a StateChanged handler calling back in)
+        // Re-entry from inside the critical section (a Connecting or Disconnecting handler calling back in)
         // proceeds without acquiring, exactly as a reentrant monitor would.
-        if (_isInsideLifecycleOperation.Value)
+        if (_operation.Value is { IsRunning: true })
         {
             operation();
             return true;
@@ -238,7 +299,7 @@ internal sealed class LifecycleGate
             throw LifecycleTimeout(timeout);
         }
 
-        _isInsideLifecycleOperation.Value = true;
+        var holding = _operation.Value = new Operation();
         try
         {
             operation();
@@ -246,8 +307,7 @@ internal sealed class LifecycleGate
         }
         finally
         {
-            _isInsideLifecycleOperation.Value = false;
-            ReleaseLifecycleLock();
+            Release(holding);
         }
     }
 
@@ -264,7 +324,7 @@ internal sealed class LifecycleGate
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        if (_isInsideLifecycleOperation.Value)
+        if (_operation.Value is { IsRunning: true })
         {
             await operation().ConfigureAwait(false);
             return true;
@@ -312,7 +372,7 @@ internal sealed class LifecycleGate
             throw LifecycleTimeout(timeout);
         }
 
-        _isInsideLifecycleOperation.Value = true;
+        var holding = _operation.Value = new Operation();
         try
         {
             await operation().ConfigureAwait(false);
@@ -320,8 +380,23 @@ internal sealed class LifecycleGate
         }
         finally
         {
-            _isInsideLifecycleOperation.Value = false;
-            ReleaseLifecycleLock();
+            Release(holding);
+        }
+    }
+
+    /// <summary>
+    /// Ends <paramref name="holding"/> and releases the lock, then runs what it deferred: in that
+    /// order, so no flow still takes itself for part of it once another operation may start.
+    /// </summary>
+    private void Release(Operation holding)
+    {
+        _operation.Value = null;
+        var deferred = holding.End();
+        ReleaseLifecycleLock();
+
+        foreach (var action in deferred)
+        {
+            action();
         }
     }
 

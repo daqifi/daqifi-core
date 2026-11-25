@@ -173,21 +173,24 @@ public class BootloaderSessionDeviceTests
     }
 
     [Fact]
-    public void AThrowingSubscriber_DoesNotFailTheDisconnectOrStopLaterEvents()
+    public void AThrowingSubscriber_FailsNeitherTheDisconnectNorTheOtherSubscribers()
     {
         var device = new BootloaderSessionDevice();
         var raised = 0;
+        var heard = new List<DeviceState>();
         device.StateChanged += (_, _) =>
         {
             raised++;
             throw new InvalidOperationException("a badly behaved subscriber");
         };
+        device.StateChanged += (_, e) => heard.Add(e.CurrentState);
 
         device.Disconnect();
         device.Connect();
 
         Assert.True(device.IsConnected);
         Assert.Equal(2, raised);
+        Assert.Equal([DeviceState.Disconnected, DeviceState.Connected], heard);
     }
 
     #endregion

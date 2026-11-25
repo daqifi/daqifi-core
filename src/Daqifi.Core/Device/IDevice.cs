@@ -47,10 +47,15 @@ public interface IDevice : IAsyncDisposable
     /// as arbitrary: a UI consumer must marshal to its own dispatcher before touching controls.
     /// </para>
     /// <para>
-    /// Events are raised one at a time and with no lock held. A change made while a handler runs,
+    /// Events are raised one at a time. A change made while a handler runs,
     /// by that handler or by another thread, is raised after the handler returns: a handler must
     /// not wait for a later event, and <see cref="State"/> may already be further on than
     /// <see cref="DeviceStateChangedEventArgs.CurrentState"/>.
+    /// </para>
+    /// <para>
+    /// <see cref="DeviceState.Connecting"/> and <see cref="DeviceState.Disconnecting"/> are raised by
+    /// a connect or disconnect that is still running and waits for the handler, so a handler of these
+    /// two must not block on another one made from another thread. For every other event it may.
     /// </para>
     /// </remarks>
     event EventHandler<DeviceStateChangedEventArgs> StateChanged;

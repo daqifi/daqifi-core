@@ -82,7 +82,11 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public BootloaderSessionDevice(string? name = null)
     {
         Name = string.IsNullOrWhiteSpace(name) ? DefaultName : name;
-        _stateChanges = new StateChangeQueue(RaiseStateChanged);
+
+        // A subscriber's failure is isolated, as on a real device: the update flow calls
+        // Disconnect() itself, and that failure must not become the update's. There is nothing to
+        // report it on — ErrorOccurred is never raised by this type.
+        _stateChanges = new StateChangeQueue(this, () => StateChanged, static _ => { });
     }
 
     #region IDevice
@@ -98,8 +102,9 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
 
     /// <summary>
     /// Raised by <see cref="Connect"/> and <see cref="Disconnect"/>. This is the one event this type
-    /// actually raises — the device itself produces nothing to report. A subscriber that throws does
-    /// not fail the <see cref="Connect"/> or <see cref="Disconnect"/> it was notified of.
+    /// actually raises — the device itself produces nothing to report. A subscriber that throws fails
+    /// neither the <see cref="Connect"/> or <see cref="Disconnect"/> it was notified of nor the
+    /// other subscribers.
     /// </summary>
     public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
 
@@ -468,19 +473,5 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
         }
 
         _stateChanges.Publish(change);
-    }
-
-    private void RaiseStateChanged(DeviceStateChangedEventArgs args)
-    {
-        try
-        {
-            StateChanged?.Invoke(this, args);
-        }
-        catch
-        {
-            // Isolated, as on a real device: the update flow calls Disconnect() itself, and a
-            // subscriber's failure must not become the update's. Nothing here to report it on —
-            // ErrorOccurred is never raised by this type.
-        }
     }
 }

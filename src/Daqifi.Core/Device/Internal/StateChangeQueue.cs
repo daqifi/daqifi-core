@@ -27,9 +27,11 @@ namespace Daqifi.Core.Device.Internal;
 /// </remarks>
 internal sealed class StateChangeQueue
 {
-    private readonly Action<DeviceStateChangedEventArgs> _raise;
+    private readonly object _sender;
+    private readonly Func<EventHandler<DeviceStateChangedEventArgs>?> _subscribers;
+    private readonly Action<Exception> _onSubscriberError;
 
-    /// <summary>A leaf lock: never held across <see cref="_raise"/> or any other call out.</summary>
+    /// <summary>A leaf lock: never held across a subscriber or any other call out.</summary>
     private readonly Lock _lock = new();
 
     private readonly Queue<Change> _pending = new();
@@ -37,10 +39,17 @@ internal sealed class StateChangeQueue
     private bool _isDelivering;
 
     /// <summary>Creates a queue.</summary>
-    /// <param name="raise">Raises the event for one change. Must not throw.</param>
-    internal StateChangeQueue(Action<DeviceStateChangedEventArgs> raise)
+    /// <param name="sender">The device the events are raised for.</param>
+    /// <param name="subscribers">Reads the event's current subscribers.</param>
+    /// <param name="onSubscriberError">Reports a subscriber that threw. Must not throw.</param>
+    internal StateChangeQueue(
+        object sender,
+        Func<EventHandler<DeviceStateChangedEventArgs>?> subscribers,
+        Action<Exception> onSubscriberError)
     {
-        _raise = raise ?? throw new ArgumentNullException(nameof(raise));
+        _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+        _subscribers = subscribers ?? throw new ArgumentNullException(nameof(subscribers));
+        _onSubscriberError = onSubscriberError ?? throw new ArgumentNullException(nameof(onSubscriberError));
     }
 
     /// <summary>
@@ -78,9 +87,36 @@ internal sealed class StateChangeQueue
     /// </summary>
     internal void Publish(Change change)
     {
+        MarkPublished(change);
+        Deliver();
+    }
+
+    /// <summary>
+    /// As <see cref="Publish"/>, but stops after <paramref name="change"/>: for a caller in the middle
+    /// of an operation, which must not deliver what others publish meanwhile. The caller calls
+    /// <see cref="Deliver"/> once that operation is over.
+    /// </summary>
+    internal void PublishAlone(Change change)
+    {
+        MarkPublished(change);
+        DeliverThrough(change);
+    }
+
+    /// <summary>Delivers everything that is ready, unless another caller is already doing that.</summary>
+    internal void Deliver() => DeliverThrough(last: null);
+
+    private void MarkPublished(Change change)
+    {
         lock (_lock)
         {
             change.IsPublished = true;
+        }
+    }
+
+    private void DeliverThrough(Change? last)
+    {
+        lock (_lock)
+        {
             if (_isDelivering)
             {
                 return;
@@ -89,23 +125,42 @@ internal sealed class StateChangeQueue
             _isDelivering = true;
         }
 
+        Change? delivered = null;
         while (true)
         {
-            Change next;
             lock (_lock)
             {
                 // A head that is not published yet stops the line. Its author publishes it, and
                 // delivers it along with everything that queued up behind it.
-                if (!_pending.TryPeek(out var head) || !head.IsPublished)
+                if ((last != null && delivered == last) || !_pending.TryPeek(out var head) || !head.IsPublished)
                 {
                     _isDelivering = false;
                     return;
                 }
 
-                next = _pending.Dequeue();
+                delivered = _pending.Dequeue();
             }
 
-            _raise(new DeviceStateChangedEventArgs(next.Previous, next.Current));
+            Raise(new DeviceStateChangedEventArgs(delivered.Previous, delivered.Current));
+        }
+    }
+
+    /// <summary>
+    /// Calls each subscriber on its own, so one that throws costs neither the others nor whoever
+    /// made the change (issue #494).
+    /// </summary>
+    private void Raise(DeviceStateChangedEventArgs args)
+    {
+        foreach (var subscriber in Delegate.EnumerateInvocationList(_subscribers()))
+        {
+            try
+            {
+                subscriber(_sender, args);
+            }
+            catch (Exception ex)
+            {
+                _onSubscriberError(ex);
+            }
         }
     }
 }
