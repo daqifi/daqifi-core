@@ -6,13 +6,17 @@ namespace Daqifi.Core.Device;
 /// docs/adr/0001-firmware-feature-gating.md). New members are added only when
 /// daqifi-core starts consuming a command that some supported device might lack.
 /// </summary>
+/// <remarks>
+/// The values start at 1, so a <see cref="DeviceFeature"/> that was never set names no feature and is
+/// rejected rather than being read as the first one.
+/// </remarks>
 public enum DeviceFeature
 {
     /// <summary>
     /// Analog output (<c>SOURce:VOLTage:LEVel</c> / <c>CONFigure:DAC:*</c>). Board-gated:
     /// Nyquist3 only.
     /// </summary>
-    AnalogOutput,
+    AnalogOutput = 1,
 
     /// <summary>
     /// SD card storage capacity query (<c>SYSTem:STORage:SD:SPACe?</c>). Introduced in
@@ -22,13 +26,13 @@ public enum DeviceFeature
     /// (not v3.4.6b1) as the required version, since that floor — not the command's original
     /// introduction version — is what daqifi-core actually guarantees.
     /// </summary>
-    SdStorageQuery,
+    SdStorageQuery = 2,
 
     /// <summary>
     /// Capability document query (<c>CONFigure:CAPabilities:JSON?</c> /
     /// <c>:APIVersion?</c>). Firmware-gated: requires firmware &gt;= v3.5.0.
     /// </summary>
-    CapabilityDocument,
+    CapabilityDocument = 3,
 
     /// <summary>
     /// SD-card access over a WiFi/TCP connection instead of USB — file transfer
@@ -41,7 +45,7 @@ public enum DeviceFeature
     /// requires SD hardware. Over USB these operations are available on all SD-capable firmware
     /// and are not gated.
     /// </summary>
-    SdFileTransferOverWifi,
+    SdFileTransferOverWifi = 4,
 
     /// <summary>
     /// The end-of-listing marker on <c>SYSTem:STORage:SD:LISt?</c> (<c>__END_OF_LIST__</c>
@@ -57,7 +61,7 @@ public enum DeviceFeature
     /// did get as the whole card (closes #887). On older firmware a missing marker is simply
     /// the norm and carries no such information.
     /// </remarks>
-    SdListingEndMarker,
+    SdListingEndMarker = 5,
 
     /// <summary>
     /// A truthful PWM frequency floor in the capability document
@@ -72,14 +76,14 @@ public enum DeviceFeature
     /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the floor. See
     /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/>.
     /// </remarks>
-    PwmFrequencyFloor,
+    PwmFrequencyFloor = 6,
 
     /// <summary>
     /// Flashing both LEDs so the physical board can be picked out (<c>SYSTem:IDENtify</c> /
     /// <c>SYSTem:IDENtify?</c>). Firmware-gated: introduced by firmware <c>#1220</c> and first
     /// released in <b>v3.9.0</b>; every board has the LEDs.
     /// </summary>
-    Identify,
+    Identify = 7,
 
     /// <summary>
     /// The live WiFi status queries behind <see cref="Network.IWifiLinkStatusProvider"/>: the link
@@ -88,7 +92,7 @@ public enum DeviceFeature
     /// <c>#1186</c>/<c>#1193</c>). Firmware-gated: first released in <b>v3.9.0</b>; requires WiFi
     /// hardware.
     /// </summary>
-    WifiLinkStatus,
+    WifiLinkStatus = 8,
 
     /// <summary>
     /// The SCPI error an <c>SYSTem:STORage:SD:GET</c> leaves behind when the device cannot open
@@ -106,7 +110,7 @@ public enum DeviceFeature
     /// <see cref="SdCard.SdCardFilesystemException"/> instead of reporting an empty file. Older
     /// firmware queues nothing, so the error queue holds no answer and is not read.
     /// </remarks>
-    SdGetOpenFailureError,
+    SdGetOpenFailureError = 9,
 
     /// <summary>
     /// The stored streaming rate readback (<c>SYSTem:STReam:START?</c>), which answers the rate
@@ -121,7 +125,7 @@ public enum DeviceFeature
     /// 1 Hz boot placeholder is not adopted. Below v3.9.0 the query is not sent and the default
     /// stands.
     /// </remarks>
-    StoredStreamingRateQuery,
+    StoredStreamingRateQuery = 10,
 
     /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by
@@ -130,5 +134,5 @@ public enum DeviceFeature
     /// introduced by firmware <c>#1217</c>/<c>#1228</c> and first released in <b>v3.9.0</b>;
     /// requires SD hardware.
     /// </summary>
-    SdCardCrcProtection
+    SdCardCrcProtection = 11
 }

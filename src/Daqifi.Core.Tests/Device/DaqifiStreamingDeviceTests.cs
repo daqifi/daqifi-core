@@ -227,9 +227,9 @@ public class DaqifiStreamingDeviceTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public void UseAdcCalibration_WhenConnected_SendsCorrectCommand(int bank)
+    [InlineData(AdcCalibrationBank.Factory)]
+    [InlineData(AdcCalibrationBank.User)]
+    public void UseAdcCalibration_WhenConnected_SendsCorrectCommand(AdcCalibrationBank bank)
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
@@ -240,7 +240,7 @@ public class DaqifiStreamingDeviceTests
 
         // Assert
         var sentMessage = Assert.Single(device.SentMessages);
-        Assert.Equal($"CONFigure:ADC:USECal {bank}", sentMessage.Data);
+        Assert.Equal($"CONFigure:ADC:USECal {(int)bank}", sentMessage.Data);
     }
 
     [Fact]
@@ -259,9 +259,9 @@ public class DaqifiStreamingDeviceTests
     }
 
     [Theory]
-    [InlineData(-1)]
-    [InlineData(2)]
-    public void UseAdcCalibration_WithInvalidBank_ThrowsArgumentOutOfRange(int bank)
+    [InlineData((AdcCalibrationBank)(-1))]
+    [InlineData((AdcCalibrationBank)2)]
+    public void UseAdcCalibration_WithInvalidBank_ThrowsArgumentOutOfRange(AdcCalibrationBank bank)
     {
         var device = new DaqifiStreamingDevice("TestDevice");
         Assert.Throws<System.ArgumentOutOfRangeException>(() => device.UseAdcCalibration(bank));

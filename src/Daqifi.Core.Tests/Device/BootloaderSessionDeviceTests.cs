@@ -262,7 +262,7 @@ public class BootloaderSessionDeviceTests
             () => device.SetAdcCalibrationOffsetAsync(0, 1.0, token),
             () => device.SaveFactoryAdcCalibrationAsync(token),
             () => device.LoadFactoryAdcCalibrationAsync(token),
-            () => device.UseAdcCalibrationAsync(0, token),
+            () => device.UseAdcCalibrationAsync(AdcCalibrationBank.Factory, token),
             () => device.SaveVoltagePrecisionAsync(token),
             () => device.LoadVoltagePrecisionAsync(token),
         };

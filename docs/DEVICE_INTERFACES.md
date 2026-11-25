@@ -1261,9 +1261,8 @@ IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
 foreach (var entry in log) Console.WriteLine(entry.Message);
 await device.ClearSystemLogAsync();
 
-// Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
-// setting reflects the level actually applied, which a module's ceiling may cap.
-LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", 2);
+// Runtime log levels. The returned setting reflects the level actually applied, which a module's ceiling may cap.
+LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", DeviceLogLevel.Info);
 Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
 
 // SCPI command history (oldest first — the device numbers lines backwards from

@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Network;
 using System;
@@ -84,7 +85,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("LoadAdcCalibration", d => d.LoadAdcCalibration());
         yield return Site("SaveFactoryAdcCalibration", d => d.SaveFactoryAdcCalibration());
         yield return Site("LoadFactoryAdcCalibration", d => d.LoadFactoryAdcCalibration());
-        yield return Site("UseAdcCalibration", d => d.UseAdcCalibration(1));
+        yield return Site("UseAdcCalibration", d => d.UseAdcCalibration(AdcCalibrationBank.User));
         yield return Site("SetAdcCalibrationSlope", d => d.SetAdcCalibrationSlope(0, 1.0));
         yield return Site("SetAdcCalibrationOffset", d => d.SetAdcCalibrationOffset(0, 0.0));
         yield return Site("SaveVoltagePrecision", d => d.SaveVoltagePrecision());
@@ -131,7 +132,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("GetLanChipInfoAsync", d => d.GetLanChipInfoAsync());
         yield return Site("GetSystemLogAsync", d => d.GetSystemLogAsync());
         yield return Site("ClearSystemLogAsync", d => d.ClearSystemLogAsync());
-        yield return Site("SetLogLevelAsync", d => d.SetLogLevelAsync("STREAM", 2));
+        yield return Site("SetLogLevelAsync", d => d.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         yield return Site("GetCommandHistoryAsync", d => d.GetCommandHistoryAsync());
         yield return Site("TestSystemLogAsync", d => d.TestSystemLogAsync());
         yield return Site("GetSystemErrorCountAsync", d => d.GetSystemErrorCountAsync());
@@ -142,7 +143,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("LoadAdcCalibrationAsync", d => d.LoadAdcCalibrationAsync());
         yield return Site("SaveFactoryAdcCalibrationAsync", d => d.SaveFactoryAdcCalibrationAsync());
         yield return Site("LoadFactoryAdcCalibrationAsync", d => d.LoadFactoryAdcCalibrationAsync());
-        yield return Site("UseAdcCalibrationAsync", d => d.UseAdcCalibrationAsync(1));
+        yield return Site("UseAdcCalibrationAsync", d => d.UseAdcCalibrationAsync(AdcCalibrationBank.User));
         yield return Site("SetAdcCalibrationSlopeAsync", d => d.SetAdcCalibrationSlopeAsync(0, 1.0));
         yield return Site("SetAdcCalibrationOffsetAsync", d => d.SetAdcCalibrationOffsetAsync(0, 0.0));
         yield return Site("SaveVoltagePrecisionAsync", d => d.SaveVoltagePrecisionAsync());

@@ -569,16 +569,16 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     void LoadFactoryAdcCalibration();
 
     /// <summary>
-    /// Selects which ADC calibration bank the device applies (<c>0</c> = factory, <c>1</c> = user).
+    /// Selects which ADC calibration bank the device applies.
     /// </summary>
-    /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
+    /// <param name="bank">The calibration bank.</param>
     /// <remarks>
     /// <b>Persisted</b> (firmware primitive <c>CONFigure:ADC:USECal</c>). The choice is written to NVM, the
     /// runtime coefficients are immediately reloaded from the selected bank, and that bank is loaded on every
     /// subsequent boot. Values other than 0 or 1 are rejected. Fire-and-forget: a device that refuses this
     /// reports nothing — use <see cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync"/> when that matters.
     /// </remarks>
-    void UseAdcCalibration(int bank);
+    void UseAdcCalibration(AdcCalibrationBank bank);
 
     /// <summary>
     /// Persists the device's current voltage precision setting to NVM so it survives a reboot.

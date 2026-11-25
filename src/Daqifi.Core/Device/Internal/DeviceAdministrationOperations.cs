@@ -216,7 +216,7 @@ internal sealed class DeviceAdministrationOperations
     }
 
     /// <inheritdoc cref="IStreamingDevice.UseAdcCalibration" />
-    internal void UseAdcCalibration(int bank)
+    internal void UseAdcCalibration(AdcCalibrationBank bank)
     {
         ValidateBank(bank);
 
@@ -276,7 +276,7 @@ internal sealed class DeviceAdministrationOperations
         => SendConfirmedAsync(ScpiMessageProducer.LoadFactoryAdcCalibration, cancellationToken);
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync" />
-    internal Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+    internal Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default)
     {
         ValidateBank(bank);
 
@@ -485,11 +485,11 @@ internal sealed class DeviceAdministrationOperations
         }
     }
 
-    private static void ValidateBank(int bank)
+    private static void ValidateBank(AdcCalibrationBank bank)
     {
-        if (bank is < 0 or > 1)
+        if (!Enum.IsDefined(bank))
         {
-            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be Factory or User.");
         }
     }
 }

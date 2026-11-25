@@ -377,7 +377,7 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="bank">Ignored.</param>
-    public void UseAdcCalibration(int bank)
+    public void UseAdcCalibration(AdcCalibrationBank bank)
     {
     }
 
@@ -435,7 +435,7 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// <param name="bank">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
-    public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+    public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
     /// <inheritdoc cref="SaveVoltagePrecision" />

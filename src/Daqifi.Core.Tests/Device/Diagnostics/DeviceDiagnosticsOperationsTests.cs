@@ -190,11 +190,11 @@ public class DeviceDiagnosticsOperationsTests
         host.EnqueueResponse("STREAM: 2 (ceiling 3)");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        var setting = await ops.SetLogLevelAsync("STREAM", 2);
+        var setting = await ops.SetLogLevelAsync("STREAM", DeviceLogLevel.Info);
 
         Assert.Equal("STREAM", setting.Module);
-        Assert.Equal(2, setting.Level);
-        Assert.Equal(3, setting.Ceiling);
+        Assert.Equal(DeviceLogLevel.Info, setting.Level);
+        Assert.Equal(DeviceLogLevel.Debug, setting.Ceiling);
         Assert.Equal(new[] { "send:SYSTem:LOG:LEVel STREAM,2" }, host.Calls);
     }
 
@@ -206,7 +206,7 @@ public class DeviceDiagnosticsOperationsTests
         var ops = new DeviceDiagnosticsOperations(host);
 
         var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(
-            () => ops.SetLogLevelAsync("STREAM", 2));
+            () => ops.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         Assert.Contains("STREAM", ex.Message);
     }
 
@@ -217,7 +217,7 @@ public class DeviceDiagnosticsOperationsTests
         host.EnqueueResponse("not a level echo");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.SetLogLevelAsync("STREAM", 2));
+        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class DeviceDiagnosticsOperationsTests
         var ops = new DeviceDiagnosticsOperations(host);
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
-            () => ops.SetLogLevelAsync("STREAM", 2));
+            () => ops.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
     }
 
     [Fact]
@@ -242,7 +242,7 @@ public class DeviceDiagnosticsOperationsTests
         var host = new FakeHost { IsConnected = false };
         var ops = new DeviceDiagnosticsOperations(host);
 
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ops.SetLogLevelAsync("STREAM", 99));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ops.SetLogLevelAsync("STREAM", (DeviceLogLevel)99));
         Assert.Empty(host.Calls);
     }
 
