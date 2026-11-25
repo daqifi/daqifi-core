@@ -7,7 +7,7 @@ namespace Daqifi.Core.Device;
 /// <summary>
 /// Provides data for the <see cref="DaqifiDevice.ChannelsPopulated"/> event.
 /// </summary>
-public class ChannelsPopulatedEventArgs : EventArgs
+public sealed class ChannelsPopulatedEventArgs : EventArgs
 {
     /// <summary>
     /// Gets the list of channels that were populated.

@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device;
 /// non-zero on the events that do get through.
 /// </para>
 /// </remarks>
-public class DeviceErrorEventArgs : EventArgs
+public sealed class DeviceErrorEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="DeviceErrorEventArgs"/> class.
@@ -49,7 +49,7 @@ public class DeviceErrorEventArgs : EventArgs
         Error = error;
         SuppressedCount = suppressedCount;
         RawData = rawData;
-        Timestamp = DateTime.UtcNow;
+        Timestamp = DateTimeOffset.UtcNow;
     }
 
     /// <summary>
@@ -80,5 +80,5 @@ public class DeviceErrorEventArgs : EventArgs
     /// <summary>
     /// Gets the UTC time at which the failure was observed.
     /// </summary>
-    public DateTime Timestamp { get; }
+    public DateTimeOffset Timestamp { get; }
 }

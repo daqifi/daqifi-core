@@ -8,15 +8,10 @@ public enum ChannelDirection
     /// <summary>
     /// Input channel (reads data from device).
     /// </summary>
-    Input,
+    Input = 0,
 
     /// <summary>
     /// Output channel (writes data to device).
     /// </summary>
-    Output,
-
-    /// <summary>
-    /// Unknown or uninitialized direction.
-    /// </summary>
-    Unknown
+    Output = 1
 }

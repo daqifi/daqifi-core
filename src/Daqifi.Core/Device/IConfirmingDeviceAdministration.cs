@@ -134,18 +134,18 @@ public interface IConfirmingDeviceAdministration
     Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Selects which ADC calibration bank the device applies (<c>0</c> = factory, <c>1</c> = user), and
+    /// Selects which ADC calibration bank the device applies, and
     /// confirms the device accepted the command.
     /// </summary>
     /// <inheritdoc cref="LoadAdcCalibrationAsync" path="/remarks" />
-    /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
+    /// <param name="bank">The calibration bank.</param>
     /// <param name="cancellationToken">A cancellation token to observe while the exchange runs.</param>
     /// <returns>A task that completes once the device has confirmed the command.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="bank"/> is not 0 or 1.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="bank"/> is not a defined <see cref="AdcCalibrationBank"/>.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="DeviceCommandFailedException">Thrown when the device refused the command, or did not confirm it.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default);
+    Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persists the device's current voltage precision setting to NVM, and confirms the device accepted the

@@ -1540,7 +1540,7 @@ public class ContinuousDeviceFinderTests
         // HidDeviceFinder answers all at once or not at all, so a pass that times out in it returns
         // an empty list. MissThreshold is 1: reading that list as a census would lose the device.
         var enumerator = new HangingAfterFirstEnumerator(
-            new HidDeviceInfo(HidDeviceFinder.DefaultVendorId, HidDeviceFinder.DefaultProductId, "/dev/hid0", "SN1"));
+            new HidDeviceInfo(DaqifiUsbIds.VendorId, DaqifiUsbIds.BootloaderProductId, "/dev/hid0", "SN1"));
         var lost = 0;
         await using var finder = new ContinuousDeviceFinder(
             new HidDeviceFinder(enumerator),

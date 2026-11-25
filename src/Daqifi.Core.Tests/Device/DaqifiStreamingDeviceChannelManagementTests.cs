@@ -401,12 +401,12 @@ public class DaqifiStreamingDeviceChannelManagementTests
     }
 
     [Fact]
-    public void SetDioDirection_WithUnknownDirection_ThrowsArgumentOutOfRangeException()
+    public void SetDioDirection_WithUndefinedDirection_ThrowsArgumentOutOfRangeException()
     {
         var device = CreateConnectedDevice();
         var channel = DigitalChannelAt(device, 0);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetDioDirection(channel, ChannelDirection.Unknown));
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetDioDirection(channel, (ChannelDirection)2));
     }
 
     [Fact]

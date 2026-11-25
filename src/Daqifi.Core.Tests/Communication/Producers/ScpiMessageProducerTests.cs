@@ -8,6 +8,8 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Device;
+using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Tests.Communication.Producers;
@@ -198,8 +200,8 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031), "CONFigure:ADC:chanCALB 3,-0.0031" },
         { () => ScpiMessageProducer.GetAdcCalibrationSlope(0), "CONFigure:ADC:chanCALM? 0" },
         { () => ScpiMessageProducer.GetAdcCalibrationOffset(5), "CONFigure:ADC:chanCALB? 5" },
-        { () => ScpiMessageProducer.UseAdcCalibration(0), "CONFigure:ADC:USECal 0" },
-        { () => ScpiMessageProducer.UseAdcCalibration(1), "CONFigure:ADC:USECal 1" },
+        { () => ScpiMessageProducer.UseAdcCalibration(AdcCalibrationBank.Factory), "CONFigure:ADC:USECal 0" },
+        { () => ScpiMessageProducer.UseAdcCalibration(AdcCalibrationBank.User), "CONFigure:ADC:USECal 1" },
 
         // Analog output. A negative channel is rejected, but a negative voltage is valid and
         // must render with a leading minus.
@@ -208,7 +210,10 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.GetAnalogOutputVoltage(2), "SOURce:VOLTage:LEVel? 2" },
 
         // Logging & diagnostics
-        { () => ScpiMessageProducer.SetLogLevel("STREAM", 2), "SYSTem:LOG:LEVel STREAM,2" },
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", DeviceLogLevel.None), "SYSTem:LOG:LEVel STREAM,0" },
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", DeviceLogLevel.Error), "SYSTem:LOG:LEVel STREAM,1" },
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", DeviceLogLevel.Info), "SYSTem:LOG:LEVel STREAM,2" },
+        { () => ScpiMessageProducer.SetLogLevel("STREAM", DeviceLogLevel.Debug), "SYSTem:LOG:LEVel STREAM,3" },
     };
 
     [Theory]
@@ -464,7 +469,7 @@ public class ScpiMessageProducerTests
     [InlineData("   ")]
     public void SetLogLevel_WithEmptyModule_Throws(string? module)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module!, 1));
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module!, DeviceLogLevel.Error));
     }
 
     [Theory]
@@ -475,7 +480,7 @@ public class ScpiMessageProducerTests
     [InlineData("a\nb")]
     public void SetLogLevel_WithInjectionChars_Throws(string module)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module, 1));
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module, DeviceLogLevel.Error));
     }
 
     // ---------------------------------------------------------------------
@@ -563,7 +568,7 @@ public class ScpiMessageProducerTests
             (nameof(ScpiMessageProducer.SetAdcCalibrationOffset), () => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationSlope), () => ScpiMessageProducer.GetAdcCalibrationSlope(-1)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationOffset), () => ScpiMessageProducer.GetAdcCalibrationOffset(-1)),
-            (nameof(ScpiMessageProducer.SetDioPortDirection), () => ScpiMessageProducer.SetDioPortDirection(-1, ChannelDirection.Unknown)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), () => ScpiMessageProducer.SetDioPortDirection(-1, (ChannelDirection)(-1))),
             (nameof(ScpiMessageProducer.SetDioPortState), () => ScpiMessageProducer.SetDioPortState(-1, true)),
         };
 
@@ -609,18 +614,16 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetPwmChannelFrequency(0, 0)),
             (nameof(ScpiMessageProducer.SetPwmChannelDutyCycle), "dutyCyclePercent", 101, "Duty cycle must be 0-100 percent.",
                 () => ScpiMessageProducer.SetPwmChannelDutyCycle(0, 101)),
-            (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", ChannelDirection.Unknown, "Direction must be Input or Output.",
-                () => ScpiMessageProducer.SetDioPortDirection(0, ChannelDirection.Unknown)),
             (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", (ChannelDirection)999, "Direction must be Input or Output.",
                 () => ScpiMessageProducer.SetDioPortDirection(0, (ChannelDirection)999)),
-            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", -1, "Calibration bank must be 0 (factory) or 1 (user).",
-                () => ScpiMessageProducer.UseAdcCalibration(-1)),
-            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", 2, "Calibration bank must be 0 (factory) or 1 (user).",
-                () => ScpiMessageProducer.UseAdcCalibration(2)),
-            (nameof(ScpiMessageProducer.SetLogLevel), "level", -1, "Log level must be between 0 (None) and 3 (Debug).",
-                () => ScpiMessageProducer.SetLogLevel("STREAM", -1)),
-            (nameof(ScpiMessageProducer.SetLogLevel), "level", 4, "Log level must be between 0 (None) and 3 (Debug).",
-                () => ScpiMessageProducer.SetLogLevel("ADC", 4)),
+            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", (AdcCalibrationBank)(-1), "Calibration bank must be Factory or User.",
+                () => ScpiMessageProducer.UseAdcCalibration((AdcCalibrationBank)(-1))),
+            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", (AdcCalibrationBank)2, "Calibration bank must be Factory or User.",
+                () => ScpiMessageProducer.UseAdcCalibration((AdcCalibrationBank)2)),
+            (nameof(ScpiMessageProducer.SetLogLevel), "level", (DeviceLogLevel)(-1), "Log level must be None, Error, Info or Debug.",
+                () => ScpiMessageProducer.SetLogLevel("STREAM", (DeviceLogLevel)(-1))),
+            (nameof(ScpiMessageProducer.SetLogLevel), "level", (DeviceLogLevel)4, "Log level must be None, Error, Info or Debug.",
+                () => ScpiMessageProducer.SetLogLevel("ADC", (DeviceLogLevel)4)),
             (nameof(ScpiMessageProducer.SetSdMaxFileSize), "bytes", -1L, "Max file size cannot be negative.",
                 () => ScpiMessageProducer.SetSdMaxFileSize(-1)),
             (nameof(ScpiMessageProducer.SetSdMinFreeSpace), "bytes", -1L, "Minimum free space cannot be negative.",
@@ -633,6 +636,8 @@ public class ScpiMessageProducerTests
             // throws the same exception in the same shape, so it belongs in the census too.
             (nameof(ScpiMessageProducer.SetStreamInterface), "streamInterface", (StreamInterface)999, "Unknown stream interface.",
                 () => ScpiMessageProducer.SetStreamInterface((StreamInterface)999)),
+            (nameof(ScpiMessageProducer.SetNetworkWifiMode), "mode", default(WifiMode), "Unsupported WiFi mode.",
+                () => ScpiMessageProducer.SetNetworkWifiMode(default)),
             (nameof(ScpiMessageProducer.SetNetworkWifiMode), "mode", (WifiMode)2, "Unsupported WiFi mode.",
                 () => ScpiMessageProducer.SetNetworkWifiMode((WifiMode)2)),
             (nameof(ScpiMessageProducer.SetNetworkWifiSecurity), "securityType", (WifiSecurityType)1, "Unsupported WiFi security type.",

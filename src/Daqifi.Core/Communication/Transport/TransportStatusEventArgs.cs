@@ -3,7 +3,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// <summary>
 /// Provides data for transport status change events.
 /// </summary>
-public class TransportStatusEventArgs : EventArgs
+public sealed class TransportStatusEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the TransportStatusEventArgs class.

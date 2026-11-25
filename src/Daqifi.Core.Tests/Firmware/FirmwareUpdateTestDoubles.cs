@@ -189,7 +189,7 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
@@ -229,9 +229,9 @@ internal sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
         return Task.FromResult<string?>(null);
     }
 
-    public Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
+    public Task<WifiFirmwareDownloadResult?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<(string ExtractedPath, string Version)?>(null);
+        return Task.FromResult<WifiFirmwareDownloadResult?>(null);
     }
 
     /// <summary>

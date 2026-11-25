@@ -73,7 +73,7 @@ public class AnalogOutputChannelTests
 
     [Theory]
     [InlineData(ChannelDirection.Input)]
-    [InlineData(ChannelDirection.Unknown)]
+    [InlineData((ChannelDirection)2)]
     public void Direction_SetToAnythingElse_Throws(ChannelDirection direction)
     {
         var channel = new AnalogOutputChannel(0);

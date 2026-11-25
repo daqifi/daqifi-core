@@ -57,7 +57,7 @@ public class SerialUnplugValidationTests
         var warmup = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_WARMUP_SECONDS", 20));
         var timeout = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_TIMEOUT_SECONDS", 180));
 
-        var transport = new SerialStreamTransport(portName, baudRate);
+        var transport = new SerialStreamTransport(portName, new SerialTransportOptions { BaudRate = baudRate });
         using var device = new DaqifiDevice("Unplug Validation", transport);
 
         var statuses = new List<(DateTime At, DeviceState Status)>();
@@ -159,7 +159,7 @@ public class SerialUnplugValidationTests
         var timeout = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_TIMEOUT_SECONDS", 180));
 
         using var registry = new DaqifiDeviceRegistry();
-        var transport = new SerialStreamTransport(portName, baudRate);
+        var transport = new SerialStreamTransport(portName, new SerialTransportOptions { BaudRate = baudRate });
         var device = new DaqifiStreamingDevice("Unplug Validation", transport);
 
         var removals = new List<DeviceRemovalReason>();

@@ -22,8 +22,8 @@ public class ClassifiedEventSubscriberIsolationTests
         using var device = new RaiseProbeDevice("TestDevice");
         var secondSubscriberFrames = 0;
 
-        device.StatusMessageReceived += _ => throw new InvalidOperationException("first subscriber misbehaves");
-        device.StatusMessageReceived += _ => secondSubscriberFrames++;
+        device.StatusMessageReceived += (_, _) => throw new InvalidOperationException("first subscriber misbehaves");
+        device.StatusMessageReceived += (_, _) => secondSubscriberFrames++;
 
         device.InvokeStatusMessage(StatusFrame());
         device.InvokeStatusMessage(StatusFrame());
@@ -37,8 +37,8 @@ public class ClassifiedEventSubscriberIsolationTests
         using var device = new RaiseProbeDevice("TestDevice");
         var secondSubscriberFrames = 0;
 
-        device.StreamMessageReceived += _ => throw new InvalidOperationException("first subscriber misbehaves");
-        device.StreamMessageReceived += _ => secondSubscriberFrames++;
+        device.StreamMessageReceived += (_, _) => throw new InvalidOperationException("first subscriber misbehaves");
+        device.StreamMessageReceived += (_, _) => secondSubscriberFrames++;
 
         device.InvokeStreamMessage(StreamFrame());
         device.InvokeStreamMessage(StreamFrame());
@@ -52,9 +52,9 @@ public class ClassifiedEventSubscriberIsolationTests
         using var device = new RaiseProbeDevice("TestDevice");
         var order = new List<string>();
 
-        device.StatusMessageReceived += _ => order.Add("first");
-        device.StatusMessageReceived += _ => throw new InvalidOperationException("middle subscriber misbehaves");
-        device.StatusMessageReceived += _ => order.Add("third");
+        device.StatusMessageReceived += (_, _) => order.Add("first");
+        device.StatusMessageReceived += (_, _) => throw new InvalidOperationException("middle subscriber misbehaves");
+        device.StatusMessageReceived += (_, _) => order.Add("third");
 
         device.InvokeStatusMessage(StatusFrame());
 
@@ -68,7 +68,7 @@ public class ClassifiedEventSubscriberIsolationTests
         // firing for the same frame.
         using var device = new RaiseProbeDevice("TestDevice");
 
-        device.StatusMessageReceived += _ => throw new InvalidOperationException("misbehaves");
+        device.StatusMessageReceived += (_, _) => throw new InvalidOperationException("misbehaves");
         device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
 
         device.InvokeStatusMessage(StatusFrame());
@@ -84,7 +84,7 @@ public class ClassifiedEventSubscriberIsolationTests
         // is raised -- which is why this is asserted separately rather than assumed from Status.
         using var device = new RaiseProbeDevice("TestDevice");
 
-        device.StreamMessageReceived += _ => throw new InvalidOperationException("misbehaves");
+        device.StreamMessageReceived += (_, _) => throw new InvalidOperationException("misbehaves");
         device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
 
         device.InvokeStreamMessage(StreamFrame());
@@ -98,9 +98,9 @@ public class ClassifiedEventSubscriberIsolationTests
         using var device = new RaiseProbeDevice("TestDevice");
         var runs = 0;
 
-        device.StatusMessageReceived += _ => { runs++; throw new InvalidOperationException("a"); };
-        device.StatusMessageReceived += _ => { runs++; throw new InvalidOperationException("b"); };
-        device.StatusMessageReceived += _ => { runs++; throw new InvalidOperationException("c"); };
+        device.StatusMessageReceived += (_, _) => { runs++; throw new InvalidOperationException("a"); };
+        device.StatusMessageReceived += (_, _) => { runs++; throw new InvalidOperationException("b"); };
+        device.StatusMessageReceived += (_, _) => { runs++; throw new InvalidOperationException("c"); };
 
         var escaped = Record.Exception(() => device.InvokeStatusMessage(StatusFrame()));
 
@@ -113,7 +113,7 @@ public class ClassifiedEventSubscriberIsolationTests
     {
         using var device = new RaiseProbeDevice("TestDevice");
         var frames = 0;
-        device.StatusMessageReceived += _ => frames++;
+        device.StatusMessageReceived += (_, _) => frames++;
 
         device.InvokeStatusMessage(StatusFrame());
 

@@ -75,7 +75,8 @@ public class DaqifiDeviceTests
         // Arrange
         var device = new TestableDaqifiDevice("TestDevice");
         DaqifiOutMessage? classified = null;
-        device.StatusMessageReceived += m => classified = m;
+        object? raisedBy = null;
+        device.StatusMessageReceived += (sender, e) => (raisedBy, classified) = (sender, e.Message);
 
         var status = new DaqifiOutMessage { AnalogInPortNum = 1 };
 
@@ -84,6 +85,7 @@ public class DaqifiDeviceTests
 
         // Assert
         Assert.Same(status, classified);
+        Assert.Same(device, raisedBy);
     }
 
     [Fact]
@@ -92,7 +94,8 @@ public class DaqifiDeviceTests
         // Arrange
         var device = new TestableDaqifiDevice("TestDevice");
         DaqifiOutMessage? classified = null;
-        device.StreamMessageReceived += m => classified = m;
+        object? raisedBy = null;
+        device.StreamMessageReceived += (sender, e) => (raisedBy, classified) = (sender, e.Message);
 
         var stream = new DaqifiOutMessage { MsgTimeStamp = 1 };
 
@@ -101,6 +104,7 @@ public class DaqifiDeviceTests
 
         // Assert
         Assert.Same(stream, classified);
+        Assert.Same(device, raisedBy);
     }
 
     [Fact]
@@ -158,7 +162,7 @@ public class DaqifiDeviceTests
         var device = new TestableDaqifiDevice("TestDevice");
         device.Connect();
 
-        device.StatusMessageReceived += _ => throw new InvalidOperationException("boom");
+        device.StatusMessageReceived += (_, _) => throw new InvalidOperationException("boom");
 
         var refresh = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(2));
         device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 55 });

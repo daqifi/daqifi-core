@@ -112,7 +112,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
     }
 
     /// <inheritdoc />
-    public async Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default)
+    public async Task<LogLevelSetting> SetLogLevelAsync(string module, DeviceLogLevel level, CancellationToken cancellationToken = default)
     {
         // Build the command first so argument validation (ArgumentException /
         // ArgumentOutOfRangeException) surfaces the same way regardless of

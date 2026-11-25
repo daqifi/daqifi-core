@@ -72,12 +72,12 @@ public interface IDevice : IAsyncDisposable
     /// two must not block on another one made from another thread. For every other event it may.
     /// </para>
     /// </remarks>
-    event EventHandler<DeviceStateChangedEventArgs> StateChanged;
+    event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
 
     /// <summary>
     /// Occurs when a message is received from the device.
     /// </summary>
-    event EventHandler<MessageReceivedEventArgs> MessageReceived;
+    event EventHandler<MessageReceivedEventArgs>? MessageReceived;
 
     /// <summary>
     /// Occurs when something fails on one of the device's background threads — a read from the
@@ -88,7 +88,7 @@ public interface IDevice : IAsyncDisposable
     /// does (issue #378). Raises are throttled per source and exception type — see
     /// <see cref="DaqifiDevice.ErrorOccurred"/> for the policy and the guarantees.
     /// </remarks>
-    event EventHandler<DeviceErrorEventArgs> ErrorOccurred;
+    event EventHandler<DeviceErrorEventArgs>? ErrorOccurred;
 
     /// <summary>
     /// Connects to the device, blocking the calling thread until the connection is open.

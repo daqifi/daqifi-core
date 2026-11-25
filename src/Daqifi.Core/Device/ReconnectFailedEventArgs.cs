@@ -11,7 +11,7 @@ namespace Daqifi.Core.Device;
 /// <see cref="DeviceState.Failed"/>. Cancellation is quieter — it is what the caller asked
 /// for — and leaves the device on <see cref="DeviceState.Lost"/>.
 /// </remarks>
-public class ReconnectFailedEventArgs : EventArgs
+public sealed class ReconnectFailedEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ReconnectFailedEventArgs"/> class.
@@ -24,7 +24,7 @@ public class ReconnectFailedEventArgs : EventArgs
         AttemptsMade = attemptsMade;
         LastError = lastError;
         WasCanceled = wasCanceled;
-        Timestamp = DateTime.UtcNow;
+        Timestamp = DateTimeOffset.UtcNow;
     }
 
     /// <summary>Gets how many reconnect attempts were made before giving up.</summary>
@@ -44,5 +44,5 @@ public class ReconnectFailedEventArgs : EventArgs
     public bool WasCanceled { get; }
 
     /// <summary>Gets the UTC time at which reconnection stopped.</summary>
-    public DateTime Timestamp { get; }
+    public DateTimeOffset Timestamp { get; }
 }

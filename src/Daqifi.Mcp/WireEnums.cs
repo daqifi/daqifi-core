@@ -99,7 +99,7 @@ public enum WireChannelType
 /// <summary>The direction a channel is in.</summary>
 public enum WireChannelDirection
 {
-    /// <summary>The direction is not known.</summary>
+    /// <summary>The direction is not known. Never sent; kept so the published tool schemas do not change.</summary>
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 
@@ -212,7 +212,6 @@ internal static class WireEnums
 
     internal static WireChannelDirection ToWire(this ChannelDirection value) => value switch
     {
-        ChannelDirection.Unknown => WireChannelDirection.Unknown,
         ChannelDirection.Input => WireChannelDirection.Input,
         ChannelDirection.Output => WireChannelDirection.Output,
         _ => throw Unmapped(value),
