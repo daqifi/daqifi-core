@@ -890,7 +890,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// rather than driving one of their own, which is why neither counts here; see
     /// <see cref="SampleRateCap"/>.
     /// </remarks>
-    private int EnabledAnalogInputCount() => _channelControl.RequestedAnalogInputCount;
+    private int EnabledAnalogInputCount() => GetChannelsSnapshot().Count(channel =>
+        channel.Type == ChannelType.Analog && IsEnabledAheadOfNextSend(channel));
 
     /// <inheritdoc />
     /// <remarks>
@@ -1865,7 +1866,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 
-    int IStreamingSessionHost.MaximumStreamingFrequencyHz => MaximumStreamingFrequencyHz;
+    // A start that is held back goes out behind the enables that are.
+    int IStreamingSessionHost.MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this, IsEnabledAheadOfNextSend);
+
+    bool IStreamingSessionHost.IsEnableRequested(IChannel channel) => _channelControl.IsEnableRequested(channel);
+
+    /// <summary>Whether a channel will be enabled when what this flow sends next goes out.</summary>
+    private bool IsEnabledAheadOfNextSend(IChannel channel)
+        => SendsAreNeverHeldBack ? channel.IsEnabled : _channelControl.IsEnableRequested(channel);
 
     // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
     // own report of its tick rate, read at exactly the moment the old BeginStreamingSession

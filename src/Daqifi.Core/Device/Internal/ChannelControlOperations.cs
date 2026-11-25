@@ -159,17 +159,22 @@ internal sealed class ChannelControlOperations
     private static void SetEnabled(IChannel channel, bool enabled)
         => (channel as IChannelEnablementNotifier)?.SetEnabled(enabled);
 
-    /// <summary>How many analog inputs are enabled, counting what has been requested.</summary>
-    internal int RequestedAnalogInputCount => _enabledAnalog.Requested.Count;
+    /// <summary>
+    /// Whether a channel is enabled, or has been asked to be by a command that is held back.
+    /// </summary>
+    internal bool IsEnableRequested(IChannel channel) => channel.Type switch
+    {
+        ChannelType.Analog => _enabledAnalog.Requested.Contains(channel.ChannelNumber),
+        ChannelType.Digital => _enabledDigital.Requested.Contains(channel.ChannelNumber),
+        _ => channel.IsEnabled,
+    };
 
-    /// <summary>A raw ADC enable mask, which is recorded and built on like a typed one.</summary>
+    /// <summary>
+    /// A raw ADC enable mask, which is recorded and built on like a typed one. Every bit of it is
+    /// kept: a channel it names can become known before it goes out.
+    /// </summary>
     internal TrackedCommand RawAdcMask(uint mask) => _enabledAnalog.Command(
-        _host.SnapshotChannels()
-            .Where(channel => channel.Type == ChannelType.Analog
-                && channel.ChannelNumber <= MaxAdcBitmaskChannel
-                && (mask & (1u << channel.ChannelNumber)) != 0)
-            .Select(channel => channel.ChannelNumber)
-            .ToHashSet());
+        Enumerable.Range(0, MaxAdcBitmaskChannel + 1).Where(number => (mask & (1u << number)) != 0).ToHashSet());
 
     private PinState Pin(DigitalChannel channel)
         => _pins.GetValue(channel, pin => new PinState(_host, pin));

@@ -235,6 +235,8 @@ public class StreamingSessionFrequencySourceTests
         {
         }
 
+        public bool IsEnableRequested(IChannel channel) => channel.IsEnabled;
+
         public ITrackedSend TrackAdcEnableMask(uint mask) => throw new NotSupportedException();
 
         public IReadOnlyList<IChannel> SnapshotChannels() => [];

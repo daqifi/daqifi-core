@@ -1180,7 +1180,8 @@ internal sealed class StreamingSessionController
 
     /// <inheritdoc cref="DaqifiStreamingDevice.CaptureSessionSnapshot"/>
     internal void CaptureSessionSnapshot() =>
-        _sessionSnapshot = StreamingSessionSnapshot.Capture(_host.SnapshotChannels(), IsStreaming, IsLoggingToSdCard);
+        _sessionSnapshot = StreamingSessionSnapshot.Capture(
+            _host.SnapshotChannels(), IsStreaming, IsLoggingToSdCard, _host.IsEnableRequested);
 
     /// <summary>
     /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,

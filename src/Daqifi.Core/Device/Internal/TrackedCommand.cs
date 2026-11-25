@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace Daqifi.Core.Device.Internal;
@@ -96,13 +97,13 @@ internal sealed class TrackedMessage(IOutboundMessage<string> message, TrackedCo
 /// <param name="record">Records the state.</param>
 internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
 {
-    /// <summary>Guards the two fields below. Taken before the channels lock, and never held across a send.</summary>
+    /// <summary>Guards the list below. Taken before the channels lock, and never held across a send.</summary>
     private readonly Lock _lock = new();
 
-    /// <summary>The command sent last, until it is known what became of it.</summary>
-    private TrackedCommand? _last;
-
-    private T _requested = default!;
+    /// <summary>
+    /// The commands that have not gone out yet, in the order they were sent, with what they ask for.
+    /// </summary>
+    private readonly List<(TrackedCommand Command, T State)> _outstanding = new();
 
     /// <summary>What the last command asked for, or the recorded state when none is outstanding.</summary>
     internal T Requested
@@ -111,7 +112,7 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
         {
             lock (_lock)
             {
-                return _last == null ? get() : _requested;
+                return _outstanding.Count == 0 ? get() : _outstanding[^1].State;
             }
         }
     }
@@ -126,31 +127,24 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
                 lock (_lock)
                 {
                     record(state);
-                    Finish(command);
+
+                    // What was sent before it is no longer what the next command builds on.
+                    _outstanding.RemoveRange(0, _outstanding.FindIndex(other => other.Command == command) + 1);
                 }
             },
             () =>
             {
                 lock (_lock)
                 {
-                    Finish(command);
+                    _outstanding.RemoveAll(other => other.Command == command);
                 }
             });
 
         lock (_lock)
         {
-            _last = command;
-            _requested = state;
+            _outstanding.Add((command, state));
         }
 
         return command;
-    }
-
-    private void Finish(TrackedCommand command)
-    {
-        if (ReferenceEquals(_last, command))
-        {
-            _last = null;
-        }
     }
 }

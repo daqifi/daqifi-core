@@ -286,6 +286,76 @@ public class ChannelCommandDroppedTests
         Assert.Equal("AI0", device.Enabled);
     }
 
+    [Fact]
+    public async Task AStartBehindAHeldBackEnable_IsLimitedByTheChannelsItWillUse()
+    {
+        // 110 kHz per (6 + channels) ticks: 15,714 Hz with one channel and 13,750 Hz with two.
+        using var device = await HeldDevice.CreateAsync();
+        device.UpdateMetadata(metadata => metadata with
+        {
+            Capabilities = metadata.Capabilities with { MaxSamplingRate = 22_000 }
+        });
+        device.StreamingFrequency = 15_000;
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.EnableChannel(device.Analog(1));
+            device.StartStreaming();
+        });
+
+        Assert.Equal(13_750, device.StreamingFrequency);
+        Assert.Equal(device.MaximumStreamingFrequencyHz, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task AHeldBackEnable_SurvivesALaterOneThatCannotBeSent()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.EnableChannel(device.Analog(1));
+            device.FailNextSend = true;
+            Assert.Throws<IOException>(() => device.EnableChannel(device.Analog(2)));
+            device.EnableChannel(device.Analog(3));
+        });
+
+        Assert.Equal("AI0 AI1 AI3", device.Enabled);
+    }
+
+    [Fact]
+    public async Task AHeldBackRawAdcMask_EnablesAChannelThatBecomesKnownMeanwhile()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b1_0000));
+            device.PopulateChannelsFromStatus(HeldDevice.Status(analogEnabled: 0b001, analogCount: 5));
+        });
+
+        Assert.Equal("AI4", device.Enabled);
+    }
+
+    [Fact]
+    public async Task AHeldBackEnable_IsRestoredWhenTheConnectionDropsAndComesBack()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.EnableChannel(device.Analog(1));
+            device.CaptureNow();
+            device.DisconnectNow();
+        });
+        Assert.Equal("AI0", device.Enabled);
+
+        await device.ConnectAsync();
+        await device.RestoreNowAsync();
+
+        Assert.Equal("AI0 AI1", device.Enabled);
+    }
+
     /// <summary>
     /// A connected device with analog channel 0 enabled and PWM running on digital channel 4, whose
     /// operation lock a test can hold.
@@ -315,9 +385,13 @@ public class ChannelCommandDroppedTests
         public IDigitalChannel Digital(int number) =>
             Channels.OfType<IDigitalChannel>().Single(c => c.ChannelNumber == number);
 
-        public static DaqifiOutMessage Status(byte analogEnabled) => new()
+        public void CaptureNow() => CaptureSessionSnapshot();
+
+        public Task RestoreNowAsync() => RestoreSessionSnapshotAsync(new ReconnectOptions(), CancellationToken.None);
+
+        public static DaqifiOutMessage Status(byte analogEnabled, uint analogCount = 4) => new()
         {
-            AnalogInPortNum = 4,
+            AnalogInPortNum = analogCount,
             AnalogInRes = 65535,
             AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(analogEnabled),
             DigitalPortNum = 8,
@@ -329,7 +403,7 @@ public class ChannelCommandDroppedTests
                 """
                 {"schema_version":2,"channels":[
                   {"id":0,"kind":"analog-output","unit":"V","resolution_bits":12,"ranges":[{"min":0.000,"max":10.000}],"extensions":{}}
-                ]}
+                ],"streaming":{"rate_model":{"absolute_max_hz":22000,"type1_aggregate_max_hz":55000,"per_tick_budget_hz":110000,"per_tick_overhead":6}}}
                 """,
                 out var document));
 
