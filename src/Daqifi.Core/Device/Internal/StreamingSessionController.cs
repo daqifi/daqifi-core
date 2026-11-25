@@ -350,6 +350,9 @@ internal sealed class StreamingSessionController
     /// <summary>When a stop was last sent, or <c>null</c> when none has been.</summary>
     private StopSent? _stopSent;
 
+    /// <summary>The last stop that went out, as an identity.</summary>
+    internal object? LastStopSent => Volatile.Read(ref _stopSent);
+
     /// <summary>A reference, so that it is published whole.</summary>
     private sealed record StopSent(long Timestamp);
 

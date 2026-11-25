@@ -456,6 +456,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // Evidence that the device is streaming has to be newer than this call. A new session
         // counts its frames from zero, so what must not be there is a frame of the stream before
         // it; a running one has frames already, and those say only that it was streaming once.
+        var stopWaitedFor = _session.LastStopSent;
         if (!IsStreaming
             && _session.RemainingSettleTime(StoppedStreamSettleDelay) is var settle
             && settle > TimeSpan.Zero)
@@ -469,7 +470,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         Exception? confirmationFailure = null;
         try
         {
-            await ConfirmStreamStartedAsync(session, startSent, framesBefore, cancellationToken)
+            await ConfirmStreamStartedAsync(session, startSent, stopWaitedFor, framesBefore, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -632,6 +633,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Whether this call sent the start. When it did not, the error queue is not this call's to
     /// judge: whatever it holds came from something else.
     /// </param>
+    /// <param name="stopWaitedFor">The last stop before this call's start, whose frames it has waited for.</param>
     /// <param name="framesBefore">How many frames of the session predate the call and so prove nothing.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
     /// <exception cref="DeviceCommandFailedException">
@@ -640,10 +642,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     private async Task ConfirmStreamStartedAsync(
         StreamingSession session,
         bool startSent,
+        object? stopWaitedFor,
         long framesBefore,
         CancellationToken cancellationToken)
     {
-        if (await WaitForStreamFrameAsync(session, framesBefore, cancellationToken).ConfigureAwait(false))
+        if (await WaitForStreamFrameAsync(
+                session, startSent, stopWaitedFor, framesBefore, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -803,11 +807,15 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// rate runs out.
     /// </summary>
     /// <param name="session">The session whose frame is waited for.</param>
+    /// <param name="startSent">Whether the caller sent its start.</param>
+    /// <param name="stopWaitedFor">The stop whose frames the caller has waited for before that.</param>
     /// <param name="framesBefore">How many of the session's frames do not count.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
     /// <returns><c>true</c> when a frame arrived; <c>false</c> when the budget ran out first.</returns>
     private async Task<bool> WaitForStreamFrameAsync(
         StreamingSession session,
+        bool startSent,
+        object? stopWaitedFor,
         long framesBefore,
         CancellationToken cancellationToken)
     {
@@ -822,9 +830,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         {
             // Read before the count, which starts again when a held-back start goes out: until then
             // the frames arriving are those of the stream before it. So can those be that arrive
-            // right after a stop, which a held-back start can follow straight out.
+            // right after a stop. This call has waited for them before its own start, but a stop
+            // that was held back can go out right ahead of that.
             var proveNothing = _session.IsStartHeldBack(session)
-                || _session.RemainingSettleTime(StoppedStreamSettleDelay) > TimeSpan.Zero;
+                || ((!startSent || !ReferenceEquals(_session.LastStopSent, stopWaitedFor))
+                    && _session.RemainingSettleTime(StoppedStreamSettleDelay) > TimeSpan.Zero);
             var admitted = _frameDecoder.AdmittedStreamFrameCount;
 
             // Checked after the count is read, so a frame of a later session cannot be taken for
