@@ -89,7 +89,7 @@ public sealed record DeviceInfo : IDeviceInfo
     {
         return ConnectionType switch
         {
-            ConnectionType.WiFi => $"{Name} ({IPAddress}:{Port}) - {SerialNumber}",
+            ConnectionType.Wifi => $"{Name} ({IPAddress}:{Port}) - {SerialNumber}",
             ConnectionType.Serial => $"{Name} ({PortName}) - {SerialNumber}",
             ConnectionType.Hid => $"{Name} (HID) - {SerialNumber}",
             _ => $"{Name} - {SerialNumber}"

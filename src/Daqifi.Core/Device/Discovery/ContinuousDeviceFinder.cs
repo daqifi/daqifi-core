@@ -646,7 +646,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
     /// <para>
     /// <see cref="IDeviceInfo.LocalInterfaceAddress"/> is deliberately excluded, because it
     /// records which local NIC happened to hear the device rather than anything about the device.
-    /// <see cref="WiFiDeviceFinder"/> broadcasts on every interface in parallel and keeps
+    /// <see cref="WifiDeviceFinder"/> broadcasts on every interface in parallel and keeps
     /// whichever reply arrives first, so on a multi-homed host — a laptop on Wi-Fi with a wired
     /// dock, say — the winner is a race and the field flips from pass to pass while the device
     /// sits still. Comparing it would raise <see cref="DeviceUpdated"/> on every pass and make
@@ -716,7 +716,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
     {
         string discriminator = device.ConnectionType switch
         {
-            ConnectionType.WiFi =>
+            ConnectionType.Wifi =>
                 !string.IsNullOrWhiteSpace(device.MacAddress) ? "mac:" + device.MacAddress!.ToLowerInvariant()
                 : !string.IsNullOrWhiteSpace(device.SerialNumber) ? "sn:" + device.SerialNumber
                 : device.IPAddress != null ? "ip:" + device.IPAddress
@@ -809,7 +809,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
 
             // Whether the list is a census or only the part of the system the pass reached is
             // the FINDER's to report, never something to infer from the pass deadline having
-            // elapsed. WiFiDeviceFinder and MDnsDeviceFinder have no natural end: their
+            // elapsed. WifiDeviceFinder and MDnsDeviceFinder have no natural end: their
             // DiscoverAsync listens until the timeout elapses and then returns a COMPLETE answer, so for them the deadline elapses on every healthy pass.
             // Reading that as "incomplete" marked every pass partial, and a pass that is always
             // partial can never age a device out — DeviceLost stopped firing altogether for

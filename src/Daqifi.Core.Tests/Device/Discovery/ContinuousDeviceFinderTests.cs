@@ -13,7 +13,7 @@ public class ContinuousDeviceFinderTests
     private static DeviceInfo Wifi(string mac, string sn = "SN", string name = "wifi", IPAddress? ip = null, int port = 9760)
         => new()
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             MacAddress = mac,
             SerialNumber = sn,
             Name = name,
@@ -697,7 +697,7 @@ public class ContinuousDeviceFinderTests
     public void Reconcile_OnlyTheLocalInterfaceChanged_RaisesNothing()
     {
         // LocalInterfaceAddress says which of the host's NICs heard the device, not anything
-        // about the device. WiFiDeviceFinder broadcasts on every interface at once and keeps
+        // about the device. WifiDeviceFinder broadcasts on every interface at once and keeps
         // whichever reply arrives first, so on a multi-homed host it flips between passes while
         // the device sits still. Comparing it would fire DeviceUpdated on every pass and make
         // the event worthless as a redraw trigger, which is the opposite of what #725 wants.
@@ -934,7 +934,7 @@ public class ContinuousDeviceFinderTests
     {
         // MAC wins over everything; serial-only device keys on serial; name is the last resort.
         var wifi = Wifi("AA:BB:CC:DD:EE:01", sn: "SN1");
-        Assert.StartsWith("WiFi|mac:", ContinuousDeviceFinder.DefaultIdentity(wifi));
+        Assert.StartsWith("Wifi|mac:", ContinuousDeviceFinder.DefaultIdentity(wifi));
 
         var hid = new DeviceInfo { ConnectionType = ConnectionType.Hid, DevicePath = "path-1", SerialNumber = "SN2" };
         Assert.Equal("Hid|path:path-1", ContinuousDeviceFinder.DefaultIdentity(hid));
@@ -1758,7 +1758,7 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public async Task Start_WhenTheFinderAlwaysRunsToTheDeadline_StillLosesADeviceThatWentAway()
     {
-        // The regression guard for inferring partialness from the pass deadline. WiFiDeviceFinder
+        // The regression guard for inferring partialness from the pass deadline. WifiDeviceFinder
         // passes Timeout.InfiniteTimeSpan to its own discovery, so its receive loops run until the
         // caller's token fires and then return a COMPLETE list; MDnsDeviceFinder documents the
         // same ("no natural end"). Under ContinuousDeviceFinder that token IS the pass timeout, so
@@ -1805,7 +1805,7 @@ public class ContinuousDeviceFinderTests
     public async Task Start_WhenTheFinderCannotReportPartialResults_StillLosesADeviceThatWentAway()
     {
         // The same shape through a finder that does not implement IPartialResultReporter at all —
-        // a plain IDeviceFinder, which is what a consumer writes and what WiFiDeviceFinder was
+        // a plain IDeviceFinder, which is what a consumer writes and what WifiDeviceFinder was
         // before this seam existed. It also runs to the deadline, so the absence of the seam must
         // read as "complete": treating "the finder cannot tell me" as "assume partial" would
         // disable DeviceLost for every such finder.
@@ -2254,7 +2254,7 @@ public class ContinuousDeviceFinderTests
         /// <summary>
         /// A pass that listens until the pass token fires and then answers with everything it
         /// heard — a COMPLETE answer that always uses the whole pass budget. That is what
-        /// <c>WiFiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
+        /// <c>WifiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
         /// <c>DiscoverAsync</c> has no natural end, so the pass deadline is
         /// what ends it, and the list it returns is still a census. A pass of this shape must be
         /// reported <see cref="DiscoveryPassOutcome.Completed"/> and must still age devices out,
@@ -2318,7 +2318,7 @@ public class ContinuousDeviceFinderTests
     /// <summary>
     /// A plain <see cref="IDeviceFinder"/> — no <c>IPartialResultReporter</c> — whose pass listens
     /// until the pass token fires and then answers with the COMPLETE set for that pass. This is
-    /// <c>WiFiDeviceFinder</c>'s and <c>MDnsDeviceFinder</c>'s shape: discovery with no natural
+    /// <c>WifiDeviceFinder</c>'s and <c>MDnsDeviceFinder</c>'s shape: discovery with no natural
     /// end, ended by the caller's token, returning a census rather than a fragment. Every pass
     /// therefore ends with the pass deadline elapsed while still being complete.
     /// </summary>

@@ -34,7 +34,7 @@ public class CapabilityDocumentMergeTests
         var merged = BenchDocument().OverlayOnto(boardDerived);
 
         Assert.Equal(boardDerived.HasSdCard, merged.HasSdCard);
-        Assert.Equal(boardDerived.HasWiFi, merged.HasWiFi);
+        Assert.Equal(boardDerived.HasWifi, merged.HasWifi);
         Assert.Equal(boardDerived.HasUsb, merged.HasUsb);
         Assert.Equal(boardDerived.SupportsStreaming, merged.SupportsStreaming);
         Assert.Equal(boardDerived.AnalogInputChannels, merged.AnalogInputChannels);
@@ -78,7 +78,7 @@ public class CapabilityDocumentMergeTests
         var capabilities = Parse("{\"schema_version\":2}").OverlayOnto(board);
 
         Assert.True(capabilities.HasSdCard);
-        Assert.True(capabilities.HasWiFi);
+        Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasUsb);
         Assert.True(capabilities.HasWincWifiModule);
         Assert.Equal(8, capabilities.AnalogInputChannels);
@@ -99,7 +99,7 @@ public class CapabilityDocumentMergeTests
         var capabilities = Parse("{\"schema_version\":2,\"storage\":{\"sd_supported\":false}}").OverlayOnto(board);
 
         Assert.False(capabilities.HasSdCard);
-        Assert.True(capabilities.HasWiFi);
+        Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasUsb);
         Assert.Equal(16, capabilities.AnalogInputChannels);
         Assert.Equal(22000, capabilities.MaxSamplingRate);
@@ -149,7 +149,7 @@ public class CapabilityDocumentMergeTests
 
         Assert.True(capabilities.HasUsb);
         Assert.False(capabilities.HasSdCard);
-        Assert.False(capabilities.HasWiFi);
+        Assert.False(capabilities.HasWifi);
     }
 
     [Fact]

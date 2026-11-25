@@ -332,7 +332,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return SupportFailure.Hardware;
         }
 
-        if (requirement.Hardware.HasFlag(HardwareRequirement.WiFi) && !capabilities.HasWiFi)
+        if (requirement.Hardware.HasFlag(HardwareRequirement.Wifi) && !capabilities.HasWifi)
         {
             return SupportFailure.Hardware;
         }

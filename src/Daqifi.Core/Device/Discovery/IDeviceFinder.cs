@@ -54,7 +54,7 @@ public interface IDeviceFinder : IDisposable
     /// How long the pass may take, including any wait for a pass already running on this finder.
     /// When null, a finder with a natural end (<see cref="SerialDeviceFinder"/>,
     /// <see cref="HidDeviceFinder"/>) runs to that end, and a finder that only listens
-    /// (<see cref="WiFiDeviceFinder"/>, <see cref="MDnsDeviceFinder"/>) listens for 5 seconds.
+    /// (<see cref="WifiDeviceFinder"/>, <see cref="MDnsDeviceFinder"/>) listens for 5 seconds.
     /// <see cref="Timeout.InfiniteTimeSpan"/> runs until <paramref name="cancellationToken"/> is
     /// cancelled, for a finder with no natural end.
     /// </param>

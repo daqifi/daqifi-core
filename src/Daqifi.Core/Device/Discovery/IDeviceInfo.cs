@@ -95,7 +95,7 @@ public enum ConnectionType
     /// <summary>
     /// WiFi/TCP connection.
     /// </summary>
-    WiFi,
+    Wifi,
 
     /// <summary>
     /// Serial/USB connection.

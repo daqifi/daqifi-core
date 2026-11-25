@@ -17,7 +17,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Discovers DAQiFi devices on the network using UDP broadcast on port 30303.
 /// </summary>
-public class WiFiDeviceFinder : DeviceFinderBase
+public class WifiDeviceFinder : DeviceFinderBase
 {
     #region Constants
 
@@ -63,17 +63,17 @@ public class WiFiDeviceFinder : DeviceFinderBase
     #region Constructor
 
     /// <summary>
-    /// Initializes a new instance of the WiFiDeviceFinder class with default port 30303.
+    /// Initializes a new instance of the WifiDeviceFinder class with default port 30303.
     /// </summary>
-    public WiFiDeviceFinder() : this(DefaultDiscoveryPort)
+    public WifiDeviceFinder() : this(DefaultDiscoveryPort)
     {
     }
 
     /// <summary>
-    /// Initializes a new instance of the WiFiDeviceFinder class.
+    /// Initializes a new instance of the WifiDeviceFinder class.
     /// </summary>
     /// <param name="discoveryPort">The UDP port to use for discovery.</param>
-    public WiFiDeviceFinder(int discoveryPort)
+    public WifiDeviceFinder(int discoveryPort)
     {
         _discoveryPort = discoveryPort;
         _queryCommandBytes = Encoding.ASCII.GetBytes(DaqifiFinderQuery);
@@ -99,10 +99,12 @@ public class WiFiDeviceFinder : DeviceFinderBase
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="host"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="timeout"/> is not positive.</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
+#pragma warning disable RS0026 // Both overloads shipped in 1.x; the second parameter's type tells them apart.
     public static Task<int?> ProbeTcpDataPortAsync(
         IPAddress host,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
+#pragma warning restore RS0026
     {
         return ProbeTcpDataPortAsync(host, DefaultDiscoveryPort, timeout, cancellationToken);
     }
@@ -112,11 +114,13 @@ public class WiFiDeviceFinder : DeviceFinderBase
     /// <param name="discoveryPort">The UDP discovery port to query (defaults to 30303 in the other overload).</param>
     /// <param name="timeout">How long to wait for the host to answer before giving up.</param>
     /// <param name="cancellationToken">A cancellation token to abort the probe.</param>
+#pragma warning disable RS0026 // Both overloads shipped in 1.x; the second parameter's type tells them apart.
     public static async Task<int?> ProbeTcpDataPortAsync(
         IPAddress host,
         int discoveryPort,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
+#pragma warning restore RS0026
     {
         if (host is null)
         {
@@ -402,7 +406,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
                 LocalInterfaceAddress = localInterfaceAddress,
                 Type = DeviceTypeDetector.DetectFromPartNumber(message.DevicePn),
                 IsPowerOn = message.PwrStatus == 1,
-                ConnectionType = ConnectionType.WiFi
+                ConnectionType = ConnectionType.Wifi
             };
 
             return deviceInfo;

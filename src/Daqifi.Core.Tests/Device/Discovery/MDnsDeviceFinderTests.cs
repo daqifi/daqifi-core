@@ -42,7 +42,7 @@ public class MDnsDeviceFinderTests
         Assert.Equal(DeviceType.Nyquist1, device.Type);              // TXT pn=Nq1
         Assert.Equal(DeviceAddress, device.IPAddress);               // A record
         Assert.Equal(9760, device.Port);                             // SRV port
-        Assert.Equal(ConnectionType.WiFi, device.ConnectionType);
+        Assert.Equal(ConnectionType.Wifi, device.ConnectionType);
         Assert.True(device.IsPowerOn);
 
         // The advertisement carries no MAC; inventing one from the hostname's two MAC bytes

@@ -327,7 +327,7 @@ public class WifiLinkStatusTests
 
         Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
-        Assert.Equal(HardwareRequirement.WiFi, requirement.Hardware);
+        Assert.Equal(HardwareRequirement.Wifi, requirement.Hardware);
     }
 
     [Theory]
@@ -369,7 +369,7 @@ public class WifiLinkStatusTests
     public async Task BothQueries_OnADeviceWithoutWifi_ThrowFeatureNotSupportedWithoutSending()
     {
         var device = ConnectedDevice("CONNECTED");
-        device.UpdateMetadata(metadata => metadata with { Capabilities = new DeviceCapabilities { HasWiFi = false } });
+        device.UpdateMetadata(metadata => metadata with { Capabilities = new DeviceCapabilities { HasWifi = false } });
 
         await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetWifiLinkStateAsync());
         await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetActiveWifiModeAsync());

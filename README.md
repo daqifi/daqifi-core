@@ -116,7 +116,7 @@ await using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
 **From a discovered device:**
 
 ```csharp
-using var finder = new WiFiDeviceFinder();
+using var finder = new WifiDeviceFinder();
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
 await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
 ```
@@ -153,7 +153,7 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 using Daqifi.Core.Device.Discovery;
 
 // WiFi — UDP broadcast on port 30303 by default
-using var wifiFinder = new WiFiDeviceFinder();
+using var wifiFinder = new WifiDeviceFinder();
 wifiFinder.DeviceDiscovered += (_, e) =>
     Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IPAddress}");
 
@@ -181,7 +181,7 @@ two paths together cover more networks than either alone:
 
 ```csharp
 using var finder = new AllTransportsDeviceFinder(
-    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()],
+    [new WifiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()],
     identitySelector: device => device.SerialNumber);
 
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
@@ -203,7 +203,7 @@ throws `OperationCanceledException`. Pass both to let a user abandon a pass earl
 using var cts = new CancellationTokenSource(); // cancelled by your "Stop" button
 var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(10), cts.Token);
 
-using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
+using var customFinder = new WifiDeviceFinder(discoveryPort: 12345);
 ```
 
 ### Acquisition statistics

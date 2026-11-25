@@ -14,7 +14,7 @@ using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
-public class WiFiDeviceFinderTests
+public class WifiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DeviceTypeDetectorTests (issue #283).
@@ -61,7 +61,7 @@ public class WiFiDeviceFinderTests
     public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
         // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
-        using var finder = new WiFiDeviceFinder(0);
+        using var finder = new WifiDeviceFinder(0);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -87,7 +87,7 @@ public class WiFiDeviceFinderTests
     public async Task DiscoverAsync_AfterDispose_ThrowsObjectDisposedException()
     {
         // Arrange
-        var finder = new WiFiDeviceFinder();
+        var finder = new WifiDeviceFinder();
         finder.Dispose();
 
         // Act & Assert
@@ -95,14 +95,14 @@ public class WiFiDeviceFinderTests
     }
 
     // 192.0.2.0/24 is reserved for documentation (RFC 5737), so no host has it to bind to.
-    private static WiFiDeviceFinder.NetworkInterfaceInfo Unusable() => new()
+    private static WifiDeviceFinder.NetworkInterfaceInfo Unusable() => new()
     {
         LocalAddress = IPAddress.Parse("192.0.2.1"),
         BroadcastEndpoint = new IPEndPoint(IPAddress.Parse("192.0.2.255"), 9)
     };
 
     // The query goes to a socket nobody reads, so the interface works and nothing replies.
-    private static WiFiDeviceFinder.NetworkInterfaceInfo Loopback() => new()
+    private static WifiDeviceFinder.NetworkInterfaceInfo Loopback() => new()
     {
         LocalAddress = IPAddress.Loopback,
         BroadcastEndpoint = new IPEndPoint(IPAddress.Loopback, SilentPeerPort)
@@ -113,7 +113,7 @@ public class WiFiDeviceFinderTests
     private static readonly UdpClient SilentPeer = new(new IPEndPoint(IPAddress.Loopback, 0));
     private static int SilentPeerPort => ((IPEndPoint)SilentPeer.Client.LocalEndPoint!).Port;
 
-    private static WiFiDeviceFinder FinderOn(params WiFiDeviceFinder.NetworkInterfaceInfo[] interfaces)
+    private static WifiDeviceFinder FinderOn(params WifiDeviceFinder.NetworkInterfaceInfo[] interfaces)
         => new(0) { InterfaceProvider = () => interfaces };
 
     [Fact]
@@ -155,7 +155,7 @@ public class WiFiDeviceFinderTests
             MissThreshold = 1,
             Interval = TimeSpan.FromMilliseconds(10)
         });
-        finder.Reconcile([new DeviceInfo { ConnectionType = ConnectionType.WiFi, MacAddress = "AA:BB" }]);
+        finder.Reconcile([new DeviceInfo { ConnectionType = ConnectionType.Wifi, MacAddress = "AA:BB" }]);
         var errors = 0;
         finder.ScanError += (_, e) => Interlocked.Increment(ref errors);
 
@@ -185,7 +185,7 @@ public class WiFiDeviceFinderTests
     [InlineData("VMware NAT", "Generic Adapter")]
     public void IsVirtualOrTunnelInterface_VirtualAdapters_ReturnsTrue(string name, string description)
     {
-        Assert.True(WiFiDeviceFinder.IsVirtualOrTunnelInterface(name, description));
+        Assert.True(WifiDeviceFinder.IsVirtualOrTunnelInterface(name, description));
     }
 
     [Theory]
@@ -195,13 +195,13 @@ public class WiFiDeviceFinderTests
     [InlineData("WLAN", "Qualcomm Atheros QCA9377 Wireless Network Adapter")]
     public void IsVirtualOrTunnelInterface_PhysicalAdapters_ReturnsFalse(string name, string description)
     {
-        Assert.False(WiFiDeviceFinder.IsVirtualOrTunnelInterface(name, description));
+        Assert.False(WifiDeviceFinder.IsVirtualOrTunnelInterface(name, description));
     }
 
     [Fact]
     public void IsVirtualOrTunnelInterface_NullInputs_ReturnsFalse()
     {
-        Assert.False(WiFiDeviceFinder.IsVirtualOrTunnelInterface(null, null));
+        Assert.False(WifiDeviceFinder.IsVirtualOrTunnelInterface(null, null));
     }
 
     // Mixed-NIC selection — issue #179.
@@ -225,7 +225,7 @@ public class WiFiDeviceFinderTests
         };
 
         var included = nics
-            .Where(n => WiFiDeviceFinder.ShouldIncludeInterface(n.Name, n.Description, n.Status, n.Type, n.IPv4))
+            .Where(n => WifiDeviceFinder.ShouldIncludeInterface(n.Name, n.Description, n.Status, n.Type, n.IPv4))
             .Select(n => n.Name)
             .ToList();
 
@@ -233,7 +233,7 @@ public class WiFiDeviceFinderTests
 
         foreach (var nic in nics)
         {
-            var actual = WiFiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
+            var actual = WifiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
             Assert.True(actual == nic.Expected, $"NIC '{nic.Name}' expected {nic.Expected} but got {actual}");
         }
     }
@@ -267,7 +267,7 @@ public class WiFiDeviceFinderTests
         NetworkInterfaceType type,
         bool supportsIPv4)
     {
-        Assert.False(WiFiDeviceFinder.ShouldIncludeInterface(name, description, status, type, supportsIPv4));
+        Assert.False(WifiDeviceFinder.ShouldIncludeInterface(name, description, status, type, supportsIPv4));
     }
 
     // Android interface filter — issue #846.
@@ -281,7 +281,7 @@ public class WiFiDeviceFinderTests
     [InlineData("rmnet0", "rmnet0")]
     public void ShouldIncludeInterface_UpIPv4CapableUnknownType_IsIncluded(string name, string description)
     {
-        Assert.True(WiFiDeviceFinder.ShouldIncludeInterface(
+        Assert.True(WifiDeviceFinder.ShouldIncludeInterface(
             name,
             description,
             OperationalStatus.Up,
@@ -303,7 +303,7 @@ public class WiFiDeviceFinderTests
         };
 
         var included = nics
-            .Where(n => WiFiDeviceFinder.ShouldIncludeInterface(n.Name, n.Description, n.Status, n.Type, n.IPv4))
+            .Where(n => WifiDeviceFinder.ShouldIncludeInterface(n.Name, n.Description, n.Status, n.Type, n.IPv4))
             .Select(n => n.Name)
             .ToList();
 
@@ -311,7 +311,7 @@ public class WiFiDeviceFinderTests
 
         foreach (var nic in nics)
         {
-            var actual = WiFiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
+            var actual = WifiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
             Assert.True(actual == nic.Expected, $"NIC '{nic.Name}' expected {nic.Expected} but got {actual}");
         }
     }
@@ -330,21 +330,21 @@ public class WiFiDeviceFinderTests
     public async Task ProbeTcpDataPortAsync_WithNullHost_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
-            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(null!, TimeSpan.FromSeconds(1)));
+            () => WifiDeviceFinder.ProbeTcpDataPortAsync(null!, TimeSpan.FromSeconds(1)));
     }
 
     [Fact]
     public async Task ProbeTcpDataPortAsync_WithNonPositiveTimeout_Throws()
     {
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, TimeSpan.Zero));
+            () => WifiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, TimeSpan.Zero));
     }
 
     [Fact]
     public async Task ProbeTcpDataPortAsync_WithOutOfRangeDiscoveryPort_Throws()
     {
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, 70000, TimeSpan.FromSeconds(1)));
+            () => WifiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, 70000, TimeSpan.FromSeconds(1)));
     }
 
     // The probe now binds the local socket to the discovery port itself (so it catches firmware that
@@ -368,7 +368,7 @@ public class WiFiDeviceFinderTests
             await responder.SendAsync(replyBytes, replyBytes.Length, query.RemoteEndPoint);
         });
 
-        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+        var resolved = await WifiDeviceFinder.ProbeTcpDataPortAsync(
             IPAddress.Loopback, discoveryPort, TimeSpan.FromSeconds(3));
 
         await responderTask;
@@ -391,7 +391,7 @@ public class WiFiDeviceFinderTests
             await responder.SendAsync(replyBytes, replyBytes.Length, query.RemoteEndPoint);
         });
 
-        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+        var resolved = await WifiDeviceFinder.ProbeTcpDataPortAsync(
             IPAddress.Loopback, discoveryPort, TimeSpan.FromMilliseconds(600));
 
         try { await responderTask; } catch (OperationCanceledException) { /* responder may outlive the probe */ }
@@ -407,7 +407,7 @@ public class WiFiDeviceFinderTests
         using var silent = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
         var discoveryPort = ((IPEndPoint)silent.Client.LocalEndPoint!).Port;
 
-        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+        var resolved = await WifiDeviceFinder.ProbeTcpDataPortAsync(
             IPAddress.Loopback, discoveryPort, TimeSpan.FromMilliseconds(500));
 
         Assert.Null(resolved);
@@ -422,7 +422,7 @@ public class WiFiDeviceFinderTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(
+            () => WifiDeviceFinder.ProbeTcpDataPortAsync(
                 IPAddress.Loopback, discoveryPort, TimeSpan.FromSeconds(5), cts.Token));
     }
 

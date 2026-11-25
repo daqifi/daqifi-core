@@ -158,7 +158,7 @@ public class ScpiMessageProducerTests
         // Streaming
         { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb), "SYSTem:STReam:INTerface 0" },
-        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.WiFi), "SYSTem:STReam:INTerface 1" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Wifi), "SYSTem:STReam:INTerface 1" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard), "SYSTem:STReam:INTerface 2" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.All), "SYSTem:STReam:INTerface 3" },
         { () => ScpiMessageProducer.EnableAdcChannels(84), "ENAble:VOLTage:DC 84" },

@@ -282,7 +282,7 @@ by serial number) to collapse them.
 The short mDNS + broadcast recipe is in the README. These are the notes that page does not
 keep:
 
-- **Why broadcast fails on a multi-AP home network.** `WiFiDeviceFinder` sends `DAQiFi?\r\n`
+- **Why broadcast fails on a multi-AP home network.** `WifiDeviceFinder` sends `DAQiFi?\r\n`
   to the subnet broadcast address on UDP 30303. On a single-SSID, two-AP network with the
   host on 5 GHz at one AP and the device on 2.4 GHz at the other, enough broadcast frames
   are dropped crossing the AP boundary that ARP itself fails to resolve; discovery then
@@ -294,7 +294,7 @@ keep:
   guest networks.
 - **What the mDNS finder reads.** The device answers with PTR + SRV + TXT + A in one reply;
   the finder takes the port from SRV, the address from A, and `sn` / `pn` / `fw` /
-  `friendly` from TXT, and reports the result as `ConnectionType.WiFi`.
+  `friendly` from TXT, and reports the result as `ConnectionType.Wifi`.
 - **Same board, two entries.** The default per-transport identity prefers the MAC address,
   which the broadcast reply carries and the mDNS advertisement does not, so a unit answering
   on both paths stays as two connectable entries. Pass `identitySelector: d => d.SerialNumber`
@@ -328,7 +328,7 @@ keep:
 | cannot scan the transport at all | throws the transport's own exception |
 
 With no timeout, the serial and HID finders run to their natural end and the two that only listen
-(`WiFiDeviceFinder`, `MDnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
+(`WifiDeviceFinder`, `MDnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
 pass, whichever way it ended.
 
 For a UI that shows a live, self-updating
@@ -343,7 +343,7 @@ passes:
 using Daqifi.Core.Device.Discovery;
 
 var continuous = new ContinuousDeviceFinder(
-    new WiFiDeviceFinder(),
+    new WifiDeviceFinder(),
     new ContinuousDiscoveryOptions
     {
         PassTimeout = TimeSpan.FromSeconds(3), // listen window per pass

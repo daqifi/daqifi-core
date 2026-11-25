@@ -19,14 +19,14 @@ public sealed record DeviceCapabilities
     /// <summary>
     /// Gets a value indicating whether the device supports WiFi connectivity.
     /// </summary>
-    public bool HasWiFi { get; init; }
+    public bool HasWifi { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the device's WiFi connectivity is provided by a
     /// discrete WINC1500 module (as opposed to, e.g., a future SoC-integrated WiFi part). Lets
     /// consumers ask Core whether WINC-specific handling (power-on-before-probe, the WINC flash
     /// tool, bridge-mode activation) applies to a device instead of pattern-matching
-    /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWiFi"/>, which only
+    /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWifi"/>, which only
     /// indicates WiFi connectivity in general.
     /// </summary>
     public bool HasWincWifiModule { get; init; }
@@ -87,7 +87,7 @@ public sealed record DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
                 AnalogInputChannels = 16,
@@ -99,7 +99,7 @@ public sealed record DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
                 MaxSamplingRate = 16000
@@ -108,7 +108,7 @@ public sealed record DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
                 AnalogInputChannels = 8,

@@ -110,6 +110,7 @@
 *REMOVED*Daqifi.Core.Communication.Producers.MessageProducer<T>.StopSafely(int timeoutMs = 1000) -> bool
 *REMOVED*Daqifi.Core.Communication.Producers.MessageSendFailedEventArgs<T>.Timestamp.get -> System.DateTime
 *REMOVED*Daqifi.Core.Communication.Producers.ScpiMessageProducer.ScpiMessageProducer() -> void
+*REMOVED*Daqifi.Core.Communication.StreamInterface.WiFi = 1 -> Daqifi.Core.Communication.StreamInterface
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.HidLibraryDeviceEnumerator() -> void
@@ -263,6 +264,7 @@
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.DigitalChannels.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasSdCard.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasUsb.set -> void
+*REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasWiFi.get -> bool
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasWiFi.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.HasWincWifiModule.set -> void
 *REMOVED*Daqifi.Core.Device.DeviceCapabilities.MaxSamplingRate.set -> void
@@ -324,6 +326,7 @@
 *REMOVED*Daqifi.Core.Device.Diagnostics.SystemLogParser
 *REMOVED*Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.ConnectionType.WiFi = 1 -> Daqifi.Core.Device.Discovery.ConnectionType
 *REMOVED*Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.StopAsync() -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverySemaphore.get -> System.Threading.SemaphoreSlim!
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.ConnectionType.set -> void
@@ -364,6 +367,9 @@
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.UsbPortDescriptor(int VendorId, int ProductId) -> void
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.get -> int
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
+*REMOVED*Daqifi.Core.Device.Discovery.WiFiDeviceFinder
+*REMOVED*Daqifi.Core.Device.Discovery.WiFiDeviceFinder.WiFiDeviceFinder() -> void
+*REMOVED*Daqifi.Core.Device.Discovery.WiFiDeviceFinder.WiFiDeviceFinder(int discoveryPort) -> void
 *REMOVED*Daqifi.Core.Device.DuplicateDeviceCheck.NewDevice.get -> Daqifi.Core.Device.DaqifiDevice?
 *REMOVED*Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(int bank, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.IDevice.ErrorOccurred -> System.EventHandler<Daqifi.Core.Device.DeviceErrorEventArgs!>!
@@ -809,6 +815,8 @@
 *REMOVED*static Daqifi.Core.Device.Discovery.DaqifiUsbIds.IsDaqifiCdcDevice(Daqifi.Core.Device.Discovery.UsbPortDescriptor! descriptor) -> bool
 *REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator !=(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
 *REMOVED*static Daqifi.Core.Device.Discovery.UsbPortDescriptor.operator ==(Daqifi.Core.Device.Discovery.UsbPortDescriptor? left, Daqifi.Core.Device.Discovery.UsbPortDescriptor? right) -> bool
+*REMOVED*static Daqifi.Core.Device.Discovery.WiFiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
+*REMOVED*static Daqifi.Core.Device.Discovery.WiFiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, int discoveryPort, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
 *REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetGatewayString(DaqifiOutMessage! message) -> string!
 *REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetIpAddressString(DaqifiOutMessage! message) -> string!
 *REMOVED*static Daqifi.Core.Device.Network.NetworkAddressHelper.GetMacAddressString(DaqifiOutMessage! message) -> string!
@@ -1011,6 +1019,7 @@ Daqifi.Core.Communication.Messages.ProtobufProtocolHandler
 Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.Handle(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
 Daqifi.Core.Communication.Messages.ProtobufProtocolHandler.ProtobufProtocolHandler(System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? statusMessageHandler = null, System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? streamMessageHandler = null, System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>? errorMessageHandler = null) -> void
 Daqifi.Core.Communication.Producers.MessageSendFailedEventArgs<T>.Timestamp.get -> System.DateTimeOffset
+Daqifi.Core.Communication.StreamInterface.Wifi = 1 -> Daqifi.Core.Communication.StreamInterface
 Daqifi.Core.Communication.Transport.HidLibraryTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.IHidTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -1091,7 +1100,8 @@ Daqifi.Core.Device.DeviceCapabilities.DigitalChannels.init -> void
 Daqifi.Core.Device.DeviceCapabilities.Equals(Daqifi.Core.Device.DeviceCapabilities? other) -> bool
 Daqifi.Core.Device.DeviceCapabilities.HasSdCard.init -> void
 Daqifi.Core.Device.DeviceCapabilities.HasUsb.init -> void
-Daqifi.Core.Device.DeviceCapabilities.HasWiFi.init -> void
+Daqifi.Core.Device.DeviceCapabilities.HasWifi.get -> bool
+Daqifi.Core.Device.DeviceCapabilities.HasWifi.init -> void
 Daqifi.Core.Device.DeviceCapabilities.HasWincWifiModule.init -> void
 Daqifi.Core.Device.DeviceCapabilities.MaxSamplingRate.init -> void
 Daqifi.Core.Device.DeviceCapabilities.SupportsStreaming.init -> void
@@ -1156,6 +1166,7 @@ Daqifi.Core.Device.Diagnostics.IDeviceDiagnostics.SetLogLevelAsync(string! modul
 Daqifi.Core.Device.Diagnostics.LogLevelSetting.Ceiling.get -> Daqifi.Core.Device.Diagnostics.DeviceLogLevel
 Daqifi.Core.Device.Diagnostics.LogLevelSetting.Level.get -> Daqifi.Core.Device.Diagnostics.DeviceLogLevel
 Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+Daqifi.Core.Device.Discovery.ConnectionType.Wifi = 1 -> Daqifi.Core.Device.Discovery.ConnectionType
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.Discovery.DeviceInfo.<Clone>$() -> Daqifi.Core.Device.Discovery.DeviceInfo!
@@ -1176,6 +1187,9 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTyp
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
 Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.Discovery.WifiDeviceFinder
+Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder() -> void
+Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder(int discoveryPort) -> void
 Daqifi.Core.Device.DuplicateDeviceCheck.NewDevice.get -> Daqifi.Core.Device.DaqifiStreamingDevice?
 Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(Daqifi.Core.Device.AdcCalibrationBank bank, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.IDevice.ErrorOccurred -> System.EventHandler<Daqifi.Core.Device.DeviceErrorEventArgs!>?
@@ -1452,7 +1466,7 @@ override Daqifi.Core.Device.DeviceMetadata.ToString() -> string!
 override Daqifi.Core.Device.Discovery.DeviceInfo.Equals(object? obj) -> bool
 override Daqifi.Core.Device.Discovery.DeviceInfo.GetHashCode() -> int
 override Daqifi.Core.Device.Discovery.SerialDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
-override Daqifi.Core.Device.Discovery.WiFiDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+override Daqifi.Core.Device.Discovery.WifiDeviceFinder.RunPassAsync(System.Threading.CancellationToken passToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 override Daqifi.Core.Device.SdCard.SdCardParseOptions.Equals(object? obj) -> bool
 override Daqifi.Core.Device.SdCard.SdCardParseOptions.GetHashCode() -> int
 override Daqifi.Core.Device.SdCard.SdCardParseOptions.ToString() -> string!
@@ -1491,6 +1505,8 @@ static Daqifi.Core.Device.DeviceMetadata.operator ==(Daqifi.Core.Device.DeviceMe
 static Daqifi.Core.Device.DeviceStateExtensions.IsConnected(this Daqifi.Core.Device.DeviceState state) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator !=(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator ==(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
+static Daqifi.Core.Device.Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
+static Daqifi.Core.Device.Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, int discoveryPort, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!

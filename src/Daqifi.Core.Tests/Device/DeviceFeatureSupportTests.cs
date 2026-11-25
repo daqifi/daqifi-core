@@ -63,7 +63,7 @@ public class DeviceFeatureSupportTests
 
         Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), requirement.MinVersion);
         Assert.Equal(
-            HardwareRequirement.SdCard | HardwareRequirement.WiFi,
+            HardwareRequirement.SdCard | HardwareRequirement.Wifi,
             requirement.Hardware);
     }
 
@@ -304,7 +304,7 @@ public class DeviceFeatureSupportTests
     [Fact]
     public void Supports_SdFileTransferOverWifi_WhenWifiHardwareAbsent_ReturnsFalse()
     {
-        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasWiFi = false };
+        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasWifi = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noWifi);
 
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));

@@ -144,7 +144,7 @@ public sealed class DaqifiAgent
     /// ms. Anything below the floor returns empty before the device can ever answer —
     /// indistinguishable from "nothing is attached" (#448); see <see cref="MinDiscoveryTimeoutMs"/>
     /// for how that floor is chosen. Serial probing can settle and return before the full budget;
-    /// <see cref="WiFiDeviceFinder"/> listens for the whole window regardless (its receive loop runs
+    /// <see cref="WifiDeviceFinder"/> listens for the whole window regardless (its receive loop runs
     /// until the timeout cancels it), so this floor mainly rejects budgets that could never have
     /// succeeded rather than guaranteeing an early return.
     /// </summary>
@@ -161,7 +161,7 @@ public sealed class DaqifiAgent
 
     /// <remarks>
     /// The enabled transports run concurrently, so the call costs the slower transport's window
-    /// rather than the sum of both (#488). That matters because <see cref="WiFiDeviceFinder"/>
+    /// rather than the sum of both (#488). That matters because <see cref="WifiDeviceFinder"/>
     /// listens for its whole budget by design, so running it before serial used to add its full
     /// timeout to every pass — on the first tool call of every session.
     /// A timeout returns whatever answered (empty if nothing did), while cancelling the token throws
@@ -196,7 +196,7 @@ public sealed class DaqifiAgent
         var finders = new List<IDeviceFinder>(2);
         if (wifi)
         {
-            finders.Add(new WiFiDeviceFinder());
+            finders.Add(new WifiDeviceFinder());
         }
 
         if (serial)
@@ -2021,7 +2021,7 @@ public sealed class DaqifiAgent
 
         return ids;
 
-        static string? FallbackName(IDeviceInfo info) => info.ConnectionType == ConnectionType.WiFi
+        static string? FallbackName(IDeviceInfo info) => info.ConnectionType == ConnectionType.Wifi
             ? KnownMacAddress(info.MacAddress) ?? Address(info)
             : Address(info);
     }
@@ -2049,7 +2049,7 @@ public sealed class DaqifiAgent
     internal static string? Address(IDeviceInfo info) => info.ConnectionType switch
     {
         ConnectionType.Serial => info.PortName,
-        ConnectionType.WiFi => info.IPAddress?.ToString(),
+        ConnectionType.Wifi => info.IPAddress?.ToString(),
         _ => null,
     };
 }

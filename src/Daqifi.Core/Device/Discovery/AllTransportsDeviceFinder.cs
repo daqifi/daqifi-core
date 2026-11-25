@@ -93,7 +93,7 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
     /// <returns>A new <see cref="AllTransportsDeviceFinder"/> over the default transports.</returns>
     public static AllTransportsDeviceFinder CreateDefault(Func<IDeviceInfo, string>? identitySelector = null)
     {
-        var finders = new IDeviceFinder[] { new WiFiDeviceFinder(), new SerialDeviceFinder() };
+        var finders = new IDeviceFinder[] { new WifiDeviceFinder(), new SerialDeviceFinder() };
         return new AllTransportsDeviceFinder(finders, identitySelector, ownsFinders: true);
     }
 

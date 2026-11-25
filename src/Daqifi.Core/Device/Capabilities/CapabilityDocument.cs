@@ -151,7 +151,7 @@ public sealed class CapabilityDocument
         {
             HasSdCard = SdSupported ?? capabilities.HasSdCard,
             HasUsb = UsbSupported ?? capabilities.HasUsb,
-            HasWiFi = WifiSupported ?? capabilities.HasWiFi,
+            HasWifi = WifiSupported ?? capabilities.HasWifi,
             AnalogInputChannels = hasChannels
                 ? CountChannels(CapabilityChannelKind.AnalogInput)
                 : capabilities.AnalogInputChannels,

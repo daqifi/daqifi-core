@@ -53,7 +53,7 @@ public class DeviceMetadataTests
         Assert.Equal("Nq3", metadata.PartNumber);
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
         Assert.True(metadata.Capabilities.HasSdCard);
-        Assert.True(metadata.Capabilities.HasWiFi);
+        Assert.True(metadata.Capabilities.HasWifi);
     }
 
     [Fact]

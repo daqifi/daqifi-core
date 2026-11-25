@@ -340,7 +340,7 @@ public class DaqifiDeviceFactoryTests
         // Arrange
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             Port = 9760,
             IPAddress = null
         };
@@ -358,7 +358,7 @@ public class DaqifiDeviceFactoryTests
         // Arrange
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             IPAddress = IPAddress.Parse("192.168.1.100"),
             Port = null
         };
@@ -379,7 +379,7 @@ public class DaqifiDeviceFactoryTests
 
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             IPAddress = IPAddress.Parse("192.168.1.100"),
             Port = 9760
         };
@@ -405,7 +405,7 @@ public class DaqifiDeviceFactoryTests
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             var deviceInfo = new TestDeviceInfo
             {
-                ConnectionType = ConnectionType.WiFi,
+                ConnectionType = ConnectionType.Wifi,
                 IPAddress = IPAddress.Loopback,
                 Port = port,
                 LocalInterfaceAddress = IPAddress.Parse("192.0.2.1")
@@ -510,7 +510,7 @@ public class DaqifiDeviceFactoryTests
         {
             var deviceInfo = new TestDeviceInfo
             {
-                ConnectionType = ConnectionType.WiFi,
+                ConnectionType = ConnectionType.Wifi,
                 IPAddress = IPAddress.Loopback,
                 Port = port
             };

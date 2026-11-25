@@ -26,7 +26,7 @@ public static class DaqifiDeviceFactory
     /// Discovery normally reports each device's actual data port via the UDP-30303 broadcast
     /// (<c>IDeviceInfo.Port</c>), so prefer that when available. For a manually-entered IP address that
     /// never answered the broadcast, resolve the real port with
-    /// <see cref="Discovery.WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress, System.TimeSpan, System.Threading.CancellationToken)"/>
+    /// <see cref="Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(IPAddress, System.TimeSpan, System.Threading.CancellationToken)"/>
     /// and fall back to this constant only when the probe returns <c>null</c>. Use it instead of a
     /// hardcoded literal so a single place documents the default.
     /// </remarks>
@@ -182,8 +182,8 @@ public static class DaqifiDeviceFactory
         // Handle connection type
         switch (deviceInfo.ConnectionType)
         {
-            case ConnectionType.WiFi:
-                return await ConnectWiFiDeviceAsync(deviceInfo, options, cancellationToken)
+            case ConnectionType.Wifi:
+                return await ConnectWifiDeviceAsync(deviceInfo, options, cancellationToken)
                     .ConfigureAwait(false);
 
             case ConnectionType.Serial:
@@ -289,7 +289,7 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Connects to a WiFi device using the provided device info.
     /// </summary>
-    private static async Task<DaqifiStreamingDevice> ConnectWiFiDeviceAsync(
+    private static async Task<DaqifiStreamingDevice> ConnectWifiDeviceAsync(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken)

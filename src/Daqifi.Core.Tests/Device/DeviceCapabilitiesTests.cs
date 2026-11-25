@@ -18,7 +18,7 @@ public class DeviceCapabilitiesTests
         // Assert
         Assert.True(capabilities.SupportsStreaming);
         Assert.False(capabilities.HasSdCard);
-        Assert.False(capabilities.HasWiFi);
+        Assert.False(capabilities.HasWifi);
         Assert.False(capabilities.HasWincWifiModule);
         Assert.False(capabilities.HasUsb);
         Assert.Equal(0, capabilities.AnalogInputChannels);
@@ -37,7 +37,7 @@ public class DeviceCapabilitiesTests
 
         Assert.True(capabilities.SupportsStreaming);
         Assert.True(capabilities.HasSdCard);
-        Assert.True(capabilities.HasWiFi);
+        Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasWincWifiModule);
         Assert.True(capabilities.HasUsb);
     }
@@ -93,7 +93,7 @@ public class DeviceCapabilitiesTests
         // Assert
         Assert.True(capabilities.SupportsStreaming);
         Assert.False(capabilities.HasSdCard);
-        Assert.False(capabilities.HasWiFi);
+        Assert.False(capabilities.HasWifi);
         Assert.False(capabilities.HasWincWifiModule);
         Assert.False(capabilities.HasUsb);
         Assert.Equal(0, capabilities.AnalogInputChannels);

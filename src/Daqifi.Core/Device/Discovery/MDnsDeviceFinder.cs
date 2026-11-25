@@ -16,8 +16,8 @@ namespace Daqifi.Core.Device.Discovery;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is a sibling of <see cref="WiFiDeviceFinder"/>, not a replacement: it produces the
-/// same <see cref="IDeviceInfo"/> shape with <see cref="ConnectionType.WiFi"/>, so anything
+/// This is a sibling of <see cref="WifiDeviceFinder"/>, not a replacement: it produces the
+/// same <see cref="IDeviceInfo"/> shape with <see cref="ConnectionType.Wifi"/>, so anything
 /// that can connect to a broadcast-discovered device can connect to an mDNS-discovered one.
 /// Run both — passing the two finders to
 /// <see cref="AllTransportsDeviceFinder(System.Collections.Generic.IEnumerable{IDeviceFinder}, System.Func{IDeviceInfo, string})"/>
@@ -33,7 +33,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// VLANs. See issue #183.
 /// </para>
 /// <para>
-/// A pass is a one-shot browse, matching <see cref="WiFiDeviceFinder"/>'s semantics: the query
+/// A pass is a one-shot browse, matching <see cref="WifiDeviceFinder"/>'s semantics: the query
 /// is (re)sent on a short retransmission schedule and every response received before the
 /// timeout or cancellation is reported. Wrap it in <see cref="ContinuousDeviceFinder"/> for
 /// ongoing discovery.
@@ -153,7 +153,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     private protected override TimeSpan DefaultTimeout => DefaultListenWindow;
 
     /// <summary>
-    /// Browses for devices until the pass ends. Like <see cref="WiFiDeviceFinder"/>, a browse has
+    /// Browses for devices until the pass ends. Like <see cref="WifiDeviceFinder"/>, a browse has
     /// no natural end, so every pass ends with its token.
     /// </summary>
     /// <inheritdoc />
@@ -362,7 +362,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     }
 
     /// <summary>
-    /// Receives responses until cancellation, mirroring <see cref="WiFiDeviceFinder"/>'s loop:
+    /// Receives responses until cancellation, mirroring <see cref="WifiDeviceFinder"/>'s loop:
     /// no exception from a datagram or a subscriber may fault the task, because it is awaited
     /// with <see cref="Task.WhenAll(Task[])"/> and a faulted task would hang the pass.
     /// </summary>
@@ -526,7 +526,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 LocalInterfaceAddress = ResolveLocalInterfaceAddress(address, interfaces),
                 Type = DeviceTypeDetector.DetectFromPartNumber(partNumber),
                 IsPowerOn = true,
-                ConnectionType = ConnectionType.WiFi
+                ConnectionType = ConnectionType.Wifi
             });
         }
 
@@ -598,7 +598,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// </summary>
     /// <remarks>
     /// The board has one 64-bit serial number that reaches us two ways. Over protobuf it is a
-    /// numeric <c>uint64</c> field, which <see cref="WiFiDeviceFinder"/> renders in decimal; in
+    /// numeric <c>uint64</c> field, which <see cref="WifiDeviceFinder"/> renders in decimal; in
     /// the DNS-SD TXT record the firmware formats that same integer as <c>"%08lX%08lX"</c> —
     /// 16 uppercase hex digits (see <c>wifi_manager.c</c>, issue daqifi-nyquist-firmware#345).
     /// Both are faithful renderings, but <see cref="IDeviceInfo.SerialNumber"/> is a single
@@ -699,7 +699,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
     /// <summary>
     /// Enumerates the local IPv4 interfaces eligible for a multicast browse. Reuses
-    /// <see cref="WiFiDeviceFinder.ShouldIncludeInterface"/> so the two network finders cannot
+    /// <see cref="WifiDeviceFinder.ShouldIncludeInterface"/> so the two network finders cannot
     /// drift apart on which adapters are real (the virtual/tunnel adapter problem of issue #179),
     /// and additionally requires multicast support.
     /// </summary>
@@ -714,7 +714,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 continue;
             }
 
-            if (!WiFiDeviceFinder.ShouldIncludeInterface(
+            if (!WifiDeviceFinder.ShouldIncludeInterface(
                     networkInterface.Name,
                     networkInterface.Description,
                     networkInterface.OperationalStatus,

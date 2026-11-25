@@ -16,7 +16,7 @@ public class DeviceInfoTests
             SerialNumber = "12345",
             IPAddress = IPAddress.Parse("192.168.1.100"),
             Port = 9760,
-            ConnectionType = ConnectionType.WiFi
+            ConnectionType = ConnectionType.Wifi
         };
 
         // Act

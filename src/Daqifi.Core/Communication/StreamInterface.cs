@@ -17,7 +17,7 @@ public enum StreamInterface
     /// <summary>
     /// Stream data over WiFi.
     /// </summary>
-    WiFi = 1,
+    Wifi = 1,
 
     /// <summary>
     /// Stream data to the SD card.

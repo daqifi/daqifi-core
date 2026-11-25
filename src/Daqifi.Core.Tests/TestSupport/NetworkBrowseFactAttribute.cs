@@ -11,8 +11,8 @@ namespace Daqifi.Core.Tests.TestSupport;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="WiFiDeviceFinder"/> and <see cref="MDnsDeviceFinder"/> end a pass immediately, with an
-/// empty result, when no adapter passes <see cref="WiFiDeviceFinder.ShouldIncludeInterface"/> with
+/// <see cref="WifiDeviceFinder"/> and <see cref="MDnsDeviceFinder"/> end a pass immediately, with an
+/// empty result, when no adapter passes <see cref="WifiDeviceFinder.ShouldIncludeInterface"/> with
 /// a usable IPv4 address. A hosted Windows CI runner, whose only adapter is Hyper-V, and a
 /// loopback-only container are both like that. A test about what happens <em>during</em> a browse
 /// would pass there without ever seeing one.
@@ -66,7 +66,7 @@ public sealed class NetworkBrowseFactAttribute : FactAttribute
                 continue;
             }
 
-            if (!WiFiDeviceFinder.ShouldIncludeInterface(
+            if (!WifiDeviceFinder.ShouldIncludeInterface(
                     adapter.Name,
                     adapter.Description,
                     adapter.OperationalStatus,
