@@ -56,30 +56,43 @@ starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and an
 `DaqifiStreamingDevice` implements it in this library — see [DaqifiStreamingDevice](#daqifistreamingdevice)
 below.
 
-Every one of those operations — plus `Reboot()` — has an `...Async(CancellationToken)` twin declared
-directly on the interface, so a consumer holding only an `IStreamingDevice` reference gets the same
-cancellable API surface as one holding the concrete `DaqifiStreamingDevice`:
+The synchronous methods (`StartStreaming()`, `EnableChannel()`, `SetDioValue()`, ...) are
+fire-and-forget: each sends its command and returns without waiting for the device.
+
+An `...Async` member means one thing: the task completes once **the device confirmed the command**, and
+fails with `DeviceCommandFailedException` when the device refused it or did not confirm it. There are
+three on the interface itself:
+
+| Member | What counts as confirmation |
+|--------|-----------------------------|
+| `StartStreamingAsync` | A stream frame arrived, or the device answered that it is streaming. |
+| `StopStreamingAsync` | The device answered, after the stop, that it is not streaming. Sent even when `IsStreaming` is `false`. |
+| `RebootAsync` | The device acknowledged the reboot, just before resetting. The connection is closed by then. It does not wait for the device to come back. |
 
 ```csharp
-if (device is IStreamingDevice streamingDevice)
+try
 {
-    await streamingDevice.EnableChannelAsync(channel, cancellationToken);
     await streamingDevice.StartStreamingAsync(cancellationToken);
+}
+catch (DeviceCommandFailedException ex)
+{
+    Console.WriteLine($"Not streaming: {ex.Message}"); // ex.ErrorCode, ex.RawDeviceResponse
 }
 ```
 
-The synchronous methods (`StartStreaming()`, `EnableChannel()`, etc.) remain, unchanged, for existing
-callers — the `Async` members are additive, not a replacement. Unlike `Connect`/`Disconnect`, most of
-this surface has no genuine async machinery underneath: `DaqifiStreamingDevice`'s streaming/channel/DIO
-/PWM/output commands are fire-and-forget writes with nothing to await, so the `Async` twin is a
-thin, cancellable wrapper around the same single write. `RebootAsync` is the exception: it sends the
-same reboot command and then awaits `DisconnectAsync`, so the local teardown does not block the
-caller the way `Reboot()`'s synchronous disconnect can.
+A confirmation is a text exchange, so `StopStreamingAsync` takes a few hundred milliseconds (seconds when
+it ends an SD log, which the device closes first) and waits its turn behind another operation on the
+device. `StartStreamingAsync` only needs one when no frame arrives promptly.
 
-`IStreamingDevice` also extends `IConfirmingDeviceAdministration`, so the confirming calibration calls
-(`SaveAdcCalibrationAsync`, `LoadAdcCalibrationAsync`, `SetAdcCalibrationSlopeAsync`, and the rest —
-each sends the same firmware primitive as its `void` counterpart and then confirms the device accepted
-it) are reachable directly off an `IStreamingDevice` reference too, with no separate cast needed.
+`RebootAsync` closes the connection once the command has been sent, even when it throws, unless the device
+answered with a refusal. Over WiFi the device takes its network down right after acknowledging, so a
+"did not confirm" there does not mean that it did not reboot.
+
+`IStreamingDevice` also extends `IConfirmingDeviceAdministration`, so the calibration and
+voltage-precision commands (`SaveAdcCalibrationAsync`, `LoadAdcCalibrationAsync`,
+`SetAdcCalibrationSlopeAsync`, and the rest) are reachable directly off an `IStreamingDevice` reference
+with the same meaning. They have no fire-and-forget form; to send one without asking, send the matching
+`ScpiMessageProducer` message.
 
 ## Implementation Classes
 
@@ -1137,15 +1150,8 @@ calls above are.
 > `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
 > channels are not part of `Channels`, so `SetAnalogOutput` takes a channel number directly.
 
-Every method above has a cancellable `...Async` twin (`EnableChannelsAsync`, `DisableChannelAsync`,
-`SetDioValueAsync`, `SetPwmEnabledAsync`, `SetAnalogOutputAsync`, `RebootAsync`, and the rest), declared
-directly on `IStreamingDevice`:
-
-```csharp
-await streamingDevice.EnableChannelsAsync(new[] { ai0, ai2 }, cancellationToken);
-await streamingDevice.SetAnalogOutputAsync(0, 2.5, cancellationToken);
-await streamingDevice.RebootAsync(cancellationToken);
-```
+`Reboot()` sends and disconnects without knowing whether the device took the command;
+`await device.RebootAsync(cancellationToken)` waits for the device to acknowledge it.
 
 ### Feature support
 

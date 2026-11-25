@@ -506,8 +506,7 @@ public class LiveSampleStreamTests
         // In particular the live path must never send a command or take the channels lock: it is an
         // adapter over events the decoder already raises, and it runs on the decode thread.
         public bool IsStreaming => throw new NotSupportedException();
-        public void EndStreamingSession() => throw new NotSupportedException();
-        public void MarkStreamingStartRefused() => throw new NotSupportedException();
+        public bool SendStreamStop() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();

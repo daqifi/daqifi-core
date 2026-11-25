@@ -1142,8 +1142,7 @@ public class StreamFrameDecoderTests
         public Exception? LastDecodeFailure { get; private set; }
 
         public bool IsStreaming { get; set; }
-        public void EndStreamingSession() => IsStreaming = false;
-        public void MarkStreamingStartRefused() => IsStreaming = false;
+        public bool SendStreamStop() => throw new NotSupportedException();
 
         /// <summary>
         /// The device's reported metadata. The firmware version defaults to one that does not
