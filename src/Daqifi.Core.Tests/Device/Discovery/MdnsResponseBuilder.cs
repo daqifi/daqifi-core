@@ -11,7 +11,7 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 /// (daqifi-nyquist-firmware#345: PTR in the answer section, SRV + TXT + A in additional,
 /// names uncompressed), so a test packet is a recorded advertisement rather than an invention.
 /// </summary>
-internal sealed class MDnsResponseBuilder
+internal sealed class MdnsResponseBuilder
 {
     internal const string ServiceType = "_daqifi._tcp.local";
     internal const string DefaultInstanceLabel = "DAQiFi-95A7";
@@ -33,7 +33,7 @@ internal sealed class MDnsResponseBuilder
     private int _answerCount;
     private int _additionalCount;
 
-    internal MDnsResponseBuilder(bool compressNames = false)
+    internal MdnsResponseBuilder(bool compressNames = false)
     {
         _compressNames = compressNames;
         _buffer.AddRange(new byte[12]); // header, patched in Build()
@@ -52,7 +52,7 @@ internal sealed class MDnsResponseBuilder
         bool compressNames = false)
     {
         var instance = instanceLabel + "." + ServiceType;
-        var builder = new MDnsResponseBuilder(compressNames)
+        var builder = new MdnsResponseBuilder(compressNames)
             .AddPtr(ServiceType, instance, ptrTtl)
             .AddSrv(instance, host, port)
             .AddTxt(instance, txtStrings ?? DefaultTxt());
@@ -85,7 +85,7 @@ internal sealed class MDnsResponseBuilder
     /// payload — the malformed shape a parser must reject rather than complete from the bytes of
     /// the following record.
     /// </param>
-    internal MDnsResponseBuilder AddPtr(
+    internal MdnsResponseBuilder AddPtr(
         string owner,
         string target,
         uint ttl = 4500,
@@ -102,7 +102,7 @@ internal sealed class MDnsResponseBuilder
     }
 
     /// <param name="declaredRdLength">See <see cref="AddPtr"/>.</param>
-    internal MDnsResponseBuilder AddSrv(
+    internal MdnsResponseBuilder AddSrv(
         string owner,
         string target,
         ushort port,
@@ -122,7 +122,7 @@ internal sealed class MDnsResponseBuilder
         return this;
     }
 
-    internal MDnsResponseBuilder AddTxt(string owner, IEnumerable<string> strings, uint ttl = 4500, bool inAnswerSection = false)
+    internal MdnsResponseBuilder AddTxt(string owner, IEnumerable<string> strings, uint ttl = 4500, bool inAnswerSection = false)
     {
         WriteName(owner);
         var rdLengthAt = WriteRecordHeader(TypeTxt, ClassInCacheFlush, ttl);
@@ -139,7 +139,7 @@ internal sealed class MDnsResponseBuilder
         return this;
     }
 
-    internal MDnsResponseBuilder AddA(string owner, IPAddress address, uint ttl = 120, bool inAnswerSection = false)
+    internal MdnsResponseBuilder AddA(string owner, IPAddress address, uint ttl = 120, bool inAnswerSection = false)
     {
         WriteName(owner);
         var rdLengthAt = WriteRecordHeader(TypeA, ClassInCacheFlush, ttl);
@@ -154,7 +154,7 @@ internal sealed class MDnsResponseBuilder
     /// Adds a record of a type the client does not decode, to prove an unrecognized record is
     /// skipped by RDLENGTH rather than derailing the rest of the message.
     /// </summary>
-    internal MDnsResponseBuilder AddOpaque(string owner, ushort recordType, byte[] rdata, uint ttl = 120, bool inAnswerSection = false)
+    internal MdnsResponseBuilder AddOpaque(string owner, ushort recordType, byte[] rdata, uint ttl = 120, bool inAnswerSection = false)
     {
         WriteName(owner);
         var rdLengthAt = WriteRecordHeader(recordType, ClassIn, ttl);

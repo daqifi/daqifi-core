@@ -8,11 +8,11 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 
 /// <summary>
 /// Wire-format tests for the in-tree mDNS reader. Every packet here is built byte by byte by
-/// <see cref="MDnsResponseBuilder"/>, so the whole file runs with no network and no device.
+/// <see cref="MdnsResponseBuilder"/>, so the whole file runs with no network and no device.
 /// </summary>
-public class MDnsMessageTests
+public class MdnsMessageTests
 {
-    private static readonly IReadOnlyList<string> DaqifiService = MDnsMessage.ParseServiceLabels("_daqifi._tcp");
+    private static readonly IReadOnlyList<string> DaqifiService = MdnsMessage.ParseServiceLabels("_daqifi._tcp");
 
     #region Service type parsing
 
@@ -24,7 +24,7 @@ public class MDnsMessageTests
     [InlineData("  _daqifi._tcp  ")]
     public void ParseServiceLabels_AcceptsQualifiedForms(string serviceType)
     {
-        var labels = MDnsMessage.ParseServiceLabels(serviceType);
+        var labels = MdnsMessage.ParseServiceLabels(serviceType);
 
         Assert.Equal(["_daqifi", "_tcp", "local"], labels);
     }
@@ -36,7 +36,7 @@ public class MDnsMessageTests
     [InlineData("_daqifi.._tcp")]
     public void ParseServiceLabels_RejectsMalformedServiceType(string serviceType)
     {
-        Assert.Throws<ArgumentException>(() => MDnsMessage.ParseServiceLabels(serviceType));
+        Assert.Throws<ArgumentException>(() => MdnsMessage.ParseServiceLabels(serviceType));
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class MDnsMessageTests
     {
         var serviceType = "_" + new string('a', 63) + "._tcp";
 
-        Assert.Throws<ArgumentException>(() => MDnsMessage.ParseServiceLabels(serviceType));
+        Assert.Throws<ArgumentException>(() => MdnsMessage.ParseServiceLabels(serviceType));
     }
 
     #endregion
@@ -54,7 +54,7 @@ public class MDnsMessageTests
     [Fact]
     public void BuildPtrQuery_EncodesASingleServiceTypeQuestion()
     {
-        var query = MDnsMessage.BuildPtrQuery(DaqifiService);
+        var query = MdnsMessage.BuildPtrQuery(DaqifiService);
 
         // Header: ID 0, flags 0 (standard query), QDCOUNT 1, everything else 0.
         Assert.Equal(0, query[0] << 8 | query[1]);
@@ -74,7 +74,7 @@ public class MDnsMessageTests
         Assert.Equal(0, query[offset]);
         offset++;
 
-        Assert.Equal(MDnsMessage.TypePtr, query[offset] << 8 | query[offset + 1]);
+        Assert.Equal(MdnsMessage.TypePtr, query[offset] << 8 | query[offset + 1]);
 
         // QCLASS is IN with the top (QU / unicast-response) bit clear: the querier is bound to
         // 5353 and wants the multicast answer, which every joined socket receives.
@@ -85,9 +85,9 @@ public class MDnsMessageTests
     [Fact]
     public void TryParseResponse_RejectsOurOwnQueryLoopedBack()
     {
-        var query = MDnsMessage.BuildPtrQuery(DaqifiService);
+        var query = MdnsMessage.BuildPtrQuery(DaqifiService);
 
-        Assert.False(MDnsMessage.TryParseResponse(query, query.Length, out var records));
+        Assert.False(MdnsMessage.TryParseResponse(query, query.Length, out var records));
         Assert.Empty(records);
     }
 
@@ -98,79 +98,79 @@ public class MDnsMessageTests
     [Fact]
     public void TryParseResponse_ParsesTheFirmwareAdvertisement()
     {
-        var packet = MDnsResponseBuilder.DeviceAdvertisement();
+        var packet = MdnsResponseBuilder.DeviceAdvertisement();
 
-        Assert.True(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.True(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
         Assert.Equal(4, records.Count);
 
-        var ptr = records.Single(r => r.RecordType == MDnsMessage.TypePtr);
+        var ptr = records.Single(r => r.RecordType == MdnsMessage.TypePtr);
         Assert.Equal(["_daqifi", "_tcp", "local"], ptr.Name);
         Assert.Equal(["DAQiFi-95A7", "_daqifi", "_tcp", "local"], ptr.Target);
         Assert.Equal(4500u, ptr.Ttl);
 
-        var srv = records.Single(r => r.RecordType == MDnsMessage.TypeSrv);
+        var srv = records.Single(r => r.RecordType == MdnsMessage.TypeSrv);
         Assert.Equal(9760, srv.Port);
         Assert.Equal(["daqifi-95a7", "local"], srv.Target);
 
-        var txt = records.Single(r => r.RecordType == MDnsMessage.TypeTxt);
-        Assert.Equal(MDnsResponseBuilder.DefaultTxt(), txt.TxtStrings);
+        var txt = records.Single(r => r.RecordType == MdnsMessage.TypeTxt);
+        Assert.Equal(MdnsResponseBuilder.DefaultTxt(), txt.TxtStrings);
 
-        var a = records.Single(r => r.RecordType == MDnsMessage.TypeA);
+        var a = records.Single(r => r.RecordType == MdnsMessage.TypeA);
         Assert.Equal(IPAddress.Parse("192.168.1.39"), a.Address);
     }
 
     [Fact]
     public void TryParseResponse_ResolvesNameCompressionPointers()
     {
-        var compressed = MDnsResponseBuilder.DeviceAdvertisement(compressNames: true);
-        var uncompressed = MDnsResponseBuilder.DeviceAdvertisement();
+        var compressed = MdnsResponseBuilder.DeviceAdvertisement(compressNames: true);
+        var uncompressed = MdnsResponseBuilder.DeviceAdvertisement();
 
         // Compression has to actually be exercised, or this test proves nothing.
         Assert.True(compressed.Length < uncompressed.Length);
 
-        Assert.True(MDnsMessage.TryParseResponse(compressed, compressed.Length, out var records));
+        Assert.True(MdnsMessage.TryParseResponse(compressed, compressed.Length, out var records));
 
-        var srv = records.Single(r => r.RecordType == MDnsMessage.TypeSrv);
+        var srv = records.Single(r => r.RecordType == MdnsMessage.TypeSrv);
         Assert.Equal(["DAQiFi-95A7", "_daqifi", "_tcp", "local"], srv.Name);
         Assert.Equal(9760, srv.Port);
 
-        var a = records.Single(r => r.RecordType == MDnsMessage.TypeA);
+        var a = records.Single(r => r.RecordType == MdnsMessage.TypeA);
         Assert.Equal(IPAddress.Parse("192.168.1.39"), a.Address);
     }
 
     [Fact]
     public void TryParseResponse_SkipsUnknownRecordTypesByLength()
     {
-        var packet = new MDnsResponseBuilder()
-            .AddOpaque(MDnsResponseBuilder.ServiceType, recordType: 47 /* NSEC */, rdata: [1, 2, 3, 4, 5])
-            .AddPtr(MDnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MDnsResponseBuilder.ServiceType)
+        var packet = new MdnsResponseBuilder()
+            .AddOpaque(MdnsResponseBuilder.ServiceType, recordType: 47 /* NSEC */, rdata: [1, 2, 3, 4, 5])
+            .AddPtr(MdnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType)
             .Build();
 
-        Assert.True(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.True(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
         Assert.Equal(2, records.Count);
-        Assert.Contains(records, r => r.RecordType == MDnsMessage.TypePtr);
+        Assert.Contains(records, r => r.RecordType == MdnsMessage.TypePtr);
     }
 
     [Fact]
     public void TryParseResponse_ParsesTxtRecordWithNoStrings()
     {
-        var packet = new MDnsResponseBuilder()
-            .AddTxt("DAQiFi-95A7." + MDnsResponseBuilder.ServiceType, [])
+        var packet = new MdnsResponseBuilder()
+            .AddTxt("DAQiFi-95A7." + MdnsResponseBuilder.ServiceType, [])
             .Build();
 
-        Assert.True(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.True(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
         Assert.Empty(records.Single().TxtStrings!);
     }
 
     [Fact]
     public void TryParseResponse_RejectsTruncatedDatagram()
     {
-        var packet = MDnsResponseBuilder.DeviceAdvertisement();
+        var packet = MdnsResponseBuilder.DeviceAdvertisement();
 
         // Every prefix that still has a header must be rejected, not half-parsed into a device.
         for (var length = 12; length < packet.Length; length++)
         {
-            Assert.False(MDnsMessage.TryParseResponse(packet, length, out var records), $"length {length}");
+            Assert.False(MdnsMessage.TryParseResponse(packet, length, out var records), $"length {length}");
             Assert.Empty(records);
         }
     }
@@ -178,9 +178,9 @@ public class MDnsMessageTests
     [Fact]
     public void TryParseResponse_RejectsShortAndEmptyDatagrams()
     {
-        Assert.False(MDnsMessage.TryParseResponse([], 0, out _));
-        Assert.False(MDnsMessage.TryParseResponse(new byte[11], 11, out _));
-        Assert.False(MDnsMessage.TryParseResponse(new byte[12], 20, out _)); // length beyond the buffer
+        Assert.False(MdnsMessage.TryParseResponse([], 0, out _));
+        Assert.False(MdnsMessage.TryParseResponse(new byte[11], 11, out _));
+        Assert.False(MdnsMessage.TryParseResponse(new byte[12], 20, out _)); // length beyond the buffer
     }
 
     [Fact]
@@ -190,22 +190,22 @@ public class MDnsMessageTests
         // claims. Every byte of the name is still inside the datagram, so a reader bounded only by
         // the datagram would decode the name, then resynchronize on RDLENGTH and report success —
         // returning a target assembled from bytes the record never claimed.
-        var packet = new MDnsResponseBuilder()
-            .AddPtr(MDnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MDnsResponseBuilder.ServiceType, declaredRdLength: 4)
+        var packet = new MdnsResponseBuilder()
+            .AddPtr(MdnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType, declaredRdLength: 4)
             .Build();
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out _));
     }
 
     [Fact]
     public void TryParseResponse_RejectsAServiceTargetNameThatRunsPastItsOwnRdata()
     {
-        var instance = "DAQiFi-95A7." + MDnsResponseBuilder.ServiceType;
-        var packet = new MDnsResponseBuilder()
-            .AddSrv(instance, MDnsResponseBuilder.DefaultHost, 9760, declaredRdLength: 8)
+        var instance = "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType;
+        var packet = new MdnsResponseBuilder()
+            .AddSrv(instance, MdnsResponseBuilder.DefaultHost, 9760, declaredRdLength: 8)
             .Build();
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out _));
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public class MDnsMessageTests
             0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
         };
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
         Assert.Empty(records);
     }
 
@@ -233,7 +233,7 @@ public class MDnsMessageTests
             0x00, 0x0C, 0x00, 0x01, 0x00, 0x00, 0x11, 0x94, 0x00, 0x00
         };
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out _));
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public class MDnsMessageTests
             0x01, 0x61, 0x00        // RDATA = the name "a."
         };
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out _));
     }
 
     [Fact]
@@ -267,15 +267,15 @@ public class MDnsMessageTests
             0x00, 0x0C, 0x00, 0x01, 0x00, 0x00, 0x11, 0x94, 0x00, 0x00
         };
 
-        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+        Assert.False(MdnsMessage.TryParseResponse(packet, packet.Length, out _));
     }
 
     [Fact]
     public void TryParseResponse_SkipsTheQuestionSectionOfAResponse()
     {
         // Some responders echo the question back. Build a response by hand with QDCOUNT = 1.
-        var advertisement = MDnsResponseBuilder.DeviceAdvertisement();
-        var question = MDnsMessage.BuildPtrQuery(DaqifiService);
+        var advertisement = MdnsResponseBuilder.DeviceAdvertisement();
+        var question = MdnsMessage.BuildPtrQuery(DaqifiService);
         var questionBody = question.Skip(12).ToArray();
 
         var packet = new byte[advertisement.Length + questionBody.Length];
@@ -285,7 +285,7 @@ public class MDnsMessageTests
         packet[4] = 0;
         packet[5] = 1; // QDCOUNT = 1
 
-        Assert.True(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.True(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
         Assert.Equal(4, records.Count);
     }
 
@@ -296,18 +296,18 @@ public class MDnsMessageTests
     [Fact]
     public void NameEquals_IsCaseInsensitiveAndLengthSensitive()
     {
-        Assert.True(MDnsMessage.NameEquals(["_DAQiFi", "_TCP", "Local"], DaqifiService));
-        Assert.False(MDnsMessage.NameEquals(["_daqifi", "_tcp"], DaqifiService));
-        Assert.False(MDnsMessage.NameEquals(null, DaqifiService));
+        Assert.True(MdnsMessage.NameEquals(["_DAQiFi", "_TCP", "Local"], DaqifiService));
+        Assert.False(MdnsMessage.NameEquals(["_daqifi", "_tcp"], DaqifiService));
+        Assert.False(MdnsMessage.NameEquals(null, DaqifiService));
     }
 
     [Fact]
     public void IsInstanceOf_MatchesOneLabelDeeperOnly()
     {
-        Assert.True(MDnsMessage.IsInstanceOf(["DAQiFi-95A7", "_daqifi", "_tcp", "local"], DaqifiService));
-        Assert.False(MDnsMessage.IsInstanceOf(["_daqifi", "_tcp", "local"], DaqifiService));
-        Assert.False(MDnsMessage.IsInstanceOf(["Apple TV", "_airplay", "_tcp", "local"], DaqifiService));
-        Assert.False(MDnsMessage.IsInstanceOf(null, DaqifiService));
+        Assert.True(MdnsMessage.IsInstanceOf(["DAQiFi-95A7", "_daqifi", "_tcp", "local"], DaqifiService));
+        Assert.False(MdnsMessage.IsInstanceOf(["_daqifi", "_tcp", "local"], DaqifiService));
+        Assert.False(MdnsMessage.IsInstanceOf(["Apple TV", "_airplay", "_tcp", "local"], DaqifiService));
+        Assert.False(MdnsMessage.IsInstanceOf(null, DaqifiService));
     }
 
     #endregion

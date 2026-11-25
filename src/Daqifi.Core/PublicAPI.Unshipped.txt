@@ -322,6 +322,7 @@
 *REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelSetting.Ceiling.get -> int
 *REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelSetting.Level.get -> int
 *REMOVED*Daqifi.Core.Device.Diagnostics.MemoryDiagnosticsParser
+*REMOVED*Daqifi.Core.Device.Diagnostics.StreamStats.TimerISRCalls.get -> ulong?
 *REMOVED*Daqifi.Core.Device.Diagnostics.StreamStatsParser
 *REMOVED*Daqifi.Core.Device.Diagnostics.SystemLogParser
 *REMOVED*Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
@@ -360,6 +361,10 @@
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbLocationProvider.GetLocationKey(string! portNameOrDevicePath) -> string?
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbPortDescriptorProvider.GetDescriptor(string! portName) -> Daqifi.Core.Device.Discovery.UsbPortDescriptor?
+*REMOVED*Daqifi.Core.Device.Discovery.MDnsDeviceFinder
+*REMOVED*Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder() -> void
+*REMOVED*Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder(string! serviceType) -> void
+*REMOVED*Daqifi.Core.Device.Discovery.MDnsDeviceFinder.ServiceType.get -> string!
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.<Clone>$() -> Daqifi.Core.Device.Discovery.UsbPortDescriptor!
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.Deconstruct(out int VendorId, out int ProductId) -> void
@@ -697,6 +702,7 @@
 *REMOVED*abstract Daqifi.Core.Device.Discovery.DeviceFinderBase.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*const Daqifi.Core.Device.Discovery.HidDeviceFinder.DefaultProductId = 60 -> int
 *REMOVED*const Daqifi.Core.Device.Discovery.HidDeviceFinder.DefaultVendorId = 1240 -> int
+*REMOVED*const Daqifi.Core.Device.Discovery.MDnsDeviceFinder.DefaultServiceType = "_daqifi._tcp" -> string!
 *REMOVED*const Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion = "19.7.7" -> string!
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_BEGIN_PROTECTED_ADDRESS = 488505344 -> uint
 *REMOVED*const Daqifi.Core.Firmware.IntelHexParser.DEFAULT_END_PROTECTED_ADDRESS = 488636416 -> uint
@@ -1170,6 +1176,7 @@ Daqifi.Core.Device.Diagnostics.DeviceLogLevel.None = 0 -> Daqifi.Core.Device.Dia
 Daqifi.Core.Device.Diagnostics.IDeviceDiagnostics.SetLogLevelAsync(string! module, Daqifi.Core.Device.Diagnostics.DeviceLogLevel level, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.Diagnostics.LogLevelSetting!>!
 Daqifi.Core.Device.Diagnostics.LogLevelSetting.Ceiling.get -> Daqifi.Core.Device.Diagnostics.DeviceLogLevel
 Daqifi.Core.Device.Diagnostics.LogLevelSetting.Level.get -> Daqifi.Core.Device.Diagnostics.DeviceLogLevel
+Daqifi.Core.Device.Diagnostics.StreamStats.TimerIsrCalls.get -> ulong?
 Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.ConnectionType.Wifi = 1 -> Daqifi.Core.Device.Discovery.ConnectionType
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DisposeAsync() -> System.Threading.Tasks.ValueTask
@@ -1194,6 +1201,10 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
 Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.IDeviceInfo.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.Discovery.MdnsDeviceFinder
+Daqifi.Core.Device.Discovery.MdnsDeviceFinder.MdnsDeviceFinder() -> void
+Daqifi.Core.Device.Discovery.MdnsDeviceFinder.MdnsDeviceFinder(string! serviceType) -> void
+Daqifi.Core.Device.Discovery.MdnsDeviceFinder.ServiceType.get -> string!
 Daqifi.Core.Device.Discovery.WifiDeviceFinder
 Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder(int discoveryPort) -> void
@@ -1459,6 +1470,7 @@ const Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiInfModeFieldNumber
 const Daqifi.Core.Communication.Messages.DaqifiOutMessage.WifiSecurityModeFieldNumber = 60 -> int
 const Daqifi.Core.Device.DeviceConnectionOptions.DefaultDeviceName = "DAQiFi Device" -> string!
 const Daqifi.Core.Device.Discovery.DaqifiUsbIds.BootloaderProductId = 60 -> int
+const Daqifi.Core.Device.Discovery.MdnsDeviceFinder.DefaultServiceType = "_daqifi._tcp" -> string!
 const Daqifi.Core.Export.SampleValueUnits.Unscaled = "unscaled" -> string!
 const Daqifi.Core.Export.SampleValueUnits.Volts = "V" -> string!
 const Daqifi.Core.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!

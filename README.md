@@ -166,13 +166,13 @@ var serialDevices = await serialFinder.DiscoverAsync();
 
 **On a home or multi-AP network, browse with mDNS as well.** UDP broadcast does not reliably
 cross an access-point boundary — a device associated to a second AP is online and healthy, yet the
-broadcast sweep returns nothing — so `MDnsDeviceFinder` browses the `_daqifi._tcp.local.` service
+broadcast sweep returns nothing — so `MdnsDeviceFinder` browses the `_daqifi._tcp.local.` service
 over multicast instead, which is the traffic consumer routers already reflect across APs, SSIDs and
 VLANs. It produces the same `IDeviceInfo` shape, so anything that connects to a broadcast-discovered
 device connects to an mDNS-discovered one unchanged.
 
 ```csharp
-using var mdnsFinder = new MDnsDeviceFinder();
+using var mdnsFinder = new MdnsDeviceFinder();
 var mdnsDevices = await mdnsFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 ```
 
@@ -181,7 +181,7 @@ two paths together cover more networks than either alone:
 
 ```csharp
 using var finder = new AllTransportsDeviceFinder(
-    [new WifiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()],
+    [new WifiDeviceFinder(), new MdnsDeviceFinder(), new SerialDeviceFinder()],
     identitySelector: device => device.SerialNumber);
 
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
@@ -399,7 +399,7 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 ## Connection types
 
 - **WiFi** — discovered via UDP broadcast (port 30303), and via mDNS (`_daqifi._tcp.local.`,
-  UDP 5353 multicast) when you add `MDnsDeviceFinder`
+  UDP 5353 multicast) when you add `MdnsDeviceFinder`
 - **Serial** — USB-connected, enumerated as serial ports
 - **HID** — used during firmware updates; HidSharp on Windows and Linux, native IOKit on macOS
   (HidSharp enumerates no HID devices there —
@@ -409,7 +409,7 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 - .NET 10.0 or later on Windows, macOS, or Linux
 - WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast (224.0.0.251)
-  if you use `MDnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
+  if you use `MdnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
 
 ### Supported frameworks

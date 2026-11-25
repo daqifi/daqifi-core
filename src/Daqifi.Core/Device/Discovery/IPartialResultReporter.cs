@@ -17,7 +17,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <para>
 /// This must be reported by the finder, because it cannot be inferred from the outside. In
 /// particular it cannot be inferred from the pass deadline having elapsed:
-/// <see cref="WifiDeviceFinder"/> and <see cref="MDnsDeviceFinder"/> have no natural end, so
+/// <see cref="WifiDeviceFinder"/> and <see cref="MdnsDeviceFinder"/> have no natural end, so
 /// their <see cref="IDeviceFinder.DiscoverAsync"/> listens
 /// until the timeout elapses and then returns a COMPLETE answer. Reading an elapsed deadline
 /// as "incomplete" would mark every one of their passes partial, and a pass that is always

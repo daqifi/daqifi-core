@@ -288,7 +288,7 @@ keep:
   are dropped crossing the AP boundary that ARP itself fails to resolve; discovery then
   returns zero devices while the device is associated, healthy and holding a DHCP lease
   ([#183](https://github.com/daqifi/daqifi-core/issues/183)). Nothing the library does with
-  sockets can fix that — the frames never survive the radio. `MDnsDeviceFinder` browses
+  sockets can fix that — the frames never survive the radio. `MdnsDeviceFinder` browses
   `_daqifi._tcp.local.` on 224.0.0.251:5353 instead, which consumer routers already reflect
   across APs and which also survives WSL2 NAT (broadcast is dropped) and client-isolated
   guest networks.
@@ -328,7 +328,7 @@ keep:
 | cannot scan the transport at all | throws the transport's own exception |
 
 With no timeout, the serial and HID finders run to their natural end and the two that only listen
-(`WifiDeviceFinder`, `MDnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
+(`WifiDeviceFinder`, `MdnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
 pass, whichever way it ended.
 
 For a UI that shows a live, self-updating

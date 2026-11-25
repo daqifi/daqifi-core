@@ -12,7 +12,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// finders concurrently and returns one deduplicated device set — so "find any DAQiFi on WiFi or
 /// USB" is a single call instead of the manual instantiate-both / run-both / concatenate / dedupe
 /// dance every consumer otherwise repeats. <see cref="CreateDefault"/> covers WiFi broadcast +
-/// serial; pass <see cref="MDnsDeviceFinder"/> to the constructor alongside them to add mDNS
+/// serial; pass <see cref="MdnsDeviceFinder"/> to the constructor alongside them to add mDNS
 /// browsing, which reaches devices on networks where broadcast does not (issue #183).
 /// </summary>
 /// <remarks>

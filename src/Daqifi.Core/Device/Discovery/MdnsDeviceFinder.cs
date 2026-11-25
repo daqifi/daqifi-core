@@ -39,7 +39,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// ongoing discovery.
 /// </para>
 /// </remarks>
-public sealed class MDnsDeviceFinder : DeviceFinderBase
+public sealed class MdnsDeviceFinder : DeviceFinderBase
 {
     #region Constants
 
@@ -118,7 +118,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// <summary>
     /// Initializes a new instance browsing for the default <c>_daqifi._tcp</c> service.
     /// </summary>
-    public MDnsDeviceFinder() : this(DefaultServiceType)
+    public MdnsDeviceFinder() : this(DefaultServiceType)
     {
     }
 
@@ -129,10 +129,10 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// The service type, e.g. <c>_daqifi._tcp</c>. The <c>local.</c> domain is appended when absent.
     /// </param>
     /// <exception cref="ArgumentException">Thrown when the service type is empty or malformed.</exception>
-    public MDnsDeviceFinder(string serviceType)
+    public MdnsDeviceFinder(string serviceType)
     {
-        _serviceLabels = MDnsMessage.ParseServiceLabels(serviceType);
-        _queryBytes = MDnsMessage.BuildPtrQuery(_serviceLabels);
+        _serviceLabels = MdnsMessage.ParseServiceLabels(serviceType);
+        _queryBytes = MdnsMessage.BuildPtrQuery(_serviceLabels);
         ServiceType = string.Join(".", _serviceLabels);
     }
 
@@ -246,7 +246,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             udp.ExclusiveAddressUse = false;
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             TryEnableReusePort(udp.Client);
-            udp.Client.Bind(new IPEndPoint(IPAddress.Any, MDnsMessage.MulticastPort));
+            udp.Client.Bind(new IPEndPoint(IPAddress.Any, MdnsMessage.MulticastPort));
 
             try
             {
@@ -304,7 +304,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// <returns>The first failure when every send failed, otherwise null.</returns>
     private async Task<Exception?> SendQueriesAsync(UdpClient udp, IReadOnlyList<LocalInterface> interfaces, CancellationToken cancellationToken)
     {
-        var target = new IPEndPoint(MulticastGroup, MDnsMessage.MulticastPort);
+        var target = new IPEndPoint(MulticastGroup, MdnsMessage.MulticastPort);
 
         var anySent = false;
         Exception? firstFailure = null;
@@ -419,7 +419,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
         IReadOnlyList<LocalInterface> interfaces,
         List<IDeviceInfo> discoveredDevices)
     {
-        if (!MDnsMessage.TryParseResponse(buffer, length, out var records))
+        if (!MdnsMessage.TryParseResponse(buffer, length, out var records))
         {
             return;
         }
@@ -452,7 +452,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// <param name="interfaces">The local interfaces, for <see cref="IDeviceInfo.LocalInterfaceAddress"/>.</param>
     /// <returns>One entry per resolvable service instance.</returns>
     internal static IReadOnlyList<DeviceInfo> MapDevices(
-        IReadOnlyList<MDnsResourceRecord> records,
+        IReadOnlyList<MdnsResourceRecord> records,
         IReadOnlyList<string> serviceLabels,
         IPAddress senderAddress,
         IReadOnlyList<LocalInterface> interfaces)
@@ -463,8 +463,8 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
         // leaving, so its instance must not be reported even though the same packet still
         // carries that instance's SRV/TXT/A data.
         var departed = records
-            .Where(r => r.RecordType == MDnsMessage.TypePtr && r.Ttl == 0 &&
-                        MDnsMessage.NameEquals(r.Name, serviceLabels) && r.Target is not null)
+            .Where(r => r.RecordType == MdnsMessage.TypePtr && r.Ttl == 0 &&
+                        MdnsMessage.NameEquals(r.Name, serviceLabels) && r.Target is not null)
             .Select(r => r.Target!)
             .ToList();
 
@@ -472,8 +472,8 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
         foreach (var candidate in EnumerateInstanceNames(records, serviceLabels))
         {
-            if (departed.Any(gone => MDnsMessage.NameEquals(gone, candidate)) ||
-                instances.Any(seen => MDnsMessage.NameEquals(seen, candidate)))
+            if (departed.Any(gone => MdnsMessage.NameEquals(gone, candidate)) ||
+                instances.Any(seen => MdnsMessage.NameEquals(seen, candidate)))
             {
                 continue;
             }
@@ -484,7 +484,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
         foreach (var instance in instances)
         {
             var srv = records.FirstOrDefault(r =>
-                r.RecordType == MDnsMessage.TypeSrv && r.Ttl > 0 && MDnsMessage.NameEquals(r.Name, instance));
+                r.RecordType == MdnsMessage.TypeSrv && r.Ttl > 0 && MdnsMessage.NameEquals(r.Name, instance));
 
             if (srv?.Target is null || srv.Port == 0)
             {
@@ -494,7 +494,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             }
 
             var txt = records.FirstOrDefault(r =>
-                r.RecordType == MDnsMessage.TypeTxt && r.Ttl > 0 && MDnsMessage.NameEquals(r.Name, instance));
+                r.RecordType == MdnsMessage.TypeTxt && r.Ttl > 0 && MdnsMessage.NameEquals(r.Name, instance));
 
             var attributes = ParseTxtAttributes(txt?.TxtStrings);
 
@@ -502,8 +502,8 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             // which is the device itself, so a reply that lost its A record still yields a
             // connectable entry rather than being dropped.
             var address = records.FirstOrDefault(r =>
-                              r.RecordType == MDnsMessage.TypeA && r.Ttl > 0 &&
-                              r.Address is not null && MDnsMessage.NameEquals(r.Name, srv.Target))
+                              r.RecordType == MdnsMessage.TypeA && r.Ttl > 0 &&
+                              r.Address is not null && MdnsMessage.NameEquals(r.Name, srv.Target))
                           ?.Address
                           ?? senderAddress;
 
@@ -539,21 +539,21 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// answer a resolve without repeating the PTR).
     /// </summary>
     private static IEnumerable<IReadOnlyList<string>> EnumerateInstanceNames(
-        IReadOnlyList<MDnsResourceRecord> records,
+        IReadOnlyList<MdnsResourceRecord> records,
         IReadOnlyList<string> serviceLabels)
     {
         foreach (var record in records)
         {
-            if (record.RecordType == MDnsMessage.TypePtr &&
+            if (record.RecordType == MdnsMessage.TypePtr &&
                 record.Ttl > 0 &&
-                MDnsMessage.NameEquals(record.Name, serviceLabels) &&
-                MDnsMessage.IsInstanceOf(record.Target, serviceLabels))
+                MdnsMessage.NameEquals(record.Name, serviceLabels) &&
+                MdnsMessage.IsInstanceOf(record.Target, serviceLabels))
             {
                 yield return record.Target!;
             }
-            else if (record.RecordType == MDnsMessage.TypeSrv &&
+            else if (record.RecordType == MdnsMessage.TypeSrv &&
                      record.Ttl > 0 &&
-                     MDnsMessage.IsInstanceOf(record.Name, serviceLabels))
+                     MdnsMessage.IsInstanceOf(record.Name, serviceLabels))
             {
                 yield return record.Name;
             }

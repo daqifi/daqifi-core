@@ -11,7 +11,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// (PTR, SRV, TXT, A) carry decoded payloads; anything else is kept as a bare
 /// name/type/TTL so the reader can walk past it without discarding the message.
 /// </summary>
-internal sealed class MDnsResourceRecord
+internal sealed class MdnsResourceRecord
 {
     /// <summary>
     /// The owner name, as raw labels. Kept as labels rather than a joined string so a
@@ -20,7 +20,7 @@ internal sealed class MDnsResourceRecord
     /// </summary>
     public IReadOnlyList<string> Name { get; init; } = Array.Empty<string>();
 
-    /// <summary>The record type (see the Type* constants on <see cref="MDnsMessage"/>).</summary>
+    /// <summary>The record type (see the Type* constants on <see cref="MdnsMessage"/>).</summary>
     public ushort RecordType { get; init; }
 
     /// <summary>The record TTL in seconds. Zero is a goodbye packet (RFC 6762 §10.1).</summary>
@@ -53,7 +53,7 @@ internal sealed class MDnsResourceRecord
 /// than returning a half-parsed record set, because a datagram off the wire is untrusted
 /// input and a partial parse is the shape that turns into a wrong device entry.
 /// </remarks>
-internal static class MDnsMessage
+internal static class MdnsMessage
 {
     /// <summary>The mDNS well-known UDP port (RFC 6762 §2).</summary>
     internal const int MulticastPort = 5353;
@@ -181,9 +181,9 @@ internal static class MDnsMessage
     /// <param name="length">The number of valid bytes in <paramref name="buffer"/>.</param>
     /// <param name="records">The parsed records on success; empty otherwise.</param>
     /// <returns><c>true</c> if the datagram was a well-formed response.</returns>
-    internal static bool TryParseResponse(byte[] buffer, int length, out IReadOnlyList<MDnsResourceRecord> records)
+    internal static bool TryParseResponse(byte[] buffer, int length, out IReadOnlyList<MdnsResourceRecord> records)
     {
-        records = Array.Empty<MDnsResourceRecord>();
+        records = Array.Empty<MdnsResourceRecord>();
 
         if (buffer is null || length < HeaderLength || length > buffer.Length)
         {
@@ -214,7 +214,7 @@ internal static class MDnsMessage
         // Size the list from the datagram, not from the counts: a hostile header can claim
         // 3 x 65535 records, and the smallest possible record is 11 bytes, so anything beyond
         // length/11 is a lie the loop below is about to reject anyway.
-        var parsed = new List<MDnsResourceRecord>(Math.Min(recordCount, length / 11));
+        var parsed = new List<MdnsResourceRecord>(Math.Min(recordCount, length / 11));
         for (var i = 0; i < recordCount; i++)
         {
             if (!TryReadRecord(buffer, length, ref offset, out var record))
@@ -279,7 +279,7 @@ internal static class MDnsMessage
         return true;
     }
 
-    private static bool TryReadRecord(byte[] buffer, int length, ref int offset, out MDnsResourceRecord record)
+    private static bool TryReadRecord(byte[] buffer, int length, ref int offset, out MdnsResourceRecord record)
     {
         record = null!;
 
@@ -381,7 +381,7 @@ internal static class MDnsMessage
         // type is skipped wholesale.
         offset = rdataEnd;
 
-        record = new MDnsResourceRecord
+        record = new MdnsResourceRecord
         {
             Name = name,
             RecordType = recordType,

@@ -1760,7 +1760,7 @@ public class ContinuousDeviceFinderTests
     {
         // The regression guard for inferring partialness from the pass deadline. WifiDeviceFinder
         // passes Timeout.InfiniteTimeSpan to its own discovery, so its receive loops run until the
-        // caller's token fires and then return a COMPLETE list; MDnsDeviceFinder documents the
+        // caller's token fires and then return a COMPLETE list; MdnsDeviceFinder documents the
         // same ("no natural end"). Under ContinuousDeviceFinder that token IS the pass timeout, so
         // the deadline elapses on every healthy pass.
         //
@@ -2254,7 +2254,7 @@ public class ContinuousDeviceFinderTests
         /// <summary>
         /// A pass that listens until the pass token fires and then answers with everything it
         /// heard — a COMPLETE answer that always uses the whole pass budget. That is what
-        /// <c>WifiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
+        /// <c>WifiDeviceFinder</c> and <c>MdnsDeviceFinder</c> do: their
         /// <c>DiscoverAsync</c> has no natural end, so the pass deadline is
         /// what ends it, and the list it returns is still a census. A pass of this shape must be
         /// reported <see cref="DiscoveryPassOutcome.Completed"/> and must still age devices out,
@@ -2318,7 +2318,7 @@ public class ContinuousDeviceFinderTests
     /// <summary>
     /// A plain <see cref="IDeviceFinder"/> — no <c>IPartialResultReporter</c> — whose pass listens
     /// until the pass token fires and then answers with the COMPLETE set for that pass. This is
-    /// <c>WifiDeviceFinder</c>'s and <c>MDnsDeviceFinder</c>'s shape: discovery with no natural
+    /// <c>WifiDeviceFinder</c>'s and <c>MdnsDeviceFinder</c>'s shape: discovery with no natural
     /// end, ended by the caller's token, returning a census rather than a fragment. Every pass
     /// therefore ends with the pass deadline elapsed while still being complete.
     /// </summary>

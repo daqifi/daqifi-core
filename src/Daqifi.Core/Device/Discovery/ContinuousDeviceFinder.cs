@@ -809,7 +809,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
 
             // Whether the list is a census or only the part of the system the pass reached is
             // the FINDER's to report, never something to infer from the pass deadline having
-            // elapsed. WifiDeviceFinder and MDnsDeviceFinder have no natural end: their
+            // elapsed. WifiDeviceFinder and MdnsDeviceFinder have no natural end: their
             // DiscoverAsync listens until the timeout elapses and then returns a COMPLETE answer, so for them the deadline elapses on every healthy pass.
             // Reading that as "incomplete" marked every pass partial, and a pass that is always
             // partial can never age a device out — DeviceLost stopped firing altogether for
