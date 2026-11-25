@@ -39,7 +39,7 @@ public class FirmwareUpdateStateTimeoutTests
     private static readonly TimeSpan Erasing = TimeSpan.FromSeconds(14);
     private static readonly TimeSpan Programming = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan Verifying = TimeSpan.FromSeconds(16);
-    private static readonly TimeSpan JumpingToApp = TimeSpan.FromSeconds(17);
+    private static readonly TimeSpan JumpingToApplication = TimeSpan.FromSeconds(17);
 
     /// <summary>
     /// The budget a state with no configured timeout of its own falls back to.
@@ -58,7 +58,7 @@ public class FirmwareUpdateStateTimeoutTests
         ErasingFlashTimeout = Erasing,
         ProgrammingTimeout = Programming,
         VerifyingTimeout = Verifying,
-        JumpingToApplicationTimeout = JumpingToApp,
+        JumpingToApplicationTimeout = JumpingToApplication,
 
         // Not routed to any state. Present so that a mapping which reached for it instead of the
         // property it names would return a value no case below expects.
@@ -73,7 +73,7 @@ public class FirmwareUpdateStateTimeoutTests
         { FirmwareUpdateState.ErasingFlash, Erasing },
         { FirmwareUpdateState.Programming, Programming },
         { FirmwareUpdateState.Verifying, Verifying },
-        { FirmwareUpdateState.JumpingToApp, JumpingToApp },
+        { FirmwareUpdateState.JumpingToApplication, JumpingToApplication },
     };
 
     /// <summary>

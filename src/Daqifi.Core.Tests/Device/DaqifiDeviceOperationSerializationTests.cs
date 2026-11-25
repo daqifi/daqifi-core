@@ -643,13 +643,13 @@ public class DaqifiDeviceOperationSerializationTests
         const int overflowBy = 6;
         await Task.Run(() =>
         {
-            for (var i = 0; i < DaqifiDevice.DefaultMaxDeferredSends + overflowBy; i++)
+            for (var i = 0; i < DaqifiDevice.DefaultMaximumDeferredSends + overflowBy; i++)
             {
                 device.Send(new TaggedBinaryMessage($"m{i:0000}"));
             }
         });
 
-        Assert.Equal(DaqifiDevice.DefaultMaxDeferredSends, DeferredBacklogCount(device));
+        Assert.Equal(DaqifiDevice.DefaultMaximumDeferredSends, DeferredBacklogCount(device));
         Assert.Equal(overflowBy, device.DroppedDeferredSendCount);
 
         release.SetResult();

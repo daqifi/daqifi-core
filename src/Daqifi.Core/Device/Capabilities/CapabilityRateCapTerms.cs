@@ -2,12 +2,12 @@ namespace Daqifi.Core.Device.Capabilities;
 
 /// <summary>
 /// The <c>streaming.cap_terms</c> block of the capability document: the individual limits that
-/// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is the minimum of. Published by firmware
+/// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> is the minimum of. Published by firmware
 /// v3.9.0 and newer.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> says how fast the enabled channel set can
+/// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> says how fast the enabled channel set can
 /// stream; these say <i>why</i> — whether the transport, the ADC, the scan retrigger or the SD
 /// writer is the limit — and so how far a different configuration could go. Use
 /// <see cref="BindingTerm"/> to name the one that binds.
@@ -16,7 +16,7 @@ namespace Daqifi.Core.Device.Capabilities;
 /// <b><c>0</c> means "not applicable to this configuration", never a cap of 0 Hz.</b> The firmware
 /// floors every real term at 1 Hz, so a consumer can take the minimum of the non-zero terms without
 /// a separate applicability flag, and that minimum equals
-/// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> from the same document. Every term is
+/// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> from the same document. Every term is
 /// <c>0</c> when no input is enabled. Like the rest of the document, a <c>null</c> term means the
 /// document did not state it.
 /// </para>
@@ -49,7 +49,7 @@ public sealed class CapabilityRateCapTerms
     public int? SdAdditiveHz { get; init; }
 
     /// <summary>
-    /// Gets the term that sets <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> — the lowest
+    /// Gets the term that sets <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> — the lowest
     /// term above zero — or <c>null</c> when no term applies (nothing is enabled, or the document
     /// stated none). When two terms tie, the first in <see cref="CapabilityRateCapTerm"/> order is
     /// returned.

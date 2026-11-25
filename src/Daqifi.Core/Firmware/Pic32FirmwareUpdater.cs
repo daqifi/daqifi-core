@@ -21,13 +21,13 @@ internal sealed class Pic32FirmwareUpdater
     // written AND the HID bootloader is still connected, so re-erasing to a
     // clean bootloader state is both necessary and possible. Failures in
     // PreparingDevice/WaitingForBootloader/Connecting happen before any flash
-    // write; a JumpingToApp failure happens after HID has already been
+    // write; a JumpingToApplication failure happens after HID has already been
     // disconnected — neither is eligible for cleanup.
     //
     // Necessary but not sufficient. ErasingFlash is entered before the erase
     // command is written, so the state alone cannot say the flash was changed;
     // the session's Pic32FlashProgress does (issue #952). The list still has to
-    // stay: it is what keeps a JumpingToApp failure, whose flash is changed and
+    // stay: it is what keeps a JumpingToApplication failure, whose flash is changed and
     // good, from being erased.
     private static readonly IReadOnlySet<FirmwareUpdateState> CleanupEligibleStates
         = new HashSet<FirmwareUpdateState>
@@ -158,11 +158,11 @@ internal sealed class Pic32FirmwareUpdater
                 ct => _session.VerifyFlashContentsAsync(crcRegions, progress, totalBytes, ct),
                 cancellationToken).ConfigureAwait(false);
 
-            _context.TransitionToState(FirmwareUpdateState.JumpingToApp, "Jumping to application firmware.");
-            _context.ReportProgress(progress, FirmwareUpdateState.JumpingToApp, 95, _context.CurrentOperation, totalBytes, totalBytes);
+            _context.TransitionToState(FirmwareUpdateState.JumpingToApplication, "Jumping to application firmware.");
+            _context.ReportProgress(progress, FirmwareUpdateState.JumpingToApplication, 95, _context.CurrentOperation, totalBytes, totalBytes);
 
             await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 "jump to application and reconnect serial transport",
                 ct => JumpToApplicationAndReconnectAsync(device, ct),
                 cancellationToken).ConfigureAwait(false);
@@ -252,7 +252,7 @@ internal sealed class Pic32FirmwareUpdater
             failureSubject: "Bootloader soft reset",
             async (phase, innerCt) =>
             {
-                phase.Advance(FirmwareUpdateState.JumpingToApp, "issue JMP_TO_APP soft reset");
+                phase.Advance(FirmwareUpdateState.JumpingToApplication, "issue JMP_TO_APP soft reset");
                 await _context.ExecuteWithStateTimeoutAsync(
                     phase.State,
                     phase.Operation,
@@ -348,7 +348,7 @@ internal sealed class Pic32FirmwareUpdater
         /// Cleanup did not apply: the failure occurred before flash was written
         /// (PreparingDevice/WaitingForBootloader/Connecting, or ErasingFlash
         /// before the erase command was written) or after the HID bootloader was
-        /// disconnected (JumpingToApp). Terminal state: Failed.
+        /// disconnected (JumpingToApplication). Terminal state: Failed.
         /// </summary>
         NotEligible,
 
@@ -536,7 +536,7 @@ internal sealed class Pic32FirmwareUpdater
 
             // The image is fully programmed and CRC-verified; only the return to the
             // application is unconfirmed.
-            case FirmwareUpdateState.JumpingToApp:
+            case FirmwareUpdateState.JumpingToApplication:
                 return Pic32FlashCondition.ProgrammedNotConfirmed;
 
             default:
@@ -685,7 +685,7 @@ internal sealed class Pic32FirmwareUpdater
         // queries) until SYSTem:POWer:STATe 1 is sent. InitializeAsync
         // handles that plus the rest of the standard init sequence
         // (echo off, stream format, etc.). Without this, callers writing
-        // a "natural" probe like GetLanChipInfoAsync would silently fail
+        // a "natural" probe like GetWifiChipInfoAsync would silently fail
         // for tens of seconds because the device is still dormant.
         Logger.LogInformation("Waking post-reset device via InitializeAsync.");
         try
@@ -733,7 +733,7 @@ internal sealed class Pic32FirmwareUpdater
         // Surface the wait at Information level so observers tailing the
         // log can distinguish "stuck" from "deliberately polling". The
         // wait can take up to PostReconnectReadinessTimeout (default 30s);
-        // without this, the JumpingToApp state appears hung beyond the
+        // without this, the JumpingToApplication state appears hung beyond the
         // initial transport reopen.
         Logger.LogInformation(
             "Waiting up to {Timeout} for device to become application-ready (post-reconnect readiness probe).",

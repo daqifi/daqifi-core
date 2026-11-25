@@ -32,7 +32,7 @@ public sealed record DeviceInfo : IDeviceInfo
     /// <summary>
     /// Gets the IP address (for network devices).
     /// </summary>
-    public IPAddress? IPAddress { get; init; }
+    public IPAddress? IpAddress { get; init; }
 
     /// <summary>
     /// Gets the MAC address (for network devices).
@@ -89,7 +89,7 @@ public sealed record DeviceInfo : IDeviceInfo
     {
         return ConnectionType switch
         {
-            ConnectionType.WiFi => $"{Name} ({IPAddress}:{Port}) - {SerialNumber}",
+            ConnectionType.Wifi => $"{Name} ({IpAddress}:{Port}) - {SerialNumber}",
             ConnectionType.Serial => $"{Name} ({PortName}) - {SerialNumber}",
             ConnectionType.Hid => $"{Name} (HID) - {SerialNumber}",
             _ => $"{Name} - {SerialNumber}"

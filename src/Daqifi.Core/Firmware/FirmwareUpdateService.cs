@@ -102,7 +102,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
             _context,
             hidTransport,
             bootloaderProtocol ?? new Pic32BootloaderProtocol(),
-            hidDeviceEnumerator ?? new HidLibraryDeviceEnumerator(),
+            hidDeviceEnumerator ?? new HidDeviceEnumerator(),
             usbLocationProvider ?? UsbLocationProviderFactory.CreateForCurrentPlatform());
 
         _pic32Updater = new Pic32FirmwareUpdater(_context, _bootloaderSession);
@@ -205,7 +205,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         ThrowIfDisposed();
 
         // Serialize device I/O with UpdateFirmwareAsync / UpdateWifiModuleAsync.
-        // GetLanChipInfoAsync runs a SCPI text exchange on the same transport
+        // GetWifiChipInfoAsync runs a SCPI text exchange on the same transport
         // those updates use; a concurrent caller would interleave on the wire
         // and either corrupt the exchange's reply or get partial replies.
         // Acquired without the RunExclusiveAsync state check — a status probe

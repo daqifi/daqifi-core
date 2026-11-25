@@ -24,7 +24,7 @@ public enum DiscoveryPassOutcome
     /// </summary>
     /// <remarks>
     /// An elapsed pass deadline on its own is NOT this outcome. A finder with no natural end —
-    /// <see cref="WiFiDeviceFinder"/>, <see cref="MDnsDeviceFinder"/> — listens until the pass
+    /// <see cref="WifiDeviceFinder"/>, <see cref="MdnsDeviceFinder"/> — listens until the pass
     /// token fires and then hands back a complete answer, so its healthy passes always end at
     /// the deadline and are reported <see cref="Completed"/>. A pass is only incomplete when the
     /// finder says so, or when it returned nothing at all.

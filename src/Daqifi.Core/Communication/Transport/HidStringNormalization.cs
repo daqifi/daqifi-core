@@ -5,7 +5,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// product name) into a usable managed string.
 /// </summary>
 /// <remarks>
-/// The Windows/Linux (HidSharp-backed <see cref="HidLibraryPlatform"/>) and macOS (IOKit-backed
+/// The Windows/Linux (HidSharp-backed <see cref="HidSharpPlatform"/>) and macOS (IOKit-backed
 /// <see cref="MacOsHidPlatform"/>) transport platforms each read the same kind of raw HID string
 /// descriptor and previously carried an identical copy of this normalization; it now lives here
 /// once so the two platforms can't drift out of sync with each other.

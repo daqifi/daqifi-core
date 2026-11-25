@@ -15,7 +15,7 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_FansOutAcrossFinders_ReturnsUnion()
     {
-        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { wifi, serial });
 
@@ -45,7 +45,7 @@ public class AllTransportsDeviceFinderTests
     {
         // Default identity is per-transport (issue #245): a device reachable on both USB and
         // WiFi is two genuine ways to connect, so it is intentionally NOT collapsed.
-        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { wifi, serial });
 
@@ -57,7 +57,7 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_CustomIdentitySelector_CollapsesAcrossTransports()
     {
-        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(
             new IDeviceFinder[] { wifi, serial },
@@ -100,7 +100,7 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_RaisesDeviceDiscoveredPerUnique_AndCompletedOnce()
     {
-        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { wifi, serial });
 
@@ -180,7 +180,7 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_ThrowingDeviceDiscoveredSubscriber_StillReturnsAllAndCompletes()
     {
-        var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var b = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { a, b });
 
@@ -201,7 +201,7 @@ public class AllTransportsDeviceFinderTests
         // A finder that breaks the contract by throwing OperationCanceledException on its timeout
         // must not take the other transports' results with it. What it would have found is missing
         // from the list, so continuous discovery must not read that list as a census.
-        var throwsOce = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) }, throwOnDiscover: new OperationCanceledException());
+        var throwsOce = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) }, throwOnDiscover: new OperationCanceledException());
         var ok = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { throwsOce, ok });
 
@@ -260,7 +260,7 @@ public class AllTransportsDeviceFinderTests
     [Fact]
     public async Task DiscoverAsync_SubscriberExceptionThatCannotRenderItself_StillReturnsAllAndCompletes()
     {
-        var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var b = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
         var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { a, b });
 
@@ -480,7 +480,7 @@ public class AllTransportsDeviceFinderTests
         public string Name { get; set; } = "Fake";
         public string SerialNumber { get; set; } = "SN";
         public string FirmwareVersion { get; set; } = "3.7.2";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

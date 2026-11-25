@@ -46,7 +46,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SystemLogEntry>> DrainSystemLogAsync(CancellationToken cancellationToken = default)
     {
         _host.EnsureConnected(cancellationToken);
 
@@ -272,7 +272,7 @@ internal sealed class DeviceDiagnosticsOperations : IDeviceDiagnostics
     /// exclusions matter:
     /// </para>
     /// <para>
-    /// <see cref="GetSystemLogAsync"/> and <see cref="GetCommandHistoryAsync"/> return
+    /// <see cref="DrainSystemLogAsync"/> and <see cref="GetCommandHistoryAsync"/> return
     /// firmware-authored text, one entry per line. Losing one entry out of ten is visible in the
     /// result, and the log read is destructive on the device — the buffer is cleared by the very
     /// query that read it — so throwing the surviving entries away would destroy more than it

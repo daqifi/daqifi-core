@@ -19,8 +19,8 @@ internal enum HardwareRequirement
     /// <summary>Requires an SD card slot (<see cref="DeviceCapabilities.HasSdCard"/>).</summary>
     SdCard = 1 << 0,
 
-    /// <summary>Requires WiFi connectivity (<see cref="DeviceCapabilities.HasWiFi"/>).</summary>
-    WiFi = 1 << 1
+    /// <summary>Requires WiFi connectivity (<see cref="DeviceCapabilities.HasWifi"/>).</summary>
+    Wifi = 1 << 1
 }
 
 /// <summary>
@@ -138,7 +138,7 @@ internal static class DeviceFeatureRequirements
             // below-floor devices only. It reports the floor — not v3.4.6b1 — as the required
             // version, since the floor is what daqifi-core actually guarantees.
             [DeviceFeature.SdStorageQuery] = new(
-                MinVersion: DaqifiDevice.MinSupportedFirmware,
+                MinVersion: DaqifiDevice.MinimumSupportedFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.SdCard),
 
@@ -151,7 +151,7 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.SdFileTransferOverWifi] = new(
                 MinVersion: SdOverWifiMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.SdCard | HardwareRequirement.WiFi),
+                Hardware: HardwareRequirement.SdCard | HardwareRequirement.Wifi),
 
             // Not a "may I send this?" gate like the rest of the table — the listing query goes
             // out either way. It answers "may I believe a reply that carries no marker?", so an
@@ -164,7 +164,7 @@ internal static class DeviceFeatureRequirements
                 Hardware: HardwareRequirement.SdCard),
 
             // Also a "may I believe this value?" gate. An absent or unparseable version resolves
-            // to not-supported, which keeps the fixed MinPwmFrequencyHz floor — the reading that
+            // to not-supported, which keeps the fixed MinimumPwmFrequencyHz floor — the reading that
             // is correct for every firmware before v3.9.0.
             [DeviceFeature.PwmFrequencyFloor] = new(
                 MinVersion: PwmFrequencyFloorMinFirmware,
@@ -179,7 +179,7 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.WifiLinkStatus] = new(
                 MinVersion: WifiLinkStatusMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.WiFi),
+                Hardware: HardwareRequirement.Wifi),
 
             // Another reply-reading gate. Below it the error queue never says why an SD:GET came
             // back empty, so reading it would cost an exchange and tell Core nothing; an
@@ -189,7 +189,7 @@ internal static class DeviceFeatureRequirements
                 Boards: null,
                 Hardware: HardwareRequirement.SdCard),
 
-            [DeviceFeature.StoredStreamingRateQuery] = new(
+            [DeviceFeature.StoredSampleRateQuery] = new(
                 MinVersion: StoredStreamingRateQueryMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),

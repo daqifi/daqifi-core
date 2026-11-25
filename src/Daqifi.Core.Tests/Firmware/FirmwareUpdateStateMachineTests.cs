@@ -201,7 +201,7 @@ public class FirmwareUpdateStateMachineTests
     [InlineData(FirmwareUpdateState.ErasingFlash)]
     [InlineData(FirmwareUpdateState.Programming)]
     [InlineData(FirmwareUpdateState.Verifying)]
-    [InlineData(FirmwareUpdateState.JumpingToApp)]
+    [InlineData(FirmwareUpdateState.JumpingToApplication)]
     [InlineData(FirmwareUpdateState.ReconnectingAfterFlash)]
     [InlineData(FirmwareUpdateState.CleaningUp)]
     public void ResetIfTerminalState_LeavesAnUpdateThatIsStillRunningAlone(

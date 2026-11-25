@@ -56,7 +56,7 @@ internal sealed class StreamingSession(StreamingSessionKind kind)
 /// <remarks>
 /// <para>
 /// These were four separate concerns scattered through <see cref="DaqifiStreamingDevice"/> —
-/// the <c>IsStreaming</c>/<c>StreamingFrequency</c> pair, the start/stop pair, the
+/// the <c>IsStreaming</c>/<c>SampleRateHz</c> pair, the start/stop pair, the
 /// <c>Send</c>-tracking region for issue #379, and the reconnect snapshot region — but they are
 /// one piece of state and one set of rules about moving it. Splitting the session flag from the
 /// code that decides when a session begins is exactly how the two drift, and the tracking
@@ -458,22 +458,22 @@ internal sealed class StreamingSessionController
     /// </summary>
     internal bool IsFrequencyInherited => _frequencySource == FrequencySource.Adopted;
 
-    /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
-    internal int StreamingFrequency
+    /// <inheritdoc cref="DaqifiStreamingDevice.SampleRateHz"/>
+    internal int SampleRateHz
     {
         get => _streamingFrequency;
         set
         {
-            // MaxSamplingRate is a mutable, unvalidated public property; sanitize the ceiling so
+            // MaximumSampleRateHz is a mutable, unvalidated public property; sanitize the ceiling so
             // an uninitialized/invalid capabilities value (0 or negative) can't produce an
             // impossible range like "1..0" that rejects every valid frequency.
-            var maxSamplingRate = Math.Max(1, _host.MaxSamplingRate);
-            if (value < 1 || value > maxSamplingRate)
+            var maximumSampleRateHz = Math.Max(1, _host.MaximumSampleRateHz);
+            if (value < 1 || value > maximumSampleRateHz)
             {
                 throw new ArgumentOutOfRangeException(
-                    nameof(StreamingFrequency),
+                    nameof(SampleRateHz),
                     value,
-                    DescribeRejectedFrequency(value, maxSamplingRate));
+                    DescribeRejectedFrequency(value, maximumSampleRateHz));
             }
 
             lock (_frequencyLock)
@@ -526,7 +526,7 @@ internal sealed class StreamingSessionController
     internal void SetDefaultFrequency(int frequencyHz)
     {
         // Runs only while the device is being constructed, before anything else can see it.
-        StreamingFrequency = frequencyHz;
+        SampleRateHz = frequencyHz;
         _frequencySource = FrequencySource.CoreDefault;
     }
 
@@ -568,7 +568,7 @@ internal sealed class StreamingSessionController
     /// </para>
     /// <para>
     /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
-    /// fail a connect that is otherwise fine. A rate outside <c>1..MaxSamplingRate</c> is left
+    /// fail a connect that is otherwise fine. A rate outside <c>1..MaximumSampleRateHz</c> is left
     /// alone, and the ceiling is read once and the backing field assigned directly, for the same
     /// reason <see cref="SendTracked"/> gives. Adopting it does not count as choosing it,
     /// so a later read can still bring the rate up to date.
@@ -582,7 +582,7 @@ internal sealed class StreamingSessionController
     /// <returns><c>true</c> when the rate was adopted.</returns>
     internal bool TryAdoptStoredFrequency(int frequencyHz, bool? rateConfigured)
     {
-        var maxSamplingRate = Math.Max(1, _host.MaxSamplingRate);
+        var maximumSampleRateHz = Math.Max(1, _host.MaximumSampleRateHz);
 
         lock (_frequencyLock)
         {
@@ -601,11 +601,11 @@ internal sealed class StreamingSessionController
                 return false;
             }
 
-            if (frequencyHz < 1 || frequencyHz > maxSamplingRate)
+            if (frequencyHz < 1 || frequencyHz > maximumSampleRateHz)
             {
                 SafeTrace(
                     $"[{nameof(TryAdoptStoredFrequency)}] Ignoring the device's stored streaming rate of {frequencyHz} Hz, "
-                    + $"which is outside 1..{maxSamplingRate} Hz; keeping {_streamingFrequency} Hz.");
+                    + $"which is outside 1..{maximumSampleRateHz} Hz; keeping {_streamingFrequency} Hz.");
                 return false;
             }
 
@@ -690,7 +690,7 @@ internal sealed class StreamingSessionController
     /// a value above the ceiling is refused by the ceiling, and the message adds the cap the
     /// enabled channels impose because that is the figure a caller choosing a rate needs next.
     /// </remarks>
-    private string DescribeRejectedFrequency(int value, int maxSamplingRate)
+    private string DescribeRejectedFrequency(int value, int maximumSampleRateHz)
     {
         if (value < 1)
         {
@@ -698,13 +698,13 @@ internal sealed class StreamingSessionController
         }
 
         var message =
-            $"Streaming frequency must be at most {maxSamplingRate} Hz, the device's absolute sampling-rate ceiling.";
+            $"Streaming frequency must be at most {maximumSampleRateHz} Hz, the device's absolute sampling-rate ceiling.";
 
         // A cap of 0 means nothing is enabled, so there is no sustainable rate to quote; a cap
         // equal to the ceiling means the device has said nothing that narrows it. Neither adds
         // anything the caller can act on.
-        var capHz = _host.MaximumStreamingFrequencyHz;
-        return capHz > 0 && capHz < maxSamplingRate
+        var capHz = _host.CurrentMaximumSampleRateHz;
+        return capHz > 0 && capHz < maximumSampleRateHz
             ? message
               + $" The channels enabled right now sustain at most {capHz} Hz, which is what"
               + " starting a stream lowers the rate to."
@@ -732,7 +732,7 @@ internal sealed class StreamingSessionController
                 // nothing, with no error anywhere (issue #975). A reader that cannot start throws
                 // here instead.
                 _host.EnsureMessageReaderRunning();
-                ceilingHz = _host.MaximumStreamingFrequencyHz;
+                ceilingHz = _host.CurrentMaximumSampleRateHz;
             }
 
             lock (_transitions)
@@ -791,16 +791,16 @@ internal sealed class StreamingSessionController
     /// <para>
     /// Lowering rather than throwing is deliberate. The rate is an upper bound a caller asks
     /// for, not a contract the device ever promised to honour, and it is readable afterwards
-    /// through <see cref="StreamingFrequency"/> — so a caller who cares can check what it got,
+    /// through <see cref="SampleRateHz"/> — so a caller who cares can check what it got,
     /// while one who does not still gets data. Throwing would turn every ordinary
     /// "set a high rate, then enable channels" sequence into an exception every caller has to
     /// handle, to arrive at the same rate this picks for them.
     /// </para>
     /// <para>
     /// The adjusted value is later assigned to the backing field rather than through the validating
-    /// <see cref="StreamingFrequency"/> setter, for the reason
+    /// <see cref="SampleRateHz"/> setter, for the reason
     /// <see cref="SendTracked"/> spells out: that setter re-reads
-    /// <see cref="DeviceCapabilities.MaxSamplingRate"/>, and a cap already bounded by one read
+    /// <see cref="DeviceCapabilities.MaximumSampleRateHz"/>, and a cap already bounded by one read
     /// of it must not be able to fail against another. A cap of <c>0</c> — nothing enabled —
     /// leaves the rate alone; see <see cref="SampleRateCap.Enforce"/>.
     /// </para>
@@ -956,8 +956,8 @@ internal sealed class StreamingSessionController
     /// <para>
     /// The sampling ceiling is read exactly once and handed to the interpreter, which validates
     /// the rate against it; the value that comes back is then assigned to the backing field
-    /// rather than through the validating <see cref="StreamingFrequency"/> setter. That setter
-    /// re-reads <see cref="DeviceCapabilities.MaxSamplingRate"/>, which is a
+    /// rather than through the validating <see cref="SampleRateHz"/> setter. That setter
+    /// re-reads <see cref="DeviceCapabilities.MaximumSampleRateHz"/>, which is a
     /// mutable public property — so validating against one read and assigning through a setter
     /// that takes another would let a concurrent capabilities update throw out of a <c>Send</c>
     /// whose command has already gone to the device. Tracking a command must never be able to
@@ -972,7 +972,7 @@ internal sealed class StreamingSessionController
     /// </param>
     internal void SendTracked(string? command, Func<ITrackedSend?, bool> send)
     {
-        var effect = SessionCommandInterpreter.Interpret(command, _host.MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, _host.MaximumSampleRateHz);
 
         switch (effect.Kind)
         {
@@ -993,7 +993,7 @@ internal sealed class StreamingSessionController
                     }
 
                     SendStartOrStop(
-                        StreamingSessionKind.LiveStream, RateOfAStartAt(effect.StreamingFrequency), send);
+                        StreamingSessionKind.LiveStream, RateOfAStartAt(effect.SampleRateHz), send);
                 }
 
                 break;

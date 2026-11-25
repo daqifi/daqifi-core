@@ -10,17 +10,17 @@ public class AnalogChannelTests
     public void Constructor_WithValidParameters_InitializesCorrectly()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
 
         // Assert
         Assert.Equal(0, channel.ChannelNumber);
-        Assert.Equal(65535u, channel.Resolution);
+        Assert.Equal(65535u, channel.FullScaleCount);
         Assert.Equal("Analog Channel 0", channel.Name);
         Assert.Equal(ChannelType.Analog, channel.Type);
         Assert.Equal(ChannelDirection.Input, channel.Direction);
         Assert.False(channel.IsEnabled);
-        Assert.Equal(1.0, channel.CalibrationM);
-        Assert.Equal(0.0, channel.CalibrationB);
+        Assert.Equal(1.0, channel.CalibrationSlope);
+        Assert.Equal(0.0, channel.CalibrationOffset);
         Assert.Equal(1.0, channel.InternalScaleM);
         Assert.Equal(1.0, channel.PortRange);
     }
@@ -33,23 +33,23 @@ public class AnalogChannelTests
     }
 
     [Fact]
-    public void Constructor_DefaultsResolutionIsAssumedToFalse()
+    public void Constructor_DefaultsFullScaleCountIsAssumedToFalse()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
 
         // Assert
-        Assert.False(channel.ResolutionIsAssumed);
+        Assert.False(channel.FullScaleCountIsAssumed);
     }
 
     [Fact]
-    public void Constructor_WithResolutionIsAssumedTrue_SetsResolutionIsAssumed()
+    public void Constructor_WithFullScaleCountIsAssumedTrue_SetsFullScaleCountIsAssumed()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535, resolutionIsAssumed: true);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535, fullScaleCountIsAssumed: true);
 
         // Assert
-        Assert.True(channel.ResolutionIsAssumed);
+        Assert.True(channel.FullScaleCountIsAssumed);
     }
 
     [Theory]
@@ -62,8 +62,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, resolution)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 1.0
         };
 
@@ -81,8 +81,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 1.0
         };
 
@@ -101,8 +101,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 1.0,
-            CalibrationM = 2.0,
-            CalibrationB = 1.0,
+            CalibrationSlope = 2.0,
+            CalibrationOffset = 1.0,
             InternalScaleM = 1.0
         };
 
@@ -121,8 +121,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 1.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 10.0
         };
 
@@ -137,16 +137,16 @@ public class AnalogChannelTests
     [Fact]
     public void GetScaledValue_WithInternalScaleAndOffset_DoesNotScaleTheOffset()
     {
-        // Regression pin for daqifi-core#387: CalibrationB is an offset in volts and must be added
+        // Regression pin for daqifi-core#387: CalibrationOffset is an offset in volts and must be added
         // after InternalScaleM is applied, matching the firmware's own conversion
         // (MC12bADC.c: (range * scale * calM * raw) / resolution + calB, behind MEAS:VOLT:DC?).
-        // The old form multiplied CalibrationB by InternalScaleM, which diverged from the device
-        // whenever InternalScaleM != 1 and CalibrationB != 0.
+        // The old form multiplied CalibrationOffset by InternalScaleM, which diverged from the device
+        // whenever InternalScaleM != 1 and CalibrationOffset != 0.
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.25,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.25,
             InternalScaleM = 2.0
         };
 
@@ -158,13 +158,13 @@ public class AnalogChannelTests
     [Fact]
     public void GetScaledValue_WithInternalScaleAndOffset_AtZeroRawReturnsTheOffsetUnscaled()
     {
-        // At raw 0 the gain term vanishes, so the result is exactly CalibrationB — the cleanest
+        // At raw 0 the gain term vanishes, so the result is exactly CalibrationOffset — the cleanest
         // statement that the offset is never multiplied by InternalScaleM (daqifi-core#387).
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = -0.05,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = -0.05,
             InternalScaleM = 4.0
         };
 
@@ -298,20 +298,20 @@ public class AnalogChannelTests
         // Act
         channel.Name = "Temperature";
         channel.IsEnabled = true;
-        channel.MinValue = -100.0;
-        channel.MaxValue = 100.0;
-        channel.CalibrationM = 2.0;
-        channel.CalibrationB = 1.5;
+        channel.MinimumValue = -100.0;
+        channel.MaximumValue = 100.0;
+        channel.CalibrationSlope = 2.0;
+        channel.CalibrationOffset = 1.5;
         channel.InternalScaleM = 0.5;
         channel.PortRange = 5.0;
 
         // Assert
         Assert.Equal("Temperature", channel.Name);
         Assert.True(channel.IsEnabled);
-        Assert.Equal(-100.0, channel.MinValue);
-        Assert.Equal(100.0, channel.MaxValue);
-        Assert.Equal(2.0, channel.CalibrationM);
-        Assert.Equal(1.5, channel.CalibrationB);
+        Assert.Equal(-100.0, channel.MinimumValue);
+        Assert.Equal(100.0, channel.MaximumValue);
+        Assert.Equal(2.0, channel.CalibrationSlope);
+        Assert.Equal(1.5, channel.CalibrationOffset);
         Assert.Equal(0.5, channel.InternalScaleM);
         Assert.Equal(5.0, channel.PortRange);
     }
@@ -325,7 +325,7 @@ public class AnalogChannelTests
     [InlineData(16_777_217u)] // just above the 24-bit max-count ceiling
     public void Constructor_WithOutOfRangeResolution_ThrowsException(uint resolution)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, resolution: resolution));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, fullScaleCount: resolution));
     }
 
     [Theory]
@@ -333,14 +333,14 @@ public class AnalogChannelTests
     [InlineData(16_777_216u)]  // 24-bit ceiling
     public void Constructor_WithBoundaryResolution_IsAccepted(uint resolution)
     {
-        var channel = new AnalogChannel(channelNumber: 0, resolution: resolution);
-        Assert.Equal(resolution, channel.Resolution);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: resolution);
+        Assert.Equal(resolution, channel.FullScaleCount);
     }
 
     [Theory]
     [InlineData(0.0)]                        // zero range
     [InlineData(-5.0)]                       // negative range
-    [InlineData(AnalogChannel.MaxPortRangeVolts + 0.1)] // beyond max
+    [InlineData(AnalogChannel.MaximumPortRangeVolts + 0.1)] // beyond max
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
     public void PortRange_WithInvalidValue_ThrowsException(double value)
@@ -353,37 +353,37 @@ public class AnalogChannelTests
     [InlineData(0.0)]  // zero scale factor discards the measurement
     [InlineData(double.NaN)]
     [InlineData(double.NegativeInfinity)]
-    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
-    public void CalibrationM_WithInvalidValue_ThrowsException(double value)
+    [InlineData(AnalogChannel.MaximumCalibrationMagnitude * 2)]
+    public void CalibrationSlope_WithInvalidValue_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationM = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationSlope = value);
     }
 
     [Fact]
-    public void CalibrationM_WithNegativeValue_IsAccepted()
+    public void CalibrationSlope_WithNegativeValue_IsAccepted()
     {
         // A negative slope legitimately inverts the signal (e.g. reversed wiring).
-        var channel = new AnalogChannel(0) { CalibrationM = -2.5 };
-        Assert.Equal(-2.5, channel.CalibrationM);
+        var channel = new AnalogChannel(0) { CalibrationSlope = -2.5 };
+        Assert.Equal(-2.5, channel.CalibrationSlope);
     }
 
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
-    public void CalibrationB_WithInvalidValue_ThrowsException(double value)
+    [InlineData(AnalogChannel.MaximumCalibrationMagnitude * 2)]
+    public void CalibrationOffset_WithInvalidValue_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationB = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationOffset = value);
     }
 
     [Fact]
-    public void CalibrationB_WithZero_IsAccepted()
+    public void CalibrationOffset_WithZero_IsAccepted()
     {
         // Zero is a valid offset (it's the default).
-        var channel = new AnalogChannel(0) { CalibrationB = 0.0 };
-        Assert.Equal(0.0, channel.CalibrationB);
+        var channel = new AnalogChannel(0) { CalibrationOffset = 0.0 };
+        Assert.Equal(0.0, channel.CalibrationOffset);
     }
 
     [Theory]
@@ -399,26 +399,26 @@ public class AnalogChannelTests
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.NegativeInfinity)]
-    public void MinValue_WithNonFinite_ThrowsException(double value)
+    public void MinimumValue_WithNonFinite_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MinValue = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MinimumValue = value);
     }
 
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    public void MaxValue_WithNonFinite_ThrowsException(double value)
+    public void MaximumValue_WithNonFinite_ThrowsException(double value)
     {
         var channel = new AnalogChannel(0);
-        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MaxValue = value);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MaximumValue = value);
     }
 
     [Fact]
     public void PortRange_AtMaxBoundary_IsAccepted()
     {
-        var channel = new AnalogChannel(0) { PortRange = AnalogChannel.MaxPortRangeVolts };
-        Assert.Equal(AnalogChannel.MaxPortRangeVolts, channel.PortRange);
+        var channel = new AnalogChannel(0) { PortRange = AnalogChannel.MaximumPortRangeVolts };
+        Assert.Equal(AnalogChannel.MaximumPortRangeVolts, channel.PortRange);
     }
 
     // ---------------------------------------------------------------------
@@ -433,11 +433,11 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 262143)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 1.0,
-            MinValue = -10.0,
-            MaxValue = 10.0
+            MinimumValue = -10.0,
+            MaximumValue = 10.0
         };
 
         // -full scale -> -PortRange
@@ -454,8 +454,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 5.0,
-            CalibrationM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 1.0
         };
 
@@ -473,8 +473,8 @@ public class AnalogChannelTests
         var channel = new AnalogChannel(0, 262143)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
-            CalibrationB = 1.0,
+            CalibrationSlope = 1.0,
+            CalibrationOffset = 1.0,
             InternalScaleM = 1.0
         };
 
@@ -482,13 +482,13 @@ public class AnalogChannelTests
     }
 
     [Fact]
-    public void GetScaledValue_WithNegativeCalibrationM_InvertsSign()
+    public void GetScaledValue_WithNegativeCalibrationSlope_InvertsSign()
     {
         var channel = new AnalogChannel(0, 65535)
         {
             PortRange = 10.0,
-            CalibrationM = -1.0,
-            CalibrationB = 0.0,
+            CalibrationSlope = -1.0,
+            CalibrationOffset = 0.0,
             InternalScaleM = 1.0
         };
 
@@ -499,10 +499,10 @@ public class AnalogChannelTests
     [Fact]
     public void IsBipolar_ReflectsConfiguredMinValue()
     {
-        var bipolar = new AnalogChannel(0) { MinValue = -10.0, MaxValue = 10.0 };
+        var bipolar = new AnalogChannel(0) { MinimumValue = -10.0, MaximumValue = 10.0 };
         Assert.True(bipolar.IsBipolar);
 
-        var unipolar = new AnalogChannel(0) { MinValue = 0.0, MaxValue = 10.0 };
+        var unipolar = new AnalogChannel(0) { MinimumValue = 0.0, MaximumValue = 10.0 };
         Assert.False(unipolar.IsBipolar);
     }
 
@@ -601,12 +601,12 @@ public class AnalogChannelTests
         // Two conversions, in order: counts -> volts by the device's calibration, volts ->
         // engineering units by the caller's scaling. Getting this backwards (or collapsing the two)
         // is the failure this pins.
-        var channel = new AnalogChannel(0, resolution: 65535)
+        var channel = new AnalogChannel(0, fullScaleCount: 65535)
         {
             PortRange = 10.0,
-            CalibrationM = 1.0,
+            CalibrationSlope = 1.0,
             InternalScaleM = 1.0,
-            CalibrationB = 0.0,
+            CalibrationOffset = 0.0,
             Scaling = new ChannelScaling(gain: 20.0, unit: "PSI")
         };
 

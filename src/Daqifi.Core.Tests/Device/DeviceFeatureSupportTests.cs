@@ -63,7 +63,7 @@ public class DeviceFeatureSupportTests
 
         Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), requirement.MinVersion);
         Assert.Equal(
-            HardwareRequirement.SdCard | HardwareRequirement.WiFi,
+            HardwareRequirement.SdCard | HardwareRequirement.Wifi,
             requirement.Hardware);
     }
 
@@ -154,11 +154,11 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
-    public void RequirementTable_StoredStreamingRateQuery_RequiresV3_9_0_OnEveryBoard()
+    public void RequirementTable_StoredSampleRateQuery_RequiresV3_9_0_OnEveryBoard()
     {
         // SYSTem:STReam:START? (firmware #1007/#1014) first shipped in v3.9.0. Below it the query
         // is an undefined header, so asking it would leave an error in the device's queue.
-        var requirement = DeviceFeatureRequirements.For(DeviceFeature.StoredStreamingRateQuery);
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.StoredSampleRateQuery);
 
         Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
@@ -186,7 +186,7 @@ public class DeviceFeatureSupportTests
         // guarantees, so that is the version the typed exception reports.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdStorageQuery);
 
-        Assert.Equal(DaqifiDevice.MinSupportedFirmware, requirement.MinVersion);
+        Assert.Equal(DaqifiDevice.MinimumSupportedFirmware, requirement.MinVersion);
     }
 
     // ---- Firmware-version axis ------------------------------------------------------------
@@ -206,7 +206,7 @@ public class DeviceFeatureSupportTests
             new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" },
             new object[] { DeviceFeature.PwmFrequencyFloor,      "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.Identify,               "3.8.0", "3.9.0", "3.10.0" },
-            new object[] { DeviceFeature.StoredStreamingRateQuery, "3.8.0", "3.9.0", "3.9.1" },
+            new object[] { DeviceFeature.StoredSampleRateQuery, "3.8.0", "3.9.0", "3.9.1" },
             new object[] { DeviceFeature.SdCardCrcProtection,    "3.8.0", "3.9.0", "3.9.1" }
         };
 
@@ -304,7 +304,7 @@ public class DeviceFeatureSupportTests
     [Fact]
     public void Supports_SdFileTransferOverWifi_WhenWifiHardwareAbsent_ReturnsFalse()
     {
-        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasWiFi = false };
+        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasWifi = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noWifi);
 
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));

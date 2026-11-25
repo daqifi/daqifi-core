@@ -86,13 +86,13 @@ public sealed record ChannelAcquisitionStatistics
     /// defect in the measurement. Samples counted by <see cref="OutOfOrderSampleCount"/> contribute
     /// no interval at all, since a negative number is not a gap.
     /// </summary>
-    public required TimeSpan MinSampleInterval { get; init; }
+    public required TimeSpan MinimumSampleInterval { get; init; }
 
     /// <summary>
     /// Gets the largest such gap — the jitter figure that matters, since a single stalled interval is what
     /// a dropped block of samples looks like.
     /// </summary>
-    public required TimeSpan MaxSampleInterval { get; init; }
+    public required TimeSpan MaximumSampleInterval { get; init; }
 
     /// <summary>
     /// Gets how many samples carried a timestamp earlier than the latest one already seen on this channel.
@@ -105,12 +105,12 @@ public sealed record ChannelAcquisitionStatistics
     /// <summary>
     /// Gets the smallest value seen, seeded from the first sample, in <see cref="Unit"/>.
     /// </summary>
-    public required double MinValue { get; init; }
+    public required double MinimumValue { get; init; }
 
     /// <summary>
     /// Gets the largest value seen, seeded from the first sample, in <see cref="Unit"/>.
     /// </summary>
-    public required double MaxValue { get; init; }
+    public required double MaximumValue { get; init; }
 
     /// <summary>
     /// Gets the arithmetic mean of every value seen in the window, in <see cref="Unit"/>.
@@ -170,7 +170,7 @@ public sealed record ChannelAcquisitionStatistics
 
     /// <summary>
     /// Gets the mean gap between consecutive sample timestamps (device clock) — the exact mean of
-    /// the intervals <see cref="MinSampleInterval"/> and <see cref="MaxSampleInterval"/> bound,
+    /// the intervals <see cref="MinimumSampleInterval"/> and <see cref="MaximumSampleInterval"/> bound,
     /// since consecutive intervals telescope to
     /// <c>(Latest - Earliest) / (SampleCount - 1)</c>. Approximate rather than exact once
     /// <see cref="OutOfOrderSampleCount"/> is non-zero, because a timestamp that moved backwards

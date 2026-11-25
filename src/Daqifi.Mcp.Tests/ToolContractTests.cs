@@ -286,7 +286,7 @@ public class DigitalConfigurationToolContractTests
         var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
 
         Assert.Equal(before, device.CapabilityReads);
-        Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
+        Assert.Equal(device.SampleRateHz, result.SampleRateHz);
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public class DigitalConfigurationToolContractTests
         var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
 
         Assert.Equal(20_000, result.SampleRateHz);
-        Assert.Equal(20_000, device.StreamingFrequency);
+        Assert.Equal(20_000, device.SampleRateHz);
     }
 }
 
@@ -618,7 +618,7 @@ public class SampleRateToolContractTests
         // a rate there, but the device's own rate can already be one (Core starts every device at
         // 100 Hz, above any clamp below that), so start from a live rate over the clamp.
         var (agent, device) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
-        device.StreamingFrequency = 1_000;
+        device.SampleRateHz = 1_000;
 
         var result = await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0, 1 });
 

@@ -135,7 +135,7 @@ public class PlatformFactAttributeTests
         "GetDescriptor_OffLinux_AnswersNullForEveryPort",
         TestPlatforms.Linux)]
     [InlineData(
-        typeof(Daqifi.Core.Tests.Firmware.Winc.WincFlasherTests),
+        typeof(Daqifi.Core.Tests.Firmware.Wifi.WincFlasherTests),
         "Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound",
         TestPlatforms.Windows)]
     [InlineData(

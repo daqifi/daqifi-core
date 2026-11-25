@@ -82,8 +82,8 @@ public class DeviceMetadataSnapshotTests
                 Assert.Equal(expected == "1" ? "Nq1" : "Nq3", metadata.PartNumber);
                 Assert.Equal(expected, metadata.FirmwareVersion);
                 Assert.Equal(expected, metadata.Ssid);
-                Assert.Equal(int.Parse(expected), metadata.Capabilities.AnalogInputChannels);
-                Assert.Equal(expected == "1" ? 22000 : 16000, metadata.Capabilities.MaxSamplingRate);
+                Assert.Equal(int.Parse(expected), metadata.Capabilities.AnalogInputChannelCount);
+                Assert.Equal(expected == "1" ? 22000 : 16000, metadata.Capabilities.MaximumSampleRateHz);
                 Assert.Equal(int.Parse(expected), metadata.Health.BatteryPercent);
             }
         }
@@ -147,7 +147,7 @@ public class DeviceMetadataSnapshotTests
         device.ReceiveStatus(new DaqifiOutMessage { DevicePn = "Nq1" });
 
         Assert.Equal(2, held.CapabilityDocument!.Channels.Count);
-        Assert.Equal(2, device.Metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(2, device.Metadata.Capabilities.AnalogInputChannelCount);
     }
 
     [Fact]

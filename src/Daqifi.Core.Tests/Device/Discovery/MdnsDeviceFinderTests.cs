@@ -1,0 +1,489 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+using Daqifi.Core.Device;
+using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
+
+namespace Daqifi.Core.Tests.Device.Discovery;
+
+/// <summary>
+/// Tests for the mDNS finder (issue #183). The decode path — datagram to
+/// <see cref="IDeviceInfo"/>, deduplication and event dispatch included — is driven from
+/// synthesized advertisements through the same internal entry point the receive loop calls,
+/// so none of it needs a network, a device or an mDNS responder on the build machine.
+/// </summary>
+public class MdnsDeviceFinderTests
+{
+    private static readonly IReadOnlyList<string> DaqifiService = MdnsMessage.ParseServiceLabels("_daqifi._tcp");
+    private static readonly IPAddress DeviceAddress = IPAddress.Parse("192.168.1.39");
+    private static readonly IPEndPoint DeviceEndPoint = new(DeviceAddress, MdnsMessage.MulticastPort);
+
+    private static readonly MdnsDeviceFinder.LocalInterface[] Interfaces =
+    [
+        new() { Address = IPAddress.Parse("10.0.0.5"), Mask = IPAddress.Parse("255.255.255.0") },
+        new() { Address = IPAddress.Parse("192.168.1.50"), Mask = IPAddress.Parse("255.255.255.0") }
+    ];
+
+    #region Advertisement to device mapping
+
+    [Fact]
+    public void MapDevices_MapsTheFirmwareAdvertisementOntoDeviceInfo()
+    {
+        var device = Assert.Single(MapAdvertisement(MdnsResponseBuilder.DeviceAdvertisement()));
+
+        Assert.Equal("Bench Nyquist", device.Name);                  // TXT friendly=
+        Assert.Equal("9090539562006014104", device.SerialNumber);    // TXT sn= (hex, normalized)
+        Assert.Equal("3.7.3", device.FirmwareVersion);               // TXT fw=
+        Assert.Equal(DeviceType.Nyquist1, device.Type);              // TXT pn=Nq1
+        Assert.Equal(DeviceAddress, device.IpAddress);               // A record
+        Assert.Equal(9760, device.Port);                             // SRV port
+        Assert.Equal(ConnectionType.Wifi, device.ConnectionType);
+        Assert.True(device.IsPowerOn);
+
+        // The advertisement carries no MAC; inventing one from the hostname's two MAC bytes
+        // would collide with the real MACs the broadcast finder reports.
+        Assert.Null(device.MacAddress);
+
+        // Attributed to the NIC that can actually reach 192.168.1.39.
+        Assert.Equal(IPAddress.Parse("192.168.1.50"), device.LocalInterfaceAddress);
+    }
+
+    [Fact]
+    public void MapDevices_FallsBackToTheInstanceNameWhenNoFriendlyName()
+    {
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(
+            txtStrings: ["sn=1234", "pn=Nq2", "fw=3.7.3", "hw=2.0.0"]);
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal("DAQiFi-95A7", device.Name);
+        Assert.Equal(DeviceType.Nyquist2, device.Type);
+    }
+
+    [Fact]
+    public void MapDevices_HandlesAConflictResolvedInstanceName()
+    {
+        // RFC 6762 §9: a second device that probes into a name collision renames itself.
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(
+            instanceLabel: "DAQiFi-95A7-2",
+            host: "daqifi-95a7-2.local",
+            deviceIp: "192.168.1.41",
+            txtStrings: ["sn=4321", "pn=Nq1"]);
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal("DAQiFi-95A7-2", device.Name);
+        Assert.Equal(IPAddress.Parse("192.168.1.41"), device.IpAddress);
+        // Not the firmware's 16-hex-digit format, so it is passed through rather than being
+        // reinterpreted -- "4321" is also a valid hex literal, and 17185 is not this device.
+        Assert.Equal("4321", device.SerialNumber);
+    }
+
+    [Fact]
+    public void MapDevices_IgnoresAGoodbyePacket()
+    {
+        // TTL 0 on the PTR means the device is leaving (RFC 6762 §10.1), even though the same
+        // packet still carries its SRV/TXT/A data.
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(ptrTtl: 0);
+
+        Assert.Empty(MapAdvertisement(packet));
+    }
+
+    [Fact]
+    public void MapDevices_FallsBackToTheSenderAddressWhenTheARecordIsMissing()
+    {
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(deviceIp: null);
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal(DeviceAddress, device.IpAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.50"), device.LocalInterfaceAddress);
+    }
+
+    [Fact]
+    public void MapDevices_SkipsAnInstanceWithNoServiceRecord()
+    {
+        // A browse-only answer: the service exists but nothing says where to connect.
+        var packet = new MdnsResponseBuilder()
+            .AddPtr(MdnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType)
+            .Build();
+
+        Assert.Empty(MapAdvertisement(packet));
+    }
+
+    [Fact]
+    public void MapDevices_SkipsAnInstanceAdvertisingPortZero()
+    {
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(port: 0);
+
+        Assert.Empty(MapAdvertisement(packet));
+    }
+
+    [Fact]
+    public void MapDevices_IgnoresOtherServicesOnTheNetwork()
+    {
+        // A shared 5353 socket sees every responder on the link, not just ours.
+        var packet = new MdnsResponseBuilder()
+            .AddPtr("_airplay._tcp.local", "Living Room._airplay._tcp.local")
+            .AddSrv("Living Room._airplay._tcp.local", "appletv.local", 7000)
+            .AddA("appletv.local", IPAddress.Parse("192.168.1.77"))
+            .Build();
+
+        Assert.Empty(MapAdvertisement(packet));
+    }
+
+    [Fact]
+    public void MapDevices_ResolvesAnInstanceAdvertisedWithoutAPointerRecord()
+    {
+        // Some responders answer a resolve with SRV/TXT/A and no PTR.
+        var instance = "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType;
+        var packet = new MdnsResponseBuilder()
+            .AddSrv(instance, "daqifi-95a7.local", 9760)
+            .AddTxt(instance, ["sn=1", "pn=Nq3"])
+            .AddA("daqifi-95a7.local", DeviceAddress)
+            .Build();
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal(DeviceType.Nyquist3, device.Type);
+        Assert.Equal(9760, device.Port);
+    }
+
+    [Fact]
+    public void MapDevices_ReportsTwoDistinctDevicesFromOneDatagram()
+    {
+        var first = "DAQiFi-95A7." + MdnsResponseBuilder.ServiceType;
+        var second = "DAQiFi-A4B1." + MdnsResponseBuilder.ServiceType;
+        var packet = new MdnsResponseBuilder()
+            .AddPtr(MdnsResponseBuilder.ServiceType, first)
+            .AddPtr(MdnsResponseBuilder.ServiceType, second)
+            .AddSrv(first, "daqifi-95a7.local", 9760)
+            .AddSrv(second, "daqifi-a4b1.local", 9760)
+            .AddA("daqifi-95a7.local", IPAddress.Parse("192.168.1.39"))
+            .AddA("daqifi-a4b1.local", IPAddress.Parse("192.168.1.40"))
+            .Build();
+
+        var devices = MapAdvertisement(packet);
+
+        Assert.Equal(2, devices.Count);
+        Assert.Equal(
+            new[] { IPAddress.Parse("192.168.1.39"), IPAddress.Parse("192.168.1.40") },
+            devices.Select(d => d.IpAddress));
+    }
+
+    [Fact]
+    public void MapDevices_ParsesTxtAttributesCaseInsensitivelyAndKeepsTheFirstDuplicate()
+    {
+        var packet = MdnsResponseBuilder.DeviceAdvertisement(
+            txtStrings: ["SN=first", "sn=second", "PN=Nq1", "novalue", "=empty"]);
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal("first", device.SerialNumber);
+        Assert.Equal(DeviceType.Nyquist1, device.Type);
+        Assert.Equal(string.Empty, device.FirmwareVersion);
+    }
+
+    #endregion
+
+    #region Local interface attribution
+
+    [Fact]
+    public void ResolveLocalInterfaceAddress_PicksTheInterfaceOnTheDeviceSubnet()
+    {
+        Assert.Equal(
+            IPAddress.Parse("192.168.1.50"),
+            MdnsDeviceFinder.ResolveLocalInterfaceAddress(IPAddress.Parse("192.168.1.39"), Interfaces));
+
+        Assert.Equal(
+            IPAddress.Parse("10.0.0.5"),
+            MdnsDeviceFinder.ResolveLocalInterfaceAddress(IPAddress.Parse("10.0.0.200"), Interfaces));
+    }
+
+    [Fact]
+    public void ResolveLocalInterfaceAddress_ReturnsNullWhenNoInterfaceCanReachTheDevice()
+    {
+        Assert.Null(MdnsDeviceFinder.ResolveLocalInterfaceAddress(IPAddress.Parse("172.16.4.9"), Interfaces));
+        Assert.Null(MdnsDeviceFinder.ResolveLocalInterfaceAddress(IPAddress.IPv6Loopback, Interfaces));
+    }
+
+    #endregion
+
+    #region Datagram handling
+
+    [Fact]
+    public void HandleDatagram_PublishesEachDeviceOnceAcrossRepeatedAnnouncements()
+    {
+        using var finder = new MdnsDeviceFinder();
+        var announced = new List<IDeviceInfo>();
+        finder.DeviceDiscovered += (_, e) => announced.Add(e.DeviceInfo);
+
+        var discovered = new List<IDeviceInfo>();
+        var packet = MdnsResponseBuilder.DeviceAdvertisement();
+
+        // The query is retransmitted, so the same advertisement legitimately arrives repeatedly.
+        finder.HandleDatagram(packet, packet.Length, DeviceEndPoint, Interfaces, discovered);
+        finder.HandleDatagram(packet, packet.Length, DeviceEndPoint, Interfaces, discovered);
+
+        Assert.Single(discovered);
+        Assert.Single(announced);
+        Assert.Equal("9090539562006014104", announced[0].SerialNumber);
+    }
+
+    [Fact]
+    public void HandleDatagram_IgnoresQueriesAndMalformedTraffic()
+    {
+        using var finder = new MdnsDeviceFinder();
+        var discovered = new List<IDeviceInfo>();
+
+        var query = MdnsMessage.BuildPtrQuery(DaqifiService);
+        finder.HandleDatagram(query, query.Length, DeviceEndPoint, Interfaces, discovered);
+        finder.HandleDatagram([0x01, 0x02, 0x03], 3, DeviceEndPoint, Interfaces, discovered);
+
+        Assert.Empty(discovered);
+    }
+
+    [Fact]
+    public void HandleDatagram_IsNotDerailedByAThrowingSubscriber()
+    {
+        using var finder = new MdnsDeviceFinder();
+        finder.DeviceDiscovered += (_, _) => throw new InvalidOperationException("subscriber blew up");
+
+        var discovered = new List<IDeviceInfo>();
+        var packet = MdnsResponseBuilder.DeviceAdvertisement();
+
+        finder.HandleDatagram(packet, packet.Length, DeviceEndPoint, Interfaces, discovered);
+
+        Assert.Single(discovered);
+    }
+
+    [Fact]
+    public void HandleDatagram_HonoursACustomServiceType()
+    {
+        using var finder = new MdnsDeviceFinder("_daqifi-test._tcp");
+        var discovered = new List<IDeviceInfo>();
+
+        var packet = MdnsResponseBuilder.DeviceAdvertisement();
+        finder.HandleDatagram(packet, packet.Length, DeviceEndPoint, Interfaces, discovered);
+
+        Assert.Empty(discovered);
+    }
+
+    #endregion
+
+    #region Construction and lifecycle
+
+    [Fact]
+    public void ServiceType_IsFullyQualifiedWithTheLocalDomain()
+    {
+        using var finder = new MdnsDeviceFinder();
+
+        Assert.Equal("_daqifi._tcp.local", finder.ServiceType);
+        Assert.Equal("_daqifi._tcp", MdnsDeviceFinder.DefaultServiceType);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("_daqifi")]
+    public void Constructor_RejectsAMalformedServiceType(string serviceType)
+    {
+        Assert.Throws<ArgumentException>(() => new MdnsDeviceFinder(serviceType));
+    }
+
+    private static readonly MdnsDeviceFinder.LocalInterface UnusableInterface = new()
+    {
+        // Reserved for documentation (RFC 5737), so no host has it to join a group on.
+        Address = IPAddress.Parse("192.0.2.1"),
+        Mask = IPAddress.Parse("255.255.255.0")
+    };
+
+    [Fact]
+    public async Task DiscoverAsync_ListenerCannotBeCreated_ThrowsAndRaisesCompleted()
+    {
+        using var finder = new MdnsDeviceFinder
+        {
+            InterfaceProvider = () => [UnusableInterface],
+            ListenerFactory = () => throw new SocketException((int)SocketError.AddressAlreadyInUse)
+        };
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        var ex = await Assert.ThrowsAsync<SocketException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(SocketError.AddressAlreadyInUse, ex.SocketErrorCode);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_NoInterfaceCanJoinTheGroup_Throws()
+    {
+        using var finder = new MdnsDeviceFinder
+        {
+            InterfaceProvider = () => [UnusableInterface],
+            ListenerFactory = () => new UdpClient(new IPEndPoint(IPAddress.Any, 0))
+        };
+
+        await Assert.ThrowsAsync<SocketException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_ListenerDiesMidBrowse_ThrowsInsteadOfFindingNothing()
+    {
+        UdpClient? listener = null;
+        using var finder = new MdnsDeviceFinder
+        {
+            ListenerFactory = () => listener = new UdpClient(new IPEndPoint(IPAddress.Any, 0)),
+            QuerySender = _ => Task.CompletedTask
+        };
+
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan);
+        Assert.False(browse.IsCompleted);
+        listener!.Client.Dispose();
+
+        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(failure is SocketException or ObjectDisposedException, $"got {failure}");
+    }
+
+    /// <summary>A browse whose queries are sent as told and which hears nothing back.</summary>
+    private static MdnsDeviceFinder SilentBrowse(Func<Task> send) => new()
+    {
+        ListenerFactory = () => new UdpClient(new IPEndPoint(IPAddress.Any, 0)),
+        QuerySender = _ => send()
+    };
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_EverySendFails_EndsAnInfiniteBrowseWithThatError()
+    {
+        // The listener stays healthy, so nothing but the failed sends can end this pass.
+        using var finder = SilentBrowse(
+            () => Task.FromException(new SocketException((int)SocketError.HostUnreachable)));
+
+        var ex = await Assert.ThrowsAsync<SocketException>(
+            () => finder.DiscoverAsync(Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(SocketError.HostUnreachable, ex.SocketErrorCode);
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_OnlyTheFirstSendFails_KeepsListening()
+    {
+        // A send that fails synchronously and one that succeeds: the later round carries the query.
+        var sends = 0;
+        using var finder = SilentBrowse(() => Interlocked.Increment(ref sends) == 1
+            ? throw new SocketException((int)SocketError.HostUnreachable)
+            : Task.CompletedTask);
+
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromSeconds(4)).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.True(sends > 1);
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_NoInterfaces_FindsNothing()
+    {
+        using var finder = new MdnsDeviceFinder { InterfaceProvider = () => [] };
+
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeoutAndRaisesCompleted()
+    {
+        using var finder = SilentBrowse(() => Task.CompletedTask);
+        var completed = false;
+        finder.DiscoveryCompleted += (_, _) => completed = true;
+
+        var timeout = TimeSpan.FromMilliseconds(500);
+        var browse = finder.DiscoverAsync(timeout);
+        Assert.False(browse.IsCompleted, "the browse ended before its timeout");
+
+        // Bounds a browse the timeout never ends, not how promptly it ends.
+        Assert.Empty(await browse.WaitAsync(timeout + TimeSpan.FromSeconds(10)));
+        Assert.True(completed);
+    }
+
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
+    {
+        // A timeout ends a browse with what answered by then; a cancellation never does.
+        using var finder = SilentBrowse(() => Task.CompletedTask);
+        using var cts = new CancellationTokenSource();
+
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);
+
+        // A pass that finds nothing to browse on returns at once. Still running after a moment
+        // means it is waiting on replies, so what ends it below is the cancellation.
+        var endedOnItsOwn = await Task.WhenAny(browse, Task.Delay(TimeSpan.FromMilliseconds(200))) == browse;
+        Assert.False(endedOnItsOwn, "the browse ended before it was cancelled");
+
+        cts.Cancel();
+
+        // Bounded, so a browse that ignored the token fails instead of hanging the run.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
+    {
+        // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
+        using var finder = new MdnsDeviceFinder();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AfterDispose_Throws()
+    {
+        var finder = new MdnsDeviceFinder();
+        finder.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync());
+    }
+
+    #endregion
+
+    private static IReadOnlyList<DeviceInfo> MapAdvertisement(byte[] packet)
+    {
+        Assert.True(MdnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        return MdnsDeviceFinder.MapDevices(records, DaqifiService, DeviceAddress, Interfaces);
+    }
+
+    #region Serial number normalization
+
+    [Theory]
+    // The firmware format, upper and lower case, is converted.
+    [InlineData("7E2815916200E898", "9090539562006014104")]
+    [InlineData("7e2815916200e898", "9090539562006014104")]
+    [InlineData("0000000000000001", "1")]
+    [InlineData("FFFFFFFFFFFFFFFF", "18446744073709551615")]
+    // All-decimal digits at the firmware's length are hex too -- the format specifier is
+    // unconditional, so this is 0x1234567890123456 and not the decimal number it resembles.
+    [InlineData("1234567890123456", "1311768467284833366")]
+    // Anything that is not exactly 16 hex digits is left alone: a short value that happens to
+    // parse as hex must not be silently reinterpreted, and neither must a non-hex string.
+    [InlineData("4321", "4321")]
+    [InlineData("9090539562006014104", "9090539562006014104")]
+    [InlineData("7E2815916200E89", "7E2815916200E89")]
+    [InlineData("7E2815916200E8987", "7E2815916200E8987")]
+    [InlineData("ZZZZZZZZZZZZZZZZ", "ZZZZZZZZZZZZZZZZ")]
+    [InlineData("7E28159 6200E898", "7E28159 6200E898")]
+    // Absent or blank stays empty rather than becoming a bogus identity.
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    public void NormalizeSerialNumber_ConvertsOnlyTheFirmwareFormat(string? advertised, string expected)
+    {
+        Assert.Equal(expected, MdnsDeviceFinder.NormalizeSerialNumber(advertised));
+    }
+
+    #endregion
+}

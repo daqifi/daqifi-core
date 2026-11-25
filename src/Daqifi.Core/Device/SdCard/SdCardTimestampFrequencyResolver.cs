@@ -21,7 +21,7 @@ internal static class SdCardTimestampFrequencyResolver
     /// Frequency from <see cref="SdCardParseOptions.ConfigurationOverride"/>, or zero.
     /// </param>
     /// <param name="fallbackFrequencyHz">
-    /// <see cref="SdCardParseOptions.FallbackTimestampFrequency"/>, or zero to disable it.
+    /// <see cref="SdCardParseOptions.FallbackTimestampFrequencyHz"/>, or zero to disable it.
     /// </param>
     /// <returns>The frequency to convert with, and the source it came from.</returns>
     public static (uint FrequencyHz, SdCardTimestampSource Source) Resolve(

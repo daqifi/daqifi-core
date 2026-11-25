@@ -33,7 +33,7 @@ public class CapabilityRateModelTests
     public void TryComputeMaxRateHz_EvaluatesTheDeviceFormula(
         int simultaneousCount, int totalCount, int expected)
     {
-        Assert.True(BenchModel().TryComputeMaxRateHz(simultaneousCount, totalCount, out var maxRateHz));
+        Assert.True(BenchModel().TryComputeMaximumSampleRateHz(simultaneousCount, totalCount, out var maxRateHz));
         Assert.Equal(expected, maxRateHz);
     }
 
@@ -48,14 +48,14 @@ public class CapabilityRateModelTests
             PerTickOverhead = 0
         };
 
-        Assert.True(model.TryComputeMaxRateHz(0, 1, out var maxRateHz));
+        Assert.True(model.TryComputeMaximumSampleRateHz(0, 1, out var maxRateHz));
         Assert.Equal(22000, maxRateHz);
     }
 
     [Fact]
     public void TryComputeMaxRateHz_WithNoConstants_ReturnsFalse()
     {
-        Assert.False(new CapabilityRateModel().TryComputeMaxRateHz(2, 4, out var maxRateHz));
+        Assert.False(new CapabilityRateModel().TryComputeMaximumSampleRateHz(2, 4, out var maxRateHz));
         Assert.Equal(0, maxRateHz);
     }
 
@@ -64,7 +64,7 @@ public class CapabilityRateModelTests
     {
         var model = new CapabilityRateModel { AbsoluteMaximumHz = 16000 };
 
-        Assert.True(model.TryComputeMaxRateHz(4, 16, out var maxRateHz));
+        Assert.True(model.TryComputeMaximumSampleRateHz(4, 16, out var maxRateHz));
         Assert.Equal(16000, maxRateHz);
     }
 
@@ -75,7 +75,7 @@ public class CapabilityRateModelTests
     public void TryComputeMaxRateHz_ImpossibleSelection_Throws(int simultaneousCount, int totalCount)
     {
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => BenchModel().TryComputeMaxRateHz(simultaneousCount, totalCount, out _));
+            () => BenchModel().TryComputeMaximumSampleRateHz(simultaneousCount, totalCount, out _));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class CapabilityRateModelTests
             .ToArray();
         var simultaneousCount = analogInputs.Count(c => c.IsSimultaneous);
 
-        Assert.True(document.Streaming!.RateModel!.TryComputeMaxRateHz(
+        Assert.True(document.Streaming!.RateModel!.TryComputeMaximumSampleRateHz(
             simultaneousCount, analogInputs.Length, out var maxRateHz));
 
         // Optimistic by construction — it excludes the transport cap — so it must sit at or above

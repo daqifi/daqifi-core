@@ -22,7 +22,7 @@ public sealed record SdCardDeviceConfiguration
     /// <summary>
     /// Clock frequency for tick-to-time conversion.
     /// </summary>
-    public required uint TimestampFrequency { get; init; }
+    public required uint TimestampFrequencyHz { get; init; }
 
     /// <summary>
     /// Device serial number, if present, in decimal as <see cref="DeviceMetadata.SerialNumber"/>
@@ -41,14 +41,14 @@ public sealed record SdCardDeviceConfiguration
     public required string? FirmwareVersion { get; init; }
 
     /// <summary>
-    /// Per-channel calibration slope/intercept pairs, if present.
+    /// Per-channel calibration slope/offset pairs, if present.
     /// </summary>
-    public required IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues { get; init; }
+    public required IReadOnlyList<(double Slope, double Offset)>? CalibrationValues { get; init; }
 
     /// <summary>
     /// ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.
     /// </summary>
-    public uint Resolution { get; init; }
+    public uint FullScaleCount { get; init; }
 
     /// <summary>
     /// Per-channel voltage port range values, if present.
@@ -66,7 +66,7 @@ public sealed record SdCardDeviceConfiguration
     /// internal scale, and timestamp clock values needed to interpret an SD card log file.
     /// </summary>
     /// <remarks>
-    /// The device's own <see cref="DaqifiDevice.TimestampFrequency"/> is included because
+    /// The device's own <see cref="DaqifiDevice.TimestampFrequencyHz"/> is included because
     /// firmware v3.7.2 and earlier write no timestamp frequency into SD card logs while still
     /// reporting one in their live status message. Passed to
     /// <see cref="SdCardParseOptions.ConfigurationOverride"/>, it fills that gap; a log that
@@ -100,14 +100,14 @@ public sealed record SdCardDeviceConfiguration
         {
             AnalogPortCount = analogChannels.Count,
             DigitalPortCount = digitalCount,
-            TimestampFrequency = device.TimestampFrequency,
+            TimestampFrequencyHz = device.TimestampFrequencyHz,
             DeviceSerialNumber = device.Metadata.SerialNumber,
             DevicePartNumber = device.Metadata.PartNumber,
             FirmwareVersion = device.Metadata.FirmwareVersion,
             CalibrationValues = analogChannels
-                .Select(ch => (ch.CalibrationM, ch.CalibrationB))
+                .Select(ch => (ch.CalibrationSlope, ch.CalibrationOffset))
                 .ToArray(),
-            Resolution = firstAnalog.Resolution,
+            FullScaleCount = firstAnalog.FullScaleCount,
             PortRange = analogChannels.Select(ch => ch.PortRange).ToArray(),
             InternalScaleM = analogChannels.Select(ch => ch.InternalScaleM).ToArray()
         };

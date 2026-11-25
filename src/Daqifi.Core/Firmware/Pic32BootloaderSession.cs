@@ -474,7 +474,7 @@ internal sealed class Pic32BootloaderSession
                 ex => ex is IOException or TimeoutException,
                 cancellationToken).ConfigureAwait(false);
 
-            // Verifying occupies the 92→94% band (JumpingToApp starts at 95%).
+            // Verifying occupies the 92→94% band (JumpingToApplication starts at 95%).
             var verifyPercent = 92 + ((index + 1) / (double)crcRegions.Count * 2);
             _context.ReportProgress(
                 progress,

@@ -52,7 +52,7 @@
        and a waiting test still holds its slot, so on CI's 3-4 core runners the Test step was
        capped by the slot count (~90-130 s), not by CPU. The algorithm stays "conservative":
        "aggressive", which starts every test and lets awaiting ones release their slot, failed
-       timeout-bound tests (MDnsDeviceFinderTests, ProcessExternalProcessRunnerTests,
+       timeout-bound tests (MdnsDeviceFinderTests, ProcessExternalProcessRunnerTests,
        DeviceErrorSurfaceTests) on every one of six local runs, because many tests here block a
        thread (ManualResetEventSlim, Thread.Sleep) while others need one to finish in time. -->
   <ItemGroup>

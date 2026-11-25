@@ -221,17 +221,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// typed <see cref="FeatureNotSupportedException"/> via the wire-level <c>-113</c>
     /// "Undefined header" backstop, rather than a guarantee up front.
     /// </summary>
-    public static readonly FirmwareVersion MinSupportedFirmware = new(3, 5, 0, 0, null, 0);
+    public static readonly FirmwareVersion MinimumSupportedFirmware = new(3, 5, 0, 0, null, 0);
 
     /// <summary>
     /// Gets a value indicating whether the connected device's reported firmware version meets
-    /// <see cref="MinSupportedFirmware"/>. Evaluated live against <see cref="Metadata"/> on every
+    /// <see cref="MinimumSupportedFirmware"/>. Evaluated live against <see cref="Metadata"/> on every
     /// access — not cached — so it always reflects the most recently reported version rather than
     /// a stale snapshot. Returns <c>false</c> if the firmware version has not yet been reported or
     /// does not parse; callers should treat that as "unknown", not "confirmed unsupported".
     /// </summary>
     public bool IsFirmwareVersionSupported =>
-        FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var parsed) && parsed >= MinSupportedFirmware;
+        FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var parsed) && parsed >= MinimumSupportedFirmware;
 
     /// <summary>
     /// Gets a value indicating whether this device supports <paramref name="feature"/>, per the
@@ -332,7 +332,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return SupportFailure.Hardware;
         }
 
-        if (requirement.Hardware.HasFlag(HardwareRequirement.WiFi) && !capabilities.HasWiFi)
+        if (requirement.Hardware.HasFlag(HardwareRequirement.Wifi) && !capabilities.HasWifi)
         {
             return SupportFailure.Hardware;
         }
@@ -539,7 +539,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Used as the fallback frequency for SD card log file parsing when no
     /// per-message timestamp frequency is available.
     /// </summary>
-    public uint TimestampFrequency { get; private set; }
+    public uint TimestampFrequencyHz { get; private set; }
 
     /// <summary>
     /// Gets where the device is in its life.
@@ -1385,19 +1385,19 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// can build (those are measured in milliseconds), so it only ever engages on the long
     /// exclusive operations it exists for.
     /// </remarks>
-    public const int DefaultMaxDeferredSends = 1024;
+    public const int DefaultMaximumDeferredSends = 1024;
 
     /// <summary>
     /// The live backlog cap. A seam for tests, which need a small cap to reach the drop path in
-    /// bounded time; production always reads <see cref="DefaultMaxDeferredSends"/>. Values below
+    /// bounded time; production always reads <see cref="DefaultMaximumDeferredSends"/>. Values below
     /// one are clamped, so an override can never make the append path throw.
     /// </summary>
-    internal virtual int MaxDeferredSends => DefaultMaxDeferredSends;
+    internal virtual int MaxDeferredSends => DefaultMaximumDeferredSends;
 
     /// <summary>
     /// Gets the cumulative number of messages passed to <see cref="Send{T}"/> that were
     /// discarded because the backlog of messages parked during an exclusive operation was full
-    /// (drop-oldest policy, capped at <see cref="DefaultMaxDeferredSends"/>). A non-zero and
+    /// (drop-oldest policy, capped at <see cref="DefaultMaximumDeferredSends"/>). A non-zero and
     /// growing value means commands are being issued faster than a long-running exclusive
     /// operation can let them out.
     /// </summary>
@@ -2199,7 +2199,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// query's answer.
     /// </para>
     /// <para>
-    /// That held-back backlog is capped at <see cref="DefaultMaxDeferredSends"/> messages, and
+    /// That held-back backlog is capped at <see cref="DefaultMaximumDeferredSends"/> messages, and
     /// overflows by discarding the <b>oldest</b> of them — so sending continuously through a
     /// long exclusive operation (an SD card download may run for thirty minutes) costs bounded
     /// memory and replays a bounded burst afterwards, keeping the most recent commands rather
@@ -2977,25 +2977,25 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// other text commands.
     /// </para>
     /// </remarks>
-    /// <param name="maxIterations">
+    /// <param name="maximumIterations">
     /// Safety cap on the number of <c>SYSTem:ERRor?</c> queries. Defaults to 256
     /// — large enough to drain a deeply queued device, small enough that a
     /// runaway loop is bounded. If the cap is reached without seeing
     /// <c>"No error"</c>, a warning is traced and the popped entries
     /// collected so far are returned; callers that want to treat this as a
-    /// failure can compare <c>Count</c> to <paramref name="maxIterations"/>.
+    /// failure can compare <c>Count</c> to <paramref name="maximumIterations"/>.
     /// </param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>The list of error strings popped from the queue (empty if the queue was already clean).</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxIterations"/> is not positive.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maximumIterations"/> is not positive.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     public virtual async Task<IReadOnlyList<string>> DrainErrorQueueAsync(
-        int maxIterations = 256,
+        int maximumIterations = 256,
         CancellationToken cancellationToken = default)
     {
-        var drain = await DrainErrorQueueUntilEmptyAsync(maxIterations, cancellationToken).ConfigureAwait(false);
+        var drain = await DrainErrorQueueUntilEmptyAsync(maximumIterations, cancellationToken).ConfigureAwait(false);
         return drain.Entries;
     }
 
@@ -3009,14 +3009,14 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// read later cannot be pinned on the command sent in between (the SD download, #959).
     /// </remarks>
     internal async Task<ErrorQueueDrainResult> DrainErrorQueueUntilEmptyAsync(
-        int maxIterations,
+        int maximumIterations,
         CancellationToken cancellationToken)
     {
-        if (maxIterations <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxIterations), maxIterations, "Must be positive.");
+        if (maximumIterations <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumIterations), maximumIterations, "Must be positive.");
 
         var popped = new List<string>();
-        for (int i = 0; i < maxIterations; i++)
+        for (int i = 0; i < maximumIterations; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -3029,13 +3029,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // itself, and on one that is still sending stream data the lines before the reply
             // can be anything at all. Taking the first of them counted the echo as a queued
             // entry and asked again, so a caller that drains before SYSTem:ECHO -1 — which
-            // InitializeAsync does — could spin to maxIterations against a healthy device.
+            // InitializeAsync does — could spin to maximumIterations against a healthy device.
             // This is the same way the initialization sequence reads the same reply.
             var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
             if (reply == null)
             {
                 // No reply of that shape at all means a timeout, an unresponsive device, or
-                // noise — not a queued error. Terminate rather than spin to maxIterations.
+                // noise — not a queued error. Terminate rather than spin to maximumIterations.
                 SafeLog(() => _logger.LogDebug("[DrainErrorQueueAsync] No error-queue reply on iteration {Iteration}; terminating after {PoppedCount} popped entries.", i, popped.Count));
                 return new ErrorQueueDrainResult(popped, ReachedEmpty: false);
             }
@@ -3052,7 +3052,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             popped.Add(reply);
         }
 
-        SafeLog(() => _logger.LogWarning("[DrainErrorQueueAsync] Did not converge after {MaxIterations} iterations; queue may still contain entries.", maxIterations));
+        SafeLog(() => _logger.LogWarning("[DrainErrorQueueAsync] Did not converge after {MaxIterations} iterations; queue may still contain entries.", maximumIterations));
         return new ErrorQueueDrainResult(popped, ReachedEmpty: false);
     }
 
@@ -3141,12 +3141,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// bootstrap and the fallback for every field the document does not state
     /// (<see cref="CapabilityDocument.OverlayOnto"/>). <see cref="InitializeAsync"/> calls this
     /// once, after the device reports its board and firmware version. Call it again whenever a
-    /// fresh <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed — that figure is
+    /// fresh <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> is needed — that figure is
     /// computed from the channel set enabled at the moment of the read, so it goes stale as
     /// soon as the enabled set changes.
     /// </para>
     /// <para>
-    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.StoredStreamingRateQuery"/>) the
+    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.StoredSampleRateQuery"/>) the
     /// same exchange also asks <c>SYSTem:STReam:START?</c>, the rate the device has stored, so
     /// that a <see cref="DaqifiStreamingDevice"/> reports the device's rate rather than its own
     /// default until a rate is chosen (#960). It rides here because a separate exchange would
@@ -3177,7 +3177,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
-        var readStoredStreamingRate = Supports(DeviceFeature.StoredStreamingRateQuery);
+        var readStoredStreamingRate = Supports(DeviceFeature.StoredSampleRateQuery);
 
         // Both queries go out in one text exchange. Each exchange costs far more than either
         // reply does — its settle window and completion window alone are hundreds of
@@ -3198,7 +3198,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 if (readStoredStreamingRate)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(CapabilityQuerySpacingMs), _timeProvider, token).ConfigureAwait(false);
-                    Send(ScpiMessageProducer.GetStoredStreamingRate);
+                    Send(ScpiMessageProducer.GetStoredSampleRate);
                 }
             },
             responseTimeout: CapabilityDocumentResponseTimeout,
@@ -3273,7 +3273,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return CapabilityDocumentParser.TryParseLines(lines, out var document)
-            ? document.Streaming?.CurrentMaximumRateHz
+            ? document.Streaming?.CurrentMaximumSampleRateHz
             : null;
     }
 
@@ -4615,7 +4615,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         return new ChannelPopulationTimeoutException(
             message,
-            deviceIdentity: identity,
+            identificationReply: identity,
             rawDeviceResponse: keptLines);
     }
 
@@ -4684,7 +4684,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         return new ChannelPopulationTimeoutException(
             message,
-            deviceIdentity: identity,
+            identificationReply: identity,
             streamInterface: streamInterface,
             unreadableResponseLines: identity == null ? identityLineCount : 0,
             rawDeviceResponse: keptLines);
@@ -4956,7 +4956,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // Update timestamp frequency if present
         if (message.TimestampFreq != 0)
         {
-            TimestampFrequency = message.TimestampFreq;
+            TimestampFrequencyHz = message.TimestampFreq;
         }
 
         int analogCount;
@@ -5194,7 +5194,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         var resolutionBits = descriptor.ResolutionBits ?? AnalogOutputChannel.DefaultResolutionBits;
 
-        if (resolutionBits is < AnalogOutputChannel.MinResolutionBits or > AnalogOutputChannel.MaxResolutionBits)
+        if (resolutionBits is < AnalogOutputChannel.MinimumResolutionBits or > AnalogOutputChannel.MaximumResolutionBits)
         {
             var stated = resolutionBits;
             SafeLog(() => _logger.LogWarning(
@@ -5209,8 +5209,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         var statedRangeIsUsable =
             minimum.HasValue && maximum.HasValue &&
             double.IsFinite(minimum.Value) && double.IsFinite(maximum.Value) &&
-            Math.Abs(minimum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
-            Math.Abs(maximum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
+            Math.Abs(minimum.Value) <= AnalogOutputChannel.MaximumRangeMagnitudeVolts &&
+            Math.Abs(maximum.Value) <= AnalogOutputChannel.MaximumRangeMagnitudeVolts &&
             minimum.Value < maximum.Value;
 
         if (statedRangeIsUsable)

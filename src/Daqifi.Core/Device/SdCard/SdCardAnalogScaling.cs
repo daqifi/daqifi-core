@@ -18,7 +18,7 @@ internal static class SdCardAnalogScaling
     /// <param name="rawValues">The per-channel raw ADC counts for one sample.</param>
     /// <param name="config">
     /// The device configuration supplying resolution, port range, calibration, and internal
-    /// scale. When <c>null</c> or <see cref="SdCardDeviceConfiguration.Resolution"/> is zero,
+    /// scale. When <c>null</c> or <see cref="SdCardDeviceConfiguration.FullScaleCount"/> is zero,
     /// <paramref name="rawValues"/> is returned unchanged.
     /// </param>
     /// <param name="channelIndices">
@@ -36,7 +36,7 @@ internal static class SdCardAnalogScaling
         SdCardDeviceConfiguration? config,
         IReadOnlyList<int>? channelIndices = null)
     {
-        if (config == null || config.Resolution == 0)
+        if (config == null || config.FullScaleCount == 0)
         {
             // No config or resolution available — return raw values as-is
             return rawValues;
@@ -69,7 +69,7 @@ internal static class SdCardAnalogScaling
     {
         var result = new double[rawValues.Count];
 
-        if (config == null || config.Resolution == 0)
+        if (config == null || config.FullScaleCount == 0)
         {
             // No config or resolution available — copy the raw int counts through unscaled
             for (var ch = 0; ch < rawValues.Count; ch++)
@@ -102,10 +102,10 @@ internal static class SdCardAnalogScaling
 
         var hasCal = cal != null && channel >= 0 && channel < cal.Count;
         var calM = hasCal ? cal![channel].Slope : 1.0;
-        var calB = hasCal ? cal![channel].Intercept : 0.0;
+        var calB = hasCal ? cal![channel].Offset : 0.0;
         var range = portRange != null && channel >= 0 && channel < portRange.Count ? portRange[channel] : 1.0;
         var scaleM = intScale != null && channel >= 0 && channel < intScale.Count ? intScale[channel] : 1.0;
 
-        return AnalogScaling.Scale(rawValue, config.Resolution, range, calM, scaleM, calB);
+        return AnalogScaling.Scale(rawValue, config.FullScaleCount, range, calM, scaleM, calB);
     }
 }

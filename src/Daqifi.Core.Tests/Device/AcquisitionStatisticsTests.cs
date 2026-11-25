@@ -55,8 +55,8 @@ public class AcquisitionStatisticsTests
         Assert.Equal(0, ai0.ChannelNumber);
         Assert.Equal("AI0", ai0.Name);
         Assert.Equal(3, ai0.SampleCount);
-        Assert.Equal(1.0, ai0.MinValue);
-        Assert.Equal(3.0, ai0.MaxValue);
+        Assert.Equal(1.0, ai0.MinimumValue);
+        Assert.Equal(3.0, ai0.MaximumValue);
         Assert.Equal(2.0, ai0.MeanValue, 9);
     }
 
@@ -74,8 +74,8 @@ public class AcquisitionStatisticsTests
         stats.Record(channel, Sample(clock.Now, 4.6));
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
-        Assert.Equal(4.4, ai0.MinValue);
-        Assert.Equal(4.6, ai0.MaxValue);
+        Assert.Equal(4.4, ai0.MinimumValue);
+        Assert.Equal(4.6, ai0.MaximumValue);
         Assert.Equal(4.5, ai0.MeanValue, 9);
     }
 
@@ -160,8 +160,8 @@ public class AcquisitionStatisticsTests
         }
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
-        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
-        Assert.Equal(TimeSpan.FromMilliseconds(4), ai0.MaxSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinimumSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(4), ai0.MaximumSampleInterval);
         Assert.Equal(TimeSpan.FromMilliseconds(2), ai0.MeanSampleInterval);
     }
 
@@ -177,8 +177,8 @@ public class AcquisitionStatisticsTests
         Assert.Equal(1, ai0.SampleCount);
         Assert.Equal(0.0, ai0.MeasuredSampleRateHz);
         Assert.Equal(0.0, ai0.DeviceClockSampleRateHz);
-        Assert.Equal(TimeSpan.Zero, ai0.MinSampleInterval);
-        Assert.Equal(TimeSpan.Zero, ai0.MaxSampleInterval);
+        Assert.Equal(TimeSpan.Zero, ai0.MinimumSampleInterval);
+        Assert.Equal(TimeSpan.Zero, ai0.MaximumSampleInterval);
         Assert.Equal(TimeSpan.Zero, ai0.MeanSampleInterval);
     }
 
@@ -199,7 +199,7 @@ public class AcquisitionStatisticsTests
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(0.0, ai0.DeviceClockSampleRateHz);
-        Assert.Equal(TimeSpan.Zero, ai0.MaxSampleInterval);
+        Assert.Equal(TimeSpan.Zero, ai0.MaximumSampleInterval);
         Assert.Equal(1000.0, ai0.MeasuredSampleRateHz, 6);
     }
 
@@ -221,8 +221,8 @@ public class AcquisitionStatisticsTests
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(1, ai0.OutOfOrderSampleCount);
-        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
-        Assert.Equal(TimeSpan.FromMilliseconds(2), ai0.MaxSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinimumSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), ai0.MaximumSampleInterval);
     }
 
     [Fact]
@@ -249,8 +249,8 @@ public class AcquisitionStatisticsTests
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(1, ai0.OutOfOrderSampleCount);
-        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
-        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MaxSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinimumSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MaximumSampleInterval);
     }
 
     [Fact]
@@ -314,8 +314,8 @@ public class AcquisitionStatisticsTests
         }
 
         var snapshot = stats.Snapshot();
-        Assert.Equal(TimeSpan.FromMilliseconds(2), snapshot.MinLatency);
-        Assert.Equal(TimeSpan.FromMilliseconds(6), snapshot.MaxLatency);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), snapshot.MinimumLatency);
+        Assert.Equal(TimeSpan.FromMilliseconds(6), snapshot.MaximumLatency);
         Assert.Equal(TimeSpan.FromMilliseconds(4), snapshot.MeanLatency);
     }
 
@@ -327,7 +327,7 @@ public class AcquisitionStatisticsTests
 
         stats.Record(new AnalogChannel(0), Sample(Epoch.AddMilliseconds(5), 1.0));
 
-        Assert.Equal(TimeSpan.FromMilliseconds(-5), stats.Snapshot().MinLatency);
+        Assert.Equal(TimeSpan.FromMilliseconds(-5), stats.Snapshot().MinimumLatency);
     }
 
     [Fact]
@@ -369,7 +369,7 @@ public class AcquisitionStatisticsTests
         stats.Record(channel, Sample(clock.Now, 7.0));
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(1, ai0.SampleCount);
-        Assert.Equal(7.0, ai0.MinValue);
+        Assert.Equal(7.0, ai0.MinimumValue);
     }
 
     #endregion
@@ -474,13 +474,13 @@ public class AcquisitionStatisticsTests
         var snapshot = stats.Snapshot();
         Assert.Equal(4, snapshot.TotalSampleCount);
         Assert.Equal(2, snapshot.Channels.Count);
-        Assert.Equal(1.0, snapshot.Channels[0].MinValue);
-        Assert.Equal(3.0, snapshot.Channels[0].MaxValue);
-        Assert.Equal(2.0, snapshot.Channels[1].MinValue);
-        Assert.Equal(4.0, snapshot.Channels[1].MaxValue);
+        Assert.Equal(1.0, snapshot.Channels[0].MinimumValue);
+        Assert.Equal(3.0, snapshot.Channels[0].MaximumValue);
+        Assert.Equal(2.0, snapshot.Channels[1].MinimumValue);
+        Assert.Equal(4.0, snapshot.Channels[1].MaximumValue);
 
         // Frames one millisecond apart on the device's 50 MHz tick clock.
-        Assert.Equal(TimeSpan.FromMilliseconds(1), snapshot.Channels[0].MaxSampleInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), snapshot.Channels[0].MaximumSampleInterval);
     }
 
     [Fact]
@@ -501,8 +501,8 @@ public class AcquisitionStatisticsTests
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(2, ai0.SampleCount); // one entry, and the second sample counted exactly once
-        Assert.Equal(1.0, ai0.MinValue);
-        Assert.Equal(2.0, ai0.MaxValue);
+        Assert.Equal(1.0, ai0.MinimumValue);
+        Assert.Equal(2.0, ai0.MaximumValue);
     }
 
     [Fact]
@@ -519,7 +519,7 @@ public class AcquisitionStatisticsTests
 
         var ai0 = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(1, ai0.SampleCount);
-        Assert.Equal(1.0, ai0.MaxValue);
+        Assert.Equal(1.0, ai0.MaximumValue);
 
         stats.Dispose(); // idempotent
         stats.Record(new AnalogChannel(0), Sample(Epoch, 5.0)); // ignored, not thrown
@@ -682,8 +682,8 @@ public class AcquisitionStatisticsTests
 
         var channelStats = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal("PSI", channelStats.Unit);
-        Assert.Equal(12.0, channelStats.MinValue);   // 1.0 * 2 + 10
-        Assert.Equal(16.0, channelStats.MaxValue);   // 3.0 * 2 + 10
+        Assert.Equal(12.0, channelStats.MinimumValue);   // 1.0 * 2 + 10
+        Assert.Equal(16.0, channelStats.MaximumValue);   // 3.0 * 2 + 10
         Assert.Equal(14.0, channelStats.MeanValue);  // mean of 12, 16, 14
     }
 
@@ -692,7 +692,7 @@ public class AcquisitionStatisticsTests
     {
         // The case that makes a manual fix-up unsafe rather than merely inconvenient: a
         // negative gain swaps which raw reading is the extreme. Recording raw volts and
-        // letting the consumer re-apply the scaling would hand them a MinValue that is
+        // letting the consumer re-apply the scaling would hand them a MinimumValue that is
         // actually the maximum. ChannelScaling permits a negative gain -- only finiteness
         // is validated -- so this is a supported configuration, not an abuse.
         var clock = new TestClock(Epoch);
@@ -709,8 +709,8 @@ public class AcquisitionStatisticsTests
         var channelStats = Assert.Single(stats.Snapshot().Channels);
 
         // 1.0 V -> 2.0 PSI (the MAXIMUM); 2.0 V -> -1.0 PSI (the MINIMUM).
-        Assert.Equal(-1.0, channelStats.MinValue);
-        Assert.Equal(2.0, channelStats.MaxValue);
+        Assert.Equal(-1.0, channelStats.MinimumValue);
+        Assert.Equal(2.0, channelStats.MaximumValue);
     }
 
     [Fact]
@@ -730,8 +730,8 @@ public class AcquisitionStatisticsTests
 
         var channelStats = Assert.Single(stats.Snapshot().Channels);
         Assert.Null(channelStats.Unit);
-        Assert.Equal(1.0, channelStats.MinValue);
-        Assert.Equal(3.0, channelStats.MaxValue);
+        Assert.Equal(1.0, channelStats.MinimumValue);
+        Assert.Equal(3.0, channelStats.MaximumValue);
         Assert.Equal(2.0, channelStats.MeanValue);
     }
 
@@ -764,8 +764,8 @@ public class AcquisitionStatisticsTests
 
         // Only the Bar samples describe the value figures.
         Assert.Equal("Bar", channelStats.Unit);
-        Assert.Equal(5.0, channelStats.MinValue);
-        Assert.Equal(7.0, channelStats.MaxValue);
+        Assert.Equal(5.0, channelStats.MinimumValue);
+        Assert.Equal(7.0, channelStats.MaximumValue);
         Assert.Equal(6.0, channelStats.MeanValue);
         Assert.Equal(2, channelStats.ValueSampleCount);
 
@@ -790,8 +790,8 @@ public class AcquisitionStatisticsTests
         var channelStats = Assert.Single(stats.Snapshot().Channels);
 
         Assert.Equal("PSI", channelStats.Unit);
-        Assert.Equal(50.0, channelStats.MinValue);
-        Assert.Equal(50.0, channelStats.MaxValue);
+        Assert.Equal(50.0, channelStats.MinimumValue);
+        Assert.Equal(50.0, channelStats.MaximumValue);
         Assert.Equal(1, channelStats.ValueSampleCount);
         Assert.Equal(2, channelStats.SampleCount);
     }
@@ -817,8 +817,8 @@ public class AcquisitionStatisticsTests
         var channelStats = Assert.Single(stats.Snapshot().Channels);
         Assert.Equal(3, channelStats.ValueSampleCount);
         Assert.Equal(3, channelStats.SampleCount);
-        Assert.Equal(12.0, channelStats.MinValue);
-        Assert.Equal(16.0, channelStats.MaxValue);
+        Assert.Equal(12.0, channelStats.MinimumValue);
+        Assert.Equal(16.0, channelStats.MaximumValue);
         Assert.Equal(psi.Unit, channelStats.Unit);
     }
 

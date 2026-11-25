@@ -94,7 +94,7 @@ public class ReconnectSupervisorReplayTests
         Options = new ReconnectOptions
         {
             Enabled = true,
-            MaxAttempts = 1,
+            MaximumAttempts = 1,
             InitialDelay = TimeSpan.Zero,
         },
     };

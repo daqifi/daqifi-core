@@ -46,10 +46,10 @@ public sealed class SdCardLogSession
     /// not match the recording device rescales every timestamp in the session by a constant
     /// factor, and nothing in the sample data reveals it.
     /// </remarks>
-    public uint TimestampFrequency { get; init; }
+    public uint TimestampFrequencyHz { get; init; }
 
     /// <summary>
-    /// Gets where <see cref="TimestampFrequency"/> came from.
+    /// Gets where <see cref="TimestampFrequencyHz"/> came from.
     /// </summary>
     /// <remarks>
     /// <see cref="SdCardTimestampSource.Fallback"/> means the frequency was a guess supplied by

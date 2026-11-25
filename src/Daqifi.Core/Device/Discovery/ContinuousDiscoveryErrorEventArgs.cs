@@ -12,14 +12,14 @@ public sealed class ContinuousDiscoveryErrorEventArgs : EventArgs
     /// <summary>
     /// Initializes a new instance of the <see cref="ContinuousDiscoveryErrorEventArgs"/> class.
     /// </summary>
-    /// <param name="exception">The exception thrown by the discovery pass.</param>
-    public ContinuousDiscoveryErrorEventArgs(Exception exception)
+    /// <param name="error">The exception thrown by the discovery pass.</param>
+    public ContinuousDiscoveryErrorEventArgs(Exception error)
     {
-        Exception = exception ?? throw new ArgumentNullException(nameof(exception));
+        Error = error ?? throw new ArgumentNullException(nameof(error));
     }
 
     /// <summary>
     /// Gets the exception thrown by the failed discovery pass.
     /// </summary>
-    public Exception Exception { get; }
+    public Exception Error { get; }
 }

@@ -30,21 +30,21 @@ public static class ScpiMessageProducer
     /// <summary>
     /// Maximum length, in characters, of a device friendly name accepted by firmware.
     /// </summary>
-    public const int MaxFriendlyNameLength = 31;
+    public const int MaximumFriendlyNameLength = 31;
 
     /// <summary>
     /// Validates a candidate device friendly name against firmware's acceptance rule.
     /// </summary>
     /// <param name="name">The candidate name. <c>null</c> is always invalid.</param>
     /// <remarks>
-    /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaxFriendlyNameLength"/>
+    /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaximumFriendlyNameLength"/>
     /// printable ASCII characters (0x20-0x7E), excluding <c>"</c> and <c>\</c> (which would break the
     /// SCPI string literal and the JSON info-message encoding).
     /// </remarks>
     /// <returns><c>true</c> if <paramref name="name"/> would be accepted by the device; otherwise <c>false</c>.</returns>
     public static bool IsFriendlyNameValid(string? name)
     {
-        if (name is null || name.Length is 0 or > MaxFriendlyNameLength)
+        if (name is null || name.Length is 0 or > MaximumFriendlyNameLength)
         {
             return false;
         }
@@ -64,7 +64,7 @@ public static class ScpiMessageProducer
     /// Creates a command message to set the device's friendly name.
     /// </summary>
     /// <param name="name">
-    /// 1-<see cref="MaxFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
+    /// 1-<see cref="MaximumFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
     /// <c>"</c> or <c>\</c>. See <see cref="IsFriendlyNameValid"/>. <c>null</c> is always invalid.
     /// </param>
     /// <remarks>
@@ -78,7 +78,7 @@ public static class ScpiMessageProducer
         if (!IsFriendlyNameValid(name))
         {
             throw new ArgumentException(
-                $"Device name must be 1-{MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                $"Device name must be 1-{MaximumFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
                 nameof(name));
         }
 
@@ -301,7 +301,7 @@ public static class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize bytes
     /// </remarks>
-    public static IOutboundMessage<string> SetSdMaxFileSize(long bytes)
+    public static IOutboundMessage<string> SetSdMaximumFileSize(long bytes)
     {
         if (bytes < 0)
         {
@@ -317,7 +317,7 @@ public static class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize?
     /// </remarks>
-    public static IOutboundMessage<string> GetSdMaxFileSize { get; } = new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
+    public static IOutboundMessage<string> GetSdMaximumFileSize { get; } = new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
 
     /// <summary>
     /// Creates a query message to get the free and total byte counts of the SD card.
@@ -342,7 +342,7 @@ public static class ScpiMessageProducer
     /// user-facing low-space warning (see <see cref="Device.SdCard.SdCardSpaceCheck"/>).
     /// Command: SYSTem:STORage:SD:MINFree bytes
     /// </remarks>
-    public static IOutboundMessage<string> SetSdMinFreeSpace(long bytes)
+    public static IOutboundMessage<string> SetSdMinimumFreeSpace(long bytes)
     {
         if (bytes < 0)
         {
@@ -357,10 +357,10 @@ public static class ScpiMessageProducer
     /// The reply is one whole number of bytes; 0 means the gate is off.
     /// </summary>
     /// <remarks>
-    /// Available on every supported firmware (v3.5.0+), like <see cref="SetSdMinFreeSpace"/>.
+    /// Available on every supported firmware (v3.5.0+), like <see cref="SetSdMinimumFreeSpace"/>.
     /// Command: SYSTem:STORage:SD:MINFree?
     /// </remarks>
-    public static IOutboundMessage<string> GetSdMinFreeSpace { get; } = new ScpiMessage("SYSTem:STORage:SD:MINFree?");
+    public static IOutboundMessage<string> GetSdMinimumFreeSpace { get; } = new ScpiMessage("SYSTem:STORage:SD:MINFree?");
 
     /// <summary>
     /// Creates a command message to turn CRC-protected SD card writes on or off.
@@ -470,10 +470,10 @@ public static class ScpiMessageProducer
     /// without one. That is the last rate a start set — a stop deliberately does not revert it —
     /// or the 1 Hz boot default before any start. It says nothing about whether a stream is
     /// running.
-    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.StoredStreamingRateQuery"/>).
+    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.StoredSampleRateQuery"/>).
     /// Command: SYSTem:STReam:START?
     /// </remarks>
-    public static IOutboundMessage<string> GetStoredStreamingRate { get; } = new ScpiMessage("SYSTem:STReam:START?");
+    public static IOutboundMessage<string> GetStoredSampleRate { get; } = new ScpiMessage("SYSTem:STReam:START?");
 
     /// <summary>
     /// The wire command <see cref="StartStreaming"/> emits, without its frequency argument. Exposed so
@@ -508,20 +508,20 @@ public static class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to start data streaming at the specified frequency.
     /// </summary>
-    /// <param name="frequency">The streaming frequency in Hz.</param>
+    /// <param name="sampleRateHz">The streaming frequency in Hz.</param>
     /// <remarks>
     /// Starts streaming data from enabled channels at the specified frequency. The usable range is
     /// board- and configuration-dependent, not a fixed literal: the device's absolute ceiling is
-    /// <see cref="Device.DeviceCapabilities.MaxSamplingRate"/>, and the cap for the channel set
+    /// <see cref="Device.DeviceCapabilities.MaximumSampleRateHz"/>, and the cap for the channel set
     /// currently enabled is
-    /// <see cref="Device.Capabilities.CapabilityStreaming.CurrentMaximumRateHz"/>. Firmware
+    /// <see cref="Device.Capabilities.CapabilityStreaming.CurrentMaximumSampleRateHz"/>. Firmware
     /// rejects a frequency above that cap with SCPI <c>-222</c> and does not start streaming — it
     /// does not clamp — so pre-validate or handle the error.
     /// Command: SYSTem:StartStreamData frequency
     /// </remarks>
-    public static IOutboundMessage<string> StartStreaming(int frequency)
+    public static IOutboundMessage<string> StartStreaming(int sampleRateHz)
     {
-        return new ScpiMessage($"{StartStreamingCommand} {frequency}");
+        return new ScpiMessage($"{StartStreamingCommand} {sampleRateHz}");
     }
 
     /// <summary>
@@ -822,7 +822,7 @@ public static class ScpiMessageProducer
     /// Creates a command message to set a single channel's ADC calibration slope (CalM) in device RAM.
     /// </summary>
     /// <param name="channel">The analog input channel number.</param>
-    /// <param name="calM">The calibration slope (gain) coefficient.</param>
+    /// <param name="slope">The calibration slope (gain) coefficient.</param>
     /// <remarks>
     /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
     /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
@@ -830,20 +830,20 @@ public static class ScpiMessageProducer
     /// The slope is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALM channel,calM
     /// </remarks>
-    public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double calM)
+    public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double slope)
     {
         ValidateChannel(channel);
 
-        RequireFinite(calM, nameof(calM), "Calibration slope");
+        RequireFinite(slope, nameof(slope), "Calibration slope");
 
-        return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{calM.ToString(CultureInfo.InvariantCulture)}");
+        return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{slope.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>
     /// Creates a command message to set a single channel's ADC calibration offset (CalB) in device RAM.
     /// </summary>
     /// <param name="channel">The analog input channel number.</param>
-    /// <param name="calB">The calibration offset coefficient.</param>
+    /// <param name="offset">The calibration offset coefficient.</param>
     /// <remarks>
     /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
     /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
@@ -851,13 +851,13 @@ public static class ScpiMessageProducer
     /// The offset is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALB channel,calB
     /// </remarks>
-    public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double calB)
+    public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double offset)
     {
         ValidateChannel(channel);
 
-        RequireFinite(calB, nameof(calB), "Calibration offset");
+        RequireFinite(offset, nameof(offset), "Calibration offset");
 
-        return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{calB.ToString(CultureInfo.InvariantCulture)}");
+        return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{offset.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>

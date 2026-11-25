@@ -153,7 +153,7 @@ public class SdCardProtobufLogExportTests
         using var log = NoConfigurationBlockLog();
         var session = await ParseAsync(log);
 
-        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.Fallback, session.TimestampFrequencySource);
     }
 
@@ -170,7 +170,7 @@ public class SdCardProtobufLogExportTests
                 {
                     AnalogPortCount = 16,
                     DigitalPortCount = 1,
-                    TimestampFrequency = 80_000_000,
+                    TimestampFrequencyHz = 80_000_000,
                     DeviceSerialNumber = "LIVE-SN",
                     DevicePartNumber = null,
                     FirmwareVersion = null,
@@ -178,7 +178,7 @@ public class SdCardProtobufLogExportTests
                 }
             });
 
-        Assert.Equal(80_000_000u, session.TimestampFrequency);
+        Assert.Equal(80_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.Device, session.TimestampFrequencySource);
     }
 }

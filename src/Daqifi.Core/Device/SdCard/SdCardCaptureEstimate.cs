@@ -23,7 +23,7 @@ public sealed class SdCardCaptureEstimate
     /// <summary>
     /// Initializes a new instance of the <see cref="SdCardCaptureEstimate"/> class.
     /// </summary>
-    /// <param name="frequencyHz">The streaming/sampling frequency in samples-per-second per channel. Must be positive.</param>
+    /// <param name="sampleRateHz">The streaming/sampling frequency in samples-per-second per channel. Must be positive.</param>
     /// <param name="channelCount">The number of enabled channels being recorded. Must be at least 1.</param>
     /// <param name="duration">The planned capture duration. Must be positive.</param>
     /// <param name="bytesPerSamplePerChannel">
@@ -32,14 +32,14 @@ public sealed class SdCardCaptureEstimate
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when any parameter is non-positive.</exception>
     public SdCardCaptureEstimate(
-        int frequencyHz,
+        int sampleRateHz,
         int channelCount,
         TimeSpan duration,
         int bytesPerSamplePerChannel = DefaultBytesPerSamplePerChannel)
     {
-        if (frequencyHz <= 0)
+        if (sampleRateHz <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(frequencyHz), frequencyHz, "Frequency must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(sampleRateHz), sampleRateHz, "Frequency must be positive.");
         }
 
         if (channelCount <= 0)
@@ -57,14 +57,14 @@ public sealed class SdCardCaptureEstimate
             throw new ArgumentOutOfRangeException(nameof(duration), duration, "Duration must be positive.");
         }
 
-        FrequencyHz = frequencyHz;
+        SampleRateHz = sampleRateHz;
         ChannelCount = channelCount;
         Duration = duration;
         BytesPerSamplePerChannel = bytesPerSamplePerChannel;
     }
 
     /// <summary>Gets the streaming/sampling frequency in samples-per-second per channel.</summary>
-    public int FrequencyHz { get; }
+    public int SampleRateHz { get; }
 
     /// <summary>Gets the number of enabled channels being recorded.</summary>
     public int ChannelCount { get; }
@@ -77,7 +77,7 @@ public sealed class SdCardCaptureEstimate
 
     /// <summary>
     /// Gets the estimated write rate in bytes per second:
-    /// <c>FrequencyHz × ChannelCount × BytesPerSamplePerChannel</c>, clamped to <see cref="long.MaxValue"/>
+    /// <c>SampleRateHz × ChannelCount × BytesPerSamplePerChannel</c>, clamped to <see cref="long.MaxValue"/>
     /// if the product would overflow. Clamping keeps the warning layer correct: an overflow that wrapped
     /// negative would make a capture wrongly appear to fit and suppress the truncation ETA.
     /// </summary>
@@ -87,7 +87,7 @@ public sealed class SdCardCaptureEstimate
         {
             try
             {
-                return checked((long)FrequencyHz * ChannelCount * BytesPerSamplePerChannel);
+                return checked((long)SampleRateHz * ChannelCount * BytesPerSamplePerChannel);
             }
             catch (OverflowException)
             {

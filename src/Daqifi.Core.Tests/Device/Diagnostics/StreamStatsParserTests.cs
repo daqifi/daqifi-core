@@ -29,7 +29,7 @@ public class StreamStatsParserTests
         Assert.Equal(15000UL, stats!.TotalSamplesStreamed);
         Assert.Equal(480000UL, stats.TotalBytesStreamed);
         Assert.Equal(0UL, stats.QueueDroppedSamples);
-        Assert.Equal(15000UL, stats.TimerISRCalls);
+        Assert.Equal(15000UL, stats.TimerIsrCalls);
         // Fields without a typed accessor are still available via Values.
         Assert.Equal(480000UL, stats.Values["WifiTcpBytesSent"]);
         Assert.Equal(8, stats.Values.Count);
@@ -193,7 +193,7 @@ public class StreamStatsParserTests
         // The firmware's own invariant, which the loss figure depends on: the split adds up to the
         // aggregate, and every timer tick is either streamed or dropped.
         Assert.Equal(stats.QueueDroppedSamples, stats.PoolExhaustedSamples + stats.QueueOverflowSamples);
-        Assert.Equal(stats.TimerISRCalls, stats.TotalSamplesStreamed + stats.QueueDroppedSamples);
+        Assert.Equal(stats.TimerIsrCalls, stats.TotalSamplesStreamed + stats.QueueDroppedSamples);
     }
 
     [Fact]

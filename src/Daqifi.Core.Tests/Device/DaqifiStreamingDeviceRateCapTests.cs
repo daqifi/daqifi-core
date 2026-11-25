@@ -35,12 +35,12 @@ public class DaqifiStreamingDeviceRateCapTests
     public void StartStreaming_RateUnderTheCap_StreamsAtTheRateAsked()
     {
         var device = CreateDevice(currentMaximumRateHz: TwoChannelCapHz);
-        device.StreamingFrequency = 1000;
+        device.SampleRateHz = 1000;
 
         device.StartStreaming();
 
         Assert.True(device.IsStreaming);
-        Assert.Equal(1000, device.StreamingFrequency);
+        Assert.Equal(1000, device.SampleRateHz);
         Assert.Equal(
             ScpiMessageProducer.StartStreaming(1000).Data,
             Assert.Single(device.SentMessages).Data);
@@ -52,12 +52,12 @@ public class DaqifiStreamingDeviceRateCapTests
         // The rate the device would refuse. The setter accepts it — 10000 is under the board
         // ceiling — so nothing before this point had any reason to complain.
         var device = CreateDevice(currentMaximumRateHz: TwoChannelCapHz);
-        device.StreamingFrequency = 10000;
-        Assert.Equal(10000, device.StreamingFrequency);
+        device.SampleRateHz = 10000;
+        Assert.Equal(10000, device.SampleRateHz);
 
         device.StartStreaming();
 
-        Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
+        Assert.Equal(TwoChannelCapHz, device.SampleRateHz);
         Assert.Equal(
             ScpiMessageProducer.StartStreaming(TwoChannelCapHz).Data,
             Assert.Single(device.SentMessages).Data);
@@ -68,11 +68,11 @@ public class DaqifiStreamingDeviceRateCapTests
     {
         // The exact case the issue measured: 22000 Hz is legal to set and produces no samples.
         var device = CreateDevice(currentMaximumRateHz: TwoChannelCapHz);
-        device.StreamingFrequency = BoardCeilingHz;
+        device.SampleRateHz = BoardCeilingHz;
 
         device.StartStreaming();
 
-        Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
+        Assert.Equal(TwoChannelCapHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -81,11 +81,11 @@ public class DaqifiStreamingDeviceRateCapTests
         // A cap of 0 is "no analog input is enabled", not "stream at 0 Hz". Driving the rate to
         // the cap here would reject every rate; the rate is stale, not invalid.
         var device = CreateDevice(currentMaximumRateHz: 0);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
 
         device.StartStreaming();
 
-        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Equal(10000, device.SampleRateHz);
     }
 
     [Fact]
@@ -94,18 +94,18 @@ public class DaqifiStreamingDeviceRateCapTests
         // A device that has said nothing about how its channel set affects the rate reports the
         // board ceiling, so a rate under that ceiling must still go out unchanged.
         var device = CreateDevice(currentMaximumRateHz: null);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
 
         device.StartStreaming();
 
-        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Equal(10000, device.SampleRateHz);
     }
 
     [Fact]
     public void StartStreaming_AlreadyStreaming_DoesNotTouchTheRate()
     {
         var device = CreateDevice(currentMaximumRateHz: TwoChannelCapHz);
-        device.StreamingFrequency = 1000;
+        device.SampleRateHz = 1000;
         device.StartStreaming();
         device.SentMessages.Clear();
 
@@ -114,7 +114,7 @@ public class DaqifiStreamingDeviceRateCapTests
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(500)));
         device.StartStreaming();
 
-        Assert.Equal(1000, device.StreamingFrequency);
+        Assert.Equal(1000, device.SampleRateHz);
         Assert.Empty(device.SentMessages);
     }
 
@@ -123,27 +123,27 @@ public class DaqifiStreamingDeviceRateCapTests
     #region The rejection message quotes the limit that applies
 
     [Fact]
-    public void StreamingFrequency_AboveTheCeiling_NamesTheCeilingAndTheChannelSetCap()
+    public void SampleRateHz_AboveTheCeiling_NamesTheCeilingAndTheChannelSetCap()
     {
         var device = CreateDevice(currentMaximumRateHz: 5713);
 
         var exception = Assert.Throws<ArgumentOutOfRangeException>(
-            () => device.StreamingFrequency = BoardCeilingHz + 1);
+            () => device.SampleRateHz = BoardCeilingHz + 1);
 
         Assert.Contains("at most 22000 Hz", exception.Message);
         Assert.Contains("5713 Hz", exception.Message);
     }
 
     [Fact]
-    public void StreamingFrequency_BelowOne_NamesOnlyTheLowerBound()
+    public void SampleRateHz_BelowOne_NamesOnlyTheLowerBound()
     {
-        // The issue's exact complaint: "StreamingFrequency = 0" reported
+        // The issue's exact complaint: "SampleRateHz = 0" reported
         // "must be between 1 and 22000 Hz (the device's maximum sampling rate)" while the live
         // cap was 5713 — a ceiling the value never approached, described as the limit a stream
         // is held to.
         var device = CreateDevice(currentMaximumRateHz: 5713);
 
-        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => device.StreamingFrequency = 0);
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => device.SampleRateHz = 0);
 
         Assert.Contains("at least 1 Hz", exception.Message);
         Assert.DoesNotContain("22000", exception.Message);
@@ -159,7 +159,7 @@ public class DaqifiStreamingDeviceRateCapTests
     {
         var device = CreateTransportDevice(currentMaximumRateHz: null);
         device.QueuedErrors.Add("-222,\"Data out of range\"");
-        device.StreamingFrequency = 1000;
+        device.SampleRateHz = 1000;
 
         var exception = await Assert.ThrowsAsync<DeviceCommandFailedException>(
             () => device.StartStreamingAsync());
@@ -181,7 +181,7 @@ public class DaqifiStreamingDeviceRateCapTests
         // stream that is delivering must never pay for it.
         var device = CreateTransportDevice(currentMaximumRateHz: null);
         device.QueuedErrors.Add("-222,\"Data out of range\"");
-        device.StreamingFrequency = 1000;
+        device.SampleRateHz = 1000;
         device.SendFrameOnStart = true;
 
         await device.StartStreamingAsync();
@@ -196,14 +196,14 @@ public class DaqifiStreamingDeviceRateCapTests
         // The device computes its cap for the set enabled when the document was read, so the
         // figure from connect time describes a channel set that is no longer there.
         var device = CreateTransportDevice(currentMaximumRateHz: null);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
         device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
         device.SendFrameOnStart = true;
 
         await device.StartStreamingAsync();
 
         Assert.Equal(1, device.CapabilityDocumentReads);
-        Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
+        Assert.Equal(TwoChannelCapHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -233,10 +233,10 @@ public class DaqifiStreamingDeviceRateCapTests
         device.CapabilityDocumentOnRead = BenchDocument(TwoChannelCapHz);
         device.SendFrameOnStart = true;
         EnableAnalog(device, 0, 1);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
 
         await device.StartStreamingAsync();
-        Assert.Equal(TwoChannelCapHz, device.StreamingFrequency);
+        Assert.Equal(TwoChannelCapHz, device.SampleRateHz);
 
         await device.StopStreamingAsync();
         EnableAnalog(device, 2);
@@ -244,7 +244,7 @@ public class DaqifiStreamingDeviceRateCapTests
         await device.StartStreamingAsync();
 
         Assert.Equal(2, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
+        Assert.Equal(3518, device.SampleRateHz);
     }
 
     [Fact]
@@ -266,11 +266,11 @@ public class DaqifiStreamingDeviceRateCapTests
         await device.ReadCapabilityDocumentAsync();
 
         device.CapabilityDocumentOnRead = BenchDocument(3518);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
         await device.StartStreamingAsync();
 
         Assert.Equal(3, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
+        Assert.Equal(3518, device.SampleRateHz);
     }
 
     [Fact]
@@ -292,11 +292,11 @@ public class DaqifiStreamingDeviceRateCapTests
         await device.StopStreamingAsync();
 
         device.CapabilityDocumentOnRead = BenchDocument(3518);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
         await device.StartStreamingAsync();
 
         Assert.Equal(3, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
+        Assert.Equal(3518, device.SampleRateHz);
     }
 
     [Fact]
@@ -321,13 +321,13 @@ public class DaqifiStreamingDeviceRateCapTests
         device.EnableChannel(third);
 
         device.CapabilityDocumentOnRead = BenchDocument(3518);
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
         await device.StartStreamingAsync();
 
         // The first start reads twice (the set moved under its first read), the second once
         // (the set grew back past what the first start's settled read covered).
         Assert.Equal(3, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
+        Assert.Equal(3518, device.SampleRateHz);
     }
 
     [Fact]
@@ -351,12 +351,12 @@ public class DaqifiStreamingDeviceRateCapTests
                 device.CapabilityDocumentOnRead = BenchDocument(3518);
             }
         };
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
 
         await device.StartStreamingAsync();
 
         Assert.Equal(2, device.CapabilityDocumentReads);
-        Assert.Equal(3518, device.StreamingFrequency);
+        Assert.Equal(3518, device.SampleRateHz);
     }
 
     #endregion
@@ -404,7 +404,7 @@ public class DaqifiStreamingDeviceRateCapTests
         device.UpdateMetadata(metadata => metadata with
         {
             DeviceType = DeviceType.Nyquist1,
-            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaxSamplingRate = BoardCeilingHz },
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaximumSampleRateHz = BoardCeilingHz },
             FirmwareVersion = "3.8.0"
         });
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
@@ -440,7 +440,7 @@ public class DaqifiStreamingDeviceRateCapTests
             {
                 MinimumSampleRateHz = 1,
                 MaximumSampleRateHz = BoardCeilingHz,
-                CurrentMaximumRateHz = currentMaximumRateHz,
+                CurrentMaximumSampleRateHz = currentMaximumRateHz,
                 RateValidation = "error"
             }
         };

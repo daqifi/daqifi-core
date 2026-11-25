@@ -206,8 +206,8 @@ public class DeviceIdTests
     {
         Name = "NYQUIST",
         SerialNumber = serialNumber,
-        ConnectionType = ConnectionType.WiFi,
-        IPAddress = IPAddress.Parse(ip),
+        ConnectionType = ConnectionType.Wifi,
+        IpAddress = IPAddress.Parse(ip),
         MacAddress = mac,
     };
 }

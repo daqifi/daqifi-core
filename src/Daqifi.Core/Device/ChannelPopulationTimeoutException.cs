@@ -25,7 +25,7 @@ public class ChannelPopulationTimeoutException : TimeoutException
     /// Gets the device's answer to <c>*IDN?</c>, asked after the wait expired, or <c>null</c>
     /// when the device did not answer it.
     /// </summary>
-    public string? DeviceIdentity { get; }
+    public string? IdentificationReply { get; }
 
     /// <summary>
     /// Gets the value the device reported for <c>SYSTem:STReam:INTerface?</c>, or <c>null</c>
@@ -42,7 +42,7 @@ public class ChannelPopulationTimeoutException : TimeoutException
     /// Gets whether the device answered <c>*IDN?</c> after the wait expired. When this is
     /// <c>true</c>, the device is not unresponsive, whatever else is wrong.
     /// </summary>
-    public bool IsDeviceResponding => DeviceIdentity != null;
+    public bool IsDeviceResponding => IdentificationReply != null;
 
     /// <summary>
     /// Gets how many lines arrived in answer to <c>*IDN?</c> when none of them could be read as
@@ -67,14 +67,14 @@ public class ChannelPopulationTimeoutException : TimeoutException
     /// </summary>
     public ChannelPopulationTimeoutException(
         string message,
-        string? deviceIdentity = null,
+        string? identificationReply = null,
         int? streamInterface = null,
         int unreadableResponseLines = 0,
         IReadOnlyList<string>? rawDeviceResponse = null,
         Exception? innerException = null)
         : base(message, innerException)
     {
-        DeviceIdentity = deviceIdentity;
+        IdentificationReply = identificationReply;
         StreamInterface = streamInterface;
         UnreadableResponseLines = unreadableResponseLines;
         RawDeviceResponse = rawDeviceResponse ?? Array.Empty<string>();

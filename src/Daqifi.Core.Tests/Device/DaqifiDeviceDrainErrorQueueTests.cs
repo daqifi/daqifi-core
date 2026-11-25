@@ -120,7 +120,7 @@ public class DaqifiDeviceDrainErrorQueueTests
         device.Replies.Enqueue(new[] { "0,\"No error\"" });
         device.Connect();
 
-        var popped = await device.DrainErrorQueueAsync(maxIterations: 3);
+        var popped = await device.DrainErrorQueueAsync(maximumIterations: 3);
 
         Assert.Equal(3, popped.Count);
         Assert.Equal(3, device.ExecuteTextCommandCallCount);
@@ -173,9 +173,9 @@ public class DaqifiDeviceDrainErrorQueueTests
         var device = new SequencedReplyDevice("TestDevice");
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => device.DrainErrorQueueAsync(maxIterations: 0));
+            () => device.DrainErrorQueueAsync(maximumIterations: 0));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => device.DrainErrorQueueAsync(maxIterations: -1));
+            () => device.DrainErrorQueueAsync(maximumIterations: -1));
     }
 
     /// <summary>

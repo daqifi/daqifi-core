@@ -31,16 +31,16 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     public const double DefaultMaximumVoltage = 10.0;
 
     /// <summary>Smallest resolution accepted as physically plausible, in bits.</summary>
-    public const int MinResolutionBits = 1;
+    public const int MinimumResolutionBits = 1;
 
     /// <summary>Largest resolution accepted as physically plausible, in bits.</summary>
-    public const int MaxResolutionBits = 32;
+    public const int MaximumResolutionBits = 32;
 
     /// <summary>
     /// Largest absolute voltage accepted as a range endpoint. DAQiFi analog output tops out at
     /// 10 V; 50 leaves headroom for future hardware while still rejecting a corrupt value.
     /// </summary>
-    public const double MaxRangeMagnitudeVolts = 50.0;
+    public const double MaximumRangeMagnitudeVolts = 50.0;
 
     private readonly Lock _lock = new();
     private IDataSample? _activeSample;
@@ -137,8 +137,8 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// The channel number is negative, the resolution is outside
-    /// [<see cref="MinResolutionBits"/>, <see cref="MaxResolutionBits"/>], or a range endpoint is
-    /// non-finite or beyond <see cref="MaxRangeMagnitudeVolts"/>.
+    /// [<see cref="MinimumResolutionBits"/>, <see cref="MaximumResolutionBits"/>], or a range endpoint is
+    /// non-finite or beyond <see cref="MaximumRangeMagnitudeVolts"/>.
     /// </exception>
     /// <exception cref="ArgumentException">The range is empty or inverted.</exception>
     public AnalogOutputChannel(
@@ -263,23 +263,23 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
 
     private static void ValidateResolutionBits(int resolutionBits, string parameterName)
     {
-        if (resolutionBits is < MinResolutionBits or > MaxResolutionBits)
+        if (resolutionBits is < MinimumResolutionBits or > MaximumResolutionBits)
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 resolutionBits,
-                $"DAC resolution must be between {MinResolutionBits} and {MaxResolutionBits} bits.");
+                $"DAC resolution must be between {MinimumResolutionBits} and {MaximumResolutionBits} bits.");
         }
     }
 
     private static void ValidateRangeEndpoint(double volts, string parameterName)
     {
-        if (!double.IsFinite(volts) || Math.Abs(volts) > MaxRangeMagnitudeVolts)
+        if (!double.IsFinite(volts) || Math.Abs(volts) > MaximumRangeMagnitudeVolts)
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 volts,
-                $"An output range endpoint must be finite and within +/-{MaxRangeMagnitudeVolts} V.");
+                $"An output range endpoint must be finite and within +/-{MaximumRangeMagnitudeVolts} V.");
         }
     }
 }

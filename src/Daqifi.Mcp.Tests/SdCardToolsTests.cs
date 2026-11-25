@@ -419,6 +419,6 @@ public class SdCardFileNameResolutionTests
         public Task<SdCardDownloadResult> DownloadSdCardFileAsync(string fileName, Stream destinationStream, IProgress<SdCardTransferProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SdCardDownloadResult> DownloadSdCardFileAsync(string fileName, IProgress<SdCardTransferProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public void PrepareSdInterface() => throw new NotSupportedException();
-        public void PrepareLanInterface() => throw new NotSupportedException();
+        public void PrepareWifiInterface() => throw new NotSupportedException();
     }
 }

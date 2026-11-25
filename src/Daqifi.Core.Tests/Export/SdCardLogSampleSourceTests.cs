@@ -510,7 +510,7 @@ public class SdCardLogSampleSourceTests
         {
             AnalogPortCount = analogPorts,
             DigitalPortCount = 1,
-            TimestampFrequency = 50000,
+            TimestampFrequencyHz = 50000,
             DeviceSerialNumber = serial,
             DevicePartNumber = null,
             FirmwareVersion = null,

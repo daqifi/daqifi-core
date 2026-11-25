@@ -13,17 +13,17 @@ public sealed class ReconnectAttemptEventArgs : EventArgs
     /// Initializes a new instance of the <see cref="ReconnectAttemptEventArgs"/> class.
     /// </summary>
     /// <param name="attemptNumber">The 1-based attempt number.</param>
-    /// <param name="maxAttempts">The total number of attempts the policy allows.</param>
+    /// <param name="maximumAttempts">The total number of attempts the policy allows.</param>
     /// <param name="delay">How long the device will wait before making this attempt.</param>
     /// <param name="previousError">Why the previous attempt failed, or <c>null</c> for the first.</param>
     public ReconnectAttemptEventArgs(
         int attemptNumber,
-        int maxAttempts,
+        int maximumAttempts,
         TimeSpan delay,
         Exception? previousError = null)
     {
         AttemptNumber = attemptNumber;
-        MaxAttempts = maxAttempts;
+        MaximumAttempts = maximumAttempts;
         Delay = delay;
         PreviousError = previousError;
         Timestamp = DateTimeOffset.UtcNow;
@@ -33,7 +33,7 @@ public sealed class ReconnectAttemptEventArgs : EventArgs
     public int AttemptNumber { get; }
 
     /// <summary>Gets how many attempts the policy allows in total.</summary>
-    public int MaxAttempts { get; }
+    public int MaximumAttempts { get; }
 
     /// <summary>Gets the backoff wait that precedes this attempt.</summary>
     public TimeSpan Delay { get; }

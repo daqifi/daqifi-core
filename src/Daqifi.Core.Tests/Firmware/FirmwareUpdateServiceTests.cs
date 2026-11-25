@@ -86,7 +86,7 @@ public class FirmwareUpdateServiceTests
                 FirmwareUpdateState.ErasingFlash,
                 FirmwareUpdateState.Programming,
                 FirmwareUpdateState.Verifying,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete
             ],
             stateTransitions);
@@ -128,7 +128,7 @@ public class FirmwareUpdateServiceTests
                 _ => true,
                 CancellationToken.None));
 
-        Assert.Equal("maxAttempts", ex.ParamName);
+        Assert.Equal("maximumAttempts", ex.ParamName);
         Assert.False(actionRan);
     }
 
@@ -1030,7 +1030,7 @@ public class FirmwareUpdateServiceTests
                 FirmwareUpdateState.ErasingFlash,
                 FirmwareUpdateState.Programming,
                 FirmwareUpdateState.Verifying,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete
             ],
             stateTransitions);
@@ -1827,7 +1827,7 @@ public class FirmwareUpdateServiceTests
     {
         var device = new FakeStreamingDevice("COM8");
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromSeconds(5);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -1991,7 +1991,7 @@ public class FirmwareUpdateServiceTests
                 o.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
             });
 
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, run.Exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, run.Exception.FailedState);
         AssertFlashCondition(Pic32FlashCondition.ProgrammedNotConfirmed, FirmwareUpdateState.Failed, run);
     }
 
@@ -2119,10 +2119,10 @@ public class FirmwareUpdateServiceTests
                 IsPreRelease = false
             }
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM9", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -2162,7 +2162,7 @@ public class FirmwareUpdateServiceTests
     {
         var device = new FakeStreamingDevice("COM8");
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromSeconds(5);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -2220,7 +2220,7 @@ public class FirmwareUpdateServiceTests
             [FirmwareUpdateState.ErasingFlash] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Programming] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Verifying] = Pic32FlashCondition.PossiblyHalfFlashed,
-            [FirmwareUpdateState.JumpingToApp] = Pic32FlashCondition.ProgrammedNotConfirmed,
+            [FirmwareUpdateState.JumpingToApplication] = Pic32FlashCondition.ProgrammedNotConfirmed,
             [FirmwareUpdateState.Complete] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Failed] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.CleaningUp] = Pic32FlashCondition.PossiblyHalfFlashed,
@@ -2376,7 +2376,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -2437,7 +2437,7 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task UpdateWifiModuleAsync_WhenPowerOnBeforeLanUpdateModeDisabled_SkipsPowerOnButStillRestoresTransparentMode()
+    public async Task UpdateWifiModuleAsync_WhenPowerOnBeforeUpdateModeDisabled_SkipsPowerOnButStillRestoresTransparentMode()
     {
         // The opt-out exists for consumers that already powered the module on themselves. It must
         // affect the prep half ONLY — the post-flash transparent-mode exit is recovery of state
@@ -2454,9 +2454,9 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
-        options.PowerOnWifiModuleBeforeLanUpdateMode = false;
+        options.PowerOnWifiModuleBeforeUpdateMode = false;
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -2521,7 +2521,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
         // Positive so the success-path settle exists for this cancel to land in. The token is
         // already cancelled when that wait starts, so it ends at once. Kept short on purpose:
@@ -2597,7 +2597,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
         options.PostUsbTransparentModeExitDelay = TimeSpan.Zero;
 
@@ -2697,7 +2697,7 @@ public class FirmwareUpdateServiceTests
         options.PostUsbTransparentModeExitDelay = delay;
         // The await right after the bridge-entering apply, so the cancel requested on that apply
         // is observed there rather than racing the rest of prep.
-        options.PostLanBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
+        options.PostWifiBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
         // Shorter than the settle, so a wait that observes the recovery budget cannot
         // satisfy the gap assertion below — and cannot send LAN:APPLY either.
         options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
@@ -2826,12 +2826,12 @@ public class FirmwareUpdateServiceTests
             OnGetLatestWifiRelease = cts.Cancel
         };
 
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM33",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -2866,13 +2866,13 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public void FirmwareUpdateServiceOptions_PowerOnWifiModuleBeforeLanUpdateMode_DefaultsToTrue()
+    public void FirmwareUpdateServiceOptions_PowerOnWifiModuleBeforeUpdateMode_DefaultsToTrue()
     {
         // The default is the behavior change: a consumer that upgrades without touching options
         // gets the power-on prep. Pinned so it cannot be flipped off silently.
         var options = new FirmwareUpdateServiceOptions();
 
-        Assert.True(options.PowerOnWifiModuleBeforeLanUpdateMode);
+        Assert.True(options.PowerOnWifiModuleBeforeUpdateMode);
         Assert.Equal(TimeSpan.FromSeconds(1), options.PowerOnWifiModuleSettleDelay);
         options.Validate();
     }
@@ -2901,7 +2901,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
         // Also the ReconnectingAfterFlash budget — the step kept the timeout it had when it ran
         // under Verifying, so a host that tuned VerifyingTimeout keeps that tuning.
@@ -3070,7 +3070,7 @@ public class FirmwareUpdateServiceTests
         // Long enough that cancellation lands inside it, and inside the 2s PreparingDeviceTimeout
         // so the state timeout is not what ends the wait. This is the pace between the request and
         // the apply, so a cancel here is a cancel before the bridge.
-        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromSeconds(1);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -3151,7 +3151,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
+        options.PostWifiBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
         // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
         options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
         // Longer than that budget. A settle that observed it would be cancelled before LAN:APPLY.
@@ -3503,10 +3503,10 @@ public class FirmwareUpdateServiceTests
         };
 
         var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease };
-        var device = new FakeLanChipInfoStreamingDevice("COM9", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3555,10 +3555,10 @@ public class FirmwareUpdateServiceTests
             LatestWifiReleaseException = new HttpRequestException("no route to host")
         };
         var processRunner = new FakeExternalProcessRunner();
-        var device = new FakeLanChipInfoStreamingDevice("COM47", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM47", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3608,10 +3608,10 @@ public class FirmwareUpdateServiceTests
             NextResult = new ExternalProcessResult(
                 0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM48", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM48", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3651,7 +3651,7 @@ public class FirmwareUpdateServiceTests
             NextResult = new ExternalProcessResult(
                 0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM49", chipInfo: null);
+        var device = new FakeWifiChipInfoStreamingDevice("COM49", chipInfo: null);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -3688,10 +3688,10 @@ public class FirmwareUpdateServiceTests
         };
 
         var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease };
-        var device = new FakeLanChipInfoStreamingDevice("COM10", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM10", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3701,7 +3701,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -3731,9 +3731,9 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task UpdateWifiModuleAsync_WhenDeviceDoesNotSupportLanQuery_ProceedsWithFlash()
+    public async Task UpdateWifiModuleAsync_WhenDeviceDoesNotSupportWifiQuery_ProceedsWithFlash()
     {
-        // FakeStreamingDevice does NOT implement ILanChipInfoProvider — version check is skipped
+        // FakeStreamingDevice does NOT implement IWifiChipInfoProvider — version check is skipped
         var device = new FakeStreamingDevice("COM11");
 
         var externalProcessRunner = new FakeExternalProcessRunner
@@ -3742,7 +3742,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -3844,7 +3844,7 @@ public class FirmwareUpdateServiceTests
         var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(() => RunUpdateAsync(service, device));
 
         Assert.IsType<TimeoutException>(ex.InnerException);
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
         Assert.Equal(1, device.InitializeCalls);
     }
@@ -3934,7 +3934,7 @@ public class FirmwareUpdateServiceTests
         // FirmwareUpdateServiceOptions.Validate requires whenever a probe is set.
         //
         // 10s/15s rather than something enormous: these also bound how long a real
-        // regression in the JumpingToApp state takes to surface, so the aim is comfortably
+        // regression in the JumpingToApplication state takes to surface, so the aim is comfortably
         // clear of a stalled runner without going so far that a genuine hang is slow to
         // diagnose. 10s is an order of magnitude past the ~1s stall that broke the 1s
         // budget, and ~300x what the probe actually needs.
@@ -4013,7 +4013,7 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         var inner = Assert.IsType<TimeoutException>(ex.InnerException);
         Assert.Contains("application-ready", inner.Message);
     }
@@ -4294,7 +4294,7 @@ public class FirmwareUpdateServiceTests
         // The whole JumpToApp step is bounded by JumpingToApplicationTimeout
         // via the outer state-timeout. If the readiness budget meets or
         // exceeds it, the outer timeout fires first and surfaces a generic
-        // JumpingToApp error instead of the readiness-specific one. Validate()
+        // JumpingToApplication error instead of the readiness-specific one. Validate()
         // must reject the misconfiguration up front.
         var options = CreateFastOptions();
         options.PostReconnectReadinessProbe = (_, _) => Task.FromResult(true);
@@ -4326,10 +4326,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.5.4",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM9", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4347,7 +4347,7 @@ public class FirmwareUpdateServiceTests
         Assert.True(status.IsUpToDate);
         Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
         Assert.NotNull(status.CurrentChipInfo);
-        Assert.Equal("19.5.4", status.CurrentChipInfo!.FwVersion);
+        Assert.Equal("19.5.4", status.CurrentChipInfo!.FirmwareVersion);
         Assert.NotNull(status.LatestRelease);
         Assert.Equal("19.5.4", status.LatestRelease!.TagName);
 
@@ -4367,10 +4367,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.6.1",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM10", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM10", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4391,7 +4391,7 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceDoesNotSupportLanQuery_ReturnsDeviceDoesNotSupportLanQuery()
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceDoesNotSupportWifiQuery_ReturnsDeviceDoesNotSupportWifiQuery()
     {
         var device = new FakeStreamingDevice("COM11");
 
@@ -4407,7 +4407,7 @@ public class FirmwareUpdateServiceTests
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
         Assert.False(status.IsUpToDate);
-        Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery, status.Reason);
+        Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportWifiQuery, status.Reason);
         Assert.Null(status.CurrentChipInfo);
         Assert.Null(status.LatestRelease);
 
@@ -4446,10 +4446,10 @@ public class FirmwareUpdateServiceTests
         // egress, rate limit) leaves IsUpToDate unanswerable, but the device already told
         // us its version, so "is this module supported" is still answerable — with no
         // network at all.
-        var device = new FakeLanChipInfoStreamingDevice("COM40", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM40", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4479,10 +4479,10 @@ public class FirmwareUpdateServiceTests
     {
         // The throwing half of the same failure — a different catch block in the
         // implementation, so it needs its own coverage.
-        var device = new FakeLanChipInfoStreamingDevice("COM41", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM41", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.8.0",
+            FirmwareVersion = "19.8.0",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4510,10 +4510,10 @@ public class FirmwareUpdateServiceTests
     {
         // "Below the minimum" and "could not tell" must stay distinguishable — collapsing
         // them is the conflation the three-state property exists to prevent.
-        var device = new FakeLanChipInfoStreamingDevice("COM42", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM42", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4535,7 +4535,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task CheckWifiFirmwareStatusAsync_WhenChipInfoUnavailable_LeavesMinimumVerdictUnknown()
     {
-        var device = new FakeLanChipInfoStreamingDevice("COM43", chipInfo: null);
+        var device = new FakeWifiChipInfoStreamingDevice("COM43", chipInfo: null);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -4562,10 +4562,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.7.7",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM44", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM44", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "garbage",
+            FirmwareVersion = "garbage",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4592,10 +4592,10 @@ public class FirmwareUpdateServiceTests
         var options = CreateFastOptions();
         options.MinimumSupportedWifiFirmwareVersion = new FirmwareVersion(19, 9, 0, 0, null, 0);
 
-        var device = new FakeLanChipInfoStreamingDevice("COM45", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM45", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4625,10 +4625,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.8.0",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM46", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM46", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4663,10 +4663,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.5.4",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM12", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM12", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4", // Matches latest — would normally short-circuit
+            FirmwareVersion = "19.5.4", // Matches latest — would normally short-circuit
             BuildDate = "Jan  8 2019"
         });
 
@@ -4676,7 +4676,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -4730,10 +4730,10 @@ public class FirmwareUpdateServiceTests
             TagName = "19.6.1",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice("COM13", chipInfo: new LanChipInfo
+        var device = new FakeWifiChipInfoStreamingDevice("COM13", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4743,7 +4743,7 @@ public class FirmwareUpdateServiceTests
         };
 
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
@@ -4809,7 +4809,7 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsTransiently_RetriesUntilSuccess()
+    public async Task CheckWifiFirmwareStatusAsync_WhenWifiChipInfoFailsTransiently_RetriesUntilSuccess()
     {
         // Closes #144: post-PIC32-reboot the WiFi subsystem can lag the
         // application by a few seconds, so the first chip-info query
@@ -4822,19 +4822,19 @@ public class FirmwareUpdateServiceTests
             TagName = "19.5.4",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM14",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             transientFailuresBeforeSuccess: 2);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5); // Keep test fast
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5); // Keep test fast
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -4847,31 +4847,31 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.True(status.IsUpToDate);
         Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsAllAttempts_ReturnsChipInfoUnavailable()
+    public async Task CheckWifiFirmwareStatusAsync_WhenWifiChipInfoFailsAllAttempts_ReturnsChipInfoUnavailable()
     {
-        // After exhausting LanChipInfoMaxAttempts the planning method must
+        // After exhausting WifiChipInfoMaximumAttempts the planning method must
         // fall through to ChipInfoUnavailable, NOT hang or surface the
         // raw exception. This preserves the "couldn't check, default to
         // running update" semantics for genuinely-broken devices.
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM15",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             transientFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -4884,13 +4884,13 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.False(status.IsUpToDate);
         Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_WhenLanNotInitialized_KicksLanApplyOnceAndRecovers()
+    public async Task CheckWifiFirmwareStatusAsync_WhenWifiNotInitialized_KicksLanApplyOnceAndRecovers()
     {
         // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
         // machine hasn't reached INITIALIZED yet makes GETChipInfo? return
@@ -4902,20 +4902,20 @@ public class FirmwareUpdateServiceTests
             TagName = "19.7.7",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM22",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
-            lanNotInitializedFailuresBeforeSuccess: 2);
+            wifiNotInitializedFailuresBeforeSuccess: 2);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
-        options.KickLanApplyOnNotInitialized = true;
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickWifiApplyOnNotInitialized = true;
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -4928,33 +4928,33 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(1, device.LanApplySentCount);
         Assert.True(status.IsUpToDate);
         Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_WhenLanNotInitializedExhaustsRetries_ReturnsLanNotInitialized()
+    public async Task CheckWifiFirmwareStatusAsync_WhenWifiNotInitializedExhaustsRetries_ReturnsWifiNotInitialized()
     {
         // If the kick doesn't help within the retry budget, the caller should
-        // get the more specific LanNotInitialized reason instead of the
+        // get the more specific WifiNotInitialized reason instead of the
         // generic ChipInfoUnavailable — same "proceed with flash" behavior,
         // better diagnostics.
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM23",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
-            lanNotInitializedFailuresBeforeSuccess: 99);
+            wifiNotInitializedFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
-        options.KickLanApplyOnNotInitialized = true;
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickWifiApplyOnNotInitialized = true;
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -4967,29 +4967,29 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(1, device.LanApplySentCount);
         Assert.False(status.IsUpToDate);
-        Assert.Equal(WifiFirmwareStatusReason.LanNotInitialized, status.Reason);
+        Assert.Equal(WifiFirmwareStatusReason.WifiNotInitialized, status.Reason);
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_KickLanApplyDisabled_DoesNotSendApplyOnNotInitialized()
+    public async Task CheckWifiFirmwareStatusAsync_KickWifiApplyDisabled_DoesNotSendApplyOnNotInitialized()
     {
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM24",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
-            lanNotInitializedFailuresBeforeSuccess: 99);
+            wifiNotInitializedFailuresBeforeSuccess: 99);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
-        options.KickLanApplyOnNotInitialized = false;
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickWifiApplyOnNotInitialized = false;
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -5003,22 +5003,22 @@ public class FirmwareUpdateServiceTests
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
         Assert.Equal(0, device.LanApplySentCount);
-        Assert.Equal(WifiFirmwareStatusReason.LanNotInitialized, status.Reason);
+        Assert.Equal(WifiFirmwareStatusReason.WifiNotInitialized, status.Reason);
     }
 
     [Fact]
-    public async Task CheckWifiFirmwareStatusAsync_CancelledDuringLanNotInitializedHandling_DoesNotSendLanApply()
+    public async Task CheckWifiFirmwareStatusAsync_CancelledDuringWifiNotInitializedHandling_DoesNotSendLanApply()
     {
-        // A cancellation race between the LanNotInitialized detection and the
+        // A cancellation race between the WifiNotInitialized detection and the
         // APPLY kick must not still send the state-changing command — mirrors
         // the guard already required before the WINC power-on Send.
         using var cts = new CancellationTokenSource();
-        var device = new CancelingLanChipInfoStreamingDevice("COM25", cts);
+        var device = new CancelingWifiChipInfoStreamingDevice("COM25", cts);
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
-        options.KickLanApplyOnNotInitialized = true;
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickWifiApplyOnNotInitialized = true;
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -5037,15 +5037,15 @@ public class FirmwareUpdateServiceTests
 
     /// <summary>
     /// Cancels the supplied <see cref="CancellationTokenSource"/> as soon as
-    /// <see cref="GetLanChipInfoAsync"/> is called, then throws
-    /// <see cref="LanNotInitializedException"/> — simulates cancellation racing
+    /// <see cref="GetWifiChipInfoAsync"/> is called, then throws
+    /// <see cref="WifiNotInitializedException"/> — simulates cancellation racing
     /// with the not-initialized detection, before the retry loop's APPLY kick.
     /// </summary>
-    private sealed class CancelingLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    private sealed class CancelingWifiChipInfoStreamingDevice : IStreamingDevice, IWifiChipInfoProvider
     {
         private readonly CancellationTokenSource _cts;
 
-        public CancelingLanChipInfoStreamingDevice(string name, CancellationTokenSource cts)
+        public CancelingWifiChipInfoStreamingDevice(string name, CancellationTokenSource cts)
         {
             Name = name;
             _cts = cts;
@@ -5060,7 +5060,7 @@ public class FirmwareUpdateServiceTests
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
-        public int StreamingFrequency { get; set; }
+        public int SampleRateHz { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStateChangedEventArgs>? StateChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
@@ -5124,19 +5124,19 @@ public class FirmwareUpdateServiceTests
 
         public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
         {
             _cts.Cancel();
-            return Task.FromException<LanChipInfo?>(
-                new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+            return Task.FromException<WifiChipInfo?>(
+                new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
         }
     }
 
@@ -5144,7 +5144,7 @@ public class FirmwareUpdateServiceTests
     public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
     {
         // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
-        // compound with retry delays, so a high MaxAttempts × non-trivial
+        // compound with retry delays, so a high MaximumAttempts × non-trivial
         // per-attempt latency could block far beyond the configured retry
         // budget while holding _operationLock. The total-timeout cap caps
         // wall-clock time independent of attempt counts.
@@ -5154,14 +5154,14 @@ public class FirmwareUpdateServiceTests
         // implementation would block ~2.9s. The 100ms total timeout
         // forces an early ChipInfoUnavailable return after the first
         // attempt's latency exceeds the budget.
-        var device = new SlowFakeLanChipInfoStreamingDevice(
+        var device = new SlowFakeWifiChipInfoStreamingDevice(
             "COM17",
             attemptLatency: TimeSpan.FromMilliseconds(200));
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 10;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(100);
-        options.LanChipInfoTotalTimeout = TimeSpan.FromMilliseconds(100);
+        options.WifiChipInfoMaximumAttempts = 10;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(100);
+        options.WifiChipInfoTotalTimeout = TimeSpan.FromMilliseconds(100);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -5184,10 +5184,10 @@ public class FirmwareUpdateServiceTests
             $"Probe took {stopwatch.ElapsedMilliseconds}ms, expected <1500ms with TotalTimeout=100ms.");
     }
 
-    private sealed class SlowFakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    private sealed class SlowFakeWifiChipInfoStreamingDevice : IStreamingDevice, IWifiChipInfoProvider
     {
         private readonly TimeSpan _attemptLatency;
-        public SlowFakeLanChipInfoStreamingDevice(string name, TimeSpan attemptLatency)
+        public SlowFakeWifiChipInfoStreamingDevice(string name, TimeSpan attemptLatency)
         {
             Name = name;
             _attemptLatency = attemptLatency;
@@ -5199,7 +5199,7 @@ public class FirmwareUpdateServiceTests
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
-        public int StreamingFrequency { get; set; }
+        public int SampleRateHz { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStateChangedEventArgs>? StateChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
@@ -5256,15 +5256,15 @@ public class FirmwareUpdateServiceTests
 
         public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        public async Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
         {
             await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
             return null;
@@ -5281,18 +5281,18 @@ public class FirmwareUpdateServiceTests
             TagName = "19.5.4",
             IsPreRelease = false
         };
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM16",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 3;
-        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.WifiChipInfoMaximumAttempts = 3;
+        options.WifiChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -5305,7 +5305,7 @@ public class FirmwareUpdateServiceTests
 
         await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(1, device.GetLanChipInfoCallCount);
+        Assert.Equal(1, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
@@ -5314,12 +5314,12 @@ public class FirmwareUpdateServiceTests
         // Closes #301: right after a PIC32 reflash the WINC comes back powered
         // off, so the probe must power it on before the first GETChipInfo?
         // query, not merely rely on retrying a powered-off module.
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM18",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5343,12 +5343,12 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task CheckWifiFirmwareStatusAsync_PowerOnBeforeProbeDisabled_DoesNotSendTurnDeviceOn()
     {
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM19",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5372,16 +5372,16 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task CheckWifiFirmwareStatusAsync_DeviceNotConnected_SkipsPowerOnAndDoesNotThrow()
     {
-        // FakeLanChipInfoStreamingDevice.Send does not itself throw when
+        // FakeWifiChipInfoStreamingDevice.Send does not itself throw when
         // disconnected (unlike the real DaqifiDevice), so this asserts the
         // guard on the caller side: CheckWifiFirmwareStatusAsync must not
         // attempt to send TurnDeviceOn to a device it knows is disconnected.
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM20",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             isConnected: false);
@@ -5407,12 +5407,12 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public async Task CheckWifiFirmwareStatusAsync_PowerOnBeforeProbe_WaitsSettleDelayBeforeProbing()
     {
-        var device = new FakeLanChipInfoStreamingDevice(
+        var device = new FakeWifiChipInfoStreamingDevice(
             "COM21",
-            chipInfo: new LanChipInfo
+            chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5436,12 +5436,12 @@ public class FirmwareUpdateServiceTests
         // to the actual gap between the two operations under test instead of
         // being sensitive to unrelated CI/test-framework overhead.
         Assert.NotNull(device.TurnDeviceOnSentAt);
-        Assert.NotNull(device.FirstGetLanChipInfoCallAt);
+        Assert.NotNull(device.FirstGetWifiChipInfoCallAt);
         Assert.True(
-            device.FirstGetLanChipInfoCallAt > device.TurnDeviceOnSentAt,
+            device.FirstGetWifiChipInfoCallAt > device.TurnDeviceOnSentAt,
             "Expected the chip-info probe to happen after the power-on command.");
 
-        var gap = device.FirstGetLanChipInfoCallAt!.Value - device.TurnDeviceOnSentAt!.Value;
+        var gap = device.FirstGetWifiChipInfoCallAt!.Value - device.TurnDeviceOnSentAt!.Value;
         Assert.True(gap >= TimeSpan.FromMilliseconds(180),
             $"Expected the probe to wait out the settle delay between power-on and chip-info query, but the gap was only {gap.TotalMilliseconds}ms.");
     }
@@ -5712,7 +5712,7 @@ public class FirmwareUpdateServiceTests
         var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
             () => service.ResetBootloaderAsync());
 
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         Assert.Equal("issue JMP_TO_APP soft reset", ex.Operation);
         Assert.IsType<TimeoutException>(ex.InnerException);
         // The hung write never completed, so nothing was recorded, and the HID
@@ -5979,7 +5979,7 @@ public class FirmwareUpdateServiceTests
             JumpingToApplicationTimeout = TimeSpan.FromSeconds(2),
             BootloaderResponseTimeout = TimeSpan.FromMilliseconds(250),
             PostForceBootDelay = TimeSpan.FromMilliseconds(5),
-            PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5),
+            PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5),
             PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5),
             HidConnectRetryDelay = TimeSpan.FromMilliseconds(5),
             FlashWriteRetryDelay = TimeSpan.FromMilliseconds(5),
@@ -5987,9 +5987,9 @@ public class FirmwareUpdateServiceTests
             // Collapse the WiFi-flash lifecycle waits for unit tests: the fake transport
             // releases its port synchronously and the fake process runner needs no
             // prompt/bridge-init window, so these delays are pure latency here.
-            PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
-            PostLanBridgeEntryDelay = TimeSpan.Zero,
-            WincBootPromptResponseDelay = TimeSpan.Zero,
+            PostWifiDisconnectPortReleaseDelay = TimeSpan.Zero,
+            PostWifiBridgeEntryDelay = TimeSpan.Zero,
+            WifiBootPromptResponseDelay = TimeSpan.Zero,
             WifiFlashRetryDelay = TimeSpan.FromMilliseconds(5),
             // Disable the macOS USB CDC stale-handle settling delay for unit
             // tests — FakeStreamingDevice doesn't reproduce the re-enum race,
@@ -6019,19 +6019,19 @@ public class FirmwareUpdateServiceTests
         return path;
     }
 
-    private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider, ISerialPortNamed
+    private sealed class FakeWifiChipInfoStreamingDevice : IStreamingDevice, IWifiChipInfoProvider, ISerialPortNamed
     {
-        private readonly LanChipInfo? _chipInfo;
+        private readonly WifiChipInfo? _chipInfo;
         private DeviceState _state = DeviceState.Connected;
         private int _remainingTransientFailures;
-        private int _remainingLanNotInitializedFailures;
+        private int _remainingWifiNotInitializedFailures;
 
-        public FakeLanChipInfoStreamingDevice(
+        public FakeWifiChipInfoStreamingDevice(
             string name,
-            LanChipInfo? chipInfo,
+            WifiChipInfo? chipInfo,
             int transientFailuresBeforeSuccess = 0,
             bool isConnected = true,
-            int lanNotInitializedFailuresBeforeSuccess = 0,
+            int wifiNotInitializedFailuresBeforeSuccess = 0,
             string? serialPortName = null)
         {
             Name = name;
@@ -6040,7 +6040,7 @@ public class FirmwareUpdateServiceTests
             SerialPortName = serialPortName ?? name;
             _chipInfo = chipInfo;
             _remainingTransientFailures = transientFailuresBeforeSuccess;
-            _remainingLanNotInitializedFailures = lanNotInitializedFailuresBeforeSuccess;
+            _remainingWifiNotInitializedFailures = wifiNotInitializedFailuresBeforeSuccess;
             IsConnected = isConnected;
             if (!isConnected)
             {
@@ -6053,7 +6053,7 @@ public class FirmwareUpdateServiceTests
 
         private readonly System.Diagnostics.Stopwatch _eventStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        public int GetLanChipInfoCallCount { get; private set; }
+        public int GetWifiChipInfoCallCount { get; private set; }
 
         public string Name { get; }
 
@@ -6065,7 +6065,7 @@ public class FirmwareUpdateServiceTests
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
-        public int StreamingFrequency { get; set; }
+        public int SampleRateHz { get; set; }
         public bool IsStreaming { get; private set; }
 
         public List<string> SentCommands { get; } = [];
@@ -6073,8 +6073,8 @@ public class FirmwareUpdateServiceTests
         /// <summary>Elapsed time (from construction) at which "SYSTem:POWer:STATe 1" was sent, if any.</summary>
         public TimeSpan? TurnDeviceOnSentAt { get; private set; }
 
-        /// <summary>Elapsed time (from construction) at which the first <see cref="GetLanChipInfoAsync"/> call landed.</summary>
-        public TimeSpan? FirstGetLanChipInfoCallAt { get; private set; }
+        /// <summary>Elapsed time (from construction) at which the first <see cref="GetWifiChipInfoAsync"/> call landed.</summary>
+        public TimeSpan? FirstGetWifiChipInfoCallAt { get; private set; }
 
         public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
@@ -6174,32 +6174,32 @@ public class FirmwareUpdateServiceTests
 
         public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
         {
-            FirstGetLanChipInfoCallAt ??= _eventStopwatch.Elapsed;
-            GetLanChipInfoCallCount++;
+            FirstGetWifiChipInfoCallAt ??= _eventStopwatch.Elapsed;
+            GetWifiChipInfoCallCount++;
             if (_remainingTransientFailures > 0)
             {
                 _remainingTransientFailures--;
                 // Faulted task (not sync throw) more accurately simulates how
                 // a real async method surfaces failure — caller's await sees a
                 // genuinely-async exception path.
-                return Task.FromException<LanChipInfo?>(
+                return Task.FromException<WifiChipInfo?>(
                     new InvalidOperationException("Simulated transient post-reboot failure."));
             }
-            if (_remainingLanNotInitializedFailures > 0)
+            if (_remainingWifiNotInitializedFailures > 0)
             {
-                _remainingLanNotInitializedFailures--;
-                return Task.FromException<LanChipInfo?>(
-                    new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+                _remainingWifiNotInitializedFailures--;
+                return Task.FromException<WifiChipInfo?>(
+                    new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
             }
             return Task.FromResult(_chipInfo);
         }

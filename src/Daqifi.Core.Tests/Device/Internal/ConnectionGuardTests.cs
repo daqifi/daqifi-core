@@ -120,7 +120,7 @@ public class ConnectionGuardTests
 
         public bool IsStreaming => throw new NotSupportedException();
         public bool SendStreamStop() => throw new NotSupportedException();
-        public int StreamingFrequency => throw new NotSupportedException();
+        public int SampleRateHz => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
 
         public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => throw new NotSupportedException();

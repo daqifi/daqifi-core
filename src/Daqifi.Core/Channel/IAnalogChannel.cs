@@ -8,15 +8,15 @@ public interface IAnalogChannel : IChannel
     /// <summary>
     /// Gets the minimum value for the channel range.
     /// </summary>
-    double MinValue { get; set; }
+    double MinimumValue { get; set; }
 
     /// <summary>
     /// Gets the maximum value for the channel range.
     /// </summary>
-    double MaxValue { get; set; }
+    double MaximumValue { get; set; }
 
     /// <summary>
-    /// Gets whether the configured display range (<see cref="MinValue"/>..<see cref="MaxValue"/>) is
+    /// Gets whether the configured display range (<see cref="MinimumValue"/>..<see cref="MaximumValue"/>) is
     /// bipolar (spans negative voltages, as ±1V/±5V/±10V differential ranges do) rather than unipolar
     /// (0V-and-up). Lets range-selection UI branch on polarity without hardcoding per-device assumptions.
     /// </summary>
@@ -27,24 +27,24 @@ public interface IAnalogChannel : IChannel
     /// 262143 for 18-bit) — i.e. 2^bits - 1, not 2^bits. This value is a direct divisor in
     /// <see cref="GetScaledValue"/>.
     /// </summary>
-    uint Resolution { get; }
+    uint FullScaleCount { get; }
 
     /// <summary>
-    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// Gets whether <see cref="FullScaleCount"/> is a fallback guess rather than a value the device
     /// actually reported. When <c>true</c>, samples scaled with this channel may be systematically
     /// wrong (e.g. a device that omits its ADC resolution entirely).
     /// </summary>
-    bool ResolutionIsAssumed { get; }
+    bool FullScaleCountIsAssumed { get; }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
     /// </summary>
-    double CalibrationM { get; set; }
+    double CalibrationSlope { get; set; }
 
     /// <summary>
     /// Gets or sets the calibration offset (B in the scaling formula).
     /// </summary>
-    double CalibrationB { get; set; }
+    double CalibrationOffset { get; set; }
 
     /// <summary>
     /// Gets or sets the internal scale factor.
@@ -58,10 +58,10 @@ public interface IAnalogChannel : IChannel
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationM * InternalScaleM + CalibrationB
+    /// Formula: ScaledValue = RawValue / FullScaleCount * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
-    /// <see cref="CalibrationB"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
+    /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
     /// is applied — it is not scaled by it. This matches the firmware's own on-device conversion, so a
     /// value scaled here agrees with what the device reports for <c>MEASure:VOLTage:DC?</c>.
     /// </remarks>

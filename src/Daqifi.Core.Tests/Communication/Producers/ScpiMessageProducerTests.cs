@@ -66,10 +66,10 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.DisableStorageSd, "SYSTem:STORage:SD:ENAble 0" },
         { () => ScpiMessageProducer.GetSdFileList, "SYSTem:STORage:SD:LIST?" },
         { () => ScpiMessageProducer.FormatSdCard, "SYSTem:STORage:SD:FORmat" },
-        { () => ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
+        { () => ScpiMessageProducer.GetSdMaximumFileSize, "SYSTem:STORage:SD:MAXSize?" },
         { () => ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
         { () => ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
-        { () => ScpiMessageProducer.GetSdMinFreeSpace, "SYSTem:STORage:SD:MINFree?" },
+        { () => ScpiMessageProducer.GetSdMinimumFreeSpace, "SYSTem:STORage:SD:MINFree?" },
         { () => ScpiMessageProducer.GetSdCrcProtection, "SYSTem:STORage:SD:PROTect?" },
         { () => ScpiMessageProducer.GetSdCardInfo, "SYSTem:STORage:SD:INFO?" },
 
@@ -79,7 +79,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
         { () => ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
         { () => ScpiMessageProducer.SetCsvStreamFormat, "SYSTem:STReam:FORmat 2" },
-        { () => ScpiMessageProducer.GetStoredStreamingRate, "SYSTem:STReam:START?" },
+        { () => ScpiMessageProducer.GetStoredSampleRate, "SYSTem:STReam:START?" },
         { () => ScpiMessageProducer.GetStreamFormat, "SYSTem:STReam:FORmat?" },
         { () => ScpiMessageProducer.GetStreamInterface, "SYSTem:STReam:INTerface?" },
 
@@ -145,20 +145,20 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.GetSdFile("test.bin"), "SYSTem:STORage:SD:GET \"test.bin\"" },
         { () => ScpiMessageProducer.SetSdLoggingFileName("log.bin"), "SYSTem:STORage:SD:FILE \"log.bin\"" },
         { () => ScpiMessageProducer.DeleteSdFile("data.bin"), "SYSTem:STORage:SD:DELete \"data.bin\"" },
-        { () => ScpiMessageProducer.SetSdMaxFileSize(1073741824), "SYSTem:STORage:SD:MAXSize 1073741824" },
+        { () => ScpiMessageProducer.SetSdMaximumFileSize(1073741824), "SYSTem:STORage:SD:MAXSize 1073741824" },
         // Zero asks the firmware for its default maximum, so it must not be rejected.
-        { () => ScpiMessageProducer.SetSdMaxFileSize(0), "SYSTem:STORage:SD:MAXSize 0" },
+        { () => ScpiMessageProducer.SetSdMaximumFileSize(0), "SYSTem:STORage:SD:MAXSize 0" },
         { () => ScpiMessageProducer.SetSdCrcProtection(true), "SYSTem:STORage:SD:PROTect 1" },
         { () => ScpiMessageProducer.SetSdCrcProtection(false), "SYSTem:STORage:SD:PROTect 0" },
         { () => ScpiMessageProducer.RunSdBenchmark(1048576), "SYSTem:STORage:SD:BENCHmark 1048576" },
-        { () => ScpiMessageProducer.SetSdMinFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
+        { () => ScpiMessageProducer.SetSdMinimumFreeSpace(52428800), "SYSTem:STORage:SD:MINFree 52428800" },
         // Zero disables the free-space gate, so it must not be rejected.
-        { () => ScpiMessageProducer.SetSdMinFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
+        { () => ScpiMessageProducer.SetSdMinimumFreeSpace(0), "SYSTem:STORage:SD:MINFree 0" },
 
         // Streaming
         { () => ScpiMessageProducer.StartStreaming(100), "SYSTem:StartStreamData 100" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb), "SYSTem:STReam:INTerface 0" },
-        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.WiFi), "SYSTem:STReam:INTerface 1" },
+        { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.Wifi), "SYSTem:STReam:INTerface 1" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard), "SYSTem:STReam:INTerface 2" },
         { () => ScpiMessageProducer.SetStreamInterface(StreamInterface.All), "SYSTem:STReam:INTerface 3" },
         { () => ScpiMessageProducer.EnableAdcChannels(84), "ENAble:VOLTage:DC 84" },
@@ -390,7 +390,7 @@ public class ScpiMessageProducerTests
 
         // The finite check is shared with the other double-valued setters, so pin the
         // parameter name and wording this call site is responsible for supplying.
-        Assert.Equal("calM", ex.ParamName);
+        Assert.Equal("slope", ex.ParamName);
         Assert.Contains("Calibration slope must be a finite number.", ex.Message);
     }
 
@@ -420,7 +420,7 @@ public class ScpiMessageProducerTests
 
         // The finite check is shared with the other double-valued setters, so pin the
         // parameter name and wording this call site is responsible for supplying.
-        Assert.Equal("calB", ex.ParamName);
+        Assert.Equal("offset", ex.ParamName);
         Assert.Contains("Calibration offset must be a finite number.", ex.Message);
     }
 
@@ -501,7 +501,7 @@ public class ScpiMessageProducerTests
     [Fact]
     public void SetDeviceName_TooLong_Throws()
     {
-        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength + 1);
+        var name = new string('a', ScpiMessageProducer.MaximumFriendlyNameLength + 1);
         Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetDeviceName(name));
     }
 
@@ -517,14 +517,14 @@ public class ScpiMessageProducerTests
     [Fact]
     public void IsFriendlyNameValid_AtMaxLength_ReturnsTrue()
     {
-        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength);
+        var name = new string('a', ScpiMessageProducer.MaximumFriendlyNameLength);
         Assert.True(ScpiMessageProducer.IsFriendlyNameValid(name));
     }
 
     [Fact]
     public void IsFriendlyNameValid_OverMaxLength_ReturnsFalse()
     {
-        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength + 1);
+        var name = new string('a', ScpiMessageProducer.MaximumFriendlyNameLength + 1);
         Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
     }
 
@@ -624,10 +624,10 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetLogLevel("STREAM", (DeviceLogLevel)(-1))),
             (nameof(ScpiMessageProducer.SetLogLevel), "level", (DeviceLogLevel)4, "Log level must be None, Error, Info or Debug.",
                 () => ScpiMessageProducer.SetLogLevel("ADC", (DeviceLogLevel)4)),
-            (nameof(ScpiMessageProducer.SetSdMaxFileSize), "bytes", -1L, "Max file size cannot be negative.",
-                () => ScpiMessageProducer.SetSdMaxFileSize(-1)),
-            (nameof(ScpiMessageProducer.SetSdMinFreeSpace), "bytes", -1L, "Minimum free space cannot be negative.",
-                () => ScpiMessageProducer.SetSdMinFreeSpace(-1)),
+            (nameof(ScpiMessageProducer.SetSdMaximumFileSize), "bytes", -1L, "Max file size cannot be negative.",
+                () => ScpiMessageProducer.SetSdMaximumFileSize(-1)),
+            (nameof(ScpiMessageProducer.SetSdMinimumFreeSpace), "bytes", -1L, "Minimum free space cannot be negative.",
+                () => ScpiMessageProducer.SetSdMinimumFreeSpace(-1)),
             (nameof(ScpiMessageProducer.RunSdBenchmark), "size", 0L, "Benchmark size must be positive.",
                 () => ScpiMessageProducer.RunSdBenchmark(0)),
             (nameof(ScpiMessageProducer.RunSdBenchmark), "size", -1L, "Benchmark size must be positive.",

@@ -38,12 +38,12 @@ public sealed record AcquisitionStatisticsSnapshot
     /// <summary>
     /// Gets the smallest observed latency (see <see cref="MeanLatency"/>).
     /// </summary>
-    public required TimeSpan MinLatency { get; init; }
+    public required TimeSpan MinimumLatency { get; init; }
 
     /// <summary>
     /// Gets the largest observed latency (see <see cref="MeanLatency"/>).
     /// </summary>
-    public required TimeSpan MaxLatency { get; init; }
+    public required TimeSpan MaximumLatency { get; init; }
 
     /// <summary>
     /// Gets the mean of <c>received-at minus sample timestamp</c> across every recorded sample: how far

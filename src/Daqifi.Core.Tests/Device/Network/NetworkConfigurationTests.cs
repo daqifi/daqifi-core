@@ -17,7 +17,7 @@ public class NetworkConfigurationTests
         Assert.Equal(WifiSecurityType.WpaPskPhrase, config.SecurityType);
         Assert.Equal(string.Empty, config.Ssid);
         Assert.Equal(string.Empty, config.Password);
-        Assert.Null(config.StaticIP);
+        Assert.Null(config.StaticIpAddress);
         Assert.Null(config.SubnetMask);
         Assert.Null(config.Gateway);
     }
@@ -89,7 +89,7 @@ public class NetworkConfigurationTests
         Assert.Equal(WifiSecurityType.WpaPskPhrase, config.SecurityType);
         Assert.Equal("Net", config.Ssid);
         Assert.Equal("Pass", config.Password);
-        Assert.Equal(staticIP, config.StaticIP);
+        Assert.Equal(staticIP, config.StaticIpAddress);
         Assert.Equal(subnet, config.SubnetMask);
         Assert.Equal(gateway, config.Gateway);
     }
@@ -111,14 +111,14 @@ public class NetworkConfigurationTests
         var clone = original.Clone();
 
         // Assert
-        Assert.Equal(original.StaticIP, clone.StaticIP);
+        Assert.Equal(original.StaticIpAddress, clone.StaticIpAddress);
         Assert.Equal(original.SubnetMask, clone.SubnetMask);
         Assert.Equal(original.Gateway, clone.Gateway);
 
         // Verify independence — replacing the clone's references should not
         // affect the original.
-        clone.StaticIP = IPAddress.Parse("172.16.0.5");
-        Assert.NotEqual(original.StaticIP, clone.StaticIP);
+        clone.StaticIpAddress = IPAddress.Parse("172.16.0.5");
+        Assert.NotEqual(original.StaticIpAddress, clone.StaticIpAddress);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class NetworkConfigurationTests
         var clone = original.Clone();
 
         // Assert
-        Assert.Null(clone.StaticIP);
+        Assert.Null(clone.StaticIpAddress);
         Assert.Null(clone.SubnetMask);
         Assert.Null(clone.Gateway);
     }

@@ -37,7 +37,7 @@ internal static class LineParsing
     /// </summary>
     /// <remarks>
     /// Shared by the "first parseable line wins" response parsers (e.g. <c>SdCardSpaceParser</c>,
-    /// <c>LogLevelParser</c>, <c>LanChipInfoParser</c>) so each only needs to supply its own
+    /// <c>LogLevelParser</c>, <c>WifiChipInfoParser</c>) so each only needs to supply its own
     /// single-line <c>TryParse</c>.
     /// </remarks>
     /// <typeparam name="T">The parsed result type.</typeparam>

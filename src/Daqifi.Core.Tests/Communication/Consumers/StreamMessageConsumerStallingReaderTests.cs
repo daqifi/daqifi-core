@@ -348,7 +348,7 @@ public class StreamMessageConsumerStallingReaderTests
             await transport.ConnectAsync(new ConnectionRetryOptions
             {
                 Enabled = false,
-                MaxAttempts = 1,
+                MaximumAttempts = 1,
                 ConnectionTimeout = TimeSpan.FromSeconds(10)
             });
             // Bounded so a fixture failure fails fast instead of hanging the suite.

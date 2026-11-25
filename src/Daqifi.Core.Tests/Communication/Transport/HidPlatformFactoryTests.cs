@@ -18,7 +18,7 @@ public class HidPlatformFactoryTests
         }
         else
         {
-            Assert.IsType<HidLibraryPlatform>(platform);
+            Assert.IsType<HidSharpPlatform>(platform);
         }
     }
 }

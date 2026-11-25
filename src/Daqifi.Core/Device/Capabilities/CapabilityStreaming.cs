@@ -12,14 +12,14 @@ namespace Daqifi.Core.Device.Capabilities;
 /// <item><description>
 /// <see cref="MaximumSampleRateHz"/> is the hardware envelope — the sampling ISR's absolute
 /// ceiling, not achievable under real load. It is the board's true upper bound and is what
-/// <see cref="DeviceCapabilities.MaxSamplingRate"/> is populated from.
+/// <see cref="DeviceCapabilities.MaximumSampleRateHz"/> is populated from.
 /// </description></item>
 /// <item><description>
 /// <see cref="ConservativeEnvelopeHz"/> is guaranteed drop-free for <i>any</i> configuration. A
 /// client that always picks this rate is never surprised.
 /// </description></item>
 /// <item><description>
-/// <see cref="CurrentMaximumRateHz"/> is the device's authoritative cap for the channel set
+/// <see cref="CurrentMaximumSampleRateHz"/> is the device's authoritative cap for the channel set
 /// enabled <i>right now</i>, on the interface and encoding in use. It changes whenever the enabled
 /// set changes, so it is only as fresh as the last document read.
 /// </description></item>
@@ -48,17 +48,17 @@ public sealed class CapabilityStreaming
     /// channels are enabled; that <c>0</c> is preserved here rather than being treated as absent,
     /// because it is a real answer ("nothing to stream") and not a missing field.
     /// </summary>
-    public int? CurrentMaximumRateHz { get; init; }
+    public int? CurrentMaximumSampleRateHz { get; init; }
 
     /// <summary>
-    /// Gets how the device handles a start request above <see cref="CurrentMaximumRateHz"/>.
+    /// Gets how the device handles a start request above <see cref="CurrentMaximumSampleRateHz"/>.
     /// <c>"error"</c> — the firmware's behavior since v3.5.0 — means the start is rejected outright
     /// with SCPI <c>-222</c> and streaming does not begin; there is no silent clamping.
     /// </summary>
     public string? RateValidation { get; init; }
 
     /// <summary>
-    /// Gets the individual limits <see cref="CurrentMaximumRateHz"/> is the minimum of, and so which
+    /// Gets the individual limits <see cref="CurrentMaximumSampleRateHz"/> is the minimum of, and so which
     /// one binds; or <c>null</c> when not stated (firmware before v3.9.0).
     /// </summary>
     public CapabilityRateCapTerms? CapTerms { get; init; }

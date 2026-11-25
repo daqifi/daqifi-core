@@ -28,7 +28,7 @@ public class DiscoveryFanOutTests
         // run sequentially, the first finder waits out RendezvousTimeoutMs on a partner that has
         // not been started yet, and the assertions below fail.
         var rendezvous = new Rendezvous(participants: 2);
-        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) }, rendezvous: rendezvous);
+        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) }, rendezvous: rendezvous);
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) }, rendezvous: rendezvous);
 
         var result = await DaqifiAgent.DiscoverAcrossTransportsAsync(
@@ -46,7 +46,7 @@ public class DiscoveryFanOutTests
     {
         // The order callers have always seen. CreateTransportFinders builds the list in the same
         // order for the same reason.
-        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
 
         var result = await DaqifiAgent.DiscoverAcrossTransportsAsync(
@@ -60,7 +60,7 @@ public class DiscoveryFanOutTests
     {
         // Two genuine ways to connect to one device, so an agent must still see both. The identity
         // used for deduplication is transport-prefixed, which is what keeps them apart.
-        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("SHARED", ConnectionType.Serial) });
 
         var result = await DaqifiAgent.DiscoverAcrossTransportsAsync(
@@ -108,7 +108,7 @@ public class DiscoveryFanOutTests
     [Fact]
     public async Task DiscoverAcrossTransports_DisposesTheFindersItWasGiven()
     {
-        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var wifi = new ListDeviceFinder(new[] { Info("A", ConnectionType.Wifi) });
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
 
         await DaqifiAgent.DiscoverAcrossTransportsAsync(
@@ -138,14 +138,14 @@ public class DiscoveryFanOutTests
 
         Assert.Collection(
             finders,
-            f => Assert.IsType<WiFiDeviceFinder>(f),
+            f => Assert.IsType<WifiDeviceFinder>(f),
             f => Assert.IsType<SerialDeviceFinder>(f));
 
         DisposeAll(finders);
     }
 
     [Theory]
-    [InlineData(true, false, typeof(WiFiDeviceFinder))]
+    [InlineData(true, false, typeof(WifiDeviceFinder))]
     [InlineData(false, true, typeof(SerialDeviceFinder))]
     public void CreateTransportFinders_OneEnabled_BuildsOnlyThatTransport(bool wifi, bool serial, Type expected)
     {
@@ -242,7 +242,7 @@ public class DiscoveryFanOutTests
         // That ordinary timeout must not become an empty result — the USB device found alongside
         // is exactly what discover_devices exists to report.
         var wifi = new ListDeviceFinder(
-            new[] { Info("A", ConnectionType.WiFi) },
+            new[] { Info("A", ConnectionType.Wifi) },
             listenUntilPassEnds: true);
         var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
 
@@ -269,7 +269,7 @@ public class DiscoveryFanOutTests
             SerialNumber = serialNumber,
             ConnectionType = connectionType,
             PortName = connectionType == ConnectionType.Serial ? "/dev/fake" : null,
-            IPAddress = connectionType == ConnectionType.WiFi ? IPAddress.Loopback : null,
+            IpAddress = connectionType == ConnectionType.Wifi ? IPAddress.Loopback : null,
         };
 
     /// <summary>
@@ -373,7 +373,7 @@ public class DiscoveryFanOutTests
         public string Name { get; set; } = "Fake";
         public string SerialNumber { get; set; } = "SN";
         public string FirmwareVersion { get; set; } = "3.7.2";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

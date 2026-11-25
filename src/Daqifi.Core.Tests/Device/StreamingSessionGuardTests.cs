@@ -11,13 +11,13 @@ namespace Daqifi.Core.Tests.Device;
 /// <summary>
 /// Pins the parts of <see cref="DaqifiStreamingDevice"/>'s streaming-session behavior that the
 /// rest of the suite only asserts weakly, or not at all: the exception metadata on the
-/// <see cref="DaqifiStreamingDevice.StreamingFrequency"/> guard, and the order in which
+/// <see cref="DaqifiStreamingDevice.SampleRateHz"/> guard, and the order in which
 /// <see cref="DaqifiStreamingDevice.IsStreaming"/> moves relative to the command that carries it
 /// onto the wire.
 /// </summary>
 /// <remarks>
 /// These exist because the surrounding tests assert the observable end state and stop there.
-/// <c>StreamingFrequency_OutOfRange_ThrowsArgumentOutOfRangeException</c> checks the exception
+/// <c>SampleRateHz_OutOfRange_ThrowsArgumentOutOfRangeException</c> checks the exception
 /// type and that the ceiling appears in the message, but never the <c>ParamName</c> — so the
 /// name a caller's <c>catch</c> block switches on is unpinned. And
 /// <c>StartStreaming_WhenConnected_SendsCorrectCommandAndSetsIsStreaming</c> reads
@@ -31,16 +31,16 @@ public class StreamingSessionGuardTests
     [InlineData(0)]
     [InlineData(-1)]
     [InlineData(1001)]
-    public void StreamingFrequency_OutOfRange_NamesTheParameterAndCarriesTheRejectedValue(int frequency)
+    public void SampleRateHz_OutOfRange_NamesTheParameterAndCarriesTheRejectedValue(int frequency)
     {
         var device = new TransportlessStreamingDevice("TestDevice");
 
         var exception = Assert.Throws<ArgumentOutOfRangeException>(
-            () => device.StreamingFrequency = frequency);
+            () => device.SampleRateHz = frequency);
 
         // The name is what a caller's handler keys on, and it is what a mechanical move of this
         // property onto another type would silently change (nameof follows the declaration).
-        Assert.Equal(nameof(DaqifiStreamingDevice.StreamingFrequency), exception.ParamName);
+        Assert.Equal(nameof(DaqifiStreamingDevice.SampleRateHz), exception.ParamName);
         Assert.Equal(frequency, exception.ActualValue);
     }
 
@@ -49,7 +49,7 @@ public class StreamingSessionGuardTests
     {
         var device = new SendObservingDevice("TestDevice");
         device.Connect();
-        device.StreamingFrequency = 200;
+        device.SampleRateHz = 200;
 
         device.StartStreaming();
 

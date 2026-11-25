@@ -122,7 +122,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
 
         device.UpdateMetadata(metadata => metadata with
         {
-            Capabilities = metadata.Capabilities with { MaxSamplingRate = HardwareMaximumRateHz }
+            Capabilities = metadata.Capabilities with { MaximumSampleRateHz = HardwareMaximumRateHz }
         });
         device.Connect();
         device.ApplyCapabilityDocumentForCurrentChannels();
@@ -147,7 +147,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
 
     /// <summary>
     /// Re-issues the capability document for the channel set enabled right now, which is what a
-    /// real device does: <c>CurrentMaximumRateHz</c> describes the selection that was live when
+    /// real device does: <c>CurrentMaximumSampleRateHz</c> describes the selection that was live when
     /// the document was read, so the number only moves when the document is re-read.
     /// </summary>
     public override async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
@@ -315,7 +315,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             Streaming = new CapabilityStreaming
             {
                 MaximumSampleRateHz = HardwareMaximumRateHz,
-                CurrentMaximumRateHz = CapForEnabledAnalogCount(enabledAnalog),
+                CurrentMaximumSampleRateHz = CapForEnabledAnalogCount(enabledAnalog),
             },
         };
 

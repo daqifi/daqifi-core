@@ -45,7 +45,7 @@ public class SdCardTimestampFrequencyTests
 
         // Assert — the one field the live device is uniquely able to supply is carried across.
         Assert.NotNull(config);
-        Assert.Equal(DeviceFrequencyHz, config.TimestampFrequency);
+        Assert.Equal(DeviceFrequencyHz, config.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class SdCardTimestampFrequencyTests
 
         // Assert — zero means "unknown", which leaves the parser's fallback in charge.
         Assert.NotNull(config);
-        Assert.Equal(0u, config.TimestampFrequency);
+        Assert.Equal(0u, config.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -111,12 +111,12 @@ public class SdCardTimestampFrequencyTests
     }
 
     [Fact]
-    public void FallbackTimestampFrequency_DefaultsToTheRateShippedFirmwareReports()
+    public void FallbackTimestampFrequencyHz_DefaultsToTheRateShippedFirmwareReports()
     {
         // It was 50 MHz, a figure no shipped Nyquist reports. A log that stated no clock was
         // therefore converted as though its 42 MHz ticks were 50 MHz, which made every timestamp
         // in the exported file about 19% fast (#902).
-        Assert.Equal(42_000_000u, new SdCardParseOptions().FallbackTimestampFrequency);
+        Assert.Equal(42_000_000u, new SdCardParseOptions().FallbackTimestampFrequencyHz);
     }
 
     #endregion
@@ -145,7 +145,7 @@ public class SdCardTimestampFrequencyTests
         });
 
         // Assert — a self-describing log is never overridden by a live device.
-        Assert.Equal(80_000_000u, session.TimestampFrequency);
+        Assert.Equal(80_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.LogFile, session.TimestampFrequencySource);
     }
 
@@ -162,7 +162,7 @@ public class SdCardTimestampFrequencyTests
         });
 
         // Assert
-        Assert.Equal(DeviceFrequencyHz, session.TimestampFrequency);
+        Assert.Equal(DeviceFrequencyHz, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.Device, session.TimestampFrequencySource);
     }
 
@@ -175,11 +175,11 @@ public class SdCardTimestampFrequencyTests
         // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 50_000_000
+            FallbackTimestampFrequencyHz = 50_000_000
         });
 
         // Assert — the guess still happens, but the caller can now see that it did.
-        Assert.Equal(50_000_000u, session.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.Fallback, session.TimestampFrequencySource);
     }
 
@@ -192,11 +192,11 @@ public class SdCardTimestampFrequencyTests
         // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 0
+            FallbackTimestampFrequencyHz = 0
         });
 
         // Assert
-        Assert.Equal(0u, session.TimestampFrequency);
+        Assert.Equal(0u, session.TimestampFrequencyHz);
         Assert.Equal(SdCardTimestampSource.None, session.TimestampFrequencySource);
     }
 
@@ -235,7 +235,7 @@ public class SdCardTimestampFrequencyTests
         // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 50_000_000
+            FallbackTimestampFrequencyHz = 50_000_000
         });
 
         var samples = await ToListAsync(session.Samples);
@@ -255,7 +255,7 @@ public class SdCardTimestampFrequencyTests
         {
             AnalogPortCount = 2,
             DigitalPortCount = 1,
-            TimestampFrequency = timestampFrequencyHz,
+            TimestampFrequencyHz = timestampFrequencyHz,
             DeviceSerialNumber = "TEST123",
             DevicePartNumber = "Nq1",
             FirmwareVersion = "3.7.2",

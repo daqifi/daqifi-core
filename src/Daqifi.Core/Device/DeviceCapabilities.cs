@@ -19,14 +19,14 @@ public sealed record DeviceCapabilities
     /// <summary>
     /// Gets a value indicating whether the device supports WiFi connectivity.
     /// </summary>
-    public bool HasWiFi { get; init; }
+    public bool HasWifi { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the device's WiFi connectivity is provided by a
     /// discrete WINC1500 module (as opposed to, e.g., a future SoC-integrated WiFi part). Lets
     /// consumers ask Core whether WINC-specific handling (power-on-before-probe, the WINC flash
     /// tool, bridge-mode activation) applies to a device instead of pattern-matching
-    /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWiFi"/>, which only
+    /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWifi"/>, which only
     /// indicates WiFi connectivity in general.
     /// </summary>
     public bool HasWincWifiModule { get; init; }
@@ -39,22 +39,22 @@ public sealed record DeviceCapabilities
     /// <summary>
     /// Gets the number of analog input channels available.
     /// </summary>
-    public int AnalogInputChannels { get; init; }
+    public int AnalogInputChannelCount { get; init; }
 
     /// <summary>
     /// Gets the number of analog output channels available.
     /// </summary>
-    public int AnalogOutputChannels { get; init; }
+    public int AnalogOutputChannelCount { get; init; }
 
     /// <summary>
     /// Gets the number of digital I/O channels available.
     /// </summary>
-    public int DigitalChannels { get; init; }
+    public int DigitalChannelCount { get; init; }
 
     /// <summary>
     /// Gets the maximum sampling rate in Hz.
     /// </summary>
-    public int MaxSamplingRate { get; init; } = 1000;
+    public int MaximumSampleRateHz { get; init; } = 1000;
 
     /// <summary>
     /// Creates the capabilities a board is known to have, before the device has described itself.
@@ -87,34 +87,34 @@ public sealed record DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                AnalogInputChannels = 16,
-                AnalogOutputChannels = 0,
-                DigitalChannels = 16,
-                MaxSamplingRate = 22000
+                AnalogInputChannelCount = 16,
+                AnalogOutputChannelCount = 0,
+                DigitalChannelCount = 16,
+                MaximumSampleRateHz = 22000
             },
             DeviceType.Nyquist2 => new DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                MaxSamplingRate = 16000
+                MaximumSampleRateHz = 16000
             },
             DeviceType.Nyquist3 => new DeviceCapabilities
             {
                 SupportsStreaming = true,
                 HasSdCard = true,
-                HasWiFi = true,
+                HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                AnalogInputChannels = 8,
-                AnalogOutputChannels = 8,
-                DigitalChannels = 16,
-                MaxSamplingRate = 16000
+                AnalogInputChannelCount = 8,
+                AnalogOutputChannelCount = 8,
+                DigitalChannelCount = 16,
+                MaximumSampleRateHz = 16000
             },
             _ => new DeviceCapabilities()
         };

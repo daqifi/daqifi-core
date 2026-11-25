@@ -38,7 +38,7 @@ public sealed class CapabilityChannel
     /// <summary>
     /// Gets a value indicating whether the channel is sampled by a dedicated converter (zero
     /// inter-channel skew) rather than through a shared multiplexer. This is the "Type-1" count
-    /// that feeds <see cref="CapabilityRateModel.TryComputeMaxRateHz"/>.
+    /// that feeds <see cref="CapabilityRateModel.TryComputeMaximumSampleRateHz"/>.
     /// </summary>
     public bool IsSimultaneous { get; init; }
 
@@ -87,7 +87,7 @@ public sealed class CapabilityChannel
     /// <para>
     /// Earlier firmware advertises a fixed 1 Hz here that the hardware cannot produce: below about
     /// 6 Hz the 16-bit period register silently wraps and the output runs in the kilohertz range.
-    /// For those devices Core uses <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> instead.
+    /// For those devices Core uses <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/> instead.
     /// <see cref="DaqifiStreamingDevice.PwmFrequencyFloorHz"/> picks the right one for the
     /// connected device and is the floor <see cref="DaqifiStreamingDevice.SetPwmFrequency"/>
     /// enforces.
@@ -100,11 +100,11 @@ public sealed class CapabilityChannel
 
     /// <summary>
     /// Gets the device-reported linear calibration slope, or <c>null</c> when not stated. Together
-    /// with <see cref="CalibrationIntercept"/> this is the device's own raw-to-engineering-units
+    /// with <see cref="CalibrationOffset"/> this is the device's own raw-to-engineering-units
     /// conversion.
     /// </summary>
     public double? CalibrationSlope { get; init; }
 
-    /// <summary>Gets the device-reported linear calibration intercept, or <c>null</c> when not stated.</summary>
-    public double? CalibrationIntercept { get; init; }
+    /// <summary>Gets the device-reported linear calibration offset, or <c>null</c> when not stated.</summary>
+    public double? CalibrationOffset { get; init; }
 }

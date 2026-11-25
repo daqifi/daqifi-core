@@ -155,7 +155,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
 
         if (LineParsing.TryParseFirst<int>(lines, TryParseCount, out var count) && count == 1)
         {
-            await _host.DrainErrorQueueAsync(maxIterations: 1, cancellationToken).ConfigureAwait(false);
+            await _host.DrainErrorQueueAsync(maximumIterations: 1, cancellationToken).ConfigureAwait(false);
         }
     }
 

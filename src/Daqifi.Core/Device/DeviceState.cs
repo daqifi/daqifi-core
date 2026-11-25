@@ -64,7 +64,7 @@ public enum DeviceState
 
     /// <summary>
     /// Automatic reconnection ran out of attempts and gave up (see
-    /// <see cref="ReconnectOptions.MaxAttempts"/>). Nothing further is attempted without a new
+    /// <see cref="ReconnectOptions.MaximumAttempts"/>). Nothing further is attempted without a new
     /// connect. Only ever seen when reconnect is enabled.
     /// </summary>
     Failed,

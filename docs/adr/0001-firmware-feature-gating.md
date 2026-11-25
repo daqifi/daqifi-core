@@ -60,7 +60,7 @@ v3.7.3 and includes its fixes). SD file transfer over WiFi
 | WiFi throughput finder | `SYSTem:STReam:WIFI:FINd?` | v3.5.0 | WiFi | #521 |
 | In-firmware iperf2 | `SYSTem:WIFI:IPERF:*` | v3.5.0 | WiFi | #377 |
 | **SD file transfer over WiFi** (list/get/delete routed to the requesting interface) | `SYSTem:STORage:SD:LIST?` / `:GET` / `:DELete` over TCP | **v3.7.0** | **WiFi + SD HW** | [#598/#599](https://github.com/daqifi/daqifi-nyquist-firmware/pull/598) |
-| **Stored streaming rate readback** (seeds `StreamingFrequency` on connect) | `SYSTem:STReam:START?` | **v3.9.0** | all | [#1007](https://github.com/daqifi/daqifi-nyquist-firmware/issues/1007)/#1014 |
+| **Stored streaming rate readback** (seeds `SampleRateHz` on connect) | `SYSTem:STReam:START?` | **v3.9.0** | all | [#1007](https://github.com/daqifi/daqifi-nyquist-firmware/issues/1007)/#1014 |
 
 > **Read this table through the v3.5.0 floor (Decision 1).** Every command daqifi-core issues
 > over USB first shipped **at or before v3.5.0**, so over USB on *supported* firmware the only
@@ -232,11 +232,11 @@ Call-site pattern (e.g. `GetSdCardStorageAsync`):
 ```csharp
 // optional up-front gate (no round-trip) — lets desktop disable the control:
 if (!Capabilities.Supports(DeviceFeature.SdStorageQuery))
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinimumSupportedFirmware, FirmwareVersion);
 
 // … issue command … the wire backstop is the authoritative signal:
 if (ResponseHasUndefinedHeader(lines))   // **ERROR: -113
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinimumSupportedFirmware, FirmwareVersion);
 ```
 
 (`CommandRename`/version-selected emit from earlier drafts is **dropped** — Decision 1 makes
@@ -251,7 +251,7 @@ The seam shipped. Two details differ from the sketch above, both settled during 
   firmware version, so it structurally cannot answer a version gate. `Supports(DeviceFeature)` and
   `EnsureSupported(DeviceFeature)` are therefore on
   [`DaqifiDevice`](../../src/Daqifi.Core/Device/DaqifiDevice.cs), which already owns
-  `MinSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
+  `MinimumSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
   evaluation rule above is unchanged and now enforced by test. Since 2.0 `Supports` is a member of
   `IDevice`, so no cast is needed to ask.
 - **The two axes fail differently.** The firmware-version axis **fails closed** — absent or
@@ -319,7 +319,7 @@ turns the reply into a
 
 Bench-validated against the NQ1 on firmware 3.7.2: the document agrees with `FromDeviceType` on
 every flag it states (SD, WiFi, USB) and supplies the channel counts (16 analog in, 0 analog out,
-16 digital). The single disagreement is `MaxSamplingRate` — the table's hardcoded `1000` against
+16 digital). The single disagreement is `MaximumSampleRateHz` — the table's hardcoded `1000` against
 the device's `22000` — and it is the disagreement this reader exists to resolve: that literal
 predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528).
 
@@ -364,7 +364,7 @@ their place.** Both have now earned it — see the implementation notes under De
   version. The backstop keeps that honest (it's correct even if the entry is missing).
 
 **Follow-up implementation issues**
-1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
+1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinimumSupportedFirmware = v3.5.0`
    + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
    deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)): **done**.
 2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the

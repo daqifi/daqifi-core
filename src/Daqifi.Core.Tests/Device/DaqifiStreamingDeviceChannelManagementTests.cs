@@ -608,8 +608,8 @@ public class DaqifiStreamingDeviceChannelManagementTests
         Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, device.PwmFrequencyHz);
         Assert.InRange(
             device.PwmFrequencyHz,
-            DaqifiStreamingDevice.MinPwmFrequencyHz,
-            DaqifiStreamingDevice.MaxPwmFrequencyHz);
+            DaqifiStreamingDevice.MinimumPwmFrequencyHz,
+            DaqifiStreamingDevice.MaximumPwmFrequencyHz);
     }
 
     [Fact]

@@ -46,7 +46,7 @@ public enum FirmwareUpdateState
     /// <summary>
     /// Jumping from bootloader to application firmware.
     /// </summary>
-    JumpingToApp = 7,
+    JumpingToApplication = 7,
 
     /// <summary>
     /// Re-establishing the serial transport after a fully flashed and verified WiFi (WINC)

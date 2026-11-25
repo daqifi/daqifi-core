@@ -126,7 +126,7 @@ public class SampleRateCapTests
     {
         var device = CreateDevice();
 
-        Assert.Equal(22000, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(22000, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class SampleRateCapTests
         var device = CreateDevice();
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518)));
 
-        Assert.Equal(3518, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(3518, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class SampleRateCapTests
         var device = CreateDevice();
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 0)));
 
-        Assert.Equal(0, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(0, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class SampleRateCapTests
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         EnableAnalog(device, 0, 1, 2, 3);
 
-        Assert.Equal(11000, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(11000, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class SampleRateCapTests
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
         EnableAnalog(device, 4, 8, 1);
 
-        Assert.Equal(12222, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(12222, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class SampleRateCapTests
         }));
         EnableAnalog(device, 0, 1);
 
-        Assert.Equal(20000, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(20000, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class SampleRateCapTests
             digital.SetEnabled(true);
         }
 
-        Assert.Equal(13750, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(13750, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -238,10 +238,10 @@ public class SampleRateCapTests
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
 
         EnableAnalog(device, 0);
-        Assert.Equal(15714, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(15714, device.CurrentMaximumSampleRateHz);
 
         EnableAnalog(device, 1, 2, 3);
-        Assert.Equal(11000, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(11000, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public class SampleRateCapTests
         var device = CreateDevice();
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: null)));
 
-        Assert.Equal(0, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(0, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class SampleRateCapTests
             digital.SetEnabled(true);
         }
 
-        Assert.Equal(0, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(0, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public class SampleRateCapTests
         var device = CreateDevice();
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(new CapabilityDocument { SchemaVersion = 2 }));
 
-        Assert.Equal(22000, device.MaximumStreamingFrequencyHz);
+        Assert.Equal(22000, device.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -293,19 +293,19 @@ public class SampleRateCapTests
 
     #endregion
 
-    #region StreamingFrequency setter
+    #region SampleRateHz setter
 
     [Fact]
-    public void StreamingFrequency_AboveAnAlreadyReportedCap_IsKeptUntilTheStream()
+    public void SampleRateHz_AboveAnAlreadyReportedCap_IsKeptUntilTheStream()
     {
         // The setter checks only the board ceiling, so "set the rate, then enable the
         // channels" keeps working; lowering to the cap is StartStreaming's job (#899).
         var device = CreateDevice();
         device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518)));
 
-        device.StreamingFrequency = 7746;
+        device.SampleRateHz = 7746;
 
-        Assert.Equal(7746, device.StreamingFrequency);
+        Assert.Equal(7746, device.SampleRateHz);
     }
 
     #endregion
@@ -322,7 +322,7 @@ public class SampleRateCapTests
         device.UpdateMetadata(metadata => metadata with
         {
             DeviceType = DeviceType.Nyquist1,
-            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaxSamplingRate = 22000 }
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { MaximumSampleRateHz = 22000 }
         });
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
@@ -371,7 +371,7 @@ public class SampleRateCapTests
                 MinimumSampleRateHz = 1,
                 MaximumSampleRateHz = 22000,
                 ConservativeEnvelopeHz = 500,
-                CurrentMaximumRateHz = currentMaximumRateHz,
+                CurrentMaximumSampleRateHz = currentMaximumRateHz,
                 RateValidation = "error",
                 RateModel = new CapabilityRateModel
                 {

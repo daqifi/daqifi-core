@@ -36,7 +36,7 @@ public class DaqifiDeviceRawCaptureLockTests
     /// the one message the test then waits for (#516). An eighth of the cap keeps every send
     /// parked while still spanning several <c>MaxDeferredSendsPerFlush</c> replay batches.
     /// </summary>
-    private const int HammerSendBudget = DaqifiDevice.DefaultMaxDeferredSends / 8;
+    private const int HammerSendBudget = DaqifiDevice.DefaultMaximumDeferredSends / 8;
 
     // ── Mutual exclusion against text exchanges ─────────────────────────────────────────────
 

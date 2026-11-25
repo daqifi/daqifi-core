@@ -75,7 +75,7 @@ internal sealed class StreamFrameDecoder
     /// #535, shipped in v3.6.0.
     /// </summary>
     /// <remarks>
-    /// Firmware v3.5.x still latches, and v3.5.0 is <see cref="DaqifiDevice.MinSupportedFirmware"/>
+    /// Firmware v3.5.x still latches, and v3.5.0 is <see cref="DaqifiDevice.MinimumSupportedFirmware"/>
     /// — so the defect sits inside the supported range and the first session of a connection has
     /// to be guarded against it (issue #773). Below this version the guard that holds the first
     /// frame is armed; from this version on it is not, because the frame it looks for cannot

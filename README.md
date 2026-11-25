@@ -44,7 +44,7 @@ ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sam
 
 // Enable channel 0, then stream at 100 Hz
 device.EnableChannel(ai0);
-device.StreamingFrequency = 100;
+device.SampleRateHz = 100;
 device.StartStreaming();
 
 // Let samples arrive for a while before the device is disposed
@@ -116,7 +116,7 @@ await using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
 **From a discovered device:**
 
 ```csharp
-using var finder = new WiFiDeviceFinder();
+using var finder = new WifiDeviceFinder();
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
 await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
 ```
@@ -132,7 +132,7 @@ var options = new DeviceConnectionOptions
     DeviceName = "My DAQiFi",
     ConnectionRetry = new ConnectionRetryOptions
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
     InitializeDevice = true
@@ -153,9 +153,9 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 using Daqifi.Core.Device.Discovery;
 
 // WiFi — UDP broadcast on port 30303 by default
-using var wifiFinder = new WiFiDeviceFinder();
+using var wifiFinder = new WifiDeviceFinder();
 wifiFinder.DeviceDiscovered += (_, e) =>
-    Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IPAddress}");
+    Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IpAddress}");
 
 var wifiDevices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 
@@ -166,13 +166,13 @@ var serialDevices = await serialFinder.DiscoverAsync();
 
 **On a home or multi-AP network, browse with mDNS as well.** UDP broadcast does not reliably
 cross an access-point boundary — a device associated to a second AP is online and healthy, yet the
-broadcast sweep returns nothing — so `MDnsDeviceFinder` browses the `_daqifi._tcp.local.` service
+broadcast sweep returns nothing — so `MdnsDeviceFinder` browses the `_daqifi._tcp.local.` service
 over multicast instead, which is the traffic consumer routers already reflect across APs, SSIDs and
 VLANs. It produces the same `IDeviceInfo` shape, so anything that connects to a broadcast-discovered
 device connects to an mDNS-discovered one unchanged.
 
 ```csharp
-using var mdnsFinder = new MDnsDeviceFinder();
+using var mdnsFinder = new MdnsDeviceFinder();
 var mdnsDevices = await mdnsFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 ```
 
@@ -181,7 +181,7 @@ two paths together cover more networks than either alone:
 
 ```csharp
 using var finder = new AllTransportsDeviceFinder(
-    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()],
+    [new WifiDeviceFinder(), new MdnsDeviceFinder(), new SerialDeviceFinder()],
     identitySelector: device => device.SerialNumber);
 
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
@@ -203,7 +203,7 @@ throws `OperationCanceledException`. Pass both to let a user abandon a pass earl
 using var cts = new CancellationTokenSource(); // cancelled by your "Stop" button
 var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(10), cts.Token);
 
-using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
+using var customFinder = new WifiDeviceFinder(discoveryPort: 12345);
 ```
 
 ### Acquisition statistics
@@ -217,7 +217,7 @@ using Daqifi.Core.Device;
 
 using var stats = new AcquisitionStatistics(device);
 
-device.StreamingFrequency = 1000;
+device.SampleRateHz = 1000;
 device.StartStreaming();
 await Task.Delay(TimeSpan.FromSeconds(5));
 device.StopStreaming();
@@ -228,7 +228,7 @@ foreach (var channel in snapshot.Channels)
     Console.WriteLine(
         $"{channel.Name}: {channel.SampleCount} samples, " +
         $"{channel.MeasuredSampleRateHz:F1} Hz measured vs {channel.DeviceClockSampleRateHz:F1} Hz by the device clock, " +
-        $"{channel.MinValue:F3}..{channel.MaxValue:F3} V, worst gap {channel.MaxSampleInterval.TotalMilliseconds:F2} ms");
+        $"{channel.MinimumValue:F3}..{channel.MaximumValue:F3} V, worst gap {channel.MaximumSampleInterval.TotalMilliseconds:F2} ms");
 }
 ```
 
@@ -247,7 +247,7 @@ grow with its length, and it hands back what reached the file and what did not.
 ```csharp
 using Daqifi.Core.Export;
 
-device.StreamingFrequency = 100;
+device.SampleRateHz = 100;
 device.StartStreaming();
 
 await using var writer = new StreamWriter("run.csv");
@@ -274,7 +274,7 @@ record:
 
 ```csharp
 await using var log = File.OpenRead(path);
-var session = await SdCardFileParserFactory.ParseAsync(log, "run.csv", SdCardParseOptions.ForDevice(device));
+var session = await SdCardLogFile.ParseAsync(log, "run.csv", SdCardParseOptions.ForDevice(device));
 var source = session.AsSampleSource(SdCardDeviceConfiguration.FromDevice(device), device.Name);
 await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions());
 ```
@@ -335,7 +335,7 @@ running. After a reconnect, call `SetPwmEnabled` again (`true` to carry on, `fal
 
 ### Network configuration
 
-`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, `SecurityType`, and (for a WPA network, the default) `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
+`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, `SecurityType`, and (for a WPA network, the default) `Password` are always applied on every call; only `StaticIpAddress`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
@@ -343,12 +343,12 @@ using Daqifi.Core.Device.Network;
 
 var config = new NetworkConfiguration
 {
-    Ssid       = "MyNetwork",
-    Password   = "secret",
-    Mode       = WifiMode.ExistingNetwork,
-    StaticIP   = IPAddress.Parse("192.168.1.42"),
-    SubnetMask = IPAddress.Parse("255.255.255.0"),
-    Gateway    = IPAddress.Parse("192.168.1.1"),
+    Ssid            = "MyNetwork",
+    Password        = "secret",
+    Mode            = WifiMode.ExistingNetwork,
+    StaticIpAddress = IPAddress.Parse("192.168.1.42"),
+    SubnetMask      = IPAddress.Parse("255.255.255.0"),
+    Gateway         = IPAddress.Parse("192.168.1.1"),
 };
 await device.UpdateNetworkConfigurationAsync(config);
 ```
@@ -399,7 +399,7 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 ## Connection types
 
 - **WiFi** — discovered via UDP broadcast (port 30303), and via mDNS (`_daqifi._tcp.local.`,
-  UDP 5353 multicast) when you add `MDnsDeviceFinder`
+  UDP 5353 multicast) when you add `MdnsDeviceFinder`
 - **Serial** — USB-connected, enumerated as serial ports
 - **HID** — used during firmware updates; HidSharp on Windows and Linux, native IOKit on macOS
   (HidSharp enumerates no HID devices there —
@@ -409,7 +409,7 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 - .NET 10.0 or later on Windows, macOS, or Linux
 - WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast (224.0.0.251)
-  if you use `MDnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
+  if you use `MdnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
 
 ### Supported frameworks

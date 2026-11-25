@@ -80,7 +80,7 @@ public sealed record SdCardParseOptions
     /// converted with a default.
     /// </para>
     /// </summary>
-    public uint FallbackTimestampFrequency { get; init; } = 42_000_000;
+    public uint FallbackTimestampFrequencyHz { get; init; } = 42_000_000;
 
     /// <summary>
     /// Gets a device configuration override. When set, fields from this
