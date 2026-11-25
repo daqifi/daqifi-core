@@ -5,11 +5,11 @@ using System.Text;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Daqifi.Core.Tests.Firmware;
 using ChannelFactory = System.Threading.Channels.Channel;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 /// <summary>
 /// Covers <see cref="LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync"/> — the join between a
@@ -331,7 +331,7 @@ public class LiveCsvRecordingTests
 
         var recording = device.RecordLiveSamplesToCsvAsync(
             writer,
-            new CsvExportOptions { UseRelativeTime = true, Delimiter = ";" },
+            new CsvExportOptions { UseRelativeTime = true, Delimiter = ';' },
             duration: TimeSpan.FromMilliseconds(200));
         device.Emit(Sample(channel, T0, 1.0));
         device.Emit(Sample(channel, T0.AddSeconds(2), 2.0));

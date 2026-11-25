@@ -56,12 +56,6 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     private const string TxtKeyFirmwareVersion = "fw";
     private const string TxtKeyFriendlyName = "friendly";
 
-    /// <summary>
-    /// Length of the serial number the firmware publishes in TXT: it formats the board's
-    /// 64-bit serial as <c>"%08lX%08lX"</c>, so always exactly 16 hex digits.
-    /// </summary>
-    private const int FirmwareSerialNumberLength = 16;
-
     #endregion
 
     #region Private Types
@@ -634,23 +628,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             return string.Empty;
         }
 
-        var advertised = advertisedSerialNumber!.Trim();
-        if (advertised.Length != FirmwareSerialNumberLength)
-        {
-            return advertised;
-        }
-
-        foreach (var character in advertised)
-        {
-            if (!char.IsAsciiHexDigit(character))
-            {
-                return advertised;
-            }
-        }
-
-        return ulong.TryParse(advertised, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var serialNumber)
-            ? serialNumber.ToString(CultureInfo.InvariantCulture)
-            : advertised;
+        return FirmwareSerialNumber.ToDecimal(advertisedSerialNumber);
     }
 
     /// <summary>

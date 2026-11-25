@@ -6,7 +6,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Daqifi.Mcp.Tools;
 using Microsoft.Extensions.Logging;
 
@@ -888,7 +888,7 @@ public sealed class DaqifiAgent
 
             // Core owns the naming convention and reports the effective on-card filename back to
             // us, so we no longer duplicate the log_{timestamp} generation here.
-            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, ct)
+            var session = await sd.StartSdCardLoggingAsync(fileName, fmt, ct)
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
@@ -1008,7 +1008,7 @@ public sealed class DaqifiAgent
             try
             {
                 (csvPath, rowCount, sampleCount, csvError) =
-                    await ExportCsvAsync(localPath, name, liveConfig, cancellationToken).ConfigureAwait(false);
+                    await ExportCsvAsync(localPath, name, liveConfig, device.Name, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -1027,7 +1027,7 @@ public sealed class DaqifiAgent
         return new SdDownloadReport(
             deviceId,
             download.FileName,
-            download.FileSize,
+            download.SizeInBytes,
             Milliseconds(download.Duration),
             localPath,
             csvPath,
@@ -1163,6 +1163,7 @@ public sealed class DaqifiAgent
         string localPath,
         string deviceFileName,
         SdCardDeviceConfiguration? liveConfig,
+        string? deviceName,
         CancellationToken cancellationToken)
     {
         // Format comes from the DEVICE-side name, not the local one: the local file is a temp file
@@ -1186,7 +1187,7 @@ public sealed class DaqifiAgent
             // device fills in when the log carries none, which is what AsSampleSource does. Zero
             // is the honest last resort — a device with no analog channels exports the digital
             // column alone rather than inventing width.
-            var source = session.AsSampleSource(liveConfig);
+            var source = session.AsSampleSource(liveConfig, deviceName);
 
             // Appended, not swapped: the firmware logs in CSV as well as protobuf and JSON, and
             // Core's temp file keeps the device-side extension — so Path.ChangeExtension(".csv")
@@ -1259,9 +1260,11 @@ public sealed class DaqifiAgent
     /// </summary>
     private static Exception? Rewrite(Exception ex, string deviceId) => ex switch
     {
-        SdCardBusyException => new InvalidOperationException(
-            $"Device '{deviceId}' is busy with the SD card, which usually means it is still logging. " +
-            "Call stop_sd_logging first, then retry.", ex),
+        // Core's message says what holds the card: an abandoned download needs a reconnect, and
+        // stopping a log that is not running would not help it.
+        SdCardBusyException busy => new InvalidOperationException(
+            $"Device '{deviceId}' is busy with the SD card: {busy.Message} " +
+            "If it is still logging, call stop_sd_logging first, then retry.", ex),
 
         SdCardEmptyTransferException empty => new InvalidOperationException(
             $"{empty.Message} This is also what a live-streaming session does to the SD subsystem: " +

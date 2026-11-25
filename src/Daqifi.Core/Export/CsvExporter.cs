@@ -3,14 +3,14 @@ using System.Linq;
 using System.Text;
 using Daqifi.Core.Channel;
 
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Exports timestamped channel samples to CSV format, writing to any <see cref="TextWriter"/>.
 /// Storage concerns are delegated to <see cref="ISampleSource"/>; this class
 /// contains only row-formatting and timestamp logic.
 /// </summary>
-public class CsvExporter
+public sealed class CsvExporter
 {
     /// <summary>
     /// Exports the samples provided by <paramref name="source"/> as CSV to <paramref name="writer"/>.
@@ -30,9 +30,8 @@ public class CsvExporter
     /// Thrown when <see cref="CsvExportOptions.AverageWindow"/> is set to a value less than or equal to zero.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when <see cref="CsvExportOptions.Delimiter"/> is not a single character other than a
-    /// newline or double-quote, or when two channels returned by
-    /// <see cref="ISampleSource.GetChannels"/> share a <see cref="ChannelDescriptor.Key"/>. Both are
+    /// Thrown when <see cref="CsvExportOptions.Delimiter"/> is a newline or double-quote, or when two
+    /// channels in <see cref="ISampleSource.Channels"/> share a <see cref="ChannelDescriptor.Key"/>. Both are
     /// detected before anything is written to <paramref name="writer"/>.
     /// </exception>
     public async Task ExportAsync(
@@ -54,43 +53,19 @@ public class CsvExporter
 
         // The double-quote is reserved as the RFC 4180 quoting character used by
         // EscapeCsvField, so allowing it as the delimiter would produce ambiguous,
-        // unparseable output. Newlines would split fields across rows. Multi-char
-        // / empty delimiters can't be handled by single-character splitting either.
-        if (string.IsNullOrEmpty(options.Delimiter)
-            || options.Delimiter.Length != 1
-            || options.Delimiter == "\""
-            || options.Delimiter == "\r"
-            || options.Delimiter == "\n")
+        // unparseable output. Newlines would split fields across rows.
+        if (options.Delimiter is '"' or '\r' or '\n')
         {
-            // Format the bad value as code points so a stray '\r' or '\n'
-            // in the delimiter doesn't break the exception message into
-            // multiple log lines. Enumerate ALL chars (not just [0]) so
-            // multi-character delimiters like ",," aren't misreported as a
-            // single character.
-            string got;
-            if (options.Delimiter == null)
-            {
-                got = "null";
-            }
-            else if (options.Delimiter.Length == 0)
-            {
-                got = "empty";
-            }
-            else
-            {
-                var codePoints = string.Join(
-                    " ",
-                    options.Delimiter.Select(c => $"U+{(int)c:X4}"));
-                got = $"len={options.Delimiter.Length} [{codePoints}]";
-            }
+            // Format the bad value as a code point so a stray '\r' or '\n' doesn't break the
+            // exception message into multiple log lines.
             throw new ArgumentException(
-                $"Delimiter must be a single character that is not a newline or double-quote (got {got}).",
+                $"Delimiter must not be a newline or double-quote (got U+{(int)options.Delimiter:X4}).",
                 $"{nameof(options)}.{nameof(CsvExportOptions.Delimiter)}");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var channels = source.GetChannels();
+        var channels = source.Channels;
         if (channels.Count == 0)
         {
             // Always finalize progress so callers (e.g. UI progress bars) don't
@@ -106,7 +81,7 @@ public class CsvExporter
 
         var totalSamples = progress != null
             ? await source.GetSampleCountAsync(cancellationToken).ConfigureAwait(false)
-            : 0;
+            : null;
 
         if (options.AverageWindow.HasValue)
             await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
@@ -180,7 +155,7 @@ public class CsvExporter
         TextWriter writer,
         CsvExportOptions options,
         List<string> channelKeys,
-        int totalSamples,
+        long? totalSamples,
         IProgress<int>? progress,
         CancellationToken cancellationToken)
     {
@@ -188,9 +163,9 @@ public class CsvExporter
         long? firstTicks = null;
         long? currentTick = null;
         var bucket = new List<SampleRow>();
-        var processed = 0;
+        var processed = 0L;
 
-        await foreach (var sample in source.StreamSamples(cancellationToken).ConfigureAwait(false))
+        await foreach (var sample in source.StreamSamplesAsync(cancellationToken).ConfigureAwait(false))
         {
             firstTicks ??= sample.TimestampTicks;
 
@@ -251,7 +226,7 @@ public class CsvExporter
         TextWriter writer,
         CsvExportOptions options,
         List<string> channelKeys,
-        int totalSamples,
+        long? totalSamples,
         IProgress<int>? progress,
         CancellationToken cancellationToken)
     {
@@ -262,9 +237,9 @@ public class CsvExporter
         long? firstTicks = null;
         long lastTick = 0;
         var windowCount = 0;
-        var processed = 0;
+        var processed = 0L;
 
-        await foreach (var sample in source.StreamSamples(cancellationToken).ConfigureAwait(false))
+        await foreach (var sample in source.StreamSamplesAsync(cancellationToken).ConfigureAwait(false))
         {
             firstTicks ??= sample.TimestampTicks;
             lastTick = sample.TimestampTicks;
@@ -349,7 +324,7 @@ public class CsvExporter
     /// RFC 4180 quoting + optional spreadsheet formula-injection neutralization.
     /// </summary>
     /// <param name="value">The field value to escape.</param>
-    /// <param name="delimiter">The current CSV delimiter (single character, validated by caller).</param>
+    /// <param name="delimiter">The current CSV delimiter (validated by caller).</param>
     /// <param name="formulaSafe">
     /// When true (default — header fields where channel names are user-controlled),
     /// prefix a literal <c>'</c> on values whose first non-whitespace character is
@@ -359,7 +334,7 @@ public class CsvExporter
     /// negative numbers like <c>-1.23</c> aren't clobbered into <c>'-1.23</c>.
     /// </param>
     /// <returns>The escaped field, ready to write between delimiters.</returns>
-    private static string EscapeCsvField(string value, string delimiter, bool formulaSafe = true)
+    private static string EscapeCsvField(string value, char delimiter, bool formulaSafe = true)
     {
         if (formulaSafe && !string.IsNullOrEmpty(value))
         {
@@ -377,7 +352,6 @@ public class CsvExporter
             }
         }
 
-        var delimChar = delimiter[0];
         var mustQuote = false;
 
         // Quote fields with leading or trailing whitespace — many CSV
@@ -394,7 +368,7 @@ public class CsvExporter
             for (var i = 0; i < value.Length; i++)
             {
                 var c = value[i];
-                if (c == delimChar || c == '"' || c == '\r' || c == '\n')
+                if (c == delimiter || c == '"' || c == '\r' || c == '\n')
                 {
                     mustQuote = true;
                     break;
@@ -409,12 +383,12 @@ public class CsvExporter
         return value;
     }
 
-    private static void ReportProgress(IProgress<int>? progress, int processed, int total)
+    private static void ReportProgress(IProgress<int>? progress, long processed, long? total)
     {
-        if (progress == null || total <= 0)
+        if (progress == null || total is not > 0)
             return;
 
         if (processed % 5000 == 0)
-            progress.Report(Math.Min(99, (int)((double)processed / total * 100)));
+            progress.Report(Math.Min(99, (int)((double)processed / total.Value * 100)));
     }
 }

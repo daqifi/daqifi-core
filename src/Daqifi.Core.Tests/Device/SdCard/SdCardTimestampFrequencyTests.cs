@@ -257,7 +257,7 @@ public class SdCardTimestampFrequencyTests
             TimestampFrequency: timestampFrequencyHz,
             DeviceSerialNumber: "TEST123",
             DevicePartNumber: "Nq1",
-            FirmwareRevision: "3.7.2",
+            FirmwareVersion: "3.7.2",
             CalibrationValues: null);
 
     private static System.IO.Stream BuildTwoSampleLogWithoutFrequency()

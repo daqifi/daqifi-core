@@ -376,19 +376,18 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin", channelMask: "1");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Equal(7900, device.StreamingFrequency);
         Assert.Contains(StartAt(7900), device.SentCommands);
         Assert.DoesNotContain(StartAt(10000), device.SentCommands);
 
-        // Asked once the stream is routed to the card with its channels set: that is the
+        // Asked once the stream is routed to the card: that is the
         // configuration the device checks the start against.
         var routed = device.SentCommands.IndexOf(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard).Data);
-        var channels = device.SentCommands.IndexOf(ScpiMessageProducer.EnableAdcChannels(1).Data);
         var asked = device.SentCommands.IndexOf(DocumentCommand);
         var started = device.SentCommands.IndexOf(StartAt(7900));
-        Assert.True(routed >= 0 && channels > routed && asked > channels && started > asked);
+        Assert.True(routed >= 0 && asked > routed && started > asked);
     }
 
     [Fact]
@@ -400,7 +399,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Equal(500, device.StreamingFrequency);
         Assert.Contains(StartAt(500), device.SentCommands);
@@ -439,7 +438,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[DocumentCommand] = UnusableCapReply(kind);
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Contains(DocumentCommand, device.SentCommands);
         Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
@@ -459,7 +458,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[DocumentCommand] = UnusableCapReply(kind);
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Equal(50, device.StreamingFrequency);
         Assert.Contains(StartAt(50), device.SentCommands);
@@ -476,7 +475,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Equal(10000, device.StreamingFrequency);
         Assert.Contains(StartAt(10000), device.SentCommands);
@@ -492,7 +491,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         await device.ReadCapabilityDocumentAsync();
         device.SentCommands.Clear();
 
-        await device.StartSdCardLoggingSessionAsync("log.bin");
+        await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Contains(StartAt(CoreDefaultHz), device.SentCommands);
         Assert.DoesNotContain(DocumentCommand, device.SentCommands);

@@ -19,7 +19,7 @@ namespace Daqifi.Core.Device;
 /// had to do even though nothing about the operation is specific to that class (#498).
 /// </para>
 /// <para>
-/// Not to be confused with <see cref="Logging.Export.ISampleSource"/>, which is the offline
+/// Not to be confused with <see cref="Export.ISampleSource"/>, which is the offline
 /// side: an already-recorded set of samples being replayed into an exporter. This one is the
 /// live device, and its enumeration ends when the device's connection does.
 /// </para>

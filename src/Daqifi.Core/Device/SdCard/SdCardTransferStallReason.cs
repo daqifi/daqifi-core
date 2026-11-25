@@ -27,7 +27,9 @@ public enum SdCardTransferStallReason
     TransportClosed = 1,
 
     /// <summary>
-    /// The overall transfer deadline elapsed before the EOF marker arrived.
+    /// The overall transfer deadline elapsed before the EOF marker arrived. When the transfer
+    /// could not be stopped at the deadline it was abandoned instead: the exception message says
+    /// so, and the device needs a reconnect before the next download.
     /// </summary>
     TransferTimeout = 2
 }

@@ -1,14 +1,15 @@
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Controls how <see cref="CsvExporter"/> formats a CSV export.
 /// </summary>
-public class CsvExportOptions
+public sealed class CsvExportOptions
 {
     /// <summary>
-    /// Gets the field delimiter. Defaults to <c>","</c>.
+    /// Gets the field delimiter. Defaults to <c>','</c>. A newline or double-quote is rejected by
+    /// <see cref="CsvExporter.ExportAsync"/>.
     /// </summary>
-    public string Delimiter { get; init; } = ",";
+    public char Delimiter { get; init; } = ',';
 
     /// <summary>
     /// When <see langword="true"/>, the time column contains seconds elapsed since the first sample

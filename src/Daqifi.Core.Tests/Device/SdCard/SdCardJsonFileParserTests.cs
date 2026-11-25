@@ -238,7 +238,7 @@ public sealed class SdCardJsonFileParserTests
             TimestampFrequency: 1000,
             DeviceSerialNumber: "TEST123",
             DevicePartNumber: "NQ1",
-            FirmwareRevision: "1.0.0",
+            FirmwareVersion: "1.0.0",
             CalibrationValues: null
         );
 
@@ -256,7 +256,7 @@ public sealed class SdCardJsonFileParserTests
         // Override fills gaps for metadata not present in JSON data
         Assert.Equal("TEST123", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("NQ1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal("1.0.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("1.0.0", session.DeviceConfig.FirmwareVersion);
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
         // The device's reported frequency beats the fallback guess, and says so.
         Assert.Equal(1000u, session.DeviceConfig.TimestampFrequency);
@@ -339,8 +339,8 @@ public sealed class SdCardJsonFileParserTests
         var session = await parser.ParseAsync(stream, "log_20240315_143022.json", options);
 
         // Assert
-        Assert.NotNull(session.FileCreatedDate);
-        Assert.Equal(new DateTime(2024, 3, 15, 14, 30, 22), session.FileCreatedDate.Value);
+        Assert.NotNull(session.CreatedDate);
+        Assert.Equal(new DateTime(2024, 3, 15, 14, 30, 22), session.CreatedDate.Value);
     }
 
     [Fact]
@@ -406,7 +406,7 @@ public sealed class SdCardJsonFileParserTests
             TimestampFrequency: 100u,
             DeviceSerialNumber: "SN001",
             DevicePartNumber: "TestDevice",
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
             Resolution: 65535,
             PortRange: new[] { 10.0, 10.0, 10.0 },
@@ -445,7 +445,7 @@ public sealed class SdCardJsonFileParserTests
             TimestampFrequency: 100u,
             DeviceSerialNumber: "SN001",
             DevicePartNumber: "TestDevice",
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: new[] { (1.0, -0.05), (1.0, -0.05), (1.0, -0.05) },
             Resolution: 65535,
             PortRange: new[] { 10.0, 10.0, 10.0 },
@@ -691,7 +691,7 @@ public sealed class SdCardJsonFileParserTests
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(42_000_000u, session.DeviceConfig.TimestampFrequency);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal(1, session.DeviceConfig.AnalogPortCount);
     }
 
@@ -712,7 +712,7 @@ public sealed class SdCardJsonFileParserTests
             TimestampFrequency: 50_000_000,
             DeviceSerialNumber: "OTHER",
             DevicePartNumber: "OTHER",
-            FirmwareRevision: "3.8.0",
+            FirmwareVersion: "3.8.0",
             CalibrationValues: null);
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
@@ -730,7 +730,7 @@ public sealed class SdCardJsonFileParserTests
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
         // The file states no firmware revision, so the override still fills that gap.
-        Assert.Equal("3.8.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("3.8.0", session.DeviceConfig.FirmwareVersion);
     }
 
     [Fact]
@@ -838,7 +838,7 @@ public sealed class SdCardJsonFileParserTests
             TimestampFrequency: 0u,
             DeviceSerialNumber: null,
             DevicePartNumber: null,
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0) },
             Resolution: 65535,
             PortRange: new[] { 10.0, 10.0 },

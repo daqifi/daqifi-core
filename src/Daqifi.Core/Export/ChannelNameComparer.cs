@@ -1,4 +1,4 @@
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Orders channel names the way a person reads them — <c>AI2</c> before <c>AI10</c>, and
@@ -36,7 +36,7 @@ public sealed class ChannelNameComparer : IComparer<string>
     /// <summary>
     /// Gets the shared instance. The comparer holds no state, so one is enough.
     /// </summary>
-    public static ChannelNameComparer Instance { get; } = new();
+    public static ChannelNameComparer Default { get; } = new();
 
     private ChannelNameComparer()
     {

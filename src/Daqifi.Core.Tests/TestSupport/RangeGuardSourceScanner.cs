@@ -15,7 +15,7 @@ namespace Daqifi.Core.Tests.TestSupport;
 /// census entry turns the comparison red.
 /// </para>
 /// <para>
-/// First written inside <c>ExportGuardCensusTests</c> for issue #664's Logging/Export slice; lifted
+/// First written inside <c>ExportGuardCensusTests</c> for issue #664's Export slice; lifted
 /// here when the Channel slice needed the same scan, rather than copied. Every census past the
 /// first shares this one implementation, so a fix to the matching rules — such as the narrowing
 /// that stopped it counting <c>catch</c> and <c>typeof</c> mentions — reaches all of them.
@@ -25,7 +25,7 @@ internal static class RangeGuardSourceScanner
 {
     /// <summary>
     /// The absolute path of a folder under <c>src/Daqifi.Core</c>, named by its path segments —
-    /// for example <c>SourceDirectory("Logging", "Export")</c>.
+    /// for example <c>SourceDirectory("Device", "SdCard")</c>.
     /// </summary>
     internal static string SourceDirectory(params string[] segments) =>
         Path.Combine([RepositoryRoot.FullPath, "src", "Daqifi.Core", .. segments]);

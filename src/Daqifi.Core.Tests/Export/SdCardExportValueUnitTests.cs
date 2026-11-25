@@ -1,10 +1,10 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Daqifi.Core.Tests.Device.SdCard;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 /// <summary>
 /// The unit an SD-card export writes, and how it gets one at all.
@@ -36,9 +36,9 @@ public class SdCardExportValueUnitTests
         AnalogPortCount: 2,
         DigitalPortCount: 1,
         TimestampFrequency: TickRate,
-        DeviceSerialNumber: "7E2815916200E898",
+        DeviceSerialNumber: "9090539562006014104",
         DevicePartNumber: "Nyquist 1",
-        FirmwareRevision: "3.8.0",
+        FirmwareVersion: "3.8.0",
         CalibrationValues: [(1.0, 0.0), (1.0, 0.0)],
         Resolution: Resolution,
         PortRange: [1.0, 1.0],
@@ -61,8 +61,8 @@ public class SdCardExportValueUnitTests
 
         // A number with no unit is the defect. An unscaled number that says so is readable.
         Assert.Equal(
-            "Time,Daqifi:7E2815916200E898:AI0 (unscaled),Daqifi:7E2815916200E898:AI1 (unscaled),"
-            + "Daqifi:7E2815916200E898:DIO",
+            "Time,DAQiFi Device:9090539562006014104:AI0 (unscaled),DAQiFi Device:9090539562006014104:AI1 (unscaled),"
+            + "DAQiFi Device:9090539562006014104:DIO",
             lines[0]);
         Assert.EndsWith(",0,13,0", lines[1], StringComparison.Ordinal);
     }
@@ -79,8 +79,8 @@ public class SdCardExportValueUnitTests
         var lines = await ExportAsync(session);
 
         Assert.Equal(
-            "Time,Daqifi:7E2815916200E898:AI0 (V),Daqifi:7E2815916200E898:AI1 (V),"
-            + "Daqifi:7E2815916200E898:DIO",
+            "Time,DAQiFi Device:9090539562006014104:AI0 (V),DAQiFi Device:9090539562006014104:AI1 (V),"
+            + "DAQiFi Device:9090539562006014104:DIO",
             lines[0]);
 
         // 13 counts at 1/1024 V per count, the same scale a live recording reports.
@@ -100,7 +100,7 @@ public class SdCardExportValueUnitTests
 
         var lines = await ExportAsync(session);
 
-        Assert.EndsWith("Daqifi:unknown:DIO", lines[0], StringComparison.Ordinal);
+        Assert.EndsWith("DAQiFi Device:unknown:DIO", lines[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -109,16 +109,16 @@ public class SdCardExportValueUnitTests
         // The header is labelled, the key is not: a label could otherwise move a value into the
         // wrong column.
         var source = new SdCardLogSampleSource(
-            EmptyEntries(), "SN", analogChannelCount: 1) { ValueUnit = SampleValueUnits.Volts };
+            EmptyEntries(), analogChannelCount: 1, deviceName: null, "SN") { ValueUnit = SampleValueUnits.Volts };
 
-        Assert.Equal("Daqifi:SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:SN:AI0", source.Channels[0].Key);
         Assert.Equal(SampleValueUnits.Volts, source.ValueUnit);
     }
 
     [Fact]
     public async Task ASourceThatStatesNoUnit_WritesTheHeaderUnchanged()
     {
-        var source = new SdCardLogSampleSource(EmptyEntries(), "SN", analogChannelCount: 1);
+        var source = new SdCardLogSampleSource(EmptyEntries(), analogChannelCount: 1, deviceName: null, "SN");
 
         Assert.Null(source.ValueUnit);
 
@@ -126,7 +126,7 @@ public class SdCardExportValueUnitTests
         await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions());
 
         Assert.Equal(
-            "Time,Daqifi:SN:AI0,Daqifi:SN:DIO",
+            "Time,DAQiFi Device:SN:AI0,DAQiFi Device:SN:DIO",
             writer.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)[0]);
     }
 

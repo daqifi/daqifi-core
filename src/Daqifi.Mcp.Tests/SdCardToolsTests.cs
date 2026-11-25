@@ -205,7 +205,7 @@ public class SdCardCsvExportTests : IDisposable
         var path = WriteLog("daqifi_abc123.bin", sampleCount: 4);
 
         var (csvPath, rows, samples, warning) = await DaqifiAgent.ExportCsvAsync(
-            path, "log_20260812_120000.csv", liveConfig: null, CancellationToken.None);
+            path, "log_20260812_120000.csv", liveConfig: null, deviceName: "Bench Nq1", CancellationToken.None);
 
         Assert.True(File.Exists(csvPath));
         Assert.Equal(4, samples);
@@ -214,7 +214,10 @@ public class SdCardCsvExportTests : IDisposable
 
         var lines = File.ReadAllLines(csvPath);
         Assert.Equal(5, lines.Length);           // header + 4 rows
-        Assert.Contains("AI0", lines[0]);
+
+        // Named after the connected device, so the columns match a live recording of it (#915).
+        Assert.Contains(",Bench Nq1:", lines[0]);
+        Assert.Contains(":AI0", lines[0]);
     }
 
     // Regression: the firmware logs in CSV too, and Core's temp file keeps the device-side
@@ -227,7 +230,7 @@ public class SdCardCsvExportTests : IDisposable
         var sourceBytes = File.ReadAllBytes(path);
 
         var (csvPath, _, samples, _) = await DaqifiAgent.ExportCsvAsync(
-            path, "log_20260812_120000.csv", liveConfig: null, CancellationToken.None);
+            path, "log_20260812_120000.csv", liveConfig: null, deviceName: null, CancellationToken.None);
 
         Assert.NotEqual(path, csvPath);
         Assert.Equal(4, samples);
@@ -243,7 +246,7 @@ public class SdCardCsvExportTests : IDisposable
         File.Copy(WriteLog("source.csv", sampleCount: 2), path);
 
         var (csvPath, _, samples, _) = await DaqifiAgent.ExportCsvAsync(
-            path, "log_20260812_120000.csv", liveConfig: null, CancellationToken.None);
+            path, "log_20260812_120000.csv", liveConfig: null, deviceName: null, CancellationToken.None);
 
         Assert.Equal(2, samples);
         Assert.True(File.Exists(csvPath));
@@ -256,7 +259,7 @@ public class SdCardCsvExportTests : IDisposable
         var before = Directory.GetFiles(_directory);
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(
-            () => DaqifiAgent.ExportCsvAsync(path, "log.dat", liveConfig: null, CancellationToken.None));
+            () => DaqifiAgent.ExportCsvAsync(path, "log.dat", liveConfig: null, deviceName: null, CancellationToken.None));
 
         Assert.Contains("Unsupported file extension", ex.Message);
         Assert.Equal(before, Directory.GetFiles(_directory));
@@ -270,7 +273,7 @@ public class SdCardCsvExportTests : IDisposable
         var path = WriteLog("daqifi_empty.bin", sampleCount: 0);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => DaqifiAgent.ExportCsvAsync(path, "log_20260812_120000.csv", liveConfig: null, CancellationToken.None));
+            () => DaqifiAgent.ExportCsvAsync(path, "log_20260812_120000.csv", liveConfig: null, deviceName: null, CancellationToken.None));
 
         Assert.Contains("zero samples", ex.Message);
         Assert.Contains("raw file is still available", ex.Message);
@@ -406,9 +409,8 @@ public class SdCardFileNameResolutionTests
         public bool IsLoggingToSdCard => false;
         public Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(SdCardCaptureEstimate? plannedCapture = null, long minimumFreeBytes = SdCardSpaceCheck.DefaultMinimumFreeBytes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public void SetSdCardMinimumFreeSpace(long bytes) => throw new NotSupportedException();
-        public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task SetSdCardMinimumFreeSpaceAsync(long bytes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task FormatSdCardAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
