@@ -165,15 +165,15 @@ public sealed record DeviceMetadata
 
         capabilities = capabilities with
         {
-            AnalogInputChannels = message.AnalogInPortNum > 0
+            AnalogInputChannelCount = message.AnalogInPortNum > 0
                 ? (int)message.AnalogInPortNum
-                : capabilities.AnalogInputChannels,
-            AnalogOutputChannels = message.AnalogOutPortNum > 0
+                : capabilities.AnalogInputChannelCount,
+            AnalogOutputChannelCount = message.AnalogOutPortNum > 0
                 ? (int)message.AnalogOutPortNum
-                : capabilities.AnalogOutputChannels,
-            DigitalChannels = message.DigitalPortNum > 0
+                : capabilities.AnalogOutputChannelCount,
+            DigitalChannelCount = message.DigitalPortNum > 0
                 ? (int)message.DigitalPortNum
-                : capabilities.DigitalChannels
+                : capabilities.DigitalChannelCount
         };
 
         // Re-apply the device's own capability document last, so it stays the authority over both

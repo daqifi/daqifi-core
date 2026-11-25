@@ -958,8 +958,8 @@ Console.WriteLine($"Firmware: {device.Metadata.FirmwareVersion}");
 
 // Check capabilities
 var caps = device.Metadata.Capabilities;
-Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannels}");
-Console.WriteLine($"Digital I/O: {caps.DigitalChannels}");
+Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannelCount}");
+Console.WriteLine($"Digital I/O: {caps.DigitalChannelCount}");
 ```
 
 `Metadata` is an immutable snapshot. The device replaces it whole when a status message arrives, so
@@ -1296,7 +1296,7 @@ using Daqifi.Core.Device.Diagnostics;
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // System log (reading the log also clears the device buffer).
-IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
+IReadOnlyList<SystemLogEntry> log = await device.DrainSystemLogAsync();
 foreach (var entry in log) Console.WriteLine(entry.Message);
 await device.ClearSystemLogAsync();
 

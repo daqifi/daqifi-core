@@ -118,7 +118,7 @@ public class CapabilityDocumentFirmware390Tests
         // %.17g writes identity coefficients as the bare integers 1 and 0; both read as doubles.
         var channel = AnalogInput(document, 0);
         Assert.Equal(1.0, channel.CalibrationSlope);
-        Assert.Equal(0.0, channel.CalibrationIntercept);
+        Assert.Equal(0.0, channel.CalibrationOffset);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class CapabilityDocumentFirmware390Tests
 
         var affected = AnalogInput(document, 1);
         Assert.Null(affected.CalibrationSlope);
-        Assert.Null(affected.CalibrationIntercept);
+        Assert.Null(affected.CalibrationOffset);
         Assert.Null(affected.RangeMinimum);
         Assert.Null(affected.RangeMaximum);
         Assert.Equal(1670, affected.ScanOffsetTicks);
@@ -261,6 +261,6 @@ public class CapabilityDocumentFirmware390Tests
         var channel = Parse(json).Channels.Single();
 
         Assert.Equal(0.0012207031250000001, channel.CalibrationSlope);
-        Assert.Equal(-1.2345678901234567e-308, channel.CalibrationIntercept);
+        Assert.Equal(-1.2345678901234567e-308, channel.CalibrationOffset);
     }
 }

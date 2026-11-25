@@ -39,17 +39,17 @@ public sealed record DeviceCapabilities
     /// <summary>
     /// Gets the number of analog input channels available.
     /// </summary>
-    public int AnalogInputChannels { get; init; }
+    public int AnalogInputChannelCount { get; init; }
 
     /// <summary>
     /// Gets the number of analog output channels available.
     /// </summary>
-    public int AnalogOutputChannels { get; init; }
+    public int AnalogOutputChannelCount { get; init; }
 
     /// <summary>
     /// Gets the number of digital I/O channels available.
     /// </summary>
-    public int DigitalChannels { get; init; }
+    public int DigitalChannelCount { get; init; }
 
     /// <summary>
     /// Gets the maximum sampling rate in Hz.
@@ -90,9 +90,9 @@ public sealed record DeviceCapabilities
                 HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                AnalogInputChannels = 16,
-                AnalogOutputChannels = 0,
-                DigitalChannels = 16,
+                AnalogInputChannelCount = 16,
+                AnalogOutputChannelCount = 0,
+                DigitalChannelCount = 16,
                 MaximumSampleRateHz = 22000
             },
             DeviceType.Nyquist2 => new DeviceCapabilities
@@ -111,9 +111,9 @@ public sealed record DeviceCapabilities
                 HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                AnalogInputChannels = 8,
-                AnalogOutputChannels = 8,
-                DigitalChannels = 16,
+                AnalogInputChannelCount = 8,
+                AnalogOutputChannelCount = 8,
+                DigitalChannelCount = 16,
                 MaximumSampleRateHz = 16000
             },
             _ => new DeviceCapabilities()

@@ -1686,8 +1686,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     #region IDeviceDiagnostics
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
-        => _diagnosticsOperations.GetSystemLogAsync(cancellationToken);
+    public Task<IReadOnlyList<SystemLogEntry>> DrainSystemLogAsync(CancellationToken cancellationToken = default)
+        => _diagnosticsOperations.DrainSystemLogAsync(cancellationToken);
 
     /// <inheritdoc />
     public Task ClearSystemLogAsync(CancellationToken cancellationToken = default)

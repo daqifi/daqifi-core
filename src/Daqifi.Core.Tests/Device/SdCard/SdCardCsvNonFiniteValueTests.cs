@@ -329,7 +329,7 @@ public sealed class SdCardCsvNonFiniteValueTests
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = "3.8.0",
             CalibrationValues = Repeat((1.0, 0.0), channelCount),
-            Resolution = AdcResolution,
+            FullScaleCount = AdcResolution,
             PortRange = Repeat(PortRangeVolts, channelCount),
             InternalScaleM = Repeat(1.0, channelCount)
         };

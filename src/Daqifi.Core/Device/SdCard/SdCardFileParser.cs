@@ -709,7 +709,7 @@ internal sealed class SdCardFileParser
                 DevicePartNumber = _devicePn,
                 FirmwareVersion = _fwRev,
                 CalibrationValues = _calibration,
-                Resolution = _resolution,
+                FullScaleCount = _resolution,
                 PortRange = _portRange,
                 InternalScaleM = _internalScaleM
             };
@@ -742,7 +742,7 @@ internal sealed class SdCardFileParser
                 ? primary.FirmwareVersion
                 : scanned.FirmwareVersion,
             CalibrationValues = primary.CalibrationValues ?? scanned.CalibrationValues,
-            Resolution = primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
+            FullScaleCount = primary.FullScaleCount != 0 ? primary.FullScaleCount : scanned.FullScaleCount,
             PortRange = primary.PortRange ?? scanned.PortRange,
             InternalScaleM = primary.InternalScaleM ?? scanned.InternalScaleM
         };
@@ -784,7 +784,7 @@ internal sealed class SdCardFileParser
             DevicePartNumber = statusMessage.DevicePn,
             FirmwareVersion = statusMessage.DeviceFwRev,
             CalibrationValues = calibration,
-            Resolution = statusMessage.AnalogInRes,
+            FullScaleCount = statusMessage.AnalogInRes,
             PortRange = portRange,
             InternalScaleM = internalScaleM
         };

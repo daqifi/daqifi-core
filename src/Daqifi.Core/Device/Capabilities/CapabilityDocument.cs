@@ -152,15 +152,15 @@ public sealed class CapabilityDocument
             HasSdCard = SdSupported ?? capabilities.HasSdCard,
             HasUsb = UsbSupported ?? capabilities.HasUsb,
             HasWifi = WifiSupported ?? capabilities.HasWifi,
-            AnalogInputChannels = hasChannels
+            AnalogInputChannelCount = hasChannels
                 ? CountChannels(CapabilityChannelKind.AnalogInput)
-                : capabilities.AnalogInputChannels,
-            AnalogOutputChannels = hasChannels
+                : capabilities.AnalogInputChannelCount,
+            AnalogOutputChannelCount = hasChannels
                 ? CountChannels(CapabilityChannelKind.AnalogOutput)
-                : capabilities.AnalogOutputChannels,
-            DigitalChannels = hasChannels
+                : capabilities.AnalogOutputChannelCount,
+            DigitalChannelCount = hasChannels
                 ? CountChannels(CapabilityChannelKind.DigitalIo)
-                : capabilities.DigitalChannels,
+                : capabilities.DigitalChannelCount,
 
             // The absolute ISR ceiling, not the current or conservative rate: MaximumSampleRateHz is
             // the board's upper bound (DaqifiStreamingDevice validates the requested frequency

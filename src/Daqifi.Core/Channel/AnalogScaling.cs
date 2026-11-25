@@ -16,7 +16,7 @@ internal static class AnalogScaling
     /// behind <c>MEASure:VOLTage:DC?</c>):
     /// </para>
     /// <code>
-    /// Volts = (raw / Resolution) * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
+    /// Volts = (raw / FullScaleCount) * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </code>
     /// <para>
     /// <paramref name="calibrationOffset"/> is an offset in volts and is added <em>after</em>
@@ -31,7 +31,7 @@ internal static class AnalogScaling
     /// </para>
     /// </remarks>
     /// <param name="rawValue">The raw ADC count.</param>
-    /// <param name="resolution">The ADC's maximum raw count (2^bits - 1). Must be non-zero.</param>
+    /// <param name="fullScaleCount">The ADC's maximum raw count (2^bits - 1). Must be non-zero.</param>
     /// <param name="portRange">The channel's full-scale range, in volts.</param>
     /// <param name="calibrationSlope">The calibration slope (gain).</param>
     /// <param name="internalScaleM">The board's internal (front-end) scale factor.</param>
@@ -39,13 +39,13 @@ internal static class AnalogScaling
     /// <returns>The scaled value, in volts.</returns>
     internal static double Scale(
         double rawValue,
-        double resolution,
+        double fullScaleCount,
         double portRange,
         double calibrationSlope,
         double internalScaleM,
         double calibrationOffset)
     {
-        var normalized = rawValue / resolution;
+        var normalized = rawValue / fullScaleCount;
         return normalized * portRange * calibrationSlope * internalScaleM + calibrationOffset;
     }
 }

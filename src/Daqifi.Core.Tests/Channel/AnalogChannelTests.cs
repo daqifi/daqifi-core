@@ -10,11 +10,11 @@ public class AnalogChannelTests
     public void Constructor_WithValidParameters_InitializesCorrectly()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
 
         // Assert
         Assert.Equal(0, channel.ChannelNumber);
-        Assert.Equal(65535u, channel.Resolution);
+        Assert.Equal(65535u, channel.FullScaleCount);
         Assert.Equal("Analog Channel 0", channel.Name);
         Assert.Equal(ChannelType.Analog, channel.Type);
         Assert.Equal(ChannelDirection.Input, channel.Direction);
@@ -33,23 +33,23 @@ public class AnalogChannelTests
     }
 
     [Fact]
-    public void Constructor_DefaultsResolutionIsAssumedToFalse()
+    public void Constructor_DefaultsFullScaleCountIsAssumedToFalse()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
 
         // Assert
-        Assert.False(channel.ResolutionIsAssumed);
+        Assert.False(channel.FullScaleCountIsAssumed);
     }
 
     [Fact]
-    public void Constructor_WithResolutionIsAssumedTrue_SetsResolutionIsAssumed()
+    public void Constructor_WithFullScaleCountIsAssumedTrue_SetsFullScaleCountIsAssumed()
     {
         // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535, resolutionIsAssumed: true);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535, fullScaleCountIsAssumed: true);
 
         // Assert
-        Assert.True(channel.ResolutionIsAssumed);
+        Assert.True(channel.FullScaleCountIsAssumed);
     }
 
     [Theory]
@@ -325,7 +325,7 @@ public class AnalogChannelTests
     [InlineData(16_777_217u)] // just above the 24-bit max-count ceiling
     public void Constructor_WithOutOfRangeResolution_ThrowsException(uint resolution)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, resolution: resolution));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, fullScaleCount: resolution));
     }
 
     [Theory]
@@ -333,8 +333,8 @@ public class AnalogChannelTests
     [InlineData(16_777_216u)]  // 24-bit ceiling
     public void Constructor_WithBoundaryResolution_IsAccepted(uint resolution)
     {
-        var channel = new AnalogChannel(channelNumber: 0, resolution: resolution);
-        Assert.Equal(resolution, channel.Resolution);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: resolution);
+        Assert.Equal(resolution, channel.FullScaleCount);
     }
 
     [Theory]
@@ -601,7 +601,7 @@ public class AnalogChannelTests
         // Two conversions, in order: counts -> volts by the device's calibration, volts ->
         // engineering units by the caller's scaling. Getting this backwards (or collapsing the two)
         // is the failure this pins.
-        var channel = new AnalogChannel(0, resolution: 65535)
+        var channel = new AnalogChannel(0, fullScaleCount: 65535)
         {
             PortRange = 10.0,
             CalibrationSlope = 1.0,

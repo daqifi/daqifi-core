@@ -131,7 +131,7 @@ public class ChannelGuardCensusTests
         // ever retuned: the message must still state the limit actually enforced. Interpolated the
         // same way the guard does, so the two agree under any culture.
         var resolutionRange =
-            $"Resolution must be a plausible ADC max-count between {AnalogChannel.MinResolution} and {AnalogChannel.MaxResolution}.";
+            $"Resolution must be a plausible ADC max-count between {AnalogChannel.MinimumFullScaleCount} and {AnalogChannel.MaximumFullScaleCount}.";
         var portRange = $"Port range must be a finite value in (0, {AnalogChannel.MaximumPortRangeVolts}] volts.";
         var scaleFactor = $"Scale factor must be a finite, non-zero value within ±{AnalogChannel.MaximumCalibrationMagnitude}.";
         var calibrationOffset = $"Calibration offset must be a finite value within ±{AnalogChannel.MaximumCalibrationMagnitude}.";
@@ -159,10 +159,10 @@ public class ChannelGuardCensusTests
                 "AnalogChannel..ctor(resolution)",
                 "AnalogChannel.cs",
                 analogCtor,
-                "resolution",
+                "fullScaleCount",
                 (uint)0,
                 resolutionRange,
-                () => _ = new AnalogChannel(0, resolution: 0)),
+                () => _ = new AnalogChannel(0, fullScaleCount: 0)),
 
             // MinimumValue and MaximumValue share one throw site and differ only in the ParamName each
             // passes it. Both are censused: the caller sees two different guards, and a copy-paste

@@ -11,17 +11,17 @@ namespace Daqifi.Core.Channel;
 public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementNotifier
 {
     /// <summary>
-    /// Smallest <see cref="Resolution"/> (maximum raw count) accepted as a physically plausible ADC
-    /// resolution — 255, i.e. 2^8 - 1 for an 8-bit converter. <see cref="Resolution"/> is stored as
+    /// Smallest <see cref="FullScaleCount"/> (maximum raw count) accepted as a physically plausible ADC
+    /// resolution — 255, i.e. 2^8 - 1 for an 8-bit converter. <see cref="FullScaleCount"/> is stored as
     /// the maximum raw count (2^bits - 1), not the bit depth, so this is the max-count for 8 bits.
     /// </summary>
-    public const uint MinResolution = 255;
+    public const uint MinimumFullScaleCount = 255;
 
     /// <summary>
-    /// Largest <see cref="Resolution"/> (maximum raw count) accepted as a physically plausible ADC
+    /// Largest <see cref="FullScaleCount"/> (maximum raw count) accepted as a physically plausible ADC
     /// resolution — 16,777,216, covering 24-bit converters whether reported as 2^24 or 2^24 - 1.
     /// </summary>
-    public const uint MaxResolution = 16_777_216;
+    public const uint MaximumFullScaleCount = 16_777_216;
 
     /// <summary>
     /// Largest absolute <see cref="PortRange"/>, in volts, accepted as physically reasonable. DAQiFi
@@ -48,8 +48,8 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     private double _calibrationOffset;
     private double _internalScaleM;
     private double _portRange;
-    private uint _resolution;
-    private bool _resolutionIsAssumed;
+    private uint _fullScaleCount;
+    private bool _fullScaleCountIsAssumed;
     private ChannelScaling? _scaling;
 
     /// <summary>
@@ -185,18 +185,18 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// place on a status re-population without recreating the channel instance, keeping
     /// <see cref="IChannel"/> references stable for consumers.
     /// </remarks>
-    public uint Resolution
+    public uint FullScaleCount
     {
-        get { lock (_lock) { return _resolution; } }
+        get { lock (_lock) { return _fullScaleCount; } }
     }
 
     /// <summary>
-    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// Gets whether <see cref="FullScaleCount"/> is a fallback guess rather than a value the device
     /// actually reported.
     /// </summary>
-    public bool ResolutionIsAssumed
+    public bool FullScaleCountIsAssumed
     {
-        get { lock (_lock) { return _resolutionIsAssumed; } }
+        get { lock (_lock) { return _fullScaleCountIsAssumed; } }
     }
 
     /// <summary>
@@ -260,11 +260,11 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// Initializes a new instance of the <see cref="AnalogChannel"/> class.
     /// </summary>
     /// <param name="channelNumber">The channel number/index.</param>
-    /// <param name="resolution">The ADC resolution (e.g., 65535 for 16-bit).</param>
-    /// <param name="resolutionIsAssumed">
-    /// Whether <paramref name="resolution"/> is a fallback guess rather than a device-reported value.
+    /// <param name="fullScaleCount">The ADC resolution (e.g., 65535 for 16-bit).</param>
+    /// <param name="fullScaleCountIsAssumed">
+    /// Whether <paramref name="fullScaleCount"/> is a fallback guess rather than a device-reported value.
     /// </param>
-    public AnalogChannel(int channelNumber, uint resolution = 65535, bool resolutionIsAssumed = false)
+    public AnalogChannel(int channelNumber, uint fullScaleCount = 65535, bool fullScaleCountIsAssumed = false)
     {
         if (channelNumber < 0)
         {
@@ -272,11 +272,11 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
                 nameof(channelNumber), channelNumber, "Channel number must be non-negative.");
         }
 
-        ValidateResolution(resolution, nameof(resolution));
+        ValidateFullScaleCount(fullScaleCount, nameof(fullScaleCount));
 
         ChannelNumber = channelNumber;
-        _resolution = resolution;
-        _resolutionIsAssumed = resolutionIsAssumed;
+        _fullScaleCount = fullScaleCount;
+        _fullScaleCountIsAssumed = fullScaleCountIsAssumed;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
         _minValue = -10.0;
@@ -296,12 +296,12 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <see cref="Device.DaqifiDevice.GetChannelsSnapshot"/> on another thread) can never observe
     /// a torn mix of old and new scaling values from <see cref="GetScaledValue"/>.
     /// </remarks>
-    internal void UpdateScalingFromStatus(uint resolution, double calibrationOffset, double calibrationSlope, double internalScaleM, double portRange, bool resolutionIsAssumed = false)
+    internal void UpdateScalingFromStatus(uint fullScaleCount, double calibrationOffset, double calibrationSlope, double internalScaleM, double portRange, bool fullScaleCountIsAssumed = false)
     {
         lock (_lock)
         {
-            _resolution = resolution;
-            _resolutionIsAssumed = resolutionIsAssumed;
+            _fullScaleCount = fullScaleCount;
+            _fullScaleCountIsAssumed = fullScaleCountIsAssumed;
             _calibrationOffset = calibrationOffset;
             _calibrationSlope = calibrationSlope;
             _internalScaleM = internalScaleM;
@@ -311,7 +311,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
+    /// Formula: ScaledValue = RawValue / FullScaleCount * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
     /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
@@ -324,7 +324,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     {
         lock (_lock)
         {
-            return AnalogScaling.Scale(rawValue, _resolution, _portRange, _calibrationSlope, _internalScaleM, _calibrationOffset);
+            return AnalogScaling.Scale(rawValue, _fullScaleCount, _portRange, _calibrationSlope, _internalScaleM, _calibrationOffset);
         }
     }
 
@@ -350,17 +350,17 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     }
 
     /// <summary>
-    /// Validates that <paramref name="resolution"/> is a physically plausible ADC max-count, in
-    /// <see cref="MinResolution"/>..<see cref="MaxResolution"/>.
+    /// Validates that <paramref name="fullScaleCount"/> is a physically plausible ADC max-count, in
+    /// <see cref="MinimumFullScaleCount"/>..<see cref="MaximumFullScaleCount"/>.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="resolution"/> is outside the valid range.</exception>
-    internal static void ValidateResolution(uint resolution, string paramName)
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="fullScaleCount"/> is outside the valid range.</exception>
+    internal static void ValidateFullScaleCount(uint fullScaleCount, string paramName)
     {
-        if (resolution is < MinResolution or > MaxResolution)
+        if (fullScaleCount is < MinimumFullScaleCount or > MaximumFullScaleCount)
         {
             throw new ArgumentOutOfRangeException(
-                paramName, resolution,
-                $"Resolution must be a plausible ADC max-count between {MinResolution} and {MaxResolution}.");
+                paramName, fullScaleCount,
+                $"Resolution must be a plausible ADC max-count between {MinimumFullScaleCount} and {MaximumFullScaleCount}.");
         }
     }
 

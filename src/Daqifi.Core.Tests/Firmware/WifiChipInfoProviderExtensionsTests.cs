@@ -17,7 +17,7 @@ public class WifiChipInfoProviderExtensionsTests
     private static WifiChipInfo SampleChipInfo => new()
     {
         ChipId = 1377184,
-        FwVersion = "19.7.7",
+        FirmwareVersion = "19.7.7",
         BuildDate = "Mar 30 2022"
     };
 
@@ -43,7 +43,7 @@ public class WifiChipInfoProviderExtensionsTests
         var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
-        Assert.Equal("19.7.7", result.ChipInfo!.FwVersion);
+        Assert.Equal("19.7.7", result.ChipInfo!.FirmwareVersion);
         Assert.False(result.WasWifiNotInitialized);
         Assert.Equal(1, device.GetWifiChipInfoCallCount);
     }
@@ -576,7 +576,7 @@ public class WifiChipInfoProviderExtensionsTests
         var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
-        Assert.Equal("19.7.7", result.ChipInfo!.FwVersion);
+        Assert.Equal("19.7.7", result.ChipInfo!.FirmwareVersion);
         Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(2, progress.Reports.Count);
     }

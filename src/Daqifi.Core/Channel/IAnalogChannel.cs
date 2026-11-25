@@ -27,14 +27,14 @@ public interface IAnalogChannel : IChannel
     /// 262143 for 18-bit) — i.e. 2^bits - 1, not 2^bits. This value is a direct divisor in
     /// <see cref="GetScaledValue"/>.
     /// </summary>
-    uint Resolution { get; }
+    uint FullScaleCount { get; }
 
     /// <summary>
-    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// Gets whether <see cref="FullScaleCount"/> is a fallback guess rather than a value the device
     /// actually reported. When <c>true</c>, samples scaled with this channel may be systematically
     /// wrong (e.g. a device that omits its ADC resolution entirely).
     /// </summary>
-    bool ResolutionIsAssumed { get; }
+    bool FullScaleCountIsAssumed { get; }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
@@ -58,7 +58,7 @@ public interface IAnalogChannel : IChannel
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
+    /// Formula: ScaledValue = RawValue / FullScaleCount * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
     /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>

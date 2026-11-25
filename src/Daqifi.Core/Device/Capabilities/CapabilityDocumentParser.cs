@@ -243,7 +243,7 @@ internal static class CapabilityDocumentParser
                 PwmMinimumFrequencyHz = pwmMin,
                 PwmMaximumFrequencyHz = pwmMax,
                 CalibrationSlope = slope,
-                CalibrationIntercept = intercept
+                CalibrationOffset = intercept
             });
         }
 

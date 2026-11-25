@@ -44,7 +44,7 @@ public class ChannelControlOperationsTests
     [Fact]
     public void EnableChannel_AnalogChannel_SendsAdcMaskForItAlone()
     {
-        var channel = new AnalogChannel(channelNumber: 3, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 3, fullScaleCount: 65535);
         var host = new FakeHost(channel);
         var ops = new ChannelControlOperations(host);
 
@@ -57,8 +57,8 @@ public class ChannelControlOperationsTests
     [Fact]
     public void DisableChannel_AnalogChannel_SendsUpdatedMask()
     {
-        var enabled = new AnalogChannel(channelNumber: 0, resolution: 65535) { IsEnabled = true };
-        var stillEnabled = new AnalogChannel(channelNumber: 1, resolution: 65535) { IsEnabled = true };
+        var enabled = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535) { IsEnabled = true };
+        var stillEnabled = new AnalogChannel(channelNumber: 1, fullScaleCount: 65535) { IsEnabled = true };
         var host = new FakeHost(enabled, stillEnabled);
         var ops = new ChannelControlOperations(host);
 
@@ -82,7 +82,7 @@ public class ChannelControlOperationsTests
     [Fact]
     public void EnableChannel_NotConnected_ThrowsAndSendsNothing()
     {
-        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var channel = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
         var host = new FakeHost(channel) { IsConnected = false };
         var ops = new ChannelControlOperations(host);
 
@@ -93,8 +93,8 @@ public class ChannelControlOperationsTests
     [Fact]
     public void EnableChannel_ChannelNotBelongingToDevice_ThrowsAndSendsNothing()
     {
-        var owned = new AnalogChannel(channelNumber: 0, resolution: 65535);
-        var stray = new AnalogChannel(channelNumber: 1, resolution: 65535);
+        var owned = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
+        var stray = new AnalogChannel(channelNumber: 1, fullScaleCount: 65535);
         var host = new FakeHost(owned);
         var ops = new ChannelControlOperations(host);
 
@@ -123,7 +123,7 @@ public class ChannelControlOperationsTests
     [Fact]
     public void EnableChannels_MixedAnalogAndDigital_SendsOneCommandPerType()
     {
-        var analog = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var analog = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
         var digital = new DigitalChannel(channelNumber: 0);
         var host = new FakeHost(analog, digital);
         var ops = new ChannelControlOperations(host);
@@ -161,7 +161,7 @@ public class ChannelControlOperationsTests
     [Fact]
     public void EnableChannels_NullEntryInCollection_ThrowsBeforeMutatingAnything()
     {
-        var real = new AnalogChannel(channelNumber: 0, resolution: 65535);
+        var real = new AnalogChannel(channelNumber: 0, fullScaleCount: 65535);
         var host = new FakeHost(real);
         var ops = new ChannelControlOperations(host);
 
@@ -179,7 +179,7 @@ public class ChannelControlOperationsTests
     [Fact]
     public void DisableAllChannels_ClearsEveryChannelAndSendsBothMasks()
     {
-        var analog = new AnalogChannel(channelNumber: 4, resolution: 65535) { IsEnabled = true };
+        var analog = new AnalogChannel(channelNumber: 4, fullScaleCount: 65535) { IsEnabled = true };
         var digital = new DigitalChannel(channelNumber: 0) { IsEnabled = true };
         var host = new FakeHost(analog, digital);
         var ops = new ChannelControlOperations(host);
@@ -891,8 +891,8 @@ public class ChannelControlOperationsTests
         // Each call computes the ADC mask from every channel's IsEnabled and then sends it. The
         // first call computes {1}, the second {1,2}; if the first call's send lands last, the
         // device ends on {1} while Core says channel 2 is on too.
-        var ch1 = new AnalogChannel(channelNumber: 1, resolution: 65535);
-        var ch2 = new AnalogChannel(channelNumber: 2, resolution: 65535);
+        var ch1 = new AnalogChannel(channelNumber: 1, fullScaleCount: 65535);
+        var ch2 = new AnalogChannel(channelNumber: 2, fullScaleCount: 65535);
         var host = new FakeHost(ch1, ch2);
         var ops = new ChannelControlOperations(host);
 
@@ -909,8 +909,8 @@ public class ChannelControlOperationsTests
     [Fact]
     public async Task DisableAllChannels_RacingAnEnable_LastMaskSentMatchesTheChannels()
     {
-        var ch1 = new AnalogChannel(channelNumber: 1, resolution: 65535) { IsEnabled = true };
-        var ch2 = new AnalogChannel(channelNumber: 2, resolution: 65535);
+        var ch1 = new AnalogChannel(channelNumber: 1, fullScaleCount: 65535) { IsEnabled = true };
+        var ch2 = new AnalogChannel(channelNumber: 2, fullScaleCount: 65535);
         var host = new FakeHost(ch1, ch2);
         var ops = new ChannelControlOperations(host);
 

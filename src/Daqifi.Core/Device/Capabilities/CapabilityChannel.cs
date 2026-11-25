@@ -100,11 +100,11 @@ public sealed class CapabilityChannel
 
     /// <summary>
     /// Gets the device-reported linear calibration slope, or <c>null</c> when not stated. Together
-    /// with <see cref="CalibrationIntercept"/> this is the device's own raw-to-engineering-units
+    /// with <see cref="CalibrationOffset"/> this is the device's own raw-to-engineering-units
     /// conversion.
     /// </summary>
     public double? CalibrationSlope { get; init; }
 
-    /// <summary>Gets the device-reported linear calibration intercept, or <c>null</c> when not stated.</summary>
-    public double? CalibrationIntercept { get; init; }
+    /// <summary>Gets the device-reported linear calibration offset, or <c>null</c> when not stated.</summary>
+    public double? CalibrationOffset { get; init; }
 }

@@ -53,7 +53,7 @@ internal static class WifiChipInfoParser
             result = new WifiChipInfo
             {
                 ChipId = chipId,
-                FwVersion = fwVersion,
+                FirmwareVersion = fwVersion,
                 BuildDate = buildDate
             };
             return true;

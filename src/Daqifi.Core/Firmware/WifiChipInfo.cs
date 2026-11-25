@@ -13,7 +13,7 @@ public sealed record WifiChipInfo
     /// <summary>
     /// Gets the WiFi module firmware version string (e.g. "19.5.4").
     /// </summary>
-    public required string FwVersion { get; init; }
+    public required string FirmwareVersion { get; init; }
 
     /// <summary>
     /// Gets the firmware build date string.

@@ -32,7 +32,7 @@ public interface IDeviceDiagnostics
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>The buffered log entries, oldest first; empty when the buffer was empty.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SystemLogEntry>> DrainSystemLogAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears the device system log buffer without reading it (<c>SYSTem:LOG:CLEar</c>).

@@ -4615,7 +4615,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         return new ChannelPopulationTimeoutException(
             message,
-            deviceIdentity: identity,
+            identificationReply: identity,
             rawDeviceResponse: keptLines);
     }
 
@@ -4684,7 +4684,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
         return new ChannelPopulationTimeoutException(
             message,
-            deviceIdentity: identity,
+            identificationReply: identity,
             streamInterface: streamInterface,
             unreadableResponseLines: identity == null ? identityLineCount : 0,
             rawDeviceResponse: keptLines);

@@ -86,7 +86,7 @@ public class FirmwareUpdateServiceTests
                 FirmwareUpdateState.ErasingFlash,
                 FirmwareUpdateState.Programming,
                 FirmwareUpdateState.Verifying,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete
             ],
             stateTransitions);
@@ -1030,7 +1030,7 @@ public class FirmwareUpdateServiceTests
                 FirmwareUpdateState.ErasingFlash,
                 FirmwareUpdateState.Programming,
                 FirmwareUpdateState.Verifying,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete
             ],
             stateTransitions);
@@ -1991,7 +1991,7 @@ public class FirmwareUpdateServiceTests
                 o.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
             });
 
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, run.Exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, run.Exception.FailedState);
         AssertFlashCondition(Pic32FlashCondition.ProgrammedNotConfirmed, FirmwareUpdateState.Failed, run);
     }
 
@@ -2122,7 +2122,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -2220,7 +2220,7 @@ public class FirmwareUpdateServiceTests
             [FirmwareUpdateState.ErasingFlash] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Programming] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Verifying] = Pic32FlashCondition.PossiblyHalfFlashed,
-            [FirmwareUpdateState.JumpingToApp] = Pic32FlashCondition.ProgrammedNotConfirmed,
+            [FirmwareUpdateState.JumpingToApplication] = Pic32FlashCondition.ProgrammedNotConfirmed,
             [FirmwareUpdateState.Complete] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.Failed] = Pic32FlashCondition.PossiblyHalfFlashed,
             [FirmwareUpdateState.CleaningUp] = Pic32FlashCondition.PossiblyHalfFlashed,
@@ -2831,7 +2831,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -3506,7 +3506,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3558,7 +3558,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM47", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3611,7 +3611,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM48", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3691,7 +3691,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM10", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -3844,7 +3844,7 @@ public class FirmwareUpdateServiceTests
         var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(() => RunUpdateAsync(service, device));
 
         Assert.IsType<TimeoutException>(ex.InnerException);
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
         Assert.Equal(1, device.InitializeCalls);
     }
@@ -3934,7 +3934,7 @@ public class FirmwareUpdateServiceTests
         // FirmwareUpdateServiceOptions.Validate requires whenever a probe is set.
         //
         // 10s/15s rather than something enormous: these also bound how long a real
-        // regression in the JumpingToApp state takes to surface, so the aim is comfortably
+        // regression in the JumpingToApplication state takes to surface, so the aim is comfortably
         // clear of a stalled runner without going so far that a genuine hang is slow to
         // diagnose. 10s is an order of magnitude past the ~1s stall that broke the 1s
         // budget, and ~300x what the probe actually needs.
@@ -4013,7 +4013,7 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         var inner = Assert.IsType<TimeoutException>(ex.InnerException);
         Assert.Contains("application-ready", inner.Message);
     }
@@ -4294,7 +4294,7 @@ public class FirmwareUpdateServiceTests
         // The whole JumpToApp step is bounded by JumpingToApplicationTimeout
         // via the outer state-timeout. If the readiness budget meets or
         // exceeds it, the outer timeout fires first and surfaces a generic
-        // JumpingToApp error instead of the readiness-specific one. Validate()
+        // JumpingToApplication error instead of the readiness-specific one. Validate()
         // must reject the misconfiguration up front.
         var options = CreateFastOptions();
         options.PostReconnectReadinessProbe = (_, _) => Task.FromResult(true);
@@ -4329,7 +4329,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM9", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4347,7 +4347,7 @@ public class FirmwareUpdateServiceTests
         Assert.True(status.IsUpToDate);
         Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
         Assert.NotNull(status.CurrentChipInfo);
-        Assert.Equal("19.5.4", status.CurrentChipInfo!.FwVersion);
+        Assert.Equal("19.5.4", status.CurrentChipInfo!.FirmwareVersion);
         Assert.NotNull(status.LatestRelease);
         Assert.Equal("19.5.4", status.LatestRelease!.TagName);
 
@@ -4370,7 +4370,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM10", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4449,7 +4449,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM40", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4482,7 +4482,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM41", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.8.0",
+            FirmwareVersion = "19.8.0",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4513,7 +4513,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM42", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4565,7 +4565,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM44", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "garbage",
+            FirmwareVersion = "garbage",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4595,7 +4595,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM45", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4628,7 +4628,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM46", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.7.7",
+            FirmwareVersion = "19.7.7",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4666,7 +4666,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM12", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4", // Matches latest — would normally short-circuit
+            FirmwareVersion = "19.5.4", // Matches latest — would normally short-circuit
             BuildDate = "Jan  8 2019"
         });
 
@@ -4733,7 +4733,7 @@ public class FirmwareUpdateServiceTests
         var device = new FakeWifiChipInfoStreamingDevice("COM13", chipInfo: new WifiChipInfo
         {
             ChipId = 1234,
-            FwVersion = "19.5.4",
+            FirmwareVersion = "19.5.4",
             BuildDate = "Jan  8 2019"
         });
 
@@ -4827,7 +4827,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             transientFailuresBeforeSuccess: 2);
@@ -4864,7 +4864,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             transientFailuresBeforeSuccess: 99);
@@ -4907,7 +4907,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
             wifiNotInitializedFailuresBeforeSuccess: 2);
@@ -4946,7 +4946,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
             wifiNotInitializedFailuresBeforeSuccess: 99);
@@ -4981,7 +4981,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1377184,
-                FwVersion = "19.7.7",
+                FirmwareVersion = "19.7.7",
                 BuildDate = "Mar 30 2022"
             },
             wifiNotInitializedFailuresBeforeSuccess: 99);
@@ -5286,7 +5286,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5319,7 +5319,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5348,7 +5348,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5381,7 +5381,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             },
             isConnected: false);
@@ -5412,7 +5412,7 @@ public class FirmwareUpdateServiceTests
             chipInfo: new WifiChipInfo
             {
                 ChipId = 1234,
-                FwVersion = "19.5.4",
+                FirmwareVersion = "19.5.4",
                 BuildDate = "Jan  8 2019"
             });
 
@@ -5712,7 +5712,7 @@ public class FirmwareUpdateServiceTests
         var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
             () => service.ResetBootloaderAsync());
 
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, ex.FailedState);
         Assert.Equal("issue JMP_TO_APP soft reset", ex.Operation);
         Assert.IsType<TimeoutException>(ex.InnerException);
         // The hung write never completed, so nothing was recorded, and the HID

@@ -49,7 +49,7 @@ internal static class SdCardConfigurationMerge
             DevicePartNumber = Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
             FirmwareVersion = Stated(parsed.FirmwareVersion) ?? Stated(overrideConfig.FirmwareVersion),
             CalibrationValues = parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
-            Resolution = parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
+            FullScaleCount = parsed.FullScaleCount > 0 ? parsed.FullScaleCount : overrideConfig.FullScaleCount,
             PortRange = parsed.PortRange ?? overrideConfig.PortRange,
             InternalScaleM = parsed.InternalScaleM ?? overrideConfig.InternalScaleM
         };

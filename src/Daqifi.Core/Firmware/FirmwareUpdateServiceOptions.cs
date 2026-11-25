@@ -54,7 +54,7 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan VerifyingTimeout { get; set; } = TimeSpan.FromSeconds(45);
 
     /// <summary>
-    /// Timeout for the <see cref="FirmwareUpdateState.JumpingToApp"/> state.
+    /// Timeout for the <see cref="FirmwareUpdateState.JumpingToApplication"/> state.
     /// </summary>
     public TimeSpan JumpingToApplicationTimeout { get; set; } = TimeSpan.FromSeconds(45);
 
@@ -256,13 +256,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// 30s covers a slow PIC32 boot and downstream-firmware initialization.
     /// </summary>
     /// <remarks>
-    /// This budget runs INSIDE the JumpingToApp state, so the effective
+    /// This budget runs INSIDE the JumpingToApplication state, so the effective
     /// upper bound is <c>JumpingToApplicationTimeout - (serial reconnect
     /// elapsed)</c>. With the defaults (45s state timeout, ~1-5s typical
     /// reconnect, 30s readiness budget) the readiness probe gets its full
     /// budget; if you raise this near or above the state timeout, the
     /// outer state-timeout will fire first and callers will see a generic
-    /// JumpingToApp timeout instead of the readiness-specific message.
+    /// JumpingToApplication timeout instead of the readiness-specific message.
     /// </remarks>
     public TimeSpan PostReconnectReadinessTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -419,7 +419,7 @@ public sealed class FirmwareUpdateServiceOptions
             // so it keeps the same budget — a host that tuned VerifyingTimeout for a slow
             // re-enumeration keeps that tuning.
             FirmwareUpdateState.ReconnectingAfterFlash => VerifyingTimeout,
-            FirmwareUpdateState.JumpingToApp => JumpingToApplicationTimeout,
+            FirmwareUpdateState.JumpingToApplication => JumpingToApplicationTimeout,
             // Cleanup re-erases the application flash, so it is bounded by the
             // same budget as a normal erase.
             FirmwareUpdateState.CleaningUp => ErasingFlashTimeout,
@@ -479,7 +479,7 @@ public sealed class FirmwareUpdateServiceOptions
 
             // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
             // so a probe budget that meets or exceeds it would always be cut off
-            // by the outer state-timeout — surfacing a generic JumpingToApp error
+            // by the outer state-timeout — surfacing a generic JumpingToApplication error
             // instead of the readiness-specific message. Reject the configuration
             // up front so misconfigurations fail fast.
             if (PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)

@@ -42,7 +42,7 @@ public class SdCardExportValueUnitTests
         DevicePartNumber = "Nyquist 1",
         FirmwareVersion = "3.8.0",
         CalibrationValues = [(1.0, 0.0), (1.0, 0.0)],
-        Resolution = Resolution,
+        FullScaleCount = Resolution,
         PortRange = [1.0, 1.0],
         InternalScaleM = [1.0, 1.0]
     };
@@ -150,7 +150,7 @@ public class SdCardExportValueUnitTests
         var options = SdCardParseOptions.ForDevice(device);
 
         Assert.NotNull(options.ConfigurationOverride);
-        Assert.Equal(Resolution, options.ConfigurationOverride.Resolution);
+        Assert.Equal(Resolution, options.ConfigurationOverride.FullScaleCount);
         Assert.Equal(TickRate, options.ConfigurationOverride.TimestampFrequencyHz);
         Assert.Equal(2, options.ConfigurationOverride.AnalogPortCount);
     }

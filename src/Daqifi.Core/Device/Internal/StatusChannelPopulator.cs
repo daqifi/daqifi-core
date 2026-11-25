@@ -125,11 +125,11 @@ internal sealed class StatusChannelPopulator
 
         // Treat both a missing (0) and a physically-implausible out-of-range resolution as
         // "assumed": the AnalogChannel constructor/setters now reject anything outside
-        // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
+        // [MinimumFullScaleCount, MaximumFullScaleCount], so passing a corrupt non-zero value straight through
         // would throw and abort channel population mid-stream. Fall back to a safe default and
         // log instead, so a corrupted status frame can neither crash population nor silently
         // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
-        var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
+        var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinimumFullScaleCount or > AnalogChannel.MaximumFullScaleCount;
         var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
 
         if (resolutionIsAssumed && count > 0)

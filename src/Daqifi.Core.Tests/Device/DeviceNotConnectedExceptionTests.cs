@@ -120,7 +120,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("LoadNetworkConfigurationAsync", d => d.LoadNetworkConfigurationAsync());
         yield return Site("FactoryResetNetworkAsync", d => d.FactoryResetNetworkAsync());
         yield return Site("GetWifiChipInfoAsync", d => d.GetWifiChipInfoAsync());
-        yield return Site("GetSystemLogAsync", d => d.GetSystemLogAsync());
+        yield return Site("DrainSystemLogAsync", d => d.DrainSystemLogAsync());
         yield return Site("ClearSystemLogAsync", d => d.ClearSystemLogAsync());
         yield return Site("SetLogLevelAsync", d => d.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         yield return Site("GetCommandHistoryAsync", d => d.GetCommandHistoryAsync());

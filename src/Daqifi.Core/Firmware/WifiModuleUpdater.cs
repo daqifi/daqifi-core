@@ -411,7 +411,7 @@ internal sealed class WifiModuleUpdater
 
         // Parsed once here, before the release lookup, because the minimum-supported
         // answer must survive that lookup failing — that is the whole point of it.
-        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion);
+        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FirmwareVersion, out var deviceVersion);
         bool? meetsMinimum = deviceVersionParsed ? deviceVersion >= minimumSupported : null;
 
         FirmwareReleaseInfo? latestWifi;
@@ -493,12 +493,12 @@ internal sealed class WifiModuleUpdater
             case WifiFirmwareStatusReason.UpdateAvailable:
                 Logger.LogInformation(
                     "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
-                    status.CurrentChipInfo!.FwVersion,
+                    status.CurrentChipInfo!.FirmwareVersion,
                     status.LatestRelease!.TagName);
                 return false;
 
             case WifiFirmwareStatusReason.UpToDate:
-                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FwVersion}, latest: {status.LatestRelease!.TagName}).";
+                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FirmwareVersion}, latest: {status.LatestRelease!.TagName}).";
                 Logger.LogInformation(message);
                 _context.CompleteOperation(progress, message, 100, 100);
                 return true;
@@ -522,7 +522,7 @@ internal sealed class WifiModuleUpdater
                 if (status.MeetsMinimumSupportedVersion == true)
                 {
                     var minimumMessage =
-                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FwVersion}, "
+                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FirmwareVersion}, "
                         + $"minimum: {status.MinimumSupportedVersion}); latest-release lookup was unavailable ({status.Reason}), "
                         + "so skipping the flash rather than reflashing a supported module.";
                     Logger.LogInformation(minimumMessage);

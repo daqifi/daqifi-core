@@ -48,14 +48,14 @@ public class SdCardConfigurationMergeTests
             AnalogPortCount = 4,
             DigitalPortCount = 2,
             TimestampFrequencyHz = 42_000_000u,
-            Resolution = 4095u
+            FullScaleCount = 4095u
         };
         var overrideConfig = Empty() with
         {
             AnalogPortCount = 16,
             DigitalPortCount = 8,
             TimestampFrequencyHz = 50_000_000u,
-            Resolution = 65_535u
+            FullScaleCount = 65_535u
         };
 
         // Act
@@ -65,7 +65,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal(4, merged.AnalogPortCount);
         Assert.Equal(2, merged.DigitalPortCount);
         Assert.Equal(42_000_000u, merged.TimestampFrequencyHz);
-        Assert.Equal(4095u, merged.Resolution);
+        Assert.Equal(4095u, merged.FullScaleCount);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class SdCardConfigurationMergeTests
             AnalogPortCount = 16,
             DigitalPortCount = 8,
             TimestampFrequencyHz = 50_000_000u,
-            Resolution = 65_535u
+            FullScaleCount = 65_535u
         };
 
         // Act
@@ -89,7 +89,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal(16, merged.AnalogPortCount);
         Assert.Equal(8, merged.DigitalPortCount);
         Assert.Equal(50_000_000u, merged.TimestampFrequencyHz);
-        Assert.Equal(65_535u, merged.Resolution);
+        Assert.Equal(65_535u, merged.FullScaleCount);
     }
 
     [Theory]
@@ -197,7 +197,7 @@ public class SdCardConfigurationMergeTests
         {
             AnalogPortCount = 16,
             TimestampFrequencyHz = 42_000_000u,
-            Resolution = 4095u,
+            FullScaleCount = 4095u,
             FirmwareVersion = "3.7.2",
             CalibrationValues = calibration
         };
@@ -211,7 +211,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal("7E2815916200E898", merged.DeviceSerialNumber);
         Assert.Equal("Nyquist 1", merged.DevicePartNumber);
         Assert.Equal(42_000_000u, merged.TimestampFrequencyHz);
-        Assert.Equal(4095u, merged.Resolution);
+        Assert.Equal(4095u, merged.FullScaleCount);
         Assert.Equal("3.7.2", merged.FirmwareVersion);
         Assert.Same(calibration, merged.CalibrationValues);
         Assert.Null(merged.PortRange);
@@ -232,7 +232,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal(4, merged.AnalogPortCount);
         Assert.Equal(0, merged.DigitalPortCount);
         Assert.Equal(0u, merged.TimestampFrequencyHz);
-        Assert.Equal(0u, merged.Resolution);
+        Assert.Equal(0u, merged.FullScaleCount);
         Assert.Null(merged.DeviceSerialNumber);
         Assert.Null(merged.DevicePartNumber);
         Assert.Null(merged.FirmwareVersion);

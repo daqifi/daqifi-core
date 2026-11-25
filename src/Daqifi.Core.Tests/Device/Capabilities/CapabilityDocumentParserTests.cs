@@ -60,7 +60,7 @@ public class CapabilityDocumentParserTests
         Assert.Equal(0.0, channel.RangeMinimum);
         Assert.Equal(5.0, channel.RangeMaximum);
         Assert.Equal(1.0, channel.CalibrationSlope);
-        Assert.Equal(0.0, channel.CalibrationIntercept);
+        Assert.Equal(0.0, channel.CalibrationOffset);
         Assert.False(channel.SupportsPwm);
     }
 

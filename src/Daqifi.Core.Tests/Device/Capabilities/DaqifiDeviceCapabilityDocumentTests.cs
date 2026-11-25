@@ -46,8 +46,8 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.NotNull(document);
         Assert.Equal(2, document!.SchemaVersion);
         Assert.Same(document, device.Metadata.CapabilityDocument);
-        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
-        Assert.Equal(16, device.Metadata.Capabilities.DigitalChannels);
+        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannelCount);
+        Assert.Equal(16, device.Metadata.Capabilities.DigitalChannelCount);
         Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(new[] { ApiVersionCommand, DocumentCommand }, device.SentCommands);
     }
@@ -67,7 +67,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.Null(device.Metadata.CapabilityDocument);
         Assert.Empty(device.SentCommands);
         Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
-        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannelCount);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" }));
 
         Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
-        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannelCount);
     }
 
     [Fact]

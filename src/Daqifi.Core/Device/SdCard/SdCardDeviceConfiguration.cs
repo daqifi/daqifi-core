@@ -48,7 +48,7 @@ public sealed record SdCardDeviceConfiguration
     /// <summary>
     /// ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.
     /// </summary>
-    public uint Resolution { get; init; }
+    public uint FullScaleCount { get; init; }
 
     /// <summary>
     /// Per-channel voltage port range values, if present.
@@ -107,7 +107,7 @@ public sealed record SdCardDeviceConfiguration
             CalibrationValues = analogChannels
                 .Select(ch => (ch.CalibrationSlope, ch.CalibrationOffset))
                 .ToArray(),
-            Resolution = firstAnalog.Resolution,
+            FullScaleCount = firstAnalog.FullScaleCount,
             PortRange = analogChannels.Select(ch => ch.PortRange).ToArray(),
             InternalScaleM = analogChannels.Select(ch => ch.InternalScaleM).ToArray()
         };

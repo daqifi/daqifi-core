@@ -617,7 +617,7 @@ public sealed class SdCardCsvFileParserTests
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = "3.4.4",
             CalibrationValues = new[] { (1.0, 0.0), (1.02, -0.05), (0.98, 0.01) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0, 5.0, 2.0 },
             InternalScaleM = new[] { 1.0, 2.0, 4.0 }
         };
@@ -680,7 +680,7 @@ public sealed class SdCardCsvFileParserTests
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.02, -0.05) },  // calM=1.02, calB=-0.05
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0 },
             InternalScaleM = new[] { 2.0 }
         };
@@ -758,7 +758,7 @@ public sealed class SdCardCsvFileParserTests
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.0, 0.0) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0 },
             InternalScaleM = new[] { 1.0 }
         };

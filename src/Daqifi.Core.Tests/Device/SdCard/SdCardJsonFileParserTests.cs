@@ -410,7 +410,7 @@ public sealed class SdCardJsonFileParserTests
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0, 10.0, 10.0 },
             InternalScaleM = new[] { 1.0, 1.0, 1.0 }
         };
@@ -451,7 +451,7 @@ public sealed class SdCardJsonFileParserTests
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.0, -0.05), (1.0, -0.05), (1.0, -0.05) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0, 10.0, 10.0 },
             InternalScaleM = new[] { 2.0, 2.0, 2.0 }
         };
@@ -848,7 +848,7 @@ public sealed class SdCardJsonFileParserTests
             DevicePartNumber = null,
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.0, 0.0), (1.0, 0.0) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0, 10.0 },
             InternalScaleM = new[] { 1.0, 1.0 }
         };

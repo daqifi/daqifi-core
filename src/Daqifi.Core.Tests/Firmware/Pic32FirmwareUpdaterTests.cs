@@ -159,7 +159,7 @@ public class Pic32FirmwareUpdaterTests
     [Fact]
     public async Task RunUpdate_WhenTheJumpBackFails_DoesNotReEraseAFlashThatIsAlreadyGood()
     {
-        // The re-erase exists so a half-written flash is never left behind. By JumpingToApp the
+        // The re-erase exists so a half-written flash is never left behind. By JumpingToApplication the
         // image is programmed and CRC-verified — erasing it would destroy a good flash to fix a
         // device that only needs a power cycle.
         var harness = new Harness();
@@ -170,7 +170,7 @@ public class Pic32FirmwareUpdaterTests
 
         var error = await Assert.ThrowsAsync<FirmwareUpdateException>(() => harness.RunUpdateAsync());
 
-        Assert.Equal(FirmwareUpdateState.JumpingToApp, error.FailedState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApplication, error.FailedState);
         Assert.Equal(1, harness.Transport.Writes.Count(w => w[0] == EraseRequest));
         Assert.DoesNotContain(FirmwareUpdateState.CleaningUp, harness.StateTransitions);
         Assert.DoesNotContain(FirmwareUpdateState.Recovered, harness.StateTransitions);

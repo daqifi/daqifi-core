@@ -15,7 +15,7 @@ public enum CapabilityCalibrationSource
     Unknown = 0,
 
     /// <summary>
-    /// <c>"none"</c>: every channel's coefficients are identity (slope 1, intercept 0), so readings
+    /// <c>"none"</c>: every channel's coefficients are identity (slope 1, offset 0), so readings
     /// are unscaled. Reported whether the device was never calibrated or its calibration happens to
     /// be identity.
     /// </summary>

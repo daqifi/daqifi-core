@@ -50,12 +50,12 @@ public class SdCardAnalogScalingTests
             DevicePartNumber = null,
             FirmwareVersion = null,
             CalibrationValues = calibration ?? new[] { (2.0, 0.5), (3.0, -0.25), (4.0, 0.125) },
-            Resolution = 1000u,
+            FullScaleCount = 1000u,
             PortRange = portRange ?? new[] { 10.0, 20.0, 40.0 },
             InternalScaleM = internalScale ?? new[] { 1.0, 2.0, 0.5 }
         };
 
-    // Raw counts chosen so that raw/Resolution*PortRange is never exactly 1.0 on any channel:
+    // Raw counts chosen so that raw/FullScaleCount*PortRange is never exactly 1.0 on any channel:
     // at 1.0 the gain and the offset become interchangeable and a slope/intercept swap would
     // still land on the expected volts.
     private static readonly double[] RawCounts = [150.0, 200.0, 400.0];
@@ -84,7 +84,7 @@ public class SdCardAnalogScalingTests
     {
         // Arrange — a status message that named calibration, range, and scale but no resolution.
         // Without the zero-resolution guard the division below would run and yield infinities.
-        var config = PerChannelConfig() with { Resolution = 0u };
+        var config = PerChannelConfig() with { FullScaleCount = 0u };
         IReadOnlyList<double> raw = RawCounts;
 
         // Act
@@ -108,7 +108,7 @@ public class SdCardAnalogScalingTests
         // Act
         var result = SdCardAnalogScaling.ScaleRawAnalogValues(RawCounts, config);
 
-        // Assert — raw/Resolution * PortRange * Slope * InternalScaleM + Offset, per channel.
+        // Assert — raw/FullScaleCount * PortRange * Slope * InternalScaleM + Offset, per channel.
         Assert.Equal(3, result.Count);
         Assert.Equal(150.0 / 1000.0 * 10.0 * 2.0 * 1.0 + 0.5, result[0], 10);
         Assert.Equal(200.0 / 1000.0 * 20.0 * 3.0 * 2.0 - 0.25, result[1], 10);
@@ -276,7 +276,7 @@ public class SdCardAnalogScalingTests
     public void ScaleRawAnalogValues_Int_WithZeroResolution_WidensEachCountUnscaled()
     {
         // Arrange — configuration present, resolution absent.
-        var config = PerChannelConfig() with { Resolution = 0u };
+        var config = PerChannelConfig() with { FullScaleCount = 0u };
 
         // Act
         var result = SdCardAnalogScaling.ScaleRawAnalogValues(RawIntCounts, config);

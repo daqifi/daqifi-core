@@ -143,12 +143,12 @@ public sealed record ChannelInfo(
             digital?.IsPwmCapable,
             digital?.IsPwmEnabled,
             (ch as IScaledChannel)?.Unit,
-            analog?.Resolution,
-            analog is null ? null : ResolutionToBits(analog.Resolution),
+            analog?.FullScaleCount,
+            analog is null ? null : ResolutionToBits(analog.FullScaleCount),
             // Surfaced rather than hidden: when the device omitted its resolution Core scales
             // every sample on this channel by an assumed 65535, which can be systematically
             // wrong. An agent reporting a voltage deserves to know that.
-            analog?.ResolutionIsAssumed,
+            analog?.FullScaleCountIsAssumed,
             analog?.PortRange);
     }
 

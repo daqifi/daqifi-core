@@ -207,8 +207,8 @@ public class StatusChannelPopulatorTests
 
     [Theory]
     [InlineData(0u)]                     // not reported
-    [InlineData(AnalogChannel.MinResolution - 1)]
-    [InlineData(AnalogChannel.MaxResolution + 1)]
+    [InlineData(AnalogChannel.MinimumFullScaleCount - 1)]
+    [InlineData(AnalogChannel.MaximumFullScaleCount + 1)]
     public void Populate_SubstitutesAssumedResolution_WhenReportedValueIsUnusable(uint reported)
     {
         var destination = new List<IChannel>();
@@ -219,8 +219,8 @@ public class StatusChannelPopulatorTests
             destination);
 
         var channel = Assert.IsType<AnalogChannel>(destination[0]);
-        Assert.Equal(65535u, channel.Resolution);
-        Assert.True(channel.ResolutionIsAssumed);
+        Assert.Equal(65535u, channel.FullScaleCount);
+        Assert.True(channel.FullScaleCountIsAssumed);
     }
 
     [Fact]

@@ -31,7 +31,7 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// </remarks>
 public sealed class SdCardCsvCalibrationByChannelTests
 {
-    private const uint Resolution = 1000u;
+    private const uint FullScaleCount = 1000u;
     private const uint TickRate = 1000u;
 
     // Eight channels, no two alike in any list.
@@ -54,7 +54,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
         DevicePartNumber = "Nyquist 1",
         FirmwareVersion = "3.8.0",
         CalibrationValues = Calibration,
-        Resolution = Resolution,
+        FullScaleCount = FullScaleCount,
         PortRange = PortRange,
         InternalScaleM = InternalScale
     };
@@ -64,7 +64,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
     /// <c>raw / resolution * portRange * calM * internalScaleM + calB</c>.
     /// </summary>
     private static double VoltsFor(int channel, double raw) =>
-        raw / Resolution * PortRange[channel] * Calibration[channel].Slope * InternalScale[channel]
+        raw / FullScaleCount * PortRange[channel] * Calibration[channel].Slope * InternalScale[channel]
         + Calibration[channel].Offset;
 
     /// <summary>
@@ -72,7 +72,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
     /// unity internal scale — the documented fallback for a channel the configuration does not
     /// describe, shared with the protobuf and JSON paths.
     /// </summary>
-    private static double UnconfiguredVoltsFor(double raw) => raw / Resolution;
+    private static double UnconfiguredVoltsFor(double raw) => raw / FullScaleCount;
 
     // ---------------------------------------------------------------------
     // Which channel's coefficients a column gets
@@ -176,7 +176,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
             FirmwareVersion = null,
             CalibrationValues = [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0),
                                 (1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
-            Resolution = 4095u,
+            FullScaleCount = 4095u,
             PortRange = [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
             InternalScaleM = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
         };

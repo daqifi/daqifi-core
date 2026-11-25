@@ -12,7 +12,7 @@ public class WifiChipInfoParserTests
         Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
         Assert.Equal(5596, result.ChipId);
-        Assert.Equal("19.5.4", result.FwVersion);
+        Assert.Equal("19.5.4", result.FirmwareVersion);
         Assert.Equal("Jan  8 2019 Time 12:38:49", result.BuildDate);
     }
 
@@ -23,7 +23,7 @@ public class WifiChipInfoParserTests
 
         Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
-        Assert.Equal("19.5.4", result.FwVersion);
+        Assert.Equal("19.5.4", result.FirmwareVersion);
         Assert.Equal(string.Empty, result.BuildDate);
     }
 
@@ -35,7 +35,7 @@ public class WifiChipInfoParserTests
         Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
         Assert.Equal(0, result.ChipId);
-        Assert.Equal("19.5.4", result.FwVersion);
+        Assert.Equal("19.5.4", result.FirmwareVersion);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class WifiChipInfoParserTests
 
         Assert.True(WifiChipInfoParser.TryParseLines(lines, out var result));
         Assert.NotNull(result);
-        Assert.Equal("19.5.4", result.FwVersion);
+        Assert.Equal("19.5.4", result.FirmwareVersion);
     }
 
     [Fact]

@@ -49,13 +49,13 @@ internal sealed class FirmwareUpdateContext
             {
                 FirmwareUpdateState.Verifying,
                 FirmwareUpdateState.ReconnectingAfterFlash,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.CleaningUp,
                 FirmwareUpdateState.Failed
             },
             [FirmwareUpdateState.Verifying] = new HashSet<FirmwareUpdateState>
             {
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.CleaningUp,
                 FirmwareUpdateState.Failed
@@ -68,7 +68,7 @@ internal sealed class FirmwareUpdateContext
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.Failed
             },
-            [FirmwareUpdateState.JumpingToApp] = new HashSet<FirmwareUpdateState>
+            [FirmwareUpdateState.JumpingToApplication] = new HashSet<FirmwareUpdateState>
             {
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.Failed
@@ -525,7 +525,7 @@ internal sealed class FirmwareUpdateContext
                 "The firmware was flashed and verified successfully; only reconnecting to the device " +
                 "afterwards timed out. Unplug and replug USB, then reconnect — the update itself does " +
                 "not need to be re-run.",
-            FirmwareUpdateState.JumpingToApp =>
+            FirmwareUpdateState.JumpingToApplication =>
                 "The device did not return to application mode. Power-cycle the device and reconnect.",
             _ =>
                 "Retry the update. If repeated failures occur, reconnect the device and attempt manual bootloader recovery."

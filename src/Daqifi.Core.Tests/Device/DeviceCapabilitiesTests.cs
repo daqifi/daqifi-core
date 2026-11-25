@@ -21,9 +21,9 @@ public class DeviceCapabilitiesTests
         Assert.False(capabilities.HasWifi);
         Assert.False(capabilities.HasWincWifiModule);
         Assert.False(capabilities.HasUsb);
-        Assert.Equal(0, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(0, capabilities.DigitalChannels);
+        Assert.Equal(0, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(0, capabilities.DigitalChannelCount);
         Assert.Equal(1000, capabilities.MaximumSampleRateHz);
     }
 
@@ -52,9 +52,9 @@ public class DeviceCapabilitiesTests
         // from the board.
         var capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
 
-        Assert.Equal(16, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(16, capabilities.DigitalChannels);
+        Assert.Equal(16, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(16, capabilities.DigitalChannelCount);
         Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
@@ -65,9 +65,9 @@ public class DeviceCapabilitiesTests
         // and its advertised 16 kHz ISR ceiling for NQ2/NQ3. Read from source, not from a board.
         var capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist3);
 
-        Assert.Equal(8, capabilities.AnalogInputChannels);
-        Assert.Equal(8, capabilities.AnalogOutputChannels);
-        Assert.Equal(16, capabilities.DigitalChannels);
+        Assert.Equal(8, capabilities.AnalogInputChannelCount);
+        Assert.Equal(8, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(16, capabilities.DigitalChannelCount);
         Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
@@ -78,9 +78,9 @@ public class DeviceCapabilitiesTests
         // the device reports them. The rate is the firmware's advertised NQ2/NQ3 ceiling.
         var capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist2);
 
-        Assert.Equal(0, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(0, capabilities.DigitalChannels);
+        Assert.Equal(0, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(0, capabilities.DigitalChannelCount);
         Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
@@ -96,9 +96,9 @@ public class DeviceCapabilitiesTests
         Assert.False(capabilities.HasWifi);
         Assert.False(capabilities.HasWincWifiModule);
         Assert.False(capabilities.HasUsb);
-        Assert.Equal(0, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(0, capabilities.DigitalChannels);
+        Assert.Equal(0, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(0, capabilities.DigitalChannelCount);
         Assert.Equal(1000, capabilities.MaximumSampleRateHz);
     }
 }

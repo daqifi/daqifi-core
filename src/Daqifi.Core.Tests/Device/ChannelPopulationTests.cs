@@ -258,13 +258,13 @@ public class ChannelPopulationTests
 
     [Theory]
     [InlineData(0u)]            // missing resolution
-    [InlineData(1u)]            // non-zero but below MinResolution
-    [InlineData(uint.MaxValue)] // above MaxResolution
+    [InlineData(1u)]            // non-zero but below MinimumFullScaleCount
+    [InlineData(uint.MaxValue)] // above MaximumFullScaleCount
     public void PopulateChannelsFromStatus_WithUnusableResolution_FallsBackWithoutThrowing(uint reportedResolution)
     {
         // A non-zero but out-of-range AnalogInRes must not reach the AnalogChannel constructor
         // (which now rejects it) and abort channel population — it should fall back to the assumed
-        // default and flag ResolutionIsAssumed, on both the new-channel and reuse paths.
+        // default and flag FullScaleCountIsAssumed, on both the new-channel and reuse paths.
         var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
@@ -285,8 +285,8 @@ public class ChannelPopulationTests
         Assert.Equal(2, analogChannels.Count);
         foreach (var ch in analogChannels)
         {
-            Assert.Equal(65535u, ch.Resolution);
-            Assert.True(ch.ResolutionIsAssumed);
+            Assert.Equal(65535u, ch.FullScaleCount);
+            Assert.True(ch.FullScaleCountIsAssumed);
         }
     }
 
@@ -310,11 +310,11 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .ToList();
 
-        Assert.All(analogChannels, c => Assert.Equal(4095u, c.Resolution));
+        Assert.All(analogChannels, c => Assert.Equal(4095u, c.FullScaleCount));
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
+    public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetFullScaleCountIsAssumed()
     {
         // Arrange
         var device = new TransportlessDevice("TestDevice");
@@ -333,18 +333,18 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .Single();
 
-        Assert.False(analogChannel.ResolutionIsAssumed);
+        Assert.False(analogChannel.FullScaleCountIsAssumed);
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_RepopulatingWithReportedResolution_ClearsResolutionIsAssumed()
+    public void PopulateChannelsFromStatus_RepopulatingWithReportedResolution_ClearsFullScaleCountIsAssumed()
     {
         // A channel first populated with an assumed resolution should stop being flagged once
         // a later status report supplies a real value (e.g. after a firmware update).
         var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
         var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
-        Assert.True(((IAnalogChannel)analog0).ResolutionIsAssumed);
+        Assert.True(((IAnalogChannel)analog0).FullScaleCountIsAssumed);
 
         // Act
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 4095 });
@@ -352,8 +352,8 @@ public class ChannelPopulationTests
         // Assert - same instance, reused, no longer flagged as assumed.
         var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
         Assert.Same(analog0, newAnalog0);
-        Assert.False(((IAnalogChannel)newAnalog0).ResolutionIsAssumed);
-        Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).Resolution);
+        Assert.False(((IAnalogChannel)newAnalog0).FullScaleCountIsAssumed);
+        Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).FullScaleCount);
     }
 
     [Fact]
@@ -803,7 +803,7 @@ public class ChannelPopulationTests
         Assert.Equal(1.0, firstAnalog.CalibrationSlope, 3);
         Assert.Equal(0.0, firstAnalog.CalibrationOffset, 3);
         Assert.Equal(10.0, firstAnalog.PortRange, 3);
-        Assert.Equal(65535u, firstAnalog.Resolution);
+        Assert.Equal(65535u, firstAnalog.FullScaleCount);
     }
 
     [Fact]

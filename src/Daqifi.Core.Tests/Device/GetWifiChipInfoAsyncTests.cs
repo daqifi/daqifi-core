@@ -23,7 +23,7 @@ public class GetWifiChipInfoAsyncTests
         var info = await device.GetWifiChipInfoAsync();
 
         Assert.NotNull(info);
-        Assert.Equal("19.7.7", info!.FwVersion);
+        Assert.Equal("19.7.7", info!.FirmwareVersion);
         Assert.Equal(1377184, info.ChipId);
     }
 

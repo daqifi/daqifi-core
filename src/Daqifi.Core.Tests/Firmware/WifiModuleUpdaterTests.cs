@@ -1175,7 +1175,7 @@ public class WifiModuleUpdaterTests : IDisposable
     private static WifiChipInfo ChipInfo(string version) => new()
     {
         ChipId = 0x1503,
-        FwVersion = version,
+        FirmwareVersion = version,
         BuildDate = "2026-01-01"
     };
 

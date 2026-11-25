@@ -492,7 +492,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         var first = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
         var renumbered = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20"));
@@ -526,7 +526,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Reconcile(new[] { device });
         discovered.Clear();
@@ -670,7 +670,7 @@ public class ContinuousDeviceFinderTests
 
         finder.Reconcile(new IDeviceInfo[] { Serial("BAD", port: "COM1"), Serial("GOOD", port: "COM2") });
 
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
         finder.DeviceUpdated += (_, e) =>
         {
             if (e.DeviceInfo.SerialNumber == "BAD")
@@ -954,7 +954,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(new StubDeviceFinder());
         var errors = new List<Exception>();
         var discovered = new List<IDeviceInfo>();
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
         finder.DeviceDiscovered += (_, e) =>
         {
             if (e.DeviceInfo.SerialNumber == "BAD")
@@ -1127,7 +1127,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner);
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
 
         finder.Start();
         var error = await AwaitSignal(errorSignal);
@@ -1145,7 +1145,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner, identitySelector: _ => throw new InvalidOperationException("selector boom"));
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
 
         finder.Start();
         var error = await AwaitSignal(errorSignal);
@@ -1168,7 +1168,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner);
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
         finder.DeviceUpdated += (_, _) => throw new InvalidOperationException("redraw boom");
 
         finder.Start();
@@ -1211,7 +1211,7 @@ public class ContinuousDeviceFinderTests
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1729,7 +1729,7 @@ public class ContinuousDeviceFinderTests
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1778,7 +1778,7 @@ public class ContinuousDeviceFinderTests
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1855,7 +1855,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1942,7 +1942,7 @@ public class ContinuousDeviceFinderTests
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1975,7 +1975,7 @@ public class ContinuousDeviceFinderTests
         var discovered = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
