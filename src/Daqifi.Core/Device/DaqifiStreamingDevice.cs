@@ -464,7 +464,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
 
         var (session, startSent) = _session.StartStreaming();
-        var framesBefore = startSent ? 0L : _frameDecoder.AdmittedStreamFrameCount;
+        var framesBefore = startSent || session.IsStartHeldBack ? 0L : _frameDecoder.AdmittedStreamFrameCount;
 
         Exception? confirmationFailure = null;
         try
@@ -820,6 +820,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         while (true)
         {
+            // Read before the count, which starts again when a held-back start goes out: until then
+            // the frames arriving are those of the stream before it.
+            var startHeldBack = session.IsStartHeldBack;
             var admitted = _frameDecoder.AdmittedStreamFrameCount;
 
             // Checked after the count is read, so a frame of a later session cannot be taken for
@@ -827,7 +830,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             // start, so there is nothing to ask the device about either.
             ThrowIfSessionEnded(session);
 
-            if (admitted > framesBefore)
+            if (!startHeldBack && admitted > framesBefore)
             {
                 return true;
             }
@@ -973,6 +976,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Only those commands are interpreted, and only after the send itself has succeeded.
     /// Everything else passes through untouched.
     /// </para>
+    /// <para>
+    /// A stream start or stop that is held back behind an operation on another flow keeps its place
+    /// among the ones that operation sends: a start that a later stop has overtaken is not sent, and
+    /// a stop goes out ahead of a later start.
+    /// </para>
     /// </remarks>
     /// <typeparam name="T">The type of the message data payload.</typeparam>
     /// <param name="message">The message to send.</param>
@@ -980,7 +988,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     {
         if (message is IOutboundMessage<string> textCommand)
         {
-            _session.SendTracked(textCommand.Data, () => base.Send(message));
+            _session.SendTracked(textCommand.Data, heldBack => SendOrHoldBack(message, heldBack));
         }
         else
         {
@@ -1965,9 +1973,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
-    void IStreamingSessionHost.SendStreamStart<T>(
-        IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent) =>
-        SendRequiringReader(message, nameof(StartStreaming), stillWanted, onNotSent);
+    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
+        SendRequiringReader(message, nameof(StartStreaming), onNotSent);
+
+    bool IStreamingSessionHost.SendsAreNeverHeldBack => SendsAreNeverHeldBack;
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 

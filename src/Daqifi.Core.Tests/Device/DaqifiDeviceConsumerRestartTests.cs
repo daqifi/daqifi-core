@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
@@ -293,6 +294,212 @@ public class DaqifiDeviceConsumerRestartTests
         device.Disconnect();
     }
 
+    public enum HeldBack
+    {
+        TypedStop,
+        RawStop,
+        StopAndStart,
+    }
+
+    [Theory]
+    [InlineData(HeldBack.TypedStop)]
+    [InlineData(HeldBack.RawStop)]
+    [InlineData(HeldBack.StopAndStart)]
+    public async Task AStopParkedBehindAnOperationThatStarts_GoesOutAheadOfThatStart(HeldBack heldBack)
+    {
+        // Replayed after the operation's start, it would stop the stream that start began, with
+        // the session still recorded as running.
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                if (heldBack == HeldBack.RawStop)
+                {
+                    device.Send(ScpiMessageProducer.StopStreaming);
+                }
+                else
+                {
+                    device.StopStreaming();
+                }
+
+                if (heldBack == HeldBack.StopAndStart)
+                {
+                    device.StartStreaming();
+                    device.StopStreaming();
+                }
+            },
+            device => device.StartStreaming());
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start", "Stop", "Start"], written);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStartParkedBehindAnOperationThatStops_IsNotSent(bool raw)
+    {
+        // Replayed after the operation's stop, it would leave the device streaming with no session
+        // recorded.
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            _ => { },
+            device =>
+            {
+                if (raw)
+                {
+                    device.Send(ScpiMessageProducer.StartStreaming(100));
+                }
+                else
+                {
+                    device.StartStreaming();
+                }
+            },
+            device => device.Send(ScpiMessageProducer.StopStreaming));
+
+        Assert.False(isStreaming);
+        Assert.Equal(["Stop"], written);
+    }
+
+    [Fact]
+    public async Task AStopParkedBehindAnOperationThatStopsToo_IsOutWhenThatReturns()
+    {
+        // Nothing is recorded as running, but the device is, and the operation has asked for a stop.
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device => device.StopStreaming(),
+            device =>
+            {
+                device.StopStreaming();
+                device.Send(new ScpiMessage(InOperation));
+            });
+
+        Assert.False(isStreaming);
+        Assert.Equal(["Start", "Stop", InOperation], written);
+    }
+
+    [Fact]
+    public async Task AStartParkedBehindAnOperationThatStartsToo_IsOutWhenThatReturns()
+    {
+        // A stream is recorded, but it waits for the operation, which has asked for one.
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            _ => { },
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.StartStreaming();
+                device.Send(new ScpiMessage(InOperation));
+            });
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start", InOperation], written);
+    }
+
+    private const string InOperation = "IN-OPERATION";
+
+    [Fact]
+    public async Task CommandsParkedBehindAnOperationThatSendsNone_GoOutInOrder()
+    {
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.StopStreaming();
+                device.StartStreaming();
+                device.Send(ScpiMessageProducer.StopStreaming);
+                device.Send(ScpiMessageProducer.StartStreaming(200));
+            },
+            _ => { });
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start", "Stop", "Start", "Stop", "Start"], written);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_Parked_IsNotConfirmedByFramesOfTheStreamStillRunning()
+    {
+        // The stop ahead of it is parked too, so the old stream keeps delivering meanwhile. Nothing
+        // counts before the start has gone out.
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new StreamingConsumerRestartTestableDevice("Parking Device", transport);
+        device.Connect();
+        device.StreamingFrequency = 10;
+        device.StartStreaming();
+
+        var inOperation = new TaskCompletionSource();
+        var endOperation = new TaskCompletionSource();
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            inOperation.SetResult();
+            await endOperation.Task;
+        }));
+        await inOperation.Task;
+
+        device.StopStreaming();
+        var start = device.StartStreamingAsync();
+        Assert.True(SpinWait.SpinUntil(() => device.IsStreaming, TimeSpan.FromSeconds(5)));
+        for (var i = 0; i < 10; i++)
+        {
+            device.DeliverFrame();
+        }
+
+        await Task.Delay(100);
+        Assert.False(start.IsCompleted);
+
+        endOperation.SetResult();
+        await operation;
+        device.DeliverFrame();
+        device.DeliverFrame();
+        await start.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// Has an operation take the device and <paramref name="operation"/> run in it once
+    /// <paramref name="parked"/> has been called on another flow.
+    /// </summary>
+    /// <returns>
+    /// The stream commands on the wire, and <see cref="InOperation"/>, in order; and whether a
+    /// session is recorded.
+    /// </returns>
+    private static async Task<(string[] Written, bool IsStreaming)> ParkBehindAnOperationAsync(
+        Action<DaqifiStreamingDevice> first,
+        Action<DaqifiStreamingDevice> parked,
+        Action<DaqifiStreamingDevice> operation)
+    {
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new StreamingConsumerRestartTestableDevice("Parking Device", transport);
+        device.Connect();
+        first(device);
+
+        var inOperation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endOperation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exclusive = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            inOperation.SetResult();
+            await endOperation.Task;
+            operation(device);
+        }));
+
+        await inOperation.Task;
+        parked(device);
+        endOperation.SetResult();
+        await exclusive;
+
+        var isStreaming = device.IsStreaming;
+        device.Send(new ScpiMessage("MARKER"));
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.Written.Contains("MARKER", StringComparison.Ordinal), TimeSpan.FromSeconds(5)),
+            "The marker must reach the wire.");
+        var written = transport.Written
+            .Split("\r\n", StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("StreamData", StringComparison.Ordinal) || line == InOperation)
+            .Select(line => line == InOperation ? line
+                : line.Contains("StartStreamData", StringComparison.Ordinal) ? "Start" : "Stop")
+            .ToArray();
+        device.Disconnect();
+
+        return (written, isStreaming);
+    }
+
     [Fact]
     public async Task StartStreaming_StoppedByTheOperationItIsParkedBehind_IsNotSent()
     {
@@ -476,6 +683,11 @@ public class DaqifiDeviceConsumerRestartTests
         }
 
         public ConcurrentQueue<string> SentCommands { get; } = new();
+
+        private uint _deviceTicks;
+
+        public void DeliverFrame() =>
+            OnStreamMessageReceived(new DaqifiOutMessage { MsgTimeStamp = _deviceTicks += 50_000_000 });
 
         public Task CallRawCaptureAsync(Func<Stream, CancellationToken, Task> rawAction)
         {

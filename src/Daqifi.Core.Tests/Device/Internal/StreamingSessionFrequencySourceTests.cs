@@ -71,14 +71,15 @@ public class StreamingSessionFrequencySourceTests
 
         session.SendTracked(
             "SYSTem:StartStreamData 100",
-            () =>
+            _ =>
             {
                 stop = Task.Factory.StartNew(
-                    () => session.SendTracked("SYSTem:StopStreamData", () => { }),
+                    () => session.SendTracked("SYSTem:StopStreamData", _ => false),
                     CancellationToken.None,
                     TaskCreationOptions.LongRunning,
                     TaskScheduler.Default);
                 stop.Wait(TimeSpan.FromMilliseconds(200));
+                return false;
             });
         await stop!;
 
@@ -90,7 +91,13 @@ public class StreamingSessionFrequencySourceTests
     {
         var session = new StreamingSessionController(new FakeHost());
 
-        session.SendTracked("SYSTem:StartStreamData 100", session.EndSessionOnConnectionEnd);
+        session.SendTracked(
+            "SYSTem:StartStreamData 100",
+            _ =>
+            {
+                session.EndSessionOnConnectionEnd();
+                return false;
+            });
 
         Assert.False(session.IsStreaming);
     }
@@ -137,6 +144,8 @@ public class StreamingSessionFrequencySourceTests
             init => _maximumStreamingFrequencyHz = value;
         }
 
+        public bool SendsAreNeverHeldBack => false;
+
         public bool PreserveActiveStream => false;
 
         public TimeProvider Clock => TimeProvider.System;
@@ -159,7 +168,7 @@ public class StreamingSessionFrequencySourceTests
 
         public Action? OnBeginDecoderSession { get; set; }
 
-        public void SendStreamStart<T>(IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent) =>
+        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
             StartCommand = message.Data as string;
 
         public void BeginDecoderSession(int streamingFrequencyHz)

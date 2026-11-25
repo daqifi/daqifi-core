@@ -42,6 +42,9 @@ internal interface IStreamingSessionHost
     /// <exception cref="DeviceNotConnectedException">A teardown disposed the reader.</exception>
     void EnsureMessageReaderRunning();
 
+    /// <inheritdoc cref="DaqifiDevice.SendsAreNeverHeldBack"/>
+    bool SendsAreNeverHeldBack { get; }
+
     /// <inheritdoc cref="DaqifiDevice.PreserveActiveStream"/>
     bool PreserveActiveStream { get; }
 
@@ -49,13 +52,12 @@ internal interface IStreamingSessionHost
     void Send<T>(IOutboundMessage<T> message);
 
     /// <summary>
-    /// Sends the stream start. If it is parked behind an operation on another flow, it is dropped
-    /// when <paramref name="stillWanted"/> no longer holds as it is about to go out; otherwise the
-    /// reader is checked again, and <paramref name="onNotSent"/> runs instead of the send when the
+    /// Sends the stream start. If it is parked behind a raw capture, the reader is checked again
+    /// before it goes out, and <paramref name="onNotSent"/> runs instead of the send when the
     /// reader cannot start (issue #975). <paramref name="onNotSent"/> receives the refusal.
     /// </summary>
     /// <remarks>See <see cref="DaqifiDevice.SendRequiringReader{T}"/>.</remarks>
-    void SendStreamStart<T>(IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent);
+    void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent);
 
     /// <summary>
     /// The device's advertised maximum sampling rate

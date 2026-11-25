@@ -151,13 +151,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     /// <param name="message">The message whose answer only the reader can deliver.</param>
     /// <param name="operation">The name of the operation, for the refusal's message.</param>
-    /// <param name="stillWanted">Whether a parked message should still go out, asked as it is about to; if not, it is dropped without <paramref name="onNotSent"/>. Runs on the replaying thread.</param>
     /// <param name="onNotSent">Undoes what the caller recorded when it sent the message, and receives the refusal. Runs on the replaying thread.</param>
-    internal void SendRequiringReader<T>(
-        IOutboundMessage<T> message, string operation, Func<bool> stillWanted, Action<Exception> onNotSent)
+    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action<Exception> onNotSent)
     {
         var previous = t_parkedSendReaderCheck;
-        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, stillWanted, onNotSent);
+        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, onNotSent);
         try
         {
             Send(message);
@@ -177,12 +175,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     [ThreadStatic]
     private static ParkedSendReaderCheck? t_parkedSendReaderCheck;
 
-    private sealed record ParkedSendReaderCheck(
-        DaqifiDevice Device, string Operation, Func<bool> StillWanted, Action<Exception> OnNotSent);
+    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action<Exception> OnNotSent);
 
     /// <summary>
-    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. False,
-    /// with nothing reported, when the message is no longer wanted. Otherwise true
+    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. True
     /// when the reader runs (started now if it has to be). False when it cannot start, after
     /// <see cref="ParkedSendReaderCheck.OnNotSent"/> has run and the refusal has been logged and
     /// raised. Usually the throttle on <c>ErrorOccurred</c> folds that raise into the capture's own
@@ -190,11 +186,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     private bool ReaderRunsForParkedSend(ParkedSendReaderCheck check)
     {
-        if (!check.StillWanted())
-        {
-            return false;
-        }
-
         try
         {
             StartStoppedReader(check.Operation);
@@ -2211,7 +2202,15 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Thrown when the device is connected but has no transport or stream to send on
     /// (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/> constructor).
     /// </exception>
-    public virtual void Send<T>(IOutboundMessage<T> message)
+    public virtual void Send<T>(IOutboundMessage<T> message) => SendOrHoldBack(message, null);
+
+    /// <summary>
+    /// The body of <see cref="Send{T}"/>.
+    /// </summary>
+    /// <param name="message">The message to send.</param>
+    /// <param name="heldBack">What to replay the message through if it is held back.</param>
+    /// <returns><c>true</c> when the message was held back; <c>false</c> when it went out.</returns>
+    private protected bool SendOrHoldBack<T>(IOutboundMessage<T> message, IHeldBackSend? heldBack)
     {
         EnsureConnected();
 
@@ -2234,16 +2233,40 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         var readerCheck = t_parkedSendReaderCheck is { } check && ReferenceEquals(check.Device, this) ? check : null;
         t_parkedSendReaderCheck = null;
 
-        var parked = readerCheck == null
-            ? _operations.TryDeferSend(message)
-            : _operations.TryDeferSend(message, beforeReplay: () => ReaderRunsForParkedSend(readerCheck));
-        if (parked)
+        var replay = readerCheck == null && heldBack == null
+            ? (Action<Action>?)null
+            : send =>
+            {
+                if (heldBack is { IsOvertaken: true }
+                    || (readerCheck != null && !ReaderRunsForParkedSend(readerCheck)))
+                {
+                    return;
+                }
+
+                if (heldBack == null)
+                {
+                    send();
+                }
+                else
+                {
+                    heldBack.Replay(send);
+                }
+            };
+
+        if (_operations.TryDeferSend(message, replay))
         {
-            return;
+            return true;
         }
 
         SendNow(message);
+        return false;
     }
+
+    /// <summary>
+    /// Whether what this flow sends goes straight out, because it owns the device for an operation
+    /// and so is what other flows' sends are held back behind.
+    /// </summary>
+    internal bool SendsAreNeverHeldBack => _operations.OwnsCurrentSession;
 
     /// <summary>
     /// The last text command a running text exchange enqueued, or <c>null</c> outside one and

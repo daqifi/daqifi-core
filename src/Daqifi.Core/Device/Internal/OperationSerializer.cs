@@ -143,7 +143,7 @@ internal sealed class OperationSerializer : IDisposable
     /// else's. Without this, a flow that outlived its teardown would keep bypassing deferral
     /// into a session it has no claim on.
     /// </remarks>
-    private bool OwnsCurrentSession =>
+    internal bool OwnsCurrentSession =>
         _operationLockGeneration.Value != 0
         && _operationLockGeneration.Value == Volatile.Read(ref _operationGeneration);
 
@@ -520,12 +520,13 @@ internal sealed class OperationSerializer : IDisposable
     /// cannot turn a fire-and-forget send into a wait.
     /// </para>
     /// <para>
-    /// <paramref name="beforeReplay"/>, when given, runs on the replaying thread just before the
-    /// parked message is sent, and a <c>false</c> drops it. A stream start uses it to check the
-    /// reader once the operation that stopped it has ended (issue #975).
+    /// <paramref name="replay"/>, when given, runs on the replaying thread in place of the send, and
+    /// sends the message with the action it receives, or drops it by not calling that. A stream
+    /// start uses it to check the reader once the operation that stopped it has ended (issue #975),
+    /// and stream starts and stops to keep their order with the operation's own.
     /// </para>
     /// </remarks>
-    internal bool TryDeferSend<T>(IOutboundMessage<T> message, Func<bool>? beforeReplay = null)
+    internal bool TryDeferSend<T>(IOutboundMessage<T> message, Action<Action>? replay = null)
     {
         if (OwnsCurrentSession)
         {
@@ -569,15 +570,9 @@ internal sealed class OperationSerializer : IDisposable
                 _deferralOverflowReported = true;
             }
 
-            backlog.Enqueue(beforeReplay == null
+            backlog.Enqueue(replay == null
                 ? () => _host.SendNow(message)
-                : () =>
-                {
-                    if (beforeReplay())
-                    {
-                        _host.SendNow(message);
-                    }
-                });
+                : () => replay(() => _host.SendNow(message)));
         }
 
         if (reportOverflow)
