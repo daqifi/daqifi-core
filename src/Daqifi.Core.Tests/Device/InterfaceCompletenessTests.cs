@@ -15,8 +15,11 @@ public class InterfaceCompletenessTests
     public void IDevice_AnswersSupports()
     {
         var concrete = new RecordingDevice();
-        concrete.Metadata.DeviceType = DeviceType.Nyquist1;
-        concrete.Metadata.FirmwareVersion = "3.9.0";
+        concrete.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = "3.9.0"
+        });
         IDevice device = concrete;
 
         Assert.True(device.Supports(DeviceFeature.Identify));
@@ -68,7 +71,7 @@ public class InterfaceCompletenessTests
     {
         var concrete = new RecordingDevice();
         concrete.Connect();
-        concrete.Metadata.FirmwareVersion = "3.9.0";
+        concrete.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.9.0" });
         IDevice device = concrete;
 
         var identification = Assert.IsAssignableFrom<IDeviceIdentification>(device);

@@ -27,7 +27,8 @@ namespace Daqifi.Core.Device;
 public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
 {
     /// <summary>
-    /// Gets the device metadata containing part number, firmware version, capabilities, etc.
+    /// Gets a snapshot of the device metadata: part number, firmware version, capabilities, etc.
+    /// The snapshot never changes; read this property again for the latest one.
     /// </summary>
     DeviceMetadata Metadata { get; }
 

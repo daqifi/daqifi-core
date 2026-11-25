@@ -21,11 +21,11 @@ public class DaqifiDeviceRegistryTests
         var device = new TransportlessStreamingDevice(name);
         if (serialNumber != null)
         {
-            device.Metadata.SerialNumber = serialNumber;
+            device.UpdateMetadata(metadata => metadata with { SerialNumber = serialNumber });
         }
         if (macAddress != null)
         {
-            device.Metadata.MacAddress = macAddress;
+            device.UpdateMetadata(metadata => metadata with { MacAddress = macAddress });
         }
 
         device.Connect();
@@ -325,7 +325,7 @@ public class DaqifiDeviceRegistryTests
         // during setup (as the ConnectedDevice helper does) would make the assertion tautological —
         // true whether or not the registry actually waits.
         var overWifi = new TransportlessStreamingDevice("wifi");
-        overWifi.Metadata.SerialNumber = serialNumber;
+        overWifi.UpdateMetadata(metadata => metadata with { SerialNumber = serialNumber });
 
         var policyCalls = new List<DuplicateCheckPhase>();
         var replacementWasOpenWhenOldWasDropped = false;

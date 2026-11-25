@@ -336,9 +336,12 @@ public class WifiLinkStatusTests
     public void Supports_WifiLinkStatus_AcrossTheV3_9_0Boundary(string firmware, bool expected)
     {
         var device = new TransportlessDevice("TestDevice");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        device.Metadata.FirmwareVersion = firmware;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1),
+            FirmwareVersion = firmware
+        });
 
         Assert.Equal(expected, device.Supports(DeviceFeature.WifiLinkStatus));
     }
@@ -366,7 +369,7 @@ public class WifiLinkStatusTests
     public async Task BothQueries_OnADeviceWithoutWifi_ThrowFeatureNotSupportedWithoutSending()
     {
         var device = ConnectedDevice("CONNECTED");
-        device.Metadata.Capabilities = new DeviceCapabilities { HasWiFi = false };
+        device.UpdateMetadata(metadata => metadata with { Capabilities = new DeviceCapabilities { HasWiFi = false } });
 
         await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetWifiLinkStateAsync());
         await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetActiveWifiModeAsync());
@@ -450,9 +453,12 @@ public class WifiLinkStatusTests
         var device = new TestableWifiDevice();
         device.CannedTextResponse.AddRange(reply);
         device.Connect();
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        device.Metadata.FirmwareVersion = firmware;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1),
+            FirmwareVersion = firmware
+        });
         return device;
     }
 
@@ -484,9 +490,12 @@ public class WifiLinkStatusTests
         {
             set
             {
-                Metadata.DeviceType = DeviceType.Nyquist1;
-                Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-                Metadata.FirmwareVersion = value;
+                UpdateMetadata(metadata => metadata with
+                {
+                    DeviceType = DeviceType.Nyquist1,
+                    Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1),
+                    FirmwareVersion = value
+                });
             }
         }
 

@@ -83,7 +83,10 @@ public class DaqifiStreamingDeviceTests
     {
         // Arrange: lower the device's advertised max and confirm the guard tracks it.
         var device = new TransportlessStreamingDevice("TestDevice");
-        device.Metadata.Capabilities.MaxSamplingRate = 200;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            Capabilities = metadata.Capabilities with { MaxSamplingRate = 200 }
+        });
 
         // Act & Assert: 200 is now the ceiling, 201 is rejected.
         device.StreamingFrequency = 200;
@@ -96,10 +99,13 @@ public class DaqifiStreamingDeviceTests
     [InlineData(-5)]
     public void StreamingFrequency_InvalidCapabilitiesMax_SanitizesCeilingToOne(int invalidMax)
     {
-        // Arrange: MaxSamplingRate is a mutable, unvalidated public property. An invalid value
+        // Arrange: MaxSamplingRate is unvalidated. An invalid value from a subclass
         // must not produce an impossible range that rejects every frequency.
         var device = new TransportlessStreamingDevice("TestDevice");
-        device.Metadata.Capabilities.MaxSamplingRate = invalidMax;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            Capabilities = metadata.Capabilities with { MaxSamplingRate = invalidMax }
+        });
 
         // Act & Assert: the ceiling is sanitized to 1, so 1 is accepted and 2 is rejected.
         device.StreamingFrequency = 1;

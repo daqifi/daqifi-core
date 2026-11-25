@@ -5,333 +5,249 @@ using Daqifi.Core.Device.Network;
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// Contains metadata and configuration information about a DAQiFi device.
+/// An immutable snapshot of what a DAQiFi device has reported about itself.
 /// </summary>
-public class DeviceMetadata
+/// <remarks>
+/// A device replaces its whole snapshot when it learns something new, so one snapshot never mixes
+/// two status messages, whichever thread reads it. Keep a reference to one only while you want its
+/// values to stand still; read <see cref="IStreamingDevice.Metadata"/> again for the latest. Code
+/// that keeps its own copy derives changes with a <c>with</c> expression.
+/// </remarks>
+public sealed record DeviceMetadata
 {
     /// <summary>
-    /// Gets or sets the device part number.
+    /// Gets the device part number.
     /// </summary>
-    public string PartNumber { get; set; } = string.Empty;
+    public string PartNumber { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the device serial number.
+    /// Gets the device serial number.
     /// </summary>
-    public string SerialNumber { get; set; } = string.Empty;
+    public string SerialNumber { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the firmware version.
+    /// Gets the firmware version.
     /// </summary>
-    public string FirmwareVersion { get; set; } = string.Empty;
+    public string FirmwareVersion { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the hardware revision.
+    /// Gets the hardware revision.
     /// </summary>
-    public string HardwareRevision { get; set; } = string.Empty;
+    public string HardwareRevision { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the device type.
+    /// Gets the device type.
     /// </summary>
-    public DeviceType DeviceType { get; set; } = DeviceType.Unknown;
-
-    private DeviceCapabilities _capabilities = new();
-    private DeviceHealth _health = new();
+    public DeviceType DeviceType { get; init; } = DeviceType.Unknown;
 
     /// <summary>
-    /// The board <see cref="Capabilities"/> was last derived from, or <c>null</c> when it has
-    /// never been derived. Tracked separately from <see cref="DeviceType"/> — which has a public
-    /// setter — so <see cref="UpdateFromProtobuf"/> can tell "already built for this board" from
-    /// "the board was assigned but the capabilities were never built for it".
+    /// Gets the device capabilities.
     /// </summary>
-    private DeviceType? _capabilitiesBoard;
-
-    /// <summary>
-    /// Gets or sets the device capabilities. Assigning <c>null</c> is coerced to a fresh instance so
-    /// the status-processing path (which populates channel counts here) can never dereference null.
-    /// </summary>
-    public DeviceCapabilities Capabilities
-    {
-        get => _capabilities;
-        set => _capabilities = value ?? new DeviceCapabilities();
-    }
+    public DeviceCapabilities Capabilities { get; init; } = new();
 
     /// <summary>
     /// Gets the device's own capability document (<c>CONFigure:CAPabilities:JSON?</c>), or
     /// <c>null</c> when it has not been read — the device predates the query, could not answer, or
-    /// <see cref="DaqifiDevice.ReadCapabilityDocumentAsync"/> has not run yet. Set through
-    /// <see cref="ApplyCapabilityDocument"/>.
+    /// <see cref="DaqifiDevice.ReadCapabilityDocumentAsync"/> has not run yet.
     /// </summary>
     /// <remarks>
     /// Carries the full parsed document, including the figures <see cref="DeviceCapabilities"/>
     /// has no field for — the conservative streaming envelope, the cap for the currently enabled
     /// channel set, and the device's rate-prediction model.
     /// </remarks>
-    public CapabilityDocument? CapabilityDocument { get; private set; }
+    public CapabilityDocument? CapabilityDocument { get; init; }
 
     /// <summary>
-    /// Gets or sets the most recent device health telemetry (battery, board temperature,
+    /// Gets the most recent device health telemetry (battery, board temperature,
     /// power/device status) decoded from a status message. Status is request-only (issue #535):
     /// streaming frames do not carry health, so this holds the last requested reading (the one
     /// captured during <see cref="DaqifiDevice.InitializeAsync"/>, unless something has asked
     /// since) — call <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> to request a new one
     /// (its remarks cover the case where a late reply to an earlier request answers it).
-    /// Assigning <c>null</c> is coerced to a fresh instance so <see cref="UpdateFromProtobuf"/>
-    /// can never dereference null on the status path.
     /// </summary>
-    public DeviceHealth Health
-    {
-        get => _health;
-        set => _health = value ?? new DeviceHealth();
-    }
+    public DeviceHealth Health { get; init; } = new();
 
     /// <summary>
-    /// Gets or sets the IP address of the device.
+    /// Gets the IP address of the device.
     /// </summary>
-    public string IpAddress { get; set; } = string.Empty;
+    public string IpAddress { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the MAC address of the device.
+    /// Gets the MAC address of the device.
     /// </summary>
-    public string MacAddress { get; set; } = string.Empty;
+    public string MacAddress { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the WiFi SSID.
+    /// Gets the WiFi SSID.
     /// </summary>
-    public string Ssid { get; set; } = string.Empty;
+    public string Ssid { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the device hostname.
+    /// Gets the device hostname.
     /// </summary>
-    public string HostName { get; set; } = string.Empty;
+    public string HostName { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the user-defined friendly name of the device.
+    /// Gets the user-defined friendly name of the device.
     /// </summary>
-    public string FriendlyName { get; set; } = string.Empty;
+    public string FriendlyName { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the TCP port for device communication.
+    /// Gets the TCP port for device communication.
     /// </summary>
-    public int DevicePort { get; set; }
+    public int DevicePort { get; init; }
 
     /// <summary>
-    /// Gets or sets the WiFi security type the device reported. It is <c>null</c> until a status
+    /// Gets the WiFi security type the device reported. It is <c>null</c> until a status
     /// message reports the WiFi settings, and when the device reports a type Core does not know.
     /// </summary>
-    public WifiSecurityType? WifiSecurityMode { get; set; }
+    public WifiSecurityType? WifiSecurityMode { get; init; }
 
     /// <summary>
-    /// Gets or sets the WiFi mode the device reported. It is <c>null</c> until a status message
+    /// Gets the WiFi mode the device reported. It is <c>null</c> until a status message
     /// reports the WiFi settings, and when the device reports a mode Core does not know.
     /// </summary>
-    public WifiMode? WifiInfrastructureMode { get; set; }
+    public WifiMode? WifiInfrastructureMode { get; init; }
 
     /// <summary>
-    /// Copies all field values from another <see cref="DeviceMetadata"/> instance into this one.
-    /// </summary>
-    /// <param name="source">The instance to copy field values from.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <c>null</c>.</exception>
-    public void CopyFrom(DeviceMetadata source)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-
-        PartNumber = source.PartNumber;
-        SerialNumber = source.SerialNumber;
-        FirmwareVersion = source.FirmwareVersion;
-        HardwareRevision = source.HardwareRevision;
-        DeviceType = source.DeviceType;
-        Capabilities = source.Capabilities?.Clone() ?? new DeviceCapabilities();
-        _capabilitiesBoard = source._capabilitiesBoard;
-        // The document is immutable once parsed, so the reference is safe to share — and copying
-        // it matters: without it, the target's next status message would rebuild Capabilities from
-        // the board table with nothing to re-overlay, silently discarding the device's own values.
-        CapabilityDocument = source.CapabilityDocument;
-        Health = source.Health?.Clone() ?? new DeviceHealth();
-        IpAddress = source.IpAddress;
-        MacAddress = source.MacAddress;
-        Ssid = source.Ssid;
-        HostName = source.HostName;
-        FriendlyName = source.FriendlyName;
-        DevicePort = source.DevicePort;
-        WifiSecurityMode = source.WifiSecurityMode;
-        WifiInfrastructureMode = source.WifiInfrastructureMode;
-    }
-
-    /// <summary>
-    /// Applies a capability document read from the device, overlaying it onto the board-derived
-    /// <see cref="Capabilities"/> and retaining it for later re-application.
+    /// Returns this metadata with a capability document read from the device overlaid onto
+    /// <see cref="Capabilities"/> and retained for later re-application.
     /// </summary>
     /// <remarks>
-    /// The overlay is re-applied on every subsequent <see cref="UpdateFromProtobuf"/>, so a status
-    /// message cannot revert the device's own values to the board table's.
+    /// The overlay is re-applied by every subsequent <see cref="WithStatus"/>, so a status message
+    /// cannot revert the device's own values to the board table's.
     /// </remarks>
     /// <param name="document">The parsed capability document.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <c>null</c>.</exception>
-    public void ApplyCapabilityDocument(CapabilityDocument document)
+    internal DeviceMetadata WithCapabilityDocument(CapabilityDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        CapabilityDocument = document;
-        document.MergeInto(Capabilities);
+        return this with
+        {
+            CapabilityDocument = document,
+            Capabilities = document.OverlayOnto(Capabilities)
+        };
     }
 
     /// <summary>
-    /// Updates the device metadata from a protobuf message.
+    /// Returns this metadata updated from a status message. A field the message does not report
+    /// keeps its last known value.
     /// </summary>
     /// <param name="message">The protobuf message containing device information.</param>
-    public void UpdateFromProtobuf(DaqifiOutMessage message)
+    internal DeviceMetadata WithStatus(DaqifiOutMessage message)
     {
-        if (!string.IsNullOrWhiteSpace(message.DevicePn))
+        ArgumentNullException.ThrowIfNull(message);
+
+        var reportsBoard = !string.IsNullOrWhiteSpace(message.DevicePn);
+        var board = reportsBoard ? DeviceTypeDetector.DetectFromPartNumber(message.DevicePn) : DeviceType;
+
+        // Rebuild the board-derived capabilities only when the board changed. Status messages
+        // repeat the part number, and rebuilding on each one discarded everything learned since —
+        // the channel counts that a status message with no port fields does not restore, and any
+        // capability-document overlay.
+        var capabilities = board == DeviceType ? Capabilities : DeviceCapabilities.FromDeviceType(board);
+
+        // Drop the retained document only on a move between two *known* boards — a reconnect to a
+        // different unit through the same device object. The document describes the board it was
+        // read from, so re-applying it there would overlay the previous device's flags, channel
+        // counts and rate ceiling onto the new one. The overlay is durable across status messages
+        // by design; it is not durable across a board change.
+        //
+        // A transition involving Unknown is not a board change. Per ADR 0001, Unknown means "not
+        // yet known", not "a different board": before the first status message there is no
+        // previous board at all, and an unrecognized part number says nothing about the device
+        // having been swapped. In both directions the document was still read from this device,
+        // and discarding it would regress capabilities — notably MaxSamplingRate back to the stale
+        // board-table ceiling — for no gain.
+        var boardWasSwapped =
+            board != DeviceType && board != DeviceType.Unknown && DeviceType != DeviceType.Unknown;
+        var document = boardWasSwapped ? null : CapabilityDocument;
+
+        capabilities = capabilities with
         {
-            PartNumber = message.DevicePn;
-
-            // Rebuild the board-derived capabilities only when they are not already built for this
-            // board. Status messages repeat the part number, and rebuilding on each one discarded
-            // everything learned since — the channel counts that a status message with no port
-            // fields does not restore, and any capability-document overlay.
-            var detectedDeviceType = DeviceTypeDetector.DetectFromPartNumber(message.DevicePn);
-            DeviceType = detectedDeviceType;
-            if (_capabilitiesBoard != detectedDeviceType)
-            {
-                // Drop the retained document only when this object moves between two *known*
-                // boards — a reconnect to a different unit through the same instance. The document
-                // describes the board it was read from, so re-applying it there would overlay the
-                // previous device's flags, channel counts and rate ceiling onto the new one. The
-                // overlay is durable across status messages by design; it is not durable across a
-                // board change.
-                //
-                // A transition involving Unknown is not a board change. Per ADR 0001, Unknown means
-                // "not yet known", not "a different board": before the first status message there
-                // is no previous board at all, and an unrecognized part number says nothing about
-                // the device having been swapped. In both directions the document was still read
-                // from this device, and discarding it would regress capabilities — notably
-                // MaxSamplingRate back to the stale board-table ceiling — for no gain.
-                var previousBoard = _capabilitiesBoard;
-                if (previousBoard is not null
-                    && previousBoard != DeviceType.Unknown
-                    && detectedDeviceType != DeviceType.Unknown)
-                {
-                    CapabilityDocument = null;
-                }
-
-                Capabilities = DeviceCapabilities.FromDeviceType(detectedDeviceType);
-                _capabilitiesBoard = detectedDeviceType;
-            }
-        }
-
-        if (message.DeviceSn != 0)
-        {
-            SerialNumber = message.DeviceSn.ToString();
-        }
-
-        if (!string.IsNullOrWhiteSpace(message.DeviceFwRev))
-        {
-            FirmwareVersion = message.DeviceFwRev;
-        }
-
-        if (!string.IsNullOrWhiteSpace(message.DeviceHwRev))
-        {
-            HardwareRevision = message.DeviceHwRev;
-        }
-
-        if (!string.IsNullOrWhiteSpace(message.Ssid))
-        {
-            Ssid = message.Ssid;
-        }
-
-        if (!string.IsNullOrWhiteSpace(message.HostName))
-        {
-            HostName = message.HostName;
-        }
-
-        if (!string.IsNullOrEmpty(message.FriendlyDeviceName))
-        {
-            FriendlyName = message.FriendlyDeviceName;
-        }
-
-        if (message.DevicePort != 0)
-        {
-            DevicePort = (int)message.DevicePort;
-        }
-
-        // Security mode 0 is a real value (an open network), but proto3 never encodes a 0, so an
-        // open network arrives as "field 60 absent" -- the same as a message that has no WiFi
-        // settings at all. The infrastructure mode tells the two apart: the firmware encodes
-        // fields 60 and 61 together from the same WiFi settings (SYSTem:SYSInfoPB?), and field 61
-        // is never 0 (1 = STA, 4 = AP), so its presence proves the message reported the WiFi
-        // settings. The discovery reply and the SD log metadata carry the part number and
-        // firmware version but neither WiFi field, so they keep the last known mode (#986).
-        if (message.WifiSecurityMode > 0 || message.WifiInfMode > 0)
-        {
-            WifiSecurityMode = ToWifiSecurityType(message.WifiSecurityMode);
-        }
-
-        if (message.WifiInfMode > 0)
-        {
-            WifiInfrastructureMode = ToWifiMode(message.WifiInfMode);
-        }
-
-        var ip = NetworkAddressHelper.GetIpAddressString(message);
-        if (ip.Length > 0)
-        {
-            IpAddress = ip;
-        }
-
-        var mac = NetworkAddressHelper.GetMacAddressString(message);
-        if (mac.Length > 0)
-        {
-            MacAddress = mac;
-        }
-
-        // Update channel counts from message
-        if (message.AnalogInPortNum > 0)
-        {
-            Capabilities.AnalogInputChannels = (int)message.AnalogInPortNum;
-        }
-
-        if (message.AnalogOutPortNum > 0)
-        {
-            Capabilities.AnalogOutputChannels = (int)message.AnalogOutPortNum;
-        }
-
-        if (message.DigitalPortNum > 0)
-        {
-            Capabilities.DigitalChannels = (int)message.DigitalPortNum;
-        }
+            AnalogInputChannels = message.AnalogInPortNum > 0
+                ? (int)message.AnalogInPortNum
+                : capabilities.AnalogInputChannels,
+            AnalogOutputChannels = message.AnalogOutPortNum > 0
+                ? (int)message.AnalogOutPortNum
+                : capabilities.AnalogOutputChannels,
+            DigitalChannels = message.DigitalPortNum > 0
+                ? (int)message.DigitalPortNum
+                : capabilities.DigitalChannels
+        };
 
         // Re-apply the device's own capability document last, so it stays the authority over both
         // the board table and the status message's port counts for the fields it states. This is
         // what makes the merge durable: without it a status frame would win by arriving later.
-        CapabilityDocument?.MergeInto(Capabilities);
+        if (document is not null)
+        {
+            capabilities = document.OverlayOnto(capabilities);
+        }
 
-        // Update health telemetry. proto3 scalars have no explicit presence, so a value of 0
-        // is indistinguishable from "not reported"; guard on non-zero (consistent with the
-        // other fields above) so a partial status message never clobbers a known reading.
+        var ip = NetworkAddressHelper.GetIpAddressString(message);
+        var mac = NetworkAddressHelper.GetMacAddressString(message);
 
+        return this with
+        {
+            PartNumber = reportsBoard ? message.DevicePn : PartNumber,
+            DeviceType = board,
+            Capabilities = capabilities,
+            CapabilityDocument = document,
+            SerialNumber = message.DeviceSn != 0 ? message.DeviceSn.ToString() : SerialNumber,
+            FirmwareVersion = Reported(message.DeviceFwRev, FirmwareVersion),
+            HardwareRevision = Reported(message.DeviceHwRev, HardwareRevision),
+            Ssid = Reported(message.Ssid, Ssid),
+            HostName = Reported(message.HostName, HostName),
+            FriendlyName = message.FriendlyDeviceName.Length > 0 ? message.FriendlyDeviceName : FriendlyName,
+            DevicePort = message.DevicePort != 0 ? (int)message.DevicePort : DevicePort,
+
+            // Security mode 0 is a real value (an open network), but proto3 never encodes a 0, so
+            // an open network arrives as "field 60 absent" -- the same as a message that has no
+            // WiFi settings at all. The infrastructure mode tells the two apart: the firmware
+            // encodes fields 60 and 61 together from the same WiFi settings (SYSTem:SYSInfoPB?),
+            // and field 61 is never 0 (1 = STA, 4 = AP), so its presence proves the message
+            // reported the WiFi settings. The discovery reply and the SD log metadata carry the
+            // part number and firmware version but neither WiFi field, so they keep the last known
+            // mode (#986).
+            WifiSecurityMode = message.WifiSecurityMode > 0 || message.WifiInfMode > 0
+                ? ToWifiSecurityType(message.WifiSecurityMode)
+                : WifiSecurityMode,
+            WifiInfrastructureMode = message.WifiInfMode > 0
+                ? ToWifiMode(message.WifiInfMode)
+                : WifiInfrastructureMode,
+            IpAddress = ip.Length > 0 ? ip : IpAddress,
+            MacAddress = mac.Length > 0 ? mac : MacAddress,
+            Health = HealthAfter(message)
+        };
+    }
+
+    /// <summary>
+    /// The health telemetry after a status message.
+    /// </summary>
+    /// <remarks>
+    /// proto3 scalars have no explicit presence, so a value of 0 is indistinguishable from "not
+    /// reported"; only a non-zero value replaces a reading, so a partial status message never
+    /// clobbers a known one.
+    /// </remarks>
+    private DeviceHealth HealthAfter(DaqifiOutMessage message) => Health with
+    {
         // BattStatus is a uint documented as a battery percentage. Only accept an in-contract
         // 1..100 reading: this both filters nonsensical values (>100) and avoids the uint->int
         // wrap-to-negative a very large value would produce. Out-of-range readings are ignored
         // (treated as not reported), leaving the last-known value in place.
-        if (message.BattStatus is >= 1 and <= 100)
-        {
-            Health.BatteryPercent = (int)message.BattStatus;
-        }
+        BatteryPercent = message.BattStatus is >= 1 and <= 100
+            ? (int)message.BattStatus
+            : Health.BatteryPercent,
+        BoardTemperatureCelsius = message.TempStatus != 0
+            ? message.TempStatus
+            : Health.BoardTemperatureCelsius,
+        PowerStatus = message.PwrStatus != 0 ? message.PwrStatus : Health.PowerStatus,
+        DeviceStatus = message.DeviceStatus != 0 ? message.DeviceStatus : Health.DeviceStatus
+    };
 
-        if (message.TempStatus != 0)
-        {
-            Health.BoardTemperatureCelsius = message.TempStatus;
-        }
-
-        if (message.PwrStatus != 0)
-        {
-            Health.PowerStatus = message.PwrStatus;
-        }
-
-        if (message.DeviceStatus != 0)
-        {
-            Health.DeviceStatus = message.DeviceStatus;
-        }
-    }
+    /// <summary>The reported text, or <paramref name="current"/> when the message has none.</summary>
+    private static string Reported(string reported, string current) =>
+        string.IsNullOrWhiteSpace(reported) ? current : reported;
 
     /// <summary>
     /// Maps a wire security mode to its type. A mode Core does not know becomes <c>null</c> rather

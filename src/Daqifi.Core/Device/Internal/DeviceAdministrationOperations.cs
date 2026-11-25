@@ -60,7 +60,7 @@ internal sealed class DeviceAdministrationOperations
 
         _host.Send(ScpiMessageProducer.SetDeviceName(name));
         _host.Send(ScpiMessageProducer.SaveDeviceName);
-        _host.Metadata.FriendlyName = name;
+        _host.UpdateMetadata(metadata => metadata with { FriendlyName = name });
 
         return Task.CompletedTask;
     }

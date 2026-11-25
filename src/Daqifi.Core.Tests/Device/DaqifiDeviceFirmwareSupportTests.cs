@@ -27,7 +27,7 @@ public class DaqifiDeviceFirmwareSupportTests
     public void IsFirmwareVersionSupported_WhenFirmwareVersionUnparseable_ReturnsFalse(string firmwareVersion)
     {
         var device = new TransportlessDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmwareVersion;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.False(device.IsFirmwareVersionSupported);
     }
@@ -39,7 +39,7 @@ public class DaqifiDeviceFirmwareSupportTests
     public void IsFirmwareVersionSupported_WhenFirmwareBelowFloor_ReturnsFalse(string firmwareVersion)
     {
         var device = new TransportlessDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmwareVersion;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.False(device.IsFirmwareVersionSupported);
     }
@@ -52,7 +52,7 @@ public class DaqifiDeviceFirmwareSupportTests
     public void IsFirmwareVersionSupported_WhenFirmwareAtOrAboveFloor_ReturnsTrue(string firmwareVersion)
     {
         var device = new TransportlessDevice("TestDevice");
-        device.Metadata.FirmwareVersion = firmwareVersion;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.True(device.IsFirmwareVersionSupported);
     }
@@ -63,10 +63,10 @@ public class DaqifiDeviceFirmwareSupportTests
         // Guards against caching a version-derived bool: the property must reflect the
         // firmware version most recently reported, not a value snapshotted earlier.
         var device = new TransportlessDevice("TestDevice");
-        device.Metadata.FirmwareVersion = "3.4.3";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.4.3" });
         Assert.False(device.IsFirmwareVersionSupported);
 
-        device.Metadata.FirmwareVersion = "3.6.0";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.6.0" });
         Assert.True(device.IsFirmwareVersionSupported);
     }
 }

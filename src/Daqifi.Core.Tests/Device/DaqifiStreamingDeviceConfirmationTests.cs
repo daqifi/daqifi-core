@@ -352,7 +352,10 @@ public class DaqifiStreamingDeviceConfirmationTests
         var loser = Task.Run(device.StartStreaming);
         reader.WaitUntilHeld();
         device.StartStreaming();
-        device.Metadata.Capabilities.MaxSamplingRate = 10;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            Capabilities = metadata.Capabilities with { MaxSamplingRate = 10 }
+        });
         reader.Release();
         await loser;
 
