@@ -212,7 +212,8 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <remarks>
     /// For analog channels the device-level ADC enable bitmask is recomputed over all enabled
     /// analog channels and sent to the device. For digital channels the global DIO enable state
-    /// is updated. The channel's <see cref="IChannel.IsEnabled"/> flag is set to <c>true</c>.
+    /// is updated. The channel's <see cref="IChannel.IsEnabled"/> flag is <c>true</c> once the command
+    /// has gone out.
     /// </remarks>
     void EnableChannel(IChannel channel);
 
@@ -253,7 +254,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
     /// firmware ignores direction writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
     /// <c>enabled: false</c> first.</exception>
-    void SetDioDirection(IChannel channel, ChannelDirection direction);
+    void SetDioDirection(IDigitalChannel channel, ChannelDirection direction);
 
     /// <summary>
     /// Sets the output state (high or low) of a digital I/O channel.
@@ -265,7 +266,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
     /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
     /// <c>enabled: false</c> first.</exception>
-    void SetDioValue(IChannel channel, bool value);
+    void SetDioValue(IDigitalChannel channel, bool value);
 
     /// <summary>
     /// Enables or disables PWM output on a PWM-capable digital channel.
@@ -288,7 +289,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// which happened. Call this again after a reconnect — <c>true</c> to carry on, <c>false</c> to stop.
     /// </para>
     /// </remarks>
-    void SetPwmEnabled(IChannel channel, bool enabled);
+    void SetPwmEnabled(IDigitalChannel channel, bool enabled);
 
     /// <summary>
     /// Sets the PWM duty cycle of a PWM-capable digital channel.
@@ -298,7 +299,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <param name="dutyCyclePercent">The duty cycle in whole percent, 1-100. A duty of 0 is rejected
     /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
     /// with <see cref="SetPwmEnabled"/> instead.</param>
-    void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent);
+    void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent);
 
     /// <summary>
     /// Sets the PWM frequency, in hertz, for the whole device.
@@ -340,11 +341,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <summary>
     /// Sets the analog output (DAC) voltage of a channel and applies it immediately.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="voltage">
-    /// The output voltage, in volts. Must be a finite number, and within the channel's stated
-    /// range when the device described one (see
-    /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel"/>).
+    /// The output voltage, in volts. Must be within the channel's range
+    /// (<see cref="Daqifi.Core.Channel.IAnalogOutputChannel.IsInRange"/>).
     /// </param>
     /// <remarks>
     /// Analog output is available on NQ3 hardware only. Each call stages the level and then latches it
@@ -352,21 +352,18 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <see cref="StageAnalogOutput"/> and
     /// <see cref="LatchAnalogOutputs"/> for that.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// The channel number is negative, or the voltage falls outside the range the device stated
-    /// for a channel it described.
-    /// </exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The voltage falls outside the channel's range.</exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    void SetAnalogOutput(int channelNumber, double voltage);
+    void SetAnalogOutput(IAnalogOutputChannel channel, double voltage);
 
     /// <summary>
     /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
     /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="voltage">
-    /// The output voltage, in volts. Must be finite, and within the channel's range when the
-    /// device described one.
+    /// The output voltage, in volts. Must be within the channel's range.
     /// </param>
     /// <remarks>
     /// This is the device's own two-step protocol made explicit:
@@ -375,12 +372,11 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
     /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// The channel number is negative, or the voltage falls outside the channel's stated range.
-    /// </exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The voltage falls outside the channel's range.</exception>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    void StageAnalogOutput(int channelNumber, double voltage);
+    void StageAnalogOutput(IAnalogOutputChannel channel, double voltage);
 
     /// <summary>
     /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
@@ -396,9 +392,9 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
 
     /// <summary>
     /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
-    /// on the modelled channel.
+    /// on the channel.
     /// </summary>
-    /// <param name="channelNumber">The analog output channel number.</param>
+    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
     /// <param name="cancellationToken">Cancels the exchange.</param>
     /// <returns>The voltage the device reports, in volts.</returns>
     /// <remarks>
@@ -407,13 +403,13 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// device actually accepted, including a write made before this session connected.
     /// Analog output is available on NQ3 hardware only.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelNumber"/> is negative.</exception>
+    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
     /// <exception cref="InvalidOperationException">
     /// The device rejected the query or answered with something that is not a voltage.
     /// </exception>
     /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
-    Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default);
+    Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reboots the device and disconnects from it.

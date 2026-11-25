@@ -553,7 +553,7 @@ public class DaqifiStreamingDeviceConfirmationTests
     public async Task Stop_OvertakenByAnotherCallersStart_LeavesThatStartToBeConfirmed()
     {
         var device = StreamingDevice();
-        device.StreamingFrequency = 10;
+        device.StreamingFrequency = 1;
         device.Replies.Enqueue(["1"]);
         Task? start = null;
         device.DuringExchange = () =>

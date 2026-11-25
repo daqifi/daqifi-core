@@ -36,8 +36,8 @@ public class DaqifiStreamingDeviceChannelManagementTests
     private static IChannel AnalogChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
         device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == channelNumber);
 
-    private static IChannel DigitalChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
-        device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == channelNumber);
+    private static IDigitalChannel DigitalChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
+        device.Channels.OfType<IDigitalChannel>().First(c => c.ChannelNumber == channelNumber);
 
     #region EnableChannel / DisableChannel - Analog bitmask
 
@@ -392,15 +392,6 @@ public class DaqifiStreamingDeviceChannelManagementTests
     }
 
     [Fact]
-    public void SetDioDirection_OnAnalogChannel_ThrowsArgumentException()
-    {
-        var device = CreateConnectedDevice();
-        var channel = AnalogChannelAt(device, 0);
-
-        Assert.Throws<ArgumentException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
-    }
-
-    [Fact]
     public void SetDioDirection_WithUndefinedDirection_ThrowsArgumentOutOfRangeException()
     {
         var device = CreateConnectedDevice();
@@ -424,7 +415,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         // The firmware silently ignores direction/state writes while PWM is running the pin
         // (#449) — Core rejects rather than mirroring a level the pin doesn't have.
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
         device.SentMessages.Clear();
 
@@ -441,7 +432,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     public void SetDioValue_High_SendsOneState()
     {
         var device = CreateConnectedDevice();
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 1);
+        var channel = DigitalChannelAt(device, 1);
 
         device.SetDioValue(channel, true);
 
@@ -453,21 +444,12 @@ public class DaqifiStreamingDeviceChannelManagementTests
     public void SetDioValue_Low_SendsZeroState()
     {
         var device = CreateConnectedDevice();
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 3);
+        var channel = DigitalChannelAt(device, 3);
 
         device.SetDioValue(channel, false);
 
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetDioPortState(3, false).Data, sent.Data);
-    }
-
-    [Fact]
-    public void SetDioValue_OnAnalogChannel_ThrowsArgumentException()
-    {
-        var device = CreateConnectedDevice();
-        var channel = AnalogChannelAt(device, 0);
-
-        Assert.Throws<ArgumentException>(() => device.SetDioValue(channel, true));
     }
 
     [Fact]
@@ -484,7 +466,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     {
         // The firmware ignores the write entirely; Core must not report success (#449).
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
         device.SentMessages.Clear();
 
@@ -541,7 +523,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
     {
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
 
         device.SetPwmDutyCycle(channel, 50);
 
@@ -575,7 +557,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     public void SetPwmEnabled_True_SetsFlagAndSendsCommand()
     {
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
 
         device.SetPwmEnabled(channel, true);
 
@@ -607,15 +589,6 @@ public class DaqifiStreamingDeviceChannelManagementTests
 
         var sent = Assert.Single(device.SentMessages);
         Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(2, false).Data, sent.Data);
-    }
-
-    [Fact]
-    public void SetPwmEnabled_OnAnalogChannel_ThrowsArgumentException()
-    {
-        var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = AnalogChannelAt(device, 0);
-
-        Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
     }
 
     [Fact]
@@ -678,7 +651,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         // tell, so it drops the flag with the PWM frequency record; the caller enables PWM
         // again after a reconnect (#945).
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
         Assert.Equal(DigitalPinMode.Pwm, channel.Mode);
 
@@ -703,7 +676,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         // The reset hangs off the status change, not off Disconnect(): a dropped link and a
         // reconnect attempt must clear the flag just the same (#945).
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
 
         Assert.True(device.TryTransition(DeviceState.Lost));
@@ -721,7 +694,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
     public void PopulateChannelsFromStatus_PreservesPwmBookkeepingAcrossRefresh()
     {
         var device = CreateConnectedDevice(digitalChannels: 8);
-        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var channel = DigitalChannelAt(device, 4);
         device.SetPwmDutyCycle(channel, 42);
         device.SetPwmEnabled(channel, true);
 
@@ -732,7 +705,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
             DigitalPortNum = 8
         });
 
-        var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
+        var refreshed = DigitalChannelAt(device, 4);
         // Channel identity (type, number) is unchanged across the refresh, so the same
         // instance is updated in place rather than replaced.
         Assert.Same(channel, refreshed);
@@ -745,25 +718,12 @@ public class DaqifiStreamingDeviceChannelManagementTests
     #region SetAnalogOutput
 
     [Fact]
-    public void SetAnalogOutput_AddressesDacByChannelNumber()
-    {
-        var device = CreateConnectedDevice();
-        // DAC channels are addressed by number and are not part of the populated input collection;
-        // a channel number with no corresponding entry in Channels must still work and latch.
-        device.SetAnalogOutput(7, 1.25);
-
-        Assert.Equal(2, device.SentMessages.Count);
-        Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(7, 1.25).Data, device.SentMessages[0].Data);
-        Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
-    }
-
-    [Fact]
     public void SetAnalogOutput_NonFiniteVoltage_ThrowsArgumentOutOfRangeException()
     {
         var device = CreateConnectedDevice();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.NaN));
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.PositiveInfinity));
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(new AnalogOutputChannel(0), double.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(new AnalogOutputChannel(0), double.PositiveInfinity));
     }
 
     #endregion
@@ -824,7 +784,7 @@ public class DaqifiStreamingDeviceChannelManagementTests
         Assert.Throws<DeviceNotConnectedException>(() => device.DisableAllChannels());
         Assert.Throws<DeviceNotConnectedException>(() => device.SetDioDirection(digital, ChannelDirection.Output));
         Assert.Throws<DeviceNotConnectedException>(() => device.SetDioValue(digital, true));
-        Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(0, 1.0));
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(new AnalogOutputChannel(0), 1.0));
         Assert.Throws<DeviceNotConnectedException>(() => device.Reboot());
     }
 

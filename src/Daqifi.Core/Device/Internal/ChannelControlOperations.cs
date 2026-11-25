@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,10 +75,128 @@ internal sealed class ChannelControlOperations
     /// </remarks>
     private readonly Lock _commandGate = new();
 
+    /// <summary>
+    /// The state Core records for the commands sent here, once they have gone out.
+    /// </summary>
+    private readonly CommandedState<HashSet<int>> _enabledAnalog;
+
+    /// <inheritdoc cref="_enabledAnalog"/>
+    private readonly CommandedState<HashSet<int>> _enabledDigital;
+
+    /// <inheritdoc cref="_enabledAnalog"/>
+    private readonly CommandedState<int> _pwmFrequency;
+
+    /// <inheritdoc cref="_enabledAnalog"/>
+    private readonly ConditionalWeakTable<DigitalChannel, PinState> _pins = new();
+
+    /// <summary>The commanded state of one digital pin.</summary>
+    private sealed class PinState(IDeviceOperationHost host, DigitalChannel channel)
+    {
+        // Under the channels lock, which is the lock the status-frame resync of these properties
+        // writes under — the discipline SetChannelsEnabled already follows for IsEnabled (#409).
+        internal CommandedState<ChannelDirection> Direction { get; } = new(
+            () => channel.StoredDirection,
+            direction => host.WithChannelsLock(() =>
+            {
+                // The firmware ignores the write while PWM drives the pin. It was checked when the
+                // command was sent, but a PWM-off it was held back behind can have been dropped.
+                if (!channel.IsPwmEnabled)
+                {
+                    channel.ApplyDirection(direction);
+                }
+            }));
+
+        internal CommandedState<bool> Pwm { get; } = new(
+            () => channel.IsPwmEnabled,
+            enabled => host.WithChannelsLock(() =>
+            {
+                if (!enabled)
+                {
+                    channel.ExitPwm();
+                }
+
+                // The link can drop between the send and this record. The state-change hook has then
+                // already reset PWM (ResetPwmEnabled, under this same lock); entering PWM now would
+                // mark a disconnected device's pin as PWM and keep it so across the reconnect. A
+                // status message can have withdrawn the capability too.
+                else if (host.IsConnected && channel.IsPwmCapable)
+                {
+                    channel.EnterPwm();
+                }
+            }));
+
+        internal CommandedState<int> PwmDutyCycle { get; } = new(
+            () => channel.PwmDutyCyclePercent,
+            percent => channel.PwmDutyCyclePercent = percent);
+    }
+
     internal ChannelControlOperations(IDeviceOperationHost host)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
+        _enabledAnalog = EnabledChannels(ChannelType.Analog);
+        _enabledDigital = EnabledChannels(ChannelType.Digital);
+        _pwmFrequency = new CommandedState<int>(() => PwmFrequencyHz, hz => PwmFrequencyHz = hz);
     }
+
+    private CommandedState<HashSet<int>> EnabledChannels(ChannelType type) => new(
+        () => ReadEnabled(type),
+        enabled => _host.WithChannelsLock(() =>
+        {
+            foreach (var channel in _host.SnapshotChannels())
+            {
+                if (channel.Type == type)
+                {
+                    SetEnabled(channel, enabled.Contains(channel.ChannelNumber));
+                }
+            }
+        }));
+
+    private HashSet<int> ReadEnabled(ChannelType type) => _host.SnapshotChannels()
+        .Where(channel => channel.Type == type && channel.IsEnabled)
+        .Select(channel => channel.ChannelNumber)
+        .ToHashSet();
+
+    private static void SetEnabled(IChannel channel, bool enabled)
+        => (channel as IChannelEnablementNotifier)?.SetEnabled(enabled);
+
+    /// <summary>
+    /// The state there will be when what this flow sends next goes out: what has been requested, or
+    /// what the device has for the flow whose operation the requests are held back behind, because
+    /// its own commands go out ahead of them.
+    /// </summary>
+    private T AheadOfNextSend<T>(CommandedState<T> state)
+        => _host.SendsAreNeverHeldBack ? state.Recorded : state.Requested;
+
+    /// <summary>Whether a channel will be enabled when what this flow sends next goes out.</summary>
+    internal bool IsEnabledAheadOfNextSend(IChannel channel)
+        => _host.SendsAreNeverHeldBack ? channel.IsEnabled : IsEnableRequested(channel);
+
+    /// <summary>
+    /// Whether a channel is enabled, or has been asked to be by a command that is held back: what its
+    /// caller wants, whether or not that goes out.
+    /// </summary>
+    internal bool IsEnableRequested(IChannel channel) => channel.Type switch
+    {
+        ChannelType.Analog => _enabledAnalog.Requested.Contains(channel.ChannelNumber),
+        ChannelType.Digital => _enabledDigital.Requested.Contains(channel.ChannelNumber),
+        _ => channel.IsEnabled,
+    };
+
+    /// <summary>
+    /// A raw ADC enable mask, which is recorded and built on like a typed one. Every bit of it is
+    /// kept: a channel it names can become known before it goes out.
+    /// </summary>
+    internal TrackedCommand RawAdcMask(uint mask)
+    {
+        var enabled = Enumerable.Range(0, MaxAdcBitmaskChannel + 1)
+            .Where(number => (mask & (1u << number)) != 0)
+            .ToHashSet();
+
+        return _enabledAnalog.Command(enabled, _ => enabled);
+    }
+
+    private PinState Pin(DigitalChannel channel)
+        => _pins.GetValue(channel, pin => new PinState(_host, pin));
 
     /// <inheritdoc cref="IStreamingDevice.PwmFrequencyHz" />
     internal int PwmFrequencyHz { get; private set; } = DaqifiStreamingDevice.DefaultPwmFrequencyHz;
@@ -158,52 +277,16 @@ internal sealed class ChannelControlOperations
     {
         _host.EnsureConnected();
 
-        (bool HasChannels, uint Mask) adcMask = default;
-        (bool HasChannels, bool AnyEnabled) dioState = default;
-
-        // Compute and send as one step, so a concurrent enable cannot send its newer mask
-        // before this one goes out (see _commandGate).
-        lock (_commandGate)
-        {
-            // Mutate and derive the outbound masks in one critical section — see the matching
-            // comment in SetChannelsEnabled (#409) for why the gap matters.
-            _host.WithChannelsLock(() =>
-            {
-                foreach (var channel in _host.SnapshotChannels())
-                {
-                    channel.IsEnabled = false;
-                }
-
-                adcMask = ComputeAdcEnableMask();
-                dioState = ComputeDioEnableState();
-            });
-
-            // Push the cleared state for whichever channel types this device actually has.
-            if (adcMask.HasChannels)
-            {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask));
-            }
-
-            if (dioState.HasChannels)
-            {
-                _host.Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts
-                    : ScpiMessageProducer.DisableDioPorts);
-            }
-        }
+        // Push the cleared state for whichever channel types this device actually has.
+        ApplyEnabled(_host.SnapshotChannels, enabled: false, all: true);
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetDioDirection" />
-    internal void SetDioDirection(IChannel channel, ChannelDirection direction)
+    internal void SetDioDirection(IDigitalChannel channel, ChannelDirection direction)
     {
         // Argument validation precedes the connection (state) check so misuse surfaces
         // the same exception type regardless of connection state.
         ArgumentNullException.ThrowIfNull(channel);
-
-        if (channel.Type != ChannelType.Digital)
-        {
-            throw new ArgumentException("Direction can only be set on digital channels.", nameof(channel));
-        }
 
         if (direction != ChannelDirection.Input && direction != ChannelDirection.Output)
         {
@@ -212,24 +295,23 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureConnected();
 
-        EnsureChannelBelongs(channel);
+        var pin = EnsureBelongs<DigitalChannel>(channel);
 
         // The PWM check, the send and the record as one step, so neither a concurrent PWM
         // enable nor a concurrent direction write can land between them (see _commandGate).
         lock (_commandGate)
         {
-            EnsurePwmNotEnabled(channel);
-            SendAndRecordDioDirection(channel, direction);
+            EnsurePwmNotEnabled(pin);
+            SendAndRecordDioDirection(pin, direction);
         }
     }
 
-    private void SendAndRecordDioDirection(IChannel channel, ChannelDirection direction)
+    private void SendAndRecordDioDirection(DigitalChannel channel, ChannelDirection direction)
     {
-        // Send first, then record the new direction — the reverse of the mirror-then-send
-        // order used elsewhere, and deliberately so now that a status frame can write this
-        // same property (#685).
+        // Send first, then record the new direction, because a status frame can write this same
+        // property (#685).
         //
-        // Mirroring first would leave a window between the local write and the wire write in
+        // Recording first would leave a window between the local write and the wire write in
         // which a status frame the device encoded *before* it applied this command can land
         // and revert Core's view. Ordinarily a later frame would repair that, but this device
         // sends no unsolicited status frames at all — measured on an Nq1 (fw 3.7.2): zero over
@@ -238,46 +320,28 @@ internal sealed class ChannelControlOperations
         // backwards indefinitely while the device sat in the commanded direction.
         //
         // Writing after the send closes that: whatever a concurrent status refresh wrote
-        // while the command was in flight, the commanded value has the last word within this
-        // call, and it is the value the device is now in. It also means a send that throws
-        // leaves Core's view untouched rather than claiming a direction the pin never took —
-        // the same principle as the PWM guard above (#449).
-        _host.Send(ScpiMessageProducer.SetDioPortDirection(channel.ChannelNumber, direction));
-
-        // Under the channels lock, which is the lock the status-frame resync of this property
-        // writes under — the discipline SetChannelsEnabled already follows for analog
-        // IsEnabled (#409). Blocking I/O stays outside it, hence the send above.
-        _host.WithChannelsLock(() =>
-        {
-            if (channel is DigitalChannel digitalChannel)
-            {
-                digitalChannel.ApplyDirection(direction);
-            }
-        });
+        // while the command was in flight, the commanded value has the last word, and it is the
+        // value the device is now in. It also means a send that throws leaves Core's view
+        // untouched rather than claiming a direction the pin never took — the same principle as
+        // the PWM guard above (#449).
+        Pin(channel).Direction.Command(direction).Send(
+            _host, ScpiMessageProducer.SetDioPortDirection(channel.ChannelNumber, direction));
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetDioValue" />
-    internal void SetDioValue(IChannel channel, bool value)
+    internal void SetDioValue(IDigitalChannel channel, bool value)
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        // Gate on Type (matching SetDioDirection) rather than the IDigitalChannel interface,
-        // so both DIO methods accept the same set of channels. The SCPI command only needs
-        // the channel number.
-        if (channel.Type != ChannelType.Digital)
-        {
-            throw new ArgumentException("A digital output value can only be set on digital channels.", nameof(channel));
-        }
-
         _host.EnsureConnected();
 
-        EnsureChannelBelongs(channel);
+        var pin = EnsureBelongs<DigitalChannel>(channel);
 
         // The PWM check and the send as one step (see _commandGate). Nothing is recorded: the
         // pin's level comes back in the stream as IDigitalChannel.IsHigh (#901).
         lock (_commandGate)
         {
-            EnsurePwmNotEnabled(channel);
+            EnsurePwmNotEnabled(pin);
             _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value));
         }
     }
@@ -289,11 +353,12 @@ internal sealed class ChannelControlOperations
     /// pin is doing something it is not (#449). Symmetric with the capability guard in
     /// <see cref="SetPwmEnabled"/>; the only way past this is <c>SetPwmEnabled(channel, false)</c>.
     /// The check is the channel's <see cref="IDigitalChannel.Mode"/>, the same one the MCP
-    /// server makes before it calls in (#945).
+    /// server makes before it calls in (#945), or the mode it will be in if the write is held back
+    /// behind a PWM command.
     /// </summary>
-    private static void EnsurePwmNotEnabled(IChannel channel)
+    private void EnsurePwmNotEnabled(DigitalChannel channel)
     {
-        if (channel is IDigitalChannel { Mode: DigitalPinMode.Pwm })
+        if (AheadOfNextSend(Pin(channel).Pwm))
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Disable PWM on this channel first (SetPwmEnabled(channel, false); the MCP server exposes this as the disable_pwm tool).");
@@ -301,20 +366,15 @@ internal sealed class ChannelControlOperations
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetPwmEnabled" />
-    internal void SetPwmEnabled(IChannel channel, bool enabled)
+    internal void SetPwmEnabled(IDigitalChannel channel, bool enabled)
     {
         ArgumentNullException.ThrowIfNull(channel);
-
-        if (channel.Type != ChannelType.Digital)
-        {
-            throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
-        }
 
         // Enabling PWM on a non-capable channel must be blocked here: the firmware flags the
         // channel PWM-active before its capability check fails and never rolls that back,
         // leaving the channel dead to digital writes. Disabling is that state's only recovery
         // command, so it is accepted on any digital channel.
-        if (enabled && channel is not IDigitalChannel { IsPwmCapable: true })
+        if (enabled && !channel.IsPwmCapable)
         {
             throw new ArgumentException(
                 $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
@@ -323,62 +383,32 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureConnected();
 
-        EnsureChannelBelongs(channel);
+        var pin = EnsureBelongs<DigitalChannel>(channel);
 
         // The send and the record as one step, so a concurrent PWM enable or disable cannot send
         // and record between them, and a digital write cannot pass its PWM check in the gap
         // (see _commandGate).
         lock (_commandGate)
         {
-            SendAndRecordPwmEnabled(channel, enabled);
+            // Send first, then record — the rule SetDioDirection sets out above. A send that
+            // throws must not leave the channel marked PWM when the pin never went there: Core
+            // would then refuse every digital command for it (#945).
+            //
+            // Disabling PWM leaves the pin high-impedance and the firmware zeroes its stored
+            // output value. The stored direction is intentionally left as-is: the firmware keeps
+            // it and re-applies it (resuming driving) on the next state or direction write, or on
+            // the next streaming tick — verified on hardware.
+            Pin(pin).Pwm.Command(enabled).Send(
+                _host, ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
         }
-    }
-
-    private void SendAndRecordPwmEnabled(IChannel channel, bool enabled)
-    {
-        // Send first, then record — the rule SetDioDirection sets out above. A send that
-        // throws must not leave the channel marked PWM when the pin never went there: Core
-        // would then refuse every digital command for it (#945).
-        _host.Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
-
-        // Disabling PWM leaves the pin high-impedance and the firmware zeroes its stored
-        // output value. The stored direction is intentionally left as-is: the firmware keeps it and
-        // re-applies it (resuming driving) on the next state or direction write, or on the
-        // next streaming tick — verified on hardware.
-        _host.WithChannelsLock(() =>
-        {
-            if (channel is DigitalChannel digitalChannel)
-            {
-                if (enabled)
-                {
-                    // The link can drop between the send above and this record. The status
-                    // handler has then already reset PWM (ResetPwmEnabled, under this same
-                    // lock); entering PWM now would mark a disconnected device's pin as PWM
-                    // and keep it so across the reconnect.
-                    if (_host.IsConnected)
-                    {
-                        digitalChannel.EnterPwm();
-                    }
-                }
-                else
-                {
-                    digitalChannel.ExitPwm();
-                }
-            }
-        });
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetPwmDutyCycle" />
-    internal void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
+    internal void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent)
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        if (channel.Type != ChannelType.Digital)
-        {
-            throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
-        }
-
-        if (channel is not IDigitalChannel { IsPwmCapable: true })
+        if (!channel.IsPwmCapable)
         {
             throw new ArgumentException(
                 $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
@@ -397,17 +427,13 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureConnected();
 
-        EnsureChannelBelongs(channel);
+        var pin = EnsureBelongs<DigitalChannel>(channel);
 
         lock (_commandGate)
         {
             // Send first, then record — the rule SetDioDirection sets out above (#945).
-            _host.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
-
-            if (channel is IDigitalChannel digitalChannel)
-            {
-                digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
-            }
+            Pin(pin).PwmDutyCycle.Command(dutyCyclePercent).Send(
+                _host, ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
         }
     }
 
@@ -478,8 +504,8 @@ internal sealed class ChannelControlOperations
             // The SCPI command is addressed to a channel, but the firmware drives all PWM from
             // one shared timer and applies the frequency to every channel. Channel 0 is used as
             // the address because it is PWM-capable on all supported hardware.
-            _host.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
-            PwmFrequencyHz = frequencyHz;
+            _pwmFrequency.Command(frequencyHz).Send(
+                _host, ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
 
             // The cache may only name a frequency the device is known to have taken last, and
             // the gate orders calls, not deliveries. A send from a flow that does not own a
@@ -522,33 +548,25 @@ internal sealed class ChannelControlOperations
     }
 
     /// <inheritdoc cref="IStreamingDevice.SetAnalogOutput" />
-    internal void SetAnalogOutput(int channelNumber, double voltage)
+    internal void SetAnalogOutput(IAnalogOutputChannel channel, double voltage)
     {
-        StageAnalogOutput(channelNumber, voltage);
+        StageAnalogOutput(channel, voltage);
         LatchAnalogOutputs();
     }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StageAnalogOutput" />
-    internal void StageAnalogOutput(int channelNumber, double voltage)
+    internal void StageAnalogOutput(IAnalogOutputChannel channel, double voltage)
     {
-        if (channelNumber < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-        }
+        ArgumentNullException.ThrowIfNull(channel);
 
         // Range-check against the device's own description of the channel before anything
-        // reaches the wire. A device that never described its DAC channels (no capability
-        // document, or firmware that does not report them) models none, and the command is
-        // still sent by number — refusing it would break the only analog-output path this
-        // library has ever had.
-        var channel = FindAnalogOutputChannel(channelNumber);
-
-        if (channel is not null && !channel.IsInRange(voltage))
+        // reaches the wire.
+        if (!channel.IsInRange(voltage))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(voltage),
                 voltage,
-                $"Analog output {channelNumber} accepts {channel.MinimumVoltage} to {channel.MaximumVoltage} V"
+                $"Analog output {channel.ChannelNumber} accepts {channel.MinimumVoltage} to {channel.MaximumVoltage} V"
                 + (channel.RangeIsAssumed ? " (assumed; the device stated no range)." : "."));
         }
 
@@ -556,10 +574,12 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureSupported(DeviceFeature.AnalogOutput);
 
+        var output = EnsureBelongs<AnalogOutputChannel>(channel);
+
         lock (_commandGate)
         {
-            _host.Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
-            channel?.Stage(voltage);
+            new TrackedCommand(() => output.Stage(voltage)).Send(
+                _host, ScpiMessageProducer.SetAnalogOutputVoltage(channel.ChannelNumber, voltage));
         }
     }
 
@@ -574,30 +594,34 @@ internal sealed class ChannelControlOperations
         // latch went out is not marked as latched by it (see _commandGate).
         lock (_commandGate)
         {
-            _host.Send(ScpiMessageProducer.UpdateDacOutputs);
-
             // The device latches every staged channel at once, so every modelled channel with a
-            // pending value now reflects what the hardware is driving.
-            var latchedAt = DateTime.Now;
-            foreach (var channel in _host.SnapshotChannels())
+            // pending value then reflects what the hardware is driving.
+            new TrackedCommand(() =>
             {
-                (channel as AnalogOutputChannel)?.Latch(latchedAt);
-            }
+                var latchedAt = DateTime.Now;
+                foreach (var channel in _host.SnapshotChannels())
+                {
+                    (channel as AnalogOutputChannel)?.Latch(latchedAt);
+                }
+            }).Send(_host, ScpiMessageProducer.UpdateDacOutputs);
         }
     }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.GetAnalogOutputAsync" />
-    internal async Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
+    internal async Task<double> GetAnalogOutputAsync(
+        IAnalogOutputChannel channel, CancellationToken cancellationToken = default)
     {
-        // Build the query first so argument validation surfaces the same exception type
-        // regardless of connection state (matches SetDioDirection / the diagnostics ops).
-        var query = ScpiMessageProducer.GetAnalogOutputVoltage(channelNumber);
+        ArgumentNullException.ThrowIfNull(channel);
 
         _host.EnsureConnected();
 
         cancellationToken.ThrowIfCancellationRequested();
 
         _host.EnsureSupported(DeviceFeature.AnalogOutput);
+
+        var output = EnsureBelongs<AnalogOutputChannel>(channel);
+        var channelNumber = channel.ChannelNumber;
+        var query = ScpiMessageProducer.GetAnalogOutputVoltage(channelNumber);
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(query),
@@ -615,29 +639,12 @@ internal sealed class ChannelControlOperations
                 && double.IsFinite(volts),
             out var readbackVolts))
         {
-            FindAnalogOutputChannel(channelNumber)?.SetOutputVoltage(readbackVolts, DateTime.Now);
+            output.SetOutputVoltage(readbackVolts, DateTime.Now);
             return readbackVolts;
         }
 
         throw new InvalidOperationException(
             $"The device's readback of analog output {channelNumber} was not a voltage. It answered: {DescribeLines(lines)}");
-    }
-
-    /// <summary>
-    /// Finds the modelled analog-output channel with this number, or <c>null</c> when the
-    /// device has not described one.
-    /// </summary>
-    private AnalogOutputChannel? FindAnalogOutputChannel(int channelNumber)
-    {
-        foreach (var channel in _host.SnapshotChannels())
-        {
-            if (channel is AnalogOutputChannel output && output.ChannelNumber == channelNumber)
-            {
-                return output;
-            }
-        }
-
-        return null;
     }
 
     private static string DescribeLines(IReadOnlyList<string> lines)
@@ -673,125 +680,80 @@ internal sealed class ChannelControlOperations
             EnsureChannelBelongs(channel);
         }
 
-        var touchedAnalog = false;
-        var touchedDigital = false;
-        var adcMask = (HasChannels: false, Mask: 0u);
-        var dioState = (HasChannels: false, AnyEnabled: false);
+        ApplyEnabled(() => channels, enabled, all: false);
+    }
 
-        // The mask is computed from every channel, not just the ones this call touches, so the
-        // computation and its send have to be one step: otherwise a concurrent call can compute
-        // a newer mask and send it first, and this call's older mask then lands last
-        // (see _commandGate).
+    /// <summary>
+    /// Sends the commands that enable or disable the channels, or that disable everything the device
+    /// streams when they are all of them. Each channel type is recorded when its command goes out.
+    /// </summary>
+    private void ApplyEnabled(Func<IReadOnlyList<IChannel>> getChannels, bool enabled, bool all)
+    {
+        // A command names every channel of its type, not just the ones this call touches, so working
+        // it out and sending it have to be one step: otherwise a concurrent call can work out a newer
+        // one and send it first, and this call's older one then lands last (see _commandGate).
         lock (_commandGate)
         {
-            // Mutate IsEnabled and derive the outbound masks from it in one critical section, so
-            // a status frame resyncing analog IsEnabled from the device (#409) on the consumer
-            // thread cannot interleave between the mutation and the read that computes the mask —
-            // which would otherwise send a mask reflecting a value the status frame is about to
-            // overwrite, silently failing to apply the requested enable/disable on the device.
-            _host.WithChannelsLock(() =>
+            var channels = getChannels();
+
+            if (ChangeOf(ChannelType.Analog, channels, enabled, all) is { } analogChange)
             {
-                foreach (var channel in channels)
-                {
-                    channel.IsEnabled = enabled;
-
-                    if (channel.Type == ChannelType.Analog)
-                    {
-                        touchedAnalog = true;
-                    }
-                    else if (channel.Type == ChannelType.Digital)
-                    {
-                        touchedDigital = true;
-                    }
-                }
-
-                if (touchedAnalog)
-                {
-                    adcMask = ComputeAdcEnableMask();
-                }
-
-                if (touchedDigital)
-                {
-                    dioState = ComputeDioEnableState();
-                }
-            });
-
-            if (touchedAnalog && adcMask.HasChannels)
-            {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask));
+                _enabledAnalog.Send(
+                    _host,
+                    AheadOfNextSend(_enabledAnalog),
+                    analogChange,
+                    analog => ScpiMessageProducer.EnableAdcChannels(AdcEnableMask(analog)));
             }
 
-            if (touchedDigital && dioState.HasChannels)
+            if (ChangeOf(ChannelType.Digital, channels, enabled, all) is { } digitalChange)
             {
-                _host.Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts
-                    : ScpiMessageProducer.DisableDioPorts);
+                _enabledDigital.Send(
+                    _host,
+                    AheadOfNextSend(_enabledDigital),
+                    digitalChange,
+                    digital => digital.Count > 0 ? ScpiMessageProducer.EnableDioPorts : ScpiMessageProducer.DisableDioPorts);
             }
         }
     }
 
     /// <summary>
-    /// Computes the ADC enable bitmask over all currently-enabled analog channels. Must be
-    /// called under <see cref="IDeviceOperationHost.WithChannelsLock"/> alongside any IsEnabled
-    /// mutation it should reflect (#409) — see <see cref="SetChannelsEnabled"/>.
+    /// What enabling or disabling the channels does to the enabled ones of a type; <c>null</c> when
+    /// there is nothing to command for that type.
     /// </summary>
-    private (bool HasChannels, uint Mask) ComputeAdcEnableMask()
+    private Func<HashSet<int>, HashSet<int>>? ChangeOf(
+        ChannelType type, IReadOnlyList<IChannel> channels, bool enabled, bool all)
     {
-        uint mask = 0;
-        var hasAnalogChannels = false;
-
-        foreach (var channel in _host.SnapshotChannels())
+        var numbers = channels.Where(channel => channel.Type == type).Select(channel => channel.ChannelNumber).ToHashSet();
+        if (numbers.Count == 0)
         {
-            if (channel.Type != ChannelType.Analog)
-            {
-                continue;
-            }
+            return null;
+        }
 
-            hasAnalogChannels = true;
+        if (all)
+        {
+            // Including any a raw mask names that the device has not described yet.
+            return _ => [];
+        }
 
-            if (!channel.IsEnabled)
-            {
-                continue;
-            }
+        return enabled ? current => [.. current, .. numbers] : current => [.. current.Except(numbers)];
+    }
 
-            if (channel.ChannelNumber > MaxAdcBitmaskChannel)
+    /// <summary>The ADC enable bitmask for these analog channels.</summary>
+    private static uint AdcEnableMask(HashSet<int> channelNumbers)
+    {
+        var mask = 0u;
+        foreach (var channelNumber in channelNumbers)
+        {
+            if (channelNumber > MaxAdcBitmaskChannel)
             {
                 throw new InvalidOperationException(
-                    $"Analog channel number {channel.ChannelNumber} exceeds the maximum ({MaxAdcBitmaskChannel}) that can be encoded in the ADC enable bitmask.");
+                    $"Analog channel number {channelNumber} exceeds the maximum ({MaxAdcBitmaskChannel}) that can be encoded in the ADC enable bitmask.");
             }
 
-            mask |= 1u << channel.ChannelNumber;
+            mask |= 1u << channelNumber;
         }
 
-        return (hasAnalogChannels, mask);
-    }
-
-    /// <summary>
-    /// Computes whether any digital channel is enabled. Must be called under
-    /// <see cref="IDeviceOperationHost.WithChannelsLock"/> alongside any IsEnabled mutation it
-    /// should reflect — see <see cref="SetChannelsEnabled"/>.
-    /// </summary>
-    private (bool HasChannels, bool AnyEnabled) ComputeDioEnableState()
-    {
-        var hasDigitalChannels = false;
-        var anyEnabled = false;
-
-        foreach (var channel in _host.SnapshotChannels())
-        {
-            if (channel.Type != ChannelType.Digital)
-            {
-                continue;
-            }
-
-            hasDigitalChannels = true;
-
-            if (channel.IsEnabled)
-            {
-                anyEnabled = true;
-            }
-        }
-
-        return (hasDigitalChannels, anyEnabled);
+        return mask;
     }
 
     /// <summary>
@@ -804,5 +766,17 @@ internal sealed class ChannelControlOperations
         {
             throw new ArgumentException("The specified channel does not belong to this device.", nameof(channel));
         }
+    }
+
+    /// <summary>
+    /// The same, for a channel of one kind. A device only holds Core's own channel types, so one
+    /// that belongs to it is one of those.
+    /// </summary>
+    private T EnsureBelongs<T>(IChannel channel)
+        where T : class, IChannel
+    {
+        EnsureChannelBelongs(channel);
+        return channel as T
+            ?? throw new ArgumentException("The specified channel does not belong to this device.", nameof(channel));
     }
 }

@@ -845,17 +845,17 @@ public class LanChipInfoProviderExtensionsTests
         public void EnableChannels(IEnumerable<IChannel> channels) { }
         public void DisableChannel(IChannel channel) { }
         public void DisableAllChannels() { }
-        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
-        public void SetDioValue(IChannel channel, bool value) { }
-        public void SetPwmEnabled(IChannel channel, bool enabled) { }
-        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IDigitalChannel channel, bool value) { }
+        public void SetPwmEnabled(IDigitalChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent) { }
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
-        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
         public int PwmFrequencyFloorHz => 0;
-        public void StageAnalogOutput(int channelNumber, double voltage) { }
+        public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
         public void LatchAnalogOutputs() { }
-        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
         public bool Supports(DeviceFeature feature) => false;
         public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;

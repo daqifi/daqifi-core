@@ -12,10 +12,10 @@ public interface IDataSample
     DateTime Timestamp { get; }
 
     /// <summary>
-    /// Gets or sets the scaled value of the sample (e.g. volts for an analog channel, or 0/1 for
+    /// Gets the scaled value of the sample (e.g. volts for an analog channel, or 0/1 for
     /// a digital channel).
     /// </summary>
-    double Value { get; set; }
+    double Value { get; }
 
     /// <summary>
     /// Gets the raw device value this sample was decoded from, when one exists: the raw ADC count
@@ -53,8 +53,7 @@ public interface IDataSample
     /// <see cref="Value"/> itself when the channel has no scaling configured.
     /// </summary>
     /// <remarks>
-    /// Derived on read rather than stored, so it stays consistent with <see cref="Value"/> even
-    /// though that property has a setter. Nothing is ever mutated in place to produce it.
+    /// Derived on read rather than stored. Nothing is ever mutated in place to produce it.
     /// </remarks>
     double ScaledValue => Scaling is { } scaling ? scaling.Apply(Value) : Value;
 

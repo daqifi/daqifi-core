@@ -294,22 +294,13 @@ public sealed record AnalogOutputListing(string DeviceId, IReadOnlyList<AnalogOu
 /// Whether the value is now on the pin. <c>false</c> means it was staged only and is waiting for
 /// latch_analog_outputs.
 /// </param>
-/// <param name="RangeChecked">
-/// Whether the voltage was validated against a range the device stated. <c>false</c> means the
-/// device described no analog outputs at all — the command was addressed by channel number and
-/// nothing here can vouch for it (see <see cref="DaqifiAgent.SetAnalogOutputAsync"/>).
-/// </param>
-/// <param name="Output">
-/// The channel afterwards, or <c>null</c> when the device described no analog outputs and there is
-/// therefore no modelled channel to report.
-/// </param>
+/// <param name="Output">The channel afterwards.</param>
 public sealed record AnalogOutputResult(
     string DeviceId,
     int Channel,
     double Volts,
     bool Applied,
-    bool RangeChecked,
-    AnalogOutputState? Output);
+    AnalogOutputState Output);
 
 /// <summary>
 /// Result of latching the staged analog outputs: every modelled analog-output channel afterwards,

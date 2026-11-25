@@ -162,7 +162,7 @@ internal sealed class StreamFrameDecoder
     /// are configured. Caching it also takes the decode thread out of contention with
     /// <c>EnableChannel</c> for that lock.
     /// </remarks>
-    private IAnalogChannel[] _cachedActiveAnalogChannels = Array.Empty<IAnalogChannel>();
+    private AnalogChannel[] _cachedActiveAnalogChannels = Array.Empty<AnalogChannel>();
 
     internal StreamFrameDecoder(IDeviceOperationHost host)
     {
@@ -581,20 +581,20 @@ internal sealed class StreamFrameDecoder
         var activeAnalogCount = 0;
         foreach (var channel in channels)
         {
-            if (channel.IsEnabled && channel is IAnalogChannel)
+            if (channel.IsEnabled && channel is AnalogChannel)
             {
                 activeAnalogCount++;
             }
         }
 
         var activeAnalog = activeAnalogCount == 0
-            ? Array.Empty<IAnalogChannel>()
-            : new IAnalogChannel[activeAnalogCount];
+            ? Array.Empty<AnalogChannel>()
+            : new AnalogChannel[activeAnalogCount];
 
         var index = 0;
         foreach (var channel in channels)
         {
-            if (channel.IsEnabled && channel is IAnalogChannel analog)
+            if (channel.IsEnabled && channel is AnalogChannel analog)
             {
                 activeAnalog[index++] = analog;
             }
@@ -612,7 +612,7 @@ internal sealed class StreamFrameDecoder
     /// <summary>
     /// The enabled analog channels in device order, refreshing the cache if it is stale.
     /// </summary>
-    private IAnalogChannel[] GetActiveAnalogChannels()
+    private AnalogChannel[] GetActiveAnalogChannels()
     {
         RefreshChannelCacheIfStale();
         return _cachedActiveAnalogChannels;
@@ -626,7 +626,7 @@ internal sealed class StreamFrameDecoder
         var count = 0;
         foreach (var channel in channels)
         {
-            if (channel.IsEnabled && channel is IAnalogChannel)
+            if (channel.IsEnabled && channel is AnalogChannel)
             {
                 count++;
             }
@@ -655,7 +655,7 @@ internal sealed class StreamFrameDecoder
     /// </param>
     private static void DecodeAnalog(
         DaqifiOutMessage message,
-        IAnalogChannel[] activeAnalog,
+        AnalogChannel[] activeAnalog,
         DateTime hostTimestamp,
         uint deviceTimestamp,
         bool hasFloat)
@@ -689,10 +689,8 @@ internal sealed class StreamFrameDecoder
             // converted reading, and nothing about the sample is mutated after the fact. Read
             // per sample because scaling can change at any time without a channel-state version
             // bump, which is what the cached channel array keys off (#501).
-            var scaling = channel is IScaledChannel scaledChannel ? scaledChannel.Scaling : null;
-
             channel.SetActiveSample(
-                new DataSample(hostTimestamp, scaled, raw, deviceTimestamp) { Scaling = scaling });
+                new DataSample(hostTimestamp, scaled, raw, deviceTimestamp) { Scaling = channel.Scaling });
         }
     }
 
@@ -719,7 +717,7 @@ internal sealed class StreamFrameDecoder
 
         foreach (var channel in channels)
         {
-            if (!channel.IsEnabled || channel.Type != ChannelType.Digital)
+            if (channel is not DigitalChannel { IsEnabled: true } digital)
             {
                 continue;
             }
@@ -732,7 +730,7 @@ internal sealed class StreamFrameDecoder
 
             var bit = (digitalData[bitIndex / 8] & (1 << (bitIndex % 8))) != 0;
 
-            channel.SetActiveSample(
+            digital.SetActiveSample(
                 new DataSample(hostTimestamp, bit ? 1.0 : 0.0, bit ? 1 : 0, deviceTimestamp));
         }
     }

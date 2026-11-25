@@ -99,6 +99,13 @@ public static class SampleRateCap
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="device"/> is <c>null</c>.</exception>
     public static int ComputeForDevice(IStreamingDevice device)
+        => ComputeForDevice(device, static channel => channel.IsEnabled);
+
+    /// <summary>
+    /// The same, for the analog inputs <paramref name="isEnabled"/> answers for rather than those
+    /// enabled right now.
+    /// </summary>
+    internal static int ComputeForDevice(IStreamingDevice device, Func<IChannel, bool> isEnabled)
     {
         ArgumentNullException.ThrowIfNull(device);
 
@@ -115,7 +122,7 @@ public static class SampleRateCap
         if (deviceReportedCapHz is not >= 0 && streaming?.RateModel is { } model)
         {
             var (simultaneousCount, totalCount) = CountEnabledAnalogInputs(
-                device.GetChannelsSnapshot(), metadata.CapabilityDocument!);
+                device.GetChannelsSnapshot(), metadata.CapabilityDocument!, isEnabled);
 
             if (totalCount == 0)
             {
@@ -144,7 +151,7 @@ public static class SampleRateCap
     /// Applies a cap to a rate that is already live, lowering it when it no longer fits.
     /// </summary>
     /// <param name="currentRateHz">The rate currently live on the device.</param>
-    /// <param name="capHz">The effective cap, from <see cref="Compute"/> or <see cref="ComputeForDevice"/>.</param>
+    /// <param name="capHz">The effective cap, from <see cref="Compute"/> or <see cref="ComputeForDevice(IStreamingDevice)"/>.</param>
     /// <returns>
     /// The rate that should now be live, and — when it differs from <paramref name="currentRateHz"/>
     /// — the rate that was live before the adjustment. A cap of <c>0</c> (nothing enabled) leaves the
@@ -172,7 +179,7 @@ public static class SampleRateCap
     /// not an approximation.
     /// </remarks>
     private static (int SimultaneousCount, int TotalCount) CountEnabledAnalogInputs(
-        IReadOnlyList<IChannel> channels, CapabilityDocument document)
+        IReadOnlyList<IChannel> channels, CapabilityDocument document, Func<IChannel, bool> isEnabled)
     {
         var simultaneousCount = 0;
         var totalCount = 0;
@@ -181,7 +188,7 @@ public static class SampleRateCap
         {
             if (channel.Type != ChannelType.Analog
                 || channel.Direction != ChannelDirection.Input
-                || !channel.IsEnabled)
+                || !isEnabled(channel))
             {
                 continue;
             }

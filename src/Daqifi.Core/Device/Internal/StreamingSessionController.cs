@@ -940,10 +940,10 @@ internal sealed class StreamingSessionController
     /// sends its stop through <c>Send</c> and repairs the format and routing itself.
     /// </description></item>
     /// <item><description>
-    /// <see cref="DaqifiStreamingDevice.EnableChannels"/> — assigns <see cref="IChannel.IsEnabled"/>
-    /// under the channels lock and derives the outbound mask from it. The mask has already been
-    /// sent by the time this runs, so only the assignment is replayed, and it is applied to
-    /// every analog channel because the firmware treats the mask as a set-replace.
+    /// <see cref="DaqifiStreamingDevice.EnableChannels"/> — records <see cref="IChannel.IsEnabled"/>
+    /// when its mask goes out. A raw mask is recorded the same way
+    /// (<see cref="IStreamingSessionHost.TrackAdcEnableMask"/>), on every analog channel, because the
+    /// firmware treats the mask as a set-replace.
     /// </description></item>
     /// </list>
     /// <para>
@@ -1006,8 +1006,17 @@ internal sealed class StreamingSessionController
                 break;
 
             case SessionCommandEffectKind.SetAdcEnableMask:
-                send(null);
-                ApplyAdcEnableMask(effect.AdcEnableMask);
+                var mask = _host.TrackAdcEnableMask(effect.AdcEnableMask);
+                try
+                {
+                    send(mask);
+                }
+                catch
+                {
+                    mask.NotSent(null);
+                    throw;
+                }
+
                 break;
 
             default:
@@ -1159,33 +1168,6 @@ internal sealed class StreamingSessionController
         }
     }
 
-    /// <summary>
-    /// Applies a sent ADC enable bitmask to the device's analog channels, so a caller who
-    /// enabled channels with a raw command has the same restorable session as one who used
-    /// <see cref="DaqifiStreamingDevice.EnableChannels"/>.
-    /// </summary>
-    /// <remarks>
-    /// The mask is a set-replace, exactly as the firmware treats it, so every analog channel is
-    /// assigned from it rather than only the set bits. A device-reported mask still wins on the
-    /// next status frame (#409) — that is the device's own view, and it outranks what was asked
-    /// for.
-    /// </remarks>
-    private void ApplyAdcEnableMask(uint mask)
-    {
-        _host.WithChannelsLock(() =>
-        {
-            foreach (var channel in _host.SnapshotChannels())
-            {
-                if (channel.Type != ChannelType.Analog || channel.ChannelNumber > ChannelControlOperations.MaxAdcBitmaskChannel)
-                {
-                    continue;
-                }
-
-                channel.IsEnabled = (mask & (1u << channel.ChannelNumber)) != 0;
-            }
-        });
-    }
-
     #endregion
 
     #region Session restore after an automatic reconnect (issue #379)
@@ -1198,7 +1180,8 @@ internal sealed class StreamingSessionController
 
     /// <inheritdoc cref="DaqifiStreamingDevice.CaptureSessionSnapshot"/>
     internal void CaptureSessionSnapshot() =>
-        _sessionSnapshot = StreamingSessionSnapshot.Capture(_host.SnapshotChannels(), IsStreaming, IsLoggingToSdCard);
+        _sessionSnapshot = StreamingSessionSnapshot.Capture(
+            _host.SnapshotChannels(), IsStreaming, IsLoggingToSdCard, _host.IsEnableRequested);
 
     /// <summary>
     /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,

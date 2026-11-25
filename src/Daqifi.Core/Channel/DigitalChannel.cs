@@ -4,7 +4,7 @@ namespace Daqifi.Core.Channel;
 /// Represents a digital input/output channel.
 /// </summary>
 /// <remarks>
-/// Instance members are thread-safe. Property accessors and <see cref="SetActiveSample(IDataSample)"/>
+/// Instance members are thread-safe. Property accessors and <see cref="SetActiveSample"/>
 /// serialize on a private lock so concurrent readers and writers observe consistent state.
 /// </remarks>
 public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
@@ -62,13 +62,17 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
         remove => Internal.ChannelEnablementNotification.RemoveHandler(_lock, ref _enablementChanged, value);
     }
 
+    /// <inheritdoc />
+    void IChannelEnablementNotifier.SetEnabled(bool enabled) => IsEnabled = enabled;
+
     /// <summary>
-    /// Gets or sets whether the channel is enabled.
+    /// Gets whether the channel is enabled. Use <c>IStreamingDevice.EnableChannel</c> and its
+    /// siblings to change it.
     /// </summary>
     public bool IsEnabled
     {
         get { lock (_lock) { return _isEnabled; } }
-        set => Internal.ChannelEnablementNotification.SetAndNotify(_lock, value, ref _isEnabled, ref _enablementChanged);
+        internal set => Internal.ChannelEnablementNotification.SetAndNotify(_lock, value, ref _isEnabled, ref _enablementChanged);
     }
 
     /// <summary>
@@ -158,15 +162,13 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// Gets or sets the last commanded PWM duty cycle in whole percent. Local bookkeeping
-    /// mirroring the last commanded state; defaults to <c>50</c> (a commandable value) until a
-    /// duty cycle has been set, and clamps to <c>1-100</c> on assignment so this always holds a
-    /// commandable value.
+    /// Gets the last commanded PWM duty cycle in whole percent; <c>50</c> (a commandable value)
+    /// until a duty cycle has been set. Use <c>IStreamingDevice.SetPwmDutyCycle</c> to change it.
     /// </summary>
     public int PwmDutyCyclePercent
     {
         get { lock (_lock) { return _pwmDutyCyclePercent; } }
-        set
+        internal set
         {
             lock (_lock)
             {
@@ -200,6 +202,14 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
         _direction = ChannelDirection.Input;
         _isPwmEnabled = false;
         _pwmDutyCyclePercent = DefaultPwmDutyCyclePercent;
+    }
+
+    /// <summary>
+    /// Gets the direction the pin is in when PWM does not drive it.
+    /// </summary>
+    internal ChannelDirection StoredDirection
+    {
+        get { lock (_lock) { return _direction; } }
     }
 
     /// <summary>
@@ -271,22 +281,12 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     }
 
     /// <summary>
-    /// Sets the active sample for this channel and triggers the SampleReceived event.
-    /// </summary>
-    /// <param name="value">The value (typically 0 for low, 1 for high).</param>
-    /// <param name="timestamp">The timestamp when the sample was taken.</param>
-    public void SetActiveSample(double value, DateTime timestamp)
-    {
-        SetActiveSample(new DataSample(timestamp, value));
-    }
-
-    /// <summary>
     /// Sets the active sample for this channel to a fully-formed sample and triggers the
     /// SampleReceived event.
     /// </summary>
     /// <param name="sample">The sample to set as active.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
-    public void SetActiveSample(IDataSample sample)
+    internal void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);
         SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));

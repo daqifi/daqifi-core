@@ -45,7 +45,6 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     private readonly Lock _lock = new();
     private IDataSample? _activeSample;
     private string _name;
-    private bool _isEnabled;
     private int _resolutionBits;
     private double _minimumVoltage;
     private double _maximumVoltage;
@@ -68,39 +67,18 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     }
 
     /// <summary>
-    /// Gets or sets whether the channel is enabled. Carried for <see cref="IChannel"/>
-    /// compatibility only — an analog output is driven by writing a voltage to it, and nothing in
-    /// the acquisition path (the ADC enable bitmask, the stream decoder, the sample-rate model)
-    /// consults this flag for an output channel.
+    /// Gets whether the channel is enabled for acquisition. Always <c>false</c>: an analog output
+    /// is driven by writing a voltage to it, and is never acquired.
     /// </summary>
-    public bool IsEnabled
-    {
-        get { lock (_lock) { return _isEnabled; } }
-        set { lock (_lock) { _isEnabled = value; } }
-    }
+    public bool IsEnabled => false;
 
     /// <summary>Gets the channel type (always <see cref="ChannelType.AnalogOutput"/>).</summary>
     public ChannelType Type => ChannelType.AnalogOutput;
 
     /// <summary>
-    /// Gets the channel direction. Always <see cref="ChannelDirection.Output"/>; assigning
-    /// anything else throws, because the direction of a DAC channel is a fact about the hardware
-    /// rather than a setting.
+    /// Gets the channel direction (always <see cref="ChannelDirection.Output"/> for this class).
     /// </summary>
-    /// <exception cref="ArgumentException">A direction other than Output was assigned.</exception>
-    public ChannelDirection Direction
-    {
-        get => ChannelDirection.Output;
-        set
-        {
-            if (value != ChannelDirection.Output)
-            {
-                throw new ArgumentException(
-                    $"An analog output channel is always {nameof(ChannelDirection.Output)}; it cannot be set to {value}.",
-                    nameof(value));
-            }
-        }
-    }
+    public ChannelDirection Direction => ChannelDirection.Output;
 
     /// <inheritdoc />
     public IDataSample? ActiveSample
@@ -272,18 +250,9 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     /// record of what the host commanded, not a hardware measurement; the device has no DAC
     /// readback path.
     /// </summary>
-    /// <param name="value">The voltage now driven on the channel.</param>
-    /// <param name="timestamp">When the value took effect.</param>
-    public void SetActiveSample(double value, DateTime timestamp)
-        => SetActiveSample(new DataSample(timestamp, value));
-
-    /// <summary>
-    /// Sets the value driven on this channel from a fully-formed sample and raises
-    /// <see cref="SampleReceived"/>.
-    /// </summary>
     /// <param name="sample">The sample to record.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
-    public void SetActiveSample(IDataSample sample)
+    private void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);
         SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));

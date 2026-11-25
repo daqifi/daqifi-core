@@ -98,18 +98,6 @@ public class DataSampleTests
     }
 
     [Fact]
-    public void ScaledValue_TracksALaterValueWrite()
-    {
-        // Derived on read rather than stored at construction. Value still has a setter, and a
-        // ScaledValue frozen at construction would silently disagree with it.
-        var sample = new DataSample(DateTime.UtcNow, 1.0) { Scaling = new ChannelScaling(10.0) };
-
-        sample.Value = 3.0;
-
-        Assert.Equal(30.0, sample.ScaledValue);
-    }
-
-    [Fact]
     public void ScaledValue_OnAnOverflowingScaling_FallsBackToTheUnscaledValue()
     {
         var sample = new DataSample(DateTime.UtcNow, 1e10) { Scaling = new ChannelScaling(1e308) };
@@ -139,7 +127,7 @@ public class DataSampleTests
     {
         public DateTime Timestamp { get; } = timestamp;
 
-        public double Value { get; set; } = value;
+        public double Value { get; } = value;
 
         public int? RawValue => null;
 

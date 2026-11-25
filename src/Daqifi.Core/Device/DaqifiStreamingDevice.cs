@@ -882,30 +882,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     }
 
     /// <summary>
-    /// How many analog <i>input</i> channels are enabled right now — the one figure the device's
-    /// sample-rate cap moves with.
+    /// How many analog <i>input</i> channels are enabled right now, counting an enable that is held
+    /// back, which a start goes out behind — the one figure the device's sample-rate cap moves with.
     /// </summary>
     /// <remarks>
     /// Analog outputs are not streamed and digital pins are captured on the analog sample tick
     /// rather than driving one of their own, which is why neither counts here; see
     /// <see cref="SampleRateCap"/>.
     /// </remarks>
-    private int EnabledAnalogInputCount()
-    {
-        var count = 0;
-
-        foreach (var channel in GetChannelsSnapshot())
-        {
-            if (channel.Type == ChannelType.Analog
-                && channel.Direction == ChannelDirection.Input
-                && channel.IsEnabled)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
+    private int EnabledAnalogInputCount() => GetChannelsSnapshot().Count(channel =>
+        channel.Type == ChannelType.Analog && _channelControl.IsEnabledAheadOfNextSend(channel));
 
     /// <inheritdoc />
     /// <remarks>
@@ -995,9 +981,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <param name="message">The message to send.</param>
     public override void Send<T>(IOutboundMessage<T> message)
     {
-        if (message is IOutboundMessage<string> textCommand)
+        if (message is TrackedMessage tracked)
         {
-            _session.SendTracked(textCommand.Data, tracked => SendOrHoldBack(message, tracked));
+            // A channel command, whose state its sender keeps.
+            SendOrHoldBack(message, tracked.Command);
+        }
+        else if (message is IOutboundMessage<string> textCommand)
+        {
+            _session.SendTracked(textCommand.Data, session => SendOrHoldBack(message, session));
         }
         else
         {
@@ -1256,11 +1247,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     public void DisableAllChannels() => _channelControl.DisableAllChannels();
 
     /// <inheritdoc />
-    public void SetDioDirection(IChannel channel, ChannelDirection direction)
+    public void SetDioDirection(IDigitalChannel channel, ChannelDirection direction)
         => _channelControl.SetDioDirection(channel, direction);
 
     /// <inheritdoc />
-    public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
+    public void SetDioValue(IDigitalChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
 
     /// <summary>
     /// The PWM frequency floor Core assumes when the device does not state a trustworthy one:
@@ -1299,10 +1290,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     public int PwmFrequencyHz => _channelControl.PwmFrequencyHz;
 
     /// <inheritdoc />
-    public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
+    public void SetPwmEnabled(IDigitalChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
     /// <inheritdoc />
-    public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
+    public void SetPwmDutyCycle(IDigitalChannel channel, int dutyCyclePercent)
         => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
     /// <inheritdoc />
@@ -1321,19 +1312,19 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         => _administration.GetIdentifyAsync(cancellationToken);
 
     /// <inheritdoc />
-    public void SetAnalogOutput(int channelNumber, double voltage)
-        => _channelControl.SetAnalogOutput(channelNumber, voltage);
+    public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage)
+        => _channelControl.SetAnalogOutput(channel, voltage);
 
     /// <inheritdoc />
-    public void StageAnalogOutput(int channelNumber, double voltage)
-        => _channelControl.StageAnalogOutput(channelNumber, voltage);
+    public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage)
+        => _channelControl.StageAnalogOutput(channel, voltage);
 
     /// <inheritdoc />
     public void LatchAnalogOutputs() => _channelControl.LatchAnalogOutputs();
 
     /// <inheritdoc />
-    public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
-        => _channelControl.GetAnalogOutputAsync(channelNumber, cancellationToken);
+    public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default)
+        => _channelControl.GetAnalogOutputAsync(channel, cancellationToken);
 
     /// <inheritdoc />
     public void Reboot() => _administration.Reboot();
@@ -1751,6 +1742,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool IDeviceOperationHost.HasDeferredSends => HasDeferredSends;
 
+    bool IDeviceOperationHost.SendsAreNeverHeldBack => SendsAreNeverHeldBack;
+
     DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
 
     void IDeviceOperationHost.UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) =>
@@ -1875,7 +1868,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 
-    int IStreamingSessionHost.MaximumStreamingFrequencyHz => MaximumStreamingFrequencyHz;
+    // A start that is held back goes out behind the enables that are.
+    int IStreamingSessionHost.MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this, _channelControl.IsEnabledAheadOfNextSend);
+
+    bool IStreamingSessionHost.IsEnableRequested(IChannel channel) => _channelControl.IsEnableRequested(channel);
 
     // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
     // own report of its tick rate, read at exactly the moment the old BeginStreamingSession
@@ -1887,7 +1883,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     void IStreamingSessionHost.EndSdCardLogSession() => _sdCardOperations.EndLoggingSession();
 
-    void IStreamingSessionHost.WithChannelsLock(Action action) => WithChannelsLock(action);
+    ITrackedSend IStreamingSessionHost.TrackAdcEnableMask(uint mask) => _channelControl.RawAdcMask(mask);
 
     IReadOnlyList<IChannel> IStreamingSessionHost.SnapshotChannels() => GetChannelsSnapshot();
 

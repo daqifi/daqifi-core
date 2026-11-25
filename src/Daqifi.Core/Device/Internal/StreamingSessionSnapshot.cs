@@ -91,17 +91,19 @@ internal sealed class StreamingSessionSnapshot
     /// <param name="channels">The device's channels at the moment of the drop.</param>
     /// <param name="isStreaming">Whether the device was streaming at the moment of the drop.</param>
     /// <param name="isLoggingToSdCard">Whether that stream was an SD card log.</param>
+    /// <param name="isEnabled">Whether a channel counts as enabled; <see cref="IChannel.IsEnabled"/> by default.</param>
     public static StreamingSessionSnapshot Capture(
         IEnumerable<IChannel> channels,
         bool isStreaming,
-        bool isLoggingToSdCard = false)
+        bool isLoggingToSdCard = false,
+        Func<IChannel, bool>? isEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(channels);
 
         var enabled = new HashSet<(ChannelType, int)>();
         foreach (var channel in channels)
         {
-            if (channel.IsEnabled)
+            if (isEnabled?.Invoke(channel) ?? channel.IsEnabled)
             {
                 enabled.Add((channel.Type, channel.ChannelNumber));
             }

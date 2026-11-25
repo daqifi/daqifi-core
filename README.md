@@ -292,7 +292,7 @@ immediately, and flipping back to input releases the pin to high-impedance.
 using Daqifi.Core.Channel;
 
 var channels = device.GetChannelsSnapshot();
-var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
+var dio3 = channels.OfType<IDigitalChannel>().First(c => c.ChannelNumber == 3);
 
 device.SetDioDirection(dio3, ChannelDirection.Output);
 device.SetDioValue(dio3, true);   // drive high

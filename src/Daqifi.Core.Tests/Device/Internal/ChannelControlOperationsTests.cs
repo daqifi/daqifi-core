@@ -269,18 +269,6 @@ public class ChannelControlOperationsTests
         Assert.Equal(ChannelDirection.Input, digital.Direction);
     }
 
-    [Fact]
-    public void SetDioDirection_AnalogChannel_ThrowsBeforeConnectionCheck()
-    {
-        var analog = new AnalogChannel(channelNumber: 0, resolution: 65535);
-        var host = new FakeHost(analog) { IsConnected = false };
-        var ops = new ChannelControlOperations(host);
-
-        // Type validation precedes the connection check, so this must be an ArgumentException,
-        // not DeviceNotConnectedException, even though the host reports disconnected.
-        Assert.Throws<ArgumentException>(() => ops.SetDioDirection(analog, ChannelDirection.Output));
-    }
-
     [Theory]
     [InlineData((ChannelDirection)2)]
     public void SetDioDirection_InvalidDirection_Throws(ChannelDirection direction)
@@ -497,16 +485,6 @@ public class ChannelControlOperationsTests
         // A channel that was not in PWM mode is not touched.
         Assert.Equal(DigitalPinMode.Output, plainOutput.Mode);
         Assert.Empty(host.Calls);
-    }
-
-    [Fact]
-    public void SetPwmEnabled_AnalogChannel_Throws()
-    {
-        var analog = new AnalogChannel(channelNumber: 0, resolution: 65535);
-        var host = new FakeHost(analog);
-        var ops = new ChannelControlOperations(host);
-
-        Assert.Throws<ArgumentException>(() => ops.SetPwmEnabled(analog, true));
     }
 
     [Fact]
@@ -812,7 +790,7 @@ public class ChannelControlOperationsTests
         var host = new FakeHost(output);
         var ops = new ChannelControlOperations(host);
 
-        ops.SetAnalogOutput(0, 3.3);
+        ops.SetAnalogOutput(output, 3.3);
 
         Assert.Equal(
             new[] { "send:SOURce:VOLTage:LEVel 0,3.3", "send:CONFigure:DAC:UPDATE" },
@@ -827,32 +805,9 @@ public class ChannelControlOperationsTests
         var host = new FakeHost(output);
         var ops = new ChannelControlOperations(host);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => ops.StageAnalogOutput(0, 10.0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ops.StageAnalogOutput(output, 10.0));
         Assert.Empty(host.Calls);
         Assert.Null(output.PendingVoltage);
-    }
-
-    [Fact]
-    public void StageAnalogOutput_NegativeChannelNumber_Throws()
-    {
-        var host = new FakeHost();
-        var ops = new ChannelControlOperations(host);
-
-        Assert.Throws<ArgumentOutOfRangeException>(() => ops.StageAnalogOutput(-1, 1.0));
-        Assert.Empty(host.Calls);
-    }
-
-    [Fact]
-    public void StageAnalogOutput_UnmodelledChannelNumber_SendsByNumberAnyway()
-    {
-        // No AnalogOutputChannel with this number in the snapshot: the command still goes out
-        // by number, matching the only analog-output path Core has ever had.
-        var host = new FakeHost();
-        var ops = new ChannelControlOperations(host);
-
-        ops.StageAnalogOutput(7, 2.5);
-
-        Assert.Equal(new[] { "send:SOURce:VOLTage:LEVel 7,2.5" }, host.Calls);
     }
 
     [Fact]
@@ -863,8 +818,8 @@ public class ChannelControlOperationsTests
         var host = new FakeHost(a, b);
         var ops = new ChannelControlOperations(host);
 
-        ops.StageAnalogOutput(0, 1.0);
-        ops.StageAnalogOutput(1, 2.0);
+        ops.StageAnalogOutput(a, 1.0);
+        ops.StageAnalogOutput(b, 2.0);
         ops.LatchAnalogOutputs();
 
         Assert.Equal(1.0, a.OutputVoltage);
@@ -881,7 +836,7 @@ public class ChannelControlOperationsTests
         host.EnqueueResponse("3.30");
         var ops = new ChannelControlOperations(host);
 
-        var volts = await ops.GetAnalogOutputAsync(2);
+        var volts = await ops.GetAnalogOutputAsync(output);
 
         Assert.Equal(3.30, volts);
         Assert.Equal(3.30, output.OutputVoltage);
@@ -891,34 +846,37 @@ public class ChannelControlOperationsTests
     [Fact]
     public async Task GetAnalogOutputAsync_ScpiError_Throws()
     {
-        var host = new FakeHost();
+        var output = new AnalogOutputChannel(0);
+        var host = new FakeHost(output);
         host.EnqueueResponse("-113,\"Undefined header\"");
         var ops = new ChannelControlOperations(host);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ops.GetAnalogOutputAsync(0));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ops.GetAnalogOutputAsync(output));
     }
 
     [Fact]
     public async Task GetAnalogOutputAsync_NonNumericResponse_ThrowsDescribingWhatCameBack()
     {
-        var host = new FakeHost();
+        var output = new AnalogOutputChannel(0);
+        var host = new FakeHost(output);
         host.EnqueueResponse("not-a-voltage");
         var ops = new ChannelControlOperations(host);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => ops.GetAnalogOutputAsync(0));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => ops.GetAnalogOutputAsync(output));
         Assert.Contains("not-a-voltage", ex.Message);
     }
 
     [Fact]
     public async Task GetAnalogOutputAsync_AlreadyCancelled_ThrowsWithoutSending()
     {
-        var host = new FakeHost();
+        var output = new AnalogOutputChannel(0);
+        var host = new FakeHost(output);
         var ops = new ChannelControlOperations(host);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => ops.GetAnalogOutputAsync(0, cts.Token));
+            () => ops.GetAnalogOutputAsync(output, cts.Token));
 
         Assert.Empty(host.Calls);
     }
@@ -1087,8 +1045,8 @@ public class ChannelControlOperationsTests
 
         await RunWithFirstSendHeldAsync(
             host, holdAfterTheCommandIsSent: true,
-            () => ops.StageAnalogOutput(0, 1.5),
-            () => ops.StageAnalogOutput(0, 2.5));
+            () => ops.StageAnalogOutput(output, 1.5),
+            () => ops.StageAnalogOutput(output, 2.5));
 
         Assert.Equal("send:SOURce:VOLTage:LEVel 0,2.5", host.Calls[^1]);
         Assert.Equal(2.5, output.PendingVoltage);

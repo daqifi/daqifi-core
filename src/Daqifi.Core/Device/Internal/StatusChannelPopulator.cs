@@ -168,7 +168,6 @@ internal sealed class StatusChannelPopulator
             var channel = new AnalogChannel(i, resolution, resolutionIsAssumed)
             {
                 Name = $"AI{i}",
-                Direction = ChannelDirection.Input,
                 IsEnabled = enabledIsReported && IsChannelBitSet(analogInPortEnabled, i),
                 CalibrationB = calibrationB,
                 CalibrationM = calibrationM,

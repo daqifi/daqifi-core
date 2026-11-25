@@ -70,8 +70,7 @@ public class AnalogOutputToolContractTests
         var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 1, 2.5, latch: true);
 
         Assert.True(result.Applied);
-        Assert.True(result.RangeChecked);
-        Assert.Equal(2.5, result.Output!.Volts);
+        Assert.Equal(2.5, result.Output.Volts);
         Assert.Null(result.Output.PendingVolts);
         Assert.Equal(
             new[]
@@ -92,7 +91,7 @@ public class AnalogOutputToolContractTests
         Assert.False(result.Applied);
         // Pending, not driven: the distinction is the whole point of the staged form, and an agent
         // that read this as "done" would report a voltage the hardware is not carrying.
-        Assert.Equal(4.0, result.Output!.PendingVolts);
+        Assert.Equal(4.0, result.Output.PendingVolts);
         Assert.Null(result.Output.Volts);
         Assert.Equal(new[] { ScpiMessageProducer.SetAnalogOutputVoltage(0, 4.0).Data }, device.Sent);
     }
@@ -123,7 +122,7 @@ public class AnalogOutputToolContractTests
 
         var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 1, 6.0, latch: true);
 
-        Assert.Equal(6.0, result.Output!.Volts);
+        Assert.Equal(6.0, result.Output.Volts);
         var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId).Outputs;
         Assert.Equal(3.0, outputs[0].Volts);
         Assert.Null(outputs[0].PendingVolts);
@@ -191,27 +190,21 @@ public class AnalogOutputToolContractTests
     }
 
     [Fact]
-    public async Task SetAnalogOutput_OnADeviceThatDescribedNoOutputs_WritesByNumberAndSaysItWasNotChecked()
+    public async Task AnalogOutput_OnADeviceThatDescribedNoOutputs_IsRefused()
     {
-        // Nyquist 3 firmware below v3.5.0 has no capability document, and the document is the only
-        // place a device describes its DACs. Refusing here would leave those boards with no
-        // analog-output path at all — so the write goes out, flagged as unvouched-for.
+        // The document that describes them has shipped since the oldest supported firmware, so
+        // this is a document that did not arrive, and there is no range to check a voltage against.
         var (agent, device) = AgentHarness.WithConnectedDevice();
-        Assert.Equal(DeviceType.Unknown, device.Metadata.DeviceType);
         device.ClearSent();
 
-        var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 3, 42, latch: true);
+        var set = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 3, 1, latch: true));
+        var get = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.GetAnalogOutputAsync(AgentHarness.DeviceId, 3, CancellationToken.None));
 
-        Assert.False(result.RangeChecked);
-        Assert.Null(result.Output);
-        Assert.True(result.Applied);
-        Assert.Equal(
-            new[]
-            {
-                ScpiMessageProducer.SetAnalogOutputVoltage(3, 42).Data,
-                ScpiMessageProducer.UpdateDacOutputs.Data,
-            },
-            device.Sent);
+        Assert.Contains("described no analog outputs", set.Message);
+        Assert.Contains("described no analog outputs", get.Message);
+        Assert.Empty(device.Sent);
     }
 
     [Theory]

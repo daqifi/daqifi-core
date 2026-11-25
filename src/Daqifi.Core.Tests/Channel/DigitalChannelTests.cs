@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Channel;
 
@@ -271,9 +272,5 @@ public class DigitalChannelTests
         public int PwmDutyCyclePercent { get; set; }
 
         public event EventHandler<SampleReceivedEventArgs>? SampleReceived { add { } remove { } }
-
-        public void SetActiveSample(double value, DateTime timestamp) { }
-
-        public void SetActiveSample(IDataSample sample) { }
     }
 }

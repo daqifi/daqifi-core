@@ -1,10 +1,11 @@
 using Daqifi.Core.Channel;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Channel;
 
 /// <summary>
-/// Tests for <see cref="IChannelEnablementNotifier"/>, the hook that lets a device notice a caller
-/// writing <see cref="IChannel.IsEnabled"/> straight onto a channel (issue #490).
+/// Tests for <see cref="IChannelEnablementNotifier"/>, the hook that lets a device notice a
+/// change of <see cref="IChannel.IsEnabled"/> however it comes about (issue #490).
 /// </summary>
 public class ChannelEnablementNotificationTests
 {
@@ -21,7 +22,7 @@ public class ChannelEnablementNotificationTests
         var notifications = 0;
         ((IChannelEnablementNotifier)channel).EnablementChanged += () => notifications++;
 
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         Assert.Equal(1, notifications);
     }
@@ -35,13 +36,13 @@ public class ChannelEnablementNotificationTests
     [MemberData(nameof(Channels))]
     public void WritingTheSameValue_DoesNotNotify(IChannel channel)
     {
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         var notifications = 0;
         ((IChannelEnablementNotifier)channel).EnablementChanged += () => notifications++;
 
-        channel.IsEnabled = true;
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
+        channel.SetEnabled(true);
 
         Assert.Equal(0, notifications);
     }
@@ -60,7 +61,7 @@ public class ChannelEnablementNotificationTests
         bool? observed = null;
         ((IChannelEnablementNotifier)channel).EnablementChanged += () => observed = channel.IsEnabled;
 
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         Assert.True(observed);
     }
@@ -88,7 +89,7 @@ public class ChannelEnablementNotificationTests
             readFromAnotherThreadCompleted = read.Wait(TimeSpan.FromSeconds(10));
         };
 
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         Assert.True(
             readFromAnotherThreadCompleted,
@@ -104,9 +105,9 @@ public class ChannelEnablementNotificationTests
         void Handler() => notifications++;
 
         ((IChannelEnablementNotifier)channel).EnablementChanged += Handler;
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         ((IChannelEnablementNotifier)channel).EnablementChanged -= Handler;
-        channel.IsEnabled = false;
+        channel.SetEnabled(false);
 
         Assert.Equal(1, notifications);
     }

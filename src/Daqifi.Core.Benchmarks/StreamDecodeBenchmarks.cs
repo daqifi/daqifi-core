@@ -104,7 +104,7 @@ public class StreamDecodeBenchmarks
 
         foreach (var channel in device.Channels)
         {
-            channel.IsEnabled = true;
+            ((IChannelEnablementNotifier)channel).SetEnabled(true);
 
             // An honest consumer, not an empty one: a real subscriber reads the value, and the
             // per-sample event args are allocated for whoever is listening either way.

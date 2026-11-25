@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Channel;
 
@@ -297,7 +298,6 @@ public class AnalogChannelTests
         // Act
         channel.Name = "Temperature";
         channel.IsEnabled = true;
-        channel.Direction = ChannelDirection.Output;
         channel.MinValue = -100.0;
         channel.MaxValue = 100.0;
         channel.CalibrationM = 2.0;
@@ -308,7 +308,6 @@ public class AnalogChannelTests
         // Assert
         Assert.Equal("Temperature", channel.Name);
         Assert.True(channel.IsEnabled);
-        Assert.Equal(ChannelDirection.Output, channel.Direction);
         Assert.Equal(-100.0, channel.MinValue);
         Assert.Equal(100.0, channel.MaxValue);
         Assert.Equal(2.0, channel.CalibrationM);

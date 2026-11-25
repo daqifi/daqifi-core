@@ -39,10 +39,9 @@ public interface IDigitalChannel : IChannel
         : DigitalPinMode.Input;
 
     /// <summary>
-    /// Gets or sets the last commanded PWM duty cycle for this channel, in whole percent.
-    /// Local bookkeeping; use <c>IStreamingDevice.SetPwmDutyCycle</c> to change the device.
-    /// Defaults to <c>50</c> (a commandable value) until a duty cycle has been set, and clamps
-    /// to <c>1-100</c> on assignment so this always holds a commandable value.
+    /// Gets the last commanded PWM duty cycle for this channel, in whole percent. Use
+    /// <c>IStreamingDevice.SetPwmDutyCycle</c> to change it. <c>50</c> (a commandable value) until
+    /// a duty cycle has been set.
     /// </summary>
-    int PwmDutyCyclePercent { get; set; }
+    int PwmDutyCyclePercent { get; }
 }

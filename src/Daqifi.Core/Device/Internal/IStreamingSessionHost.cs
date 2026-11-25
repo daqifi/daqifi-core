@@ -76,9 +76,10 @@ internal interface IStreamingSessionHost
     int MaxSamplingRate { get; }
 
     /// <summary>
-    /// The highest rate the channel set enabled <i>right now</i> can sustain
-    /// (<see cref="DaqifiStreamingDevice.MaximumStreamingFrequencyHz"/>), read fresh on each
-    /// access.
+    /// The highest rate the channel set that will be enabled when the next command goes out can
+    /// sustain, read fresh on each access. The same as
+    /// <see cref="DaqifiStreamingDevice.MaximumStreamingFrequencyHz"/>, except while an enable is
+    /// held back.
     /// </summary>
     /// <remarks>
     /// This is the bound a start request is actually judged by, and it moves with the enabled
@@ -109,8 +110,14 @@ internal interface IStreamingSessionHost
     /// </summary>
     void EndSdCardLogSession();
 
-    /// <inheritdoc cref="IDeviceOperationHost.WithChannelsLock"/>
-    void WithChannelsLock(Action action);
+    /// <inheritdoc cref="ChannelControlOperations.IsEnableRequested"/>
+    bool IsEnableRequested(IChannel channel);
+
+    /// <summary>
+    /// Makes a raw ADC enable mask the last one sent, so that it is recorded when it goes out and a
+    /// typed enable builds on it meanwhile.
+    /// </summary>
+    ITrackedSend TrackAdcEnableMask(uint mask);
 
     /// <inheritdoc cref="DaqifiDevice.GetChannelsSnapshot"/>
     IReadOnlyList<IChannel> SnapshotChannels();

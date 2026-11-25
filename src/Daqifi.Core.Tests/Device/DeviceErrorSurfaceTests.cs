@@ -165,7 +165,7 @@ public class DeviceErrorSurfaceTests
     {
         using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         // A subscriber that throws on every sample is the realistic shape of a decode that fails
         // on every frame: it propagates out of the per-channel push and into the frame's catch.
@@ -213,7 +213,7 @@ public class DeviceErrorSurfaceTests
         // not become thousands of events.
         using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
 
         var raises = 0;
@@ -240,7 +240,7 @@ public class DeviceErrorSurfaceTests
     {
         using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
 
         var samples = 0;
         channel.SampleReceived += (_, _) => Interlocked.Increment(ref samples);
@@ -264,7 +264,7 @@ public class DeviceErrorSurfaceTests
     {
         using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
 
         device.StartStreaming();
@@ -284,7 +284,7 @@ public class DeviceErrorSurfaceTests
         // Frames outside a session are re-raised but never decoded, so nothing can fail.
         using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
-        channel.IsEnabled = true;
+        channel.SetEnabled(true);
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
 
         device.InvokeStreamMessage(AnalogFrame(1000, 1.0f));

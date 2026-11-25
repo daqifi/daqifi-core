@@ -4,7 +4,7 @@ namespace Daqifi.Core.Channel.Internal;
 /// Shared implementation of the "validate the sample, then store it under the channel's own lock"
 /// half of the sequence that <see cref="AnalogChannel"/>, <see cref="DigitalChannel"/>, and
 /// <see cref="AnalogOutputChannel"/> each implement identically for their
-/// <c>SetActiveSample(IDataSample)</c> overload.
+/// <c>SetActiveSample</c>.
 /// </summary>
 /// <remarks>
 /// Deliberately does not also raise <c>SampleReceived</c>: that has to happen outside the lock (so a

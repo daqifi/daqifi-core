@@ -537,7 +537,7 @@ public sealed class DaqifiAgent
     /// Direction, then value — the order every digital write here uses. Call it inside the
     /// device's exclusive section, after <see cref="RequirePwmDisabled"/>.
     /// </summary>
-    private static void DriveDigitalOutput(IStreamingDevice streaming, IChannel channel, bool high)
+    private static void DriveDigitalOutput(IStreamingDevice streaming, IDigitalChannel channel, bool high)
     {
         if (channel.Direction != ChannelDirection.Output)
         {
@@ -656,13 +656,8 @@ public sealed class DaqifiAgent
     /// </para>
     /// <para>
     /// A voltage outside the channel's stated range is refused here, before anything reaches the
-    /// wire (Core's check, on the channel the device described). The exception is a device that
-    /// described no analog outputs at all: Core still addresses those by channel number — that is
-    /// the only analog-output path the SDK has ever had — so the write proceeds with
-    /// <see cref="AnalogOutputResult.RangeChecked"/> false rather than being refused. What that
-    /// case does <i>not</i> include is a board with no DACs: <see cref="RequireAnalogOutput"/>
-    /// stops those up front, so an agent cannot get a silent success out of hardware that has
-    /// nothing to drive.
+    /// wire (Core's check, on the channel the device described), and so is a channel the device did
+    /// not describe: there is nothing to check it against, and nothing would report back.
     /// </para>
     /// </remarks>
     public async Task<AnalogOutputResult> SetAnalogOutputAsync(
@@ -679,9 +674,9 @@ public sealed class DaqifiAgent
             // runs under this same lock and rebuilds the analog-output channels, so an outer check
             // could vouch for a channel that no longer exists by the time the value is staged —
             // the shape of #449.
-            var known = RequireKnownAnalogOutput(device, deviceId, channel);
+            var output = RequireAnalogOutputChannel(device, deviceId, channel);
 
-            device.StageAnalogOutput(channel, volts);
+            device.StageAnalogOutput(output, volts);
             if (latch)
             {
                 device.LatchAnalogOutputs();
@@ -692,8 +687,7 @@ public sealed class DaqifiAgent
                 channel,
                 volts,
                 Applied: latch,
-                RangeChecked: known,
-                Output: FindAnalogOutput(device, channel) is { } state ? AnalogOutputState.From(state) : null));
+                Output: AnalogOutputState.From(output)));
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -741,7 +735,7 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(async ct =>
         {
-            RequireKnownAnalogOutput(device, deviceId, channel);
+            var output = RequireAnalogOutputChannel(device, deviceId, channel);
 
             if (device.IsStreaming)
             {
@@ -752,7 +746,7 @@ public sealed class DaqifiAgent
                     + "without touching the device.");
             }
 
-            var volts = await device.GetAnalogOutputAsync(channel, ct).ConfigureAwait(false);
+            var volts = await device.GetAnalogOutputAsync(output, ct).ConfigureAwait(false);
             return new AnalogOutputReading(deviceId, channel, volts);
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -1472,7 +1466,7 @@ public sealed class DaqifiAgent
     private static DigitalStimulus ArmDigitalStimulus(
         string deviceId,
         IStreamingDevice streaming,
-        IChannel channel,
+        IDigitalChannel channel,
         IReadOnlyList<ChannelKey> captured,
         bool high,
         TimeSpan delay,
@@ -1908,18 +1902,12 @@ public sealed class DaqifiAgent
         .OrderBy(c => c.ChannelNumber)
         .ToList();
 
-    private static IAnalogOutputChannel? FindAnalogOutput(IStreamingDevice device, int channelNumber) => Snapshot(device)
-        .OfType<IAnalogOutputChannel>()
-        .FirstOrDefault(c => c.ChannelNumber == channelNumber);
-
     /// <summary>
     /// Resolves a device for analog output, refusing hardware that has none.
     /// </summary>
     /// <remarks>
-    /// The board gate is what keeps an agent honest here. Core sends an analog-output command by
-    /// channel number whether or not a channel was ever described, and never reads the device's
-    /// error queue back, so on a board without DACs the write would look like a success to the
-    /// agent while the firmware discarded it. <see cref="IDevice.Supports"/> answers <c>true</c>
+    /// The board gate names the real reason, where a missing channel would only say there is none.
+    /// <see cref="IDevice.Supports"/> answers <c>true</c>
     /// for a device that has not reported its part number yet, so this refuses only boards that
     /// have actually identified themselves as something other than a Nyquist 3.
     /// </remarks>
@@ -1939,20 +1927,13 @@ public sealed class DaqifiAgent
     }
 
     /// <summary>
-    /// Checks a channel number against the analog outputs the device described, and reports whether
-    /// there was anything to check it against.
+    /// Finds an analog output by number, refusing one the device did not describe.
     /// </summary>
-    /// <returns>
-    /// <c>true</c> when the channel is one the device described (so Core will range-check the
-    /// write); <c>false</c> when the device described no analog outputs at all and the command can
-    /// only be addressed by number.
-    /// </returns>
-    private static bool RequireKnownAnalogOutput(IStreamingDevice device, string deviceId, int channelNumber)
+    private static IAnalogOutputChannel RequireAnalogOutputChannel(
+        IStreamingDevice device, string deviceId, int channelNumber)
     {
-        // Ahead of the modelled-channel checks, so a negative number is answered the same way
-        // whatever the device happens to have described. Left inside them it reads as "-1 is not
-        // one of 0, 1" on a device with outputs and as something else entirely on one without —
-        // the same mistake explained two ways, and neither says what a channel number may be.
+        // Ahead of the lookup, so a negative number is answered the same way whatever the device
+        // happens to have described.
         if (channelNumber < 0)
         {
             throw new InvalidOperationException(
@@ -1962,26 +1943,21 @@ public sealed class DaqifiAgent
         var outputs = AnalogOutputs(device);
         if (outputs.Count == 0)
         {
-            // Nyquist 3 firmware below v3.5.0 has no capability document, and the document is the
-            // only place a device describes its DACs. Refusing here would leave those boards with
-            // no analog-output path at all, so the number is taken at face value — the caller is
-            // told through AnalogOutputResult.RangeChecked that nothing vouched for it.
-            return false;
+            throw new InvalidOperationException(
+                $"Device '{deviceId}' has described no analog outputs, so there is none to address. They come "
+                + "from its capability document, which is read when the device connects; reconnect it to read "
+                + "the document again.");
         }
 
-        if (outputs.All(c => c.ChannelNumber != channelNumber))
-        {
-            throw new InvalidOperationException(
+        return outputs.FirstOrDefault(c => c.ChannelNumber == channelNumber)
+            ?? throw new InvalidOperationException(
                 $"Unknown analog output channel {channelNumber} on device '{deviceId}'. This device has "
                 + $"analog outputs: {string.Join(", ", outputs.Select(c => c.ChannelNumber))}.");
-        }
-
-        return true;
     }
 
-    private static IChannel RequireDigitalChannel(IStreamingDevice device, int channelNumber)
+    private static IDigitalChannel RequireDigitalChannel(IStreamingDevice device, int channelNumber)
     {
-        var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
+        var digital = Snapshot(device).OfType<IDigitalChannel>().ToList();
         var match = digital.FirstOrDefault(c => c.ChannelNumber == channelNumber);
         if (match is null)
         {
@@ -2000,9 +1976,9 @@ public sealed class DaqifiAgent
     /// <see cref="IDigitalChannel.Mode"/>, the same one Core makes (#945); only the wording of
     /// the refusal is this server's own.
     /// </summary>
-    private static void RequirePwmDisabled(IChannel channel)
+    private static void RequirePwmDisabled(IDigitalChannel channel)
     {
-        if (channel is IDigitalChannel { Mode: DigitalPinMode.Pwm })
+        if (channel.Mode == DigitalPinMode.Pwm)
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; the firmware ignores digital direction/state " +
