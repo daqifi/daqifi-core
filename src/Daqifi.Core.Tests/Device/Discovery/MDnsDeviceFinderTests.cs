@@ -40,7 +40,7 @@ public class MDnsDeviceFinderTests
         Assert.Equal("9090539562006014104", device.SerialNumber);    // TXT sn= (hex, normalized)
         Assert.Equal("3.7.3", device.FirmwareVersion);               // TXT fw=
         Assert.Equal(DeviceType.Nyquist1, device.Type);              // TXT pn=Nq1
-        Assert.Equal(DeviceAddress, device.IPAddress);               // A record
+        Assert.Equal(DeviceAddress, device.IpAddress);               // A record
         Assert.Equal(9760, device.Port);                             // SRV port
         Assert.Equal(ConnectionType.Wifi, device.ConnectionType);
         Assert.True(device.IsPowerOn);
@@ -78,7 +78,7 @@ public class MDnsDeviceFinderTests
         var device = Assert.Single(MapAdvertisement(packet));
 
         Assert.Equal("DAQiFi-95A7-2", device.Name);
-        Assert.Equal(IPAddress.Parse("192.168.1.41"), device.IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.41"), device.IpAddress);
         // Not the firmware's 16-hex-digit format, so it is passed through rather than being
         // reinterpreted -- "4321" is also a valid hex literal, and 17185 is not this device.
         Assert.Equal("4321", device.SerialNumber);
@@ -101,7 +101,7 @@ public class MDnsDeviceFinderTests
 
         var device = Assert.Single(MapAdvertisement(packet));
 
-        Assert.Equal(DeviceAddress, device.IPAddress);
+        Assert.Equal(DeviceAddress, device.IpAddress);
         Assert.Equal(IPAddress.Parse("192.168.1.50"), device.LocalInterfaceAddress);
     }
 
@@ -173,7 +173,7 @@ public class MDnsDeviceFinderTests
         Assert.Equal(2, devices.Count);
         Assert.Equal(
             new[] { IPAddress.Parse("192.168.1.39"), IPAddress.Parse("192.168.1.40") },
-            devices.Select(d => d.IPAddress));
+            devices.Select(d => d.IpAddress));
     }
 
     [Fact]

@@ -164,7 +164,7 @@ public static class DaqifiDeviceFactory
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when deviceInfo is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IPAddress or Port for WiFi connections).</exception>
+    /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IpAddress or Port for WiFi connections).</exception>
     /// <exception cref="NotSupportedException">Thrown when the connection type is not supported (e.g., Serial, HID).</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public static async Task<DaqifiStreamingDevice> ConnectFromDeviceInfoAsync(
@@ -294,10 +294,10 @@ public static class DaqifiDeviceFactory
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken)
     {
-        if (deviceInfo.IPAddress == null)
+        if (deviceInfo.IpAddress == null)
         {
             throw new ArgumentException(
-                "DeviceInfo must have an IPAddress for WiFi connections.",
+                "DeviceInfo must have an IpAddress for WiFi connections.",
                 nameof(deviceInfo));
         }
 
@@ -315,7 +315,7 @@ public static class DaqifiDeviceFactory
         // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
         // discovered the device, not whichever NIC the OS routing table prefers.
         var transport = new TcpStreamTransport(
-            deviceInfo.IPAddress,
+            deviceInfo.IpAddress,
             deviceInfo.Port.Value,
             deviceInfo.LocalInterfaceAddress);
 

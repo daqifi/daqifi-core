@@ -269,7 +269,7 @@ public class DiscoveryFanOutTests
             SerialNumber = serialNumber,
             ConnectionType = connectionType,
             PortName = connectionType == ConnectionType.Serial ? "/dev/fake" : null,
-            IPAddress = connectionType == ConnectionType.Wifi ? IPAddress.Loopback : null,
+            IpAddress = connectionType == ConnectionType.Wifi ? IPAddress.Loopback : null,
         };
 
     /// <summary>
@@ -373,7 +373,7 @@ public class DiscoveryFanOutTests
         public string Name { get; set; } = "Fake";
         public string SerialNumber { get; set; } = "SN";
         public string FirmwareVersion { get; set; } = "3.7.2";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

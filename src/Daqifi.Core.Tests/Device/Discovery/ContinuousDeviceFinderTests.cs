@@ -17,7 +17,7 @@ public class ContinuousDeviceFinderTests
             MacAddress = mac,
             SerialNumber = sn,
             Name = name,
-            IPAddress = ip,
+            IpAddress = ip,
             Port = port
         };
 
@@ -508,7 +508,7 @@ public class ContinuousDeviceFinderTests
         Assert.Same(renumbered, update.DeviceInfo);
         Assert.Single(finder.Devices);
         Assert.Same(renumbered, finder.Devices[0]);
-        Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IpAddress);
     }
 
     [Fact]
@@ -739,8 +739,8 @@ public class ContinuousDeviceFinderTests
         finder.Reconcile(new IDeviceInfo[] { after });
 
         var update = Assert.Single(updated);
-        Assert.Equal(IPAddress.Parse("192.168.1.50"), update.PreviousDeviceInfo.IPAddress);
-        Assert.Equal(IPAddress.Parse("192.168.1.51"), update.DeviceInfo.IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.50"), update.PreviousDeviceInfo.IpAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.51"), update.DeviceInfo.IpAddress);
     }
 
     #endregion

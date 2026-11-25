@@ -669,7 +669,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
             || !string.Equals(previous.PortName, current.PortName, StringComparison.Ordinal)
             || !string.Equals(previous.DevicePath, current.DevicePath, StringComparison.Ordinal)
             || !string.Equals(previous.LocationKey, current.LocationKey, StringComparison.Ordinal)
-            || !Equals(previous.IPAddress, current.IPAddress)
+            || !Equals(previous.IpAddress, current.IpAddress)
             || previous.Port != current.Port
             || previous.Type != current.Type
             || previous.IsPowerOn != current.IsPowerOn
@@ -719,7 +719,7 @@ public sealed class ContinuousDeviceFinder : IAsyncDisposable, IDisposable
             ConnectionType.Wifi =>
                 !string.IsNullOrWhiteSpace(device.MacAddress) ? "mac:" + device.MacAddress!.ToLowerInvariant()
                 : !string.IsNullOrWhiteSpace(device.SerialNumber) ? "sn:" + device.SerialNumber
-                : device.IPAddress != null ? "ip:" + device.IPAddress
+                : device.IpAddress != null ? "ip:" + device.IpAddress
                 : "name:" + (device.Name ?? string.Empty),
 
             ConnectionType.Serial =>

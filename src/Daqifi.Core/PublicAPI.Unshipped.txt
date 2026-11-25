@@ -332,6 +332,7 @@
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.ConnectionType.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.DevicePath.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.FirmwareVersion.set -> void
+*REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.IPAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.IPAddress.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.IsPowerOn.set -> void
 *REMOVED*Daqifi.Core.Device.Discovery.DeviceInfo.LocalInterfaceAddress.set -> void
@@ -353,6 +354,7 @@
 *REMOVED*Daqifi.Core.Device.Discovery.HidDeviceFinder.DiscoverAsync(int? vendorIdFilter, int? productIdFilter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+*REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.IPAddress.get -> System.Net.IPAddress?
 *REMOVED*Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.Discovery.DeviceType
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbLocationProvider
 *REMOVED*Daqifi.Core.Device.Discovery.IUsbLocationProvider.GetLocationKey(string! portNameOrDevicePath) -> string?
@@ -409,6 +411,9 @@
 *REMOVED*Daqifi.Core.Device.Network.INetworkConfigurable.PrepareLanInterface() -> void
 *REMOVED*Daqifi.Core.Device.Network.INetworkConfigurable.PrepareSdInterface() -> void
 *REMOVED*Daqifi.Core.Device.Network.NetworkAddressHelper
+*REMOVED*Daqifi.Core.Device.Network.NetworkConfiguration.NetworkConfiguration(Daqifi.Core.Device.Network.WifiMode mode, Daqifi.Core.Device.Network.WifiSecurityType securityType, string! ssid, string! password, System.Net.IPAddress? staticIP, System.Net.IPAddress? subnetMask, System.Net.IPAddress? gateway) -> void
+*REMOVED*Daqifi.Core.Device.Network.NetworkConfiguration.StaticIP.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.Network.NetworkConfiguration.StaticIP.set -> void
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.CanHandle(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> bool
 *REMOVED*Daqifi.Core.Device.Protocol.IProtocolHandler.HandleAsync(Daqifi.Core.Communication.Messages.IInboundMessage<object!>! message) -> System.Threading.Tasks.Task!
@@ -1174,7 +1179,8 @@ Daqifi.Core.Device.Discovery.DeviceInfo.ConnectionType.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.DevicePath.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.Equals(Daqifi.Core.Device.Discovery.DeviceInfo? other) -> bool
 Daqifi.Core.Device.Discovery.DeviceInfo.FirmwareVersion.init -> void
-Daqifi.Core.Device.Discovery.DeviceInfo.IPAddress.init -> void
+Daqifi.Core.Device.Discovery.DeviceInfo.IpAddress.get -> System.Net.IPAddress?
+Daqifi.Core.Device.Discovery.DeviceInfo.IpAddress.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.IsPowerOn.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.LocalInterfaceAddress.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.LocationKey.init -> void
@@ -1186,6 +1192,7 @@ Daqifi.Core.Device.Discovery.DeviceInfo.SerialNumber.init -> void
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
 Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+Daqifi.Core.Device.Discovery.IDeviceInfo.IpAddress.get -> System.Net.IPAddress?
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
 Daqifi.Core.Device.Discovery.WifiDeviceFinder
 Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder() -> void
@@ -1218,6 +1225,9 @@ Daqifi.Core.Device.IStreamingDevice.SetPwmEnabled(Daqifi.Core.Channel.IDigitalCh
 Daqifi.Core.Device.IStreamingDevice.StageAnalogOutput(Daqifi.Core.Channel.IAnalogOutputChannel! channel, double voltage) -> void
 Daqifi.Core.Device.MessageReceivedEventArgs.Message.get -> Daqifi.Core.Communication.Messages.DaqifiOutMessage!
 Daqifi.Core.Device.MessageReceivedEventArgs.MessageReceivedEventArgs(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+Daqifi.Core.Device.Network.NetworkConfiguration.NetworkConfiguration(Daqifi.Core.Device.Network.WifiMode mode, Daqifi.Core.Device.Network.WifiSecurityType securityType, string! ssid, string! password, System.Net.IPAddress? staticIpAddress, System.Net.IPAddress? subnetMask, System.Net.IPAddress? gateway) -> void
+Daqifi.Core.Device.Network.NetworkConfiguration.StaticIpAddress.get -> System.Net.IPAddress?
+Daqifi.Core.Device.Network.NetworkConfiguration.StaticIpAddress.set -> void
 Daqifi.Core.Device.ReconnectAttemptEventArgs.Timestamp.get -> System.DateTimeOffset
 Daqifi.Core.Device.ReconnectFailedEventArgs.Timestamp.get -> System.DateTimeOffset
 Daqifi.Core.Device.ReconnectedEventArgs.Timestamp.get -> System.DateTimeOffset

@@ -480,7 +480,7 @@ public class AllTransportsDeviceFinderTests
         public string Name { get; set; } = "Fake";
         public string SerialNumber { get; set; } = "SN";
         public string FirmwareVersion { get; set; } = "3.7.2";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

@@ -47,7 +47,7 @@ public class DaqifiDeviceRegistryTests
         ConnectionType = ConnectionType.Wifi,
         SerialNumber = serialNumber,
         MacAddress = macAddress,
-        IPAddress = System.Net.IPAddress.Parse("192.168.1.50"),
+        IpAddress = System.Net.IPAddress.Parse("192.168.1.50"),
         Port = 9760
     };
 

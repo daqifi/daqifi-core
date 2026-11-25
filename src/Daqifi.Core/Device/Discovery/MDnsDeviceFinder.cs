@@ -517,7 +517,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 Name = string.IsNullOrWhiteSpace(friendlyName) ? instance[0] : friendlyName!,
                 SerialNumber = NormalizeSerialNumber(serialNumber),
                 FirmwareVersion = firmwareVersion ?? string.Empty,
-                IPAddress = address,
+                IpAddress = address,
                 // The advertisement carries no MAC address, and the low two bytes embedded in the
                 // hostname are not one. Leave it null rather than inventing a partial value that
                 // dedupe elsewhere would compare against a real MAC.
@@ -694,7 +694,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             return existing.SerialNumber.Equals(candidate.SerialNumber, StringComparison.OrdinalIgnoreCase);
         }
 
-        return Equals(existing.IPAddress, candidate.IPAddress) && existing.Port == candidate.Port;
+        return Equals(existing.IpAddress, candidate.IpAddress) && existing.Port == candidate.Port;
     }
 
     /// <summary>

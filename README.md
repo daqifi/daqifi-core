@@ -155,7 +155,7 @@ using Daqifi.Core.Device.Discovery;
 // WiFi — UDP broadcast on port 30303 by default
 using var wifiFinder = new WifiDeviceFinder();
 wifiFinder.DeviceDiscovered += (_, e) =>
-    Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IPAddress}");
+    Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IpAddress}");
 
 var wifiDevices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 
@@ -335,7 +335,7 @@ running. After a reconnect, call `SetPwmEnabled` again (`true` to carry on, `fal
 
 ### Network configuration
 
-`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, `SecurityType`, and (for a WPA network, the default) `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
+`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, `SecurityType`, and (for a WPA network, the default) `Password` are always applied on every call; only `StaticIpAddress`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
@@ -343,12 +343,12 @@ using Daqifi.Core.Device.Network;
 
 var config = new NetworkConfiguration
 {
-    Ssid       = "MyNetwork",
-    Password   = "secret",
-    Mode       = WifiMode.ExistingNetwork,
-    StaticIP   = IPAddress.Parse("192.168.1.42"),
-    SubnetMask = IPAddress.Parse("255.255.255.0"),
-    Gateway    = IPAddress.Parse("192.168.1.1"),
+    Ssid            = "MyNetwork",
+    Password        = "secret",
+    Mode            = WifiMode.ExistingNetwork,
+    StaticIpAddress = IPAddress.Parse("192.168.1.42"),
+    SubnetMask      = IPAddress.Parse("255.255.255.0"),
+    Gateway         = IPAddress.Parse("192.168.1.1"),
 };
 await device.UpdateNetworkConfigurationAsync(config);
 ```

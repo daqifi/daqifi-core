@@ -342,14 +342,14 @@ public class DaqifiDeviceFactoryTests
         {
             ConnectionType = ConnectionType.Wifi,
             Port = 9760,
-            IPAddress = null
+            IpAddress = null
         };
 
         // Act & Assert
         var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo));
 
-        Assert.Contains("IPAddress", exception.Message);
+        Assert.Contains("IpAddress", exception.Message);
     }
 
     [Fact]
@@ -359,7 +359,7 @@ public class DaqifiDeviceFactoryTests
         var deviceInfo = new TestDeviceInfo
         {
             ConnectionType = ConnectionType.Wifi,
-            IPAddress = IPAddress.Parse("192.168.1.100"),
+            IpAddress = IPAddress.Parse("192.168.1.100"),
             Port = null
         };
 
@@ -380,7 +380,7 @@ public class DaqifiDeviceFactoryTests
         var deviceInfo = new TestDeviceInfo
         {
             ConnectionType = ConnectionType.Wifi,
-            IPAddress = IPAddress.Parse("192.168.1.100"),
+            IpAddress = IPAddress.Parse("192.168.1.100"),
             Port = 9760
         };
 
@@ -406,7 +406,7 @@ public class DaqifiDeviceFactoryTests
             var deviceInfo = new TestDeviceInfo
             {
                 ConnectionType = ConnectionType.Wifi,
-                IPAddress = IPAddress.Loopback,
+                IpAddress = IPAddress.Loopback,
                 Port = port,
                 LocalInterfaceAddress = IPAddress.Parse("192.0.2.1")
             };
@@ -511,7 +511,7 @@ public class DaqifiDeviceFactoryTests
             var deviceInfo = new TestDeviceInfo
             {
                 ConnectionType = ConnectionType.Wifi,
-                IPAddress = IPAddress.Loopback,
+                IpAddress = IPAddress.Loopback,
                 Port = port
             };
 
@@ -601,7 +601,7 @@ public class DaqifiDeviceFactoryTests
         public string Name { get; set; } = "Test Device";
         public string SerialNumber { get; set; } = "SN123456";
         public string FirmwareVersion { get; set; } = "1.0.0";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

@@ -400,7 +400,7 @@ public class WifiDeviceFinder : DeviceFinderBase
                 Name = message.HostName ?? "Unknown",
                 SerialNumber = message.DeviceSn.ToString(CultureInfo.InvariantCulture),
                 FirmwareVersion = message.DeviceFwRev ?? string.Empty,
-                IPAddress = remoteEndPoint.Address,
+                IpAddress = remoteEndPoint.Address,
                 MacAddress = NetworkAddressHelper.GetMacAddressString(message),
                 Port = (int)message.DevicePort,
                 LocalInterfaceAddress = localInterfaceAddress,

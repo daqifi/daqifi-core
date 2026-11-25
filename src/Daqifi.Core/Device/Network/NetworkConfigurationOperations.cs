@@ -58,9 +58,9 @@ internal sealed class NetworkConfigurationOperations
         // Stage static IP fields (firmware writes these into the runtime
         // WiFi settings that ApplyNetworkLan consumes). Skip any field the
         // caller left null so DHCP-only callers see no behavior change.
-        if (configuration.StaticIP != null)
+        if (configuration.StaticIpAddress != null)
         {
-            _host.Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIP));
+            _host.Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIpAddress));
         }
         if (configuration.SubnetMask != null)
         {

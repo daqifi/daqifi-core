@@ -2049,7 +2049,7 @@ public sealed class DaqifiAgent
     internal static string? Address(IDeviceInfo info) => info.ConnectionType switch
     {
         ConnectionType.Serial => info.PortName,
-        ConnectionType.Wifi => info.IPAddress?.ToString(),
+        ConnectionType.Wifi => info.IpAddress?.ToString(),
         _ => null,
     };
 }
