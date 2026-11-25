@@ -4,7 +4,8 @@ release is on nuget.org; until the result merges, CI's baseline check fails ever
 
     python3 scripts/post-release.py 2.0.0 [--dry-run]
 
-1. Sets PackageValidationBaselineVersion to the release.
+1. Sets PackageValidationBaselineVersion to the release, and moves VersionPrefix (what local and
+   CI builds are called) to the next minor version unless it is already ahead of the release.
 2. Folds PublicAPI.Unshipped.txt into PublicAPI.Shipped.txt, applying *REMOVED* lines.
 3. Regenerates CompatibilitySuppressions.xml against the new baseline (no file if nothing needs
    suppressing), then packs again without the generate flag to prove the result validates.
@@ -21,6 +22,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BUILD_PROPS = "Directory.Build.props"
 CSPROJ = "src/Daqifi.Core/Daqifi.Core.csproj"
 SHIPPED = "src/Daqifi.Core/PublicAPI.Shipped.txt"
 UNSHIPPED = "src/Daqifi.Core/PublicAPI.Unshipped.txt"
@@ -70,6 +72,21 @@ def api_file(lines):
     return "\n".join([HEADER, *sorted(lines)]) + "\n"
 
 
+def parts(version):
+    return [int(n) for n in version.split(".")]
+
+
+def property_value(text, path, name):
+    matches = re.findall(rf"<{name}>([^<]*)</{name}>", text)
+    if len(matches) != 1:
+        sys.exit(f"{path}: expected one {name}, found {len(matches)}.")
+    return matches[0].strip()
+
+
+def with_property(text, name, value):
+    return re.sub(rf"(<{name}>)[^<]*(</{name}>)", rf"\g<1>{value}\g<2>", text)
+
+
 def pack(*args):
     # Never --no-build: it skips ApiCompat and passes without checking anything.
     with tempfile.TemporaryDirectory() as out:
@@ -92,13 +109,15 @@ def main():
                  "is nothing to do after one.")
 
     csproj = read(CSPROJ)
-    pattern = r"(<PackageValidationBaselineVersion>)([^<]*)(</PackageValidationBaselineVersion>)"
-    matches = re.findall(pattern, csproj)
-    if len(matches) != 1:
-        sys.exit(f"{CSPROJ}: expected one PackageValidationBaselineVersion, found {len(matches)}.")
-    baseline = matches[0][1].strip()
-    if [int(n) for n in version.split(".")] < [int(n) for n in baseline.split(".")]:
+    baseline = property_value(csproj, CSPROJ, "PackageValidationBaselineVersion")
+    if parts(version) < parts(baseline):
         sys.exit(f"The baseline is already {baseline}, newer than {version}.")
+    props = read(BUILD_PROPS)
+    prefix = property_value(props, BUILD_PROPS, "VersionPrefix")
+    next_prefix = prefix
+    if parts(prefix) <= parts(version):
+        major, minor, _ = parts(version)
+        next_prefix = f"{major}.{minor + 1}.0"
 
     tag = f"v{version}"
     released = surface(read_at(tag, SHIPPED), read_at(tag, UNSHIPPED), tag)
@@ -106,6 +125,7 @@ def main():
     unshipped = (current - released) | {REMOVED + line for line in released - current}
 
     print(f"PackageValidationBaselineVersion: {baseline} -> {version}")
+    print(f"VersionPrefix: {prefix} -> {next_prefix}")
     before = set(entries(read(SHIPPED), SHIPPED))
     print(f"PublicAPI.Shipped.txt: +{len(released - before)} -{len(before - released)}, "
           f"now {len(released)} entries")
@@ -113,7 +133,8 @@ def main():
     if args.dry_run:
         return
 
-    write(CSPROJ, re.sub(pattern, rf"\g<1>{version}\g<3>", csproj))
+    write(CSPROJ, with_property(csproj, "PackageValidationBaselineVersion", version))
+    write(BUILD_PROPS, with_property(props, "VersionPrefix", next_prefix))
     write(SHIPPED, api_file(released))
     write(UNSHIPPED, api_file(unshipped))
 

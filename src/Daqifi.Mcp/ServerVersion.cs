@@ -28,8 +28,8 @@ public static class ServerVersion
     /// Read from the assembly's informational version, which is where the release build's
     /// <c>-p:Version=</c> ends up. SourceLink appends <c>+&lt;commit sha&gt;</c> to it; that
     /// suffix is trimmed so the value is directly comparable with a NuGet version string. A
-    /// build with no version stamped in (a plain local <c>dotnet run</c>) reports the SDK's
-    /// <c>1.0.0</c> default, which is honest — that build really is not a released version.
+    /// build with no version stamped in (a plain local <c>dotnet run</c>) reports the next version
+    /// with a <c>-dev</c> suffix, from <c>Directory.Build.props</c>.
     /// </remarks>
     public static string Current { get; } = ReadCurrent();
 

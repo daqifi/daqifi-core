@@ -32,6 +32,7 @@
          the evaluated Company property before and after. -->
     <Company>DAQiFi</Company>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>nuget-icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/daqifi/daqifi-core</PackageProjectUrl>
     <RepositoryUrl>https://github.com/daqifi/daqifi-core</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -48,5 +49,11 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
+
+  <!-- The DAQiFi app icon (daqifi-avalonia store/play-icon-512.png) at the 128x128
+       nuget.org recommends. -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)assets/nuget-icon.png" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
 
 </Project>

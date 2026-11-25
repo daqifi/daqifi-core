@@ -8,12 +8,18 @@
     <!-- Package Metadata. Authors, license, URLs and the symbol/SourceLink
          settings are repo-wide and come from the root Directory.Build.targets. -->
     <PackageId>Daqifi.Core</PackageId>
-    <Description>Core library for interacting with DAQiFi devices</Description>
+    <Description>The official .NET SDK for DAQiFi Nyquist wireless data-acquisition devices. Discover devices, connect over WiFi or USB, stream calibrated analog and digital samples in real time, drive outputs, manage SD-card logging, and update firmware on Windows, macOS and Linux.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>daqifi;daq;data-acquisition;measurement;instrumentation</PackageTags>
 
     <!-- Build Configuration -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Marks the assembly trimmable and turns on the trim, single-file and AOT
+         analyzers, so code here that would break a trimmed or NativeAOT app fails
+         the build. The analyzers see this project only: HidSharp and
+         System.Management are not trim-safe themselves (docs/adr/0003). -->
+    <IsAotCompatible>true</IsAotCompatible>
 
     <!-- Binary-shape tracking against the last published package (issue #636).
          The PublicApiAnalyzers reference below guards the *source* surface as it
@@ -34,17 +40,6 @@
          CONTRIBUTING.md. -->
     <EnablePackageValidation>true</EnablePackageValidation>
     <PackageValidationBaselineVersion>1.10.0</PackageValidationBaselineVersion>
-    <!-- CP0003 compares assembly *versions*, and this repo carries none: the
-         version is stamped only by release.yml, from the git tag. Every other
-         build - CI, a developer's `dotnet pack` - therefore ships the SDK's
-         1.0.0 placeholder, which CP0003 reports as "lower than the 1.7.0
-         baseline" on a build that has changed no API at all. Suppressed so the
-         rules that do carry signal here (CP0002 for a member the baseline had,
-         CP1002 for a target framework the package no longer offers) are not
-         drowned by a diagnostic that is never about this change. Version
-         ordering is already decided upstream, by which tag the release is cut
-         from. -->
-    <NoWarn>$(NoWarn);CP0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
