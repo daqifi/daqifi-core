@@ -22,9 +22,12 @@ public partial class SdCardOperationsTests
     private static TestableSdCardStreamingDevice NyquistOn(string firmwareVersion)
     {
         var device = new TestableSdCardStreamingDevice("TestDevice");
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = firmwareVersion;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = firmwareVersion,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         return device;
     }
 
@@ -93,7 +96,7 @@ public partial class SdCardOperationsTests
     public async Task CrcProtection_OnABoardWithNoSdSlot_ThrowsFeatureNotSupported()
     {
         var device = NyquistOn("3.9.0");
-        device.Metadata.Capabilities = new DeviceCapabilities();
+        device.UpdateMetadata(metadata => metadata with { Capabilities = new DeviceCapabilities() });
         device.Connect();
 
         await Assert.ThrowsAsync<FeatureNotSupportedException>(
@@ -163,9 +166,12 @@ public partial class SdCardOperationsTests
         {
             _errorQueue = errorQueue;
             Connect();
-            Metadata.DeviceType = DeviceType.Nyquist1;
-            Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-            Metadata.FirmwareVersion = "3.9.0";
+            UpdateMetadata(metadata => metadata with
+            {
+                DeviceType = DeviceType.Nyquist1,
+                Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1),
+                FirmwareVersion = "3.9.0"
+            });
         }
 
         /// <summary>

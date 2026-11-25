@@ -21,9 +21,12 @@ public class DeviceFeatureSupportTests
         DeviceCapabilities? capabilities = null)
     {
         var device = new DaqifiDevice("TestDevice");
-        device.Metadata.DeviceType = board;
-        device.Metadata.FirmwareVersion = firmwareVersion;
-        device.Metadata.Capabilities = capabilities ?? DeviceCapabilities.FromDeviceType(board);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = board,
+            FirmwareVersion = firmwareVersion,
+            Capabilities = capabilities ?? DeviceCapabilities.FromDeviceType(board)
+        });
         return device;
     }
 
@@ -108,7 +111,7 @@ public class DeviceFeatureSupportTests
         // This gate carries HardwareRequirement.SdCard like its SD siblings, and that is only
         // safe because EvaluateSupport short-circuits DeviceType.Unknown to "supported" — ADR
         // 0001's reading that Unknown means "not yet known", not "a different board". The
-        // combination is reachable: DeviceMetadata.UpdateFromProtobuf rebuilds Capabilities only
+        // combination is reachable: DeviceMetadata.WithStatus rebuilds Capabilities only
         // when the status message carried a part number, so a device reporting firmware 3.8.0
         // with an absent or unrecognized part number sits at Unknown with HasSdCard false.
         //
@@ -253,7 +256,7 @@ public class DeviceFeatureSupportTests
         var device = DeviceOn(DeviceType.Nyquist1, "3.6.3");
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));
 
-        device.Metadata.FirmwareVersion = "3.7.0";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.7.0" });
         Assert.True(device.Supports(DeviceFeature.SdFileTransferOverWifi));
     }
 
@@ -291,8 +294,7 @@ public class DeviceFeatureSupportTests
     [Fact]
     public void Supports_SdFileTransferOverWifi_WhenSdHardwareAbsent_ReturnsFalse()
     {
-        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        noSd.HasSdCard = false;
+        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasSdCard = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noSd);
 
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));
@@ -301,8 +303,7 @@ public class DeviceFeatureSupportTests
     [Fact]
     public void Supports_SdFileTransferOverWifi_WhenWifiHardwareAbsent_ReturnsFalse()
     {
-        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        noWifi.HasWiFi = false;
+        var noWifi = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasWiFi = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noWifi);
 
         Assert.False(device.Supports(DeviceFeature.SdFileTransferOverWifi));
@@ -311,8 +312,7 @@ public class DeviceFeatureSupportTests
     [Fact]
     public void Supports_SdStorageQuery_WhenSdHardwareAbsent_ReturnsFalse()
     {
-        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        noSd.HasSdCard = false;
+        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasSdCard = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.5.0", noSd);
 
         Assert.False(device.Supports(DeviceFeature.SdStorageQuery));
@@ -409,8 +409,7 @@ public class DeviceFeatureSupportTests
         // regardless of which axis failed, so a device whose firmware already met the minimum
         // but lacked the SD card was told "Requires firmware >= 3.7.0; the device reports
         // '3.7.0'" — self-contradictory, and pointing at an upgrade that cannot fix it.
-        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
-        noSd.HasSdCard = false;
+        var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with { HasSdCard = false };
         var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noSd);
 
         var ex = Assert.Throws<FeatureNotSupportedException>(

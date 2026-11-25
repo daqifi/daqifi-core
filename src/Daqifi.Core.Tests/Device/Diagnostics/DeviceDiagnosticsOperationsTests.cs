@@ -490,6 +490,8 @@ public class DeviceDiagnosticsOperationsTests
 
         // Outside this collaborator's remit -- reaching for any of these is a regression.
         public DeviceMetadata Metadata => throw new NotSupportedException();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();

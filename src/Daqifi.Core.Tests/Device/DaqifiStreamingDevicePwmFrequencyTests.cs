@@ -109,10 +109,10 @@ public class DaqifiStreamingDevicePwmFrequencyTests
     {
         var device = new CapturingStreamingDevice();
         device.Connect();
-        device.Metadata.FirmwareVersion = firmwareVersion;
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
         Assert.True(CapabilityDocumentParser.TryParse(
             DocumentAdvertisingPwmFloor(advertisedFloorHz), out var document));
-        device.Metadata.ApplyCapabilityDocument(document);
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(document));
         return device;
     }
 
@@ -148,7 +148,7 @@ public class DaqifiStreamingDevicePwmFrequencyTests
     public void PwmFrequencyFloorHz_WithNoCapabilityDocument_IsTheFixedFloor()
     {
         var device = new CapturingStreamingDevice();
-        device.Metadata.FirmwareVersion = "3.9.0";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.9.0" });
 
         Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
     }

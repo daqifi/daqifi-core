@@ -73,8 +73,16 @@ public sealed class CapabilityStreaming
     public CapabilityRateModel? RateModel { get; init; }
 
     /// <summary>Gets the stream encodings the device supports, e.g. <c>pb</c>, <c>csv</c>, <c>json</c>.</summary>
-    public IReadOnlyList<string> Encodings { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Encodings
+    {
+        get;
+        init => field = Array.AsReadOnly(value.ToArray());
+    } = Array.Empty<string>();
 
     /// <summary>Gets the destinations the device can stream to, e.g. <c>usb</c>, <c>wifi</c>, <c>sd</c>.</summary>
-    public IReadOnlyList<string> Transports { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Transports
+    {
+        get;
+        init => field = Array.AsReadOnly(value.ToArray());
+    } = Array.Empty<string>();
 }

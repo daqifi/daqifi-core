@@ -512,7 +512,10 @@ public class DaqifiDeviceConsumerRestartTests
             device =>
             {
                 device.BacklogCap = 2;
-                device.Metadata.Capabilities.MaxSamplingRate = 500;
+                device.UpdateMetadata(metadata => metadata with
+                {
+                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 500 }
+                });
                 device.StartStreaming();
                 SendFillers(device, 2);
             },

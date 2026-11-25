@@ -1,75 +1,60 @@
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// Represents the capabilities and features available on a DAQiFi device.
+/// Represents the capabilities and features available on a DAQiFi device. Immutable: use a
+/// <c>with</c> expression to derive a changed copy.
 /// </summary>
-public class DeviceCapabilities
+public sealed record DeviceCapabilities
 {
     /// <summary>
-    /// Gets or sets a value indicating whether the device supports streaming data.
+    /// Gets a value indicating whether the device supports streaming data.
     /// </summary>
-    public bool SupportsStreaming { get; set; }
+    public bool SupportsStreaming { get; init; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device has an SD card slot.
+    /// Gets a value indicating whether the device has an SD card slot.
     /// </summary>
-    public bool HasSdCard { get; set; }
+    public bool HasSdCard { get; init; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device supports WiFi connectivity.
+    /// Gets a value indicating whether the device supports WiFi connectivity.
     /// </summary>
-    public bool HasWiFi { get; set; }
+    public bool HasWiFi { get; init; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device's WiFi connectivity is provided by a
+    /// Gets a value indicating whether the device's WiFi connectivity is provided by a
     /// discrete WINC1500 module (as opposed to, e.g., a future SoC-integrated WiFi part). Lets
     /// consumers ask Core whether WINC-specific handling (power-on-before-probe, the WINC flash
     /// tool, bridge-mode activation) applies to a device instead of pattern-matching
     /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWiFi"/>, which only
     /// indicates WiFi connectivity in general.
     /// </summary>
-    public bool HasWincWifiModule { get; set; }
+    public bool HasWincWifiModule { get; init; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device supports USB connectivity.
+    /// Gets a value indicating whether the device supports USB connectivity.
     /// </summary>
-    public bool HasUsb { get; set; }
+    public bool HasUsb { get; init; }
 
     /// <summary>
-    /// Gets or sets the number of analog input channels available.
+    /// Gets the number of analog input channels available.
     /// </summary>
-    public int AnalogInputChannels { get; set; }
+    public int AnalogInputChannels { get; init; }
 
     /// <summary>
-    /// Gets or sets the number of analog output channels available.
+    /// Gets the number of analog output channels available.
     /// </summary>
-    public int AnalogOutputChannels { get; set; }
+    public int AnalogOutputChannels { get; init; }
 
     /// <summary>
-    /// Gets or sets the number of digital I/O channels available.
+    /// Gets the number of digital I/O channels available.
     /// </summary>
-    public int DigitalChannels { get; set; }
+    public int DigitalChannels { get; init; }
 
     /// <summary>
-    /// Gets or sets the maximum sampling rate in Hz.
+    /// Gets the maximum sampling rate in Hz.
     /// </summary>
-    public int MaxSamplingRate { get; set; }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DeviceCapabilities"/> class with default values.
-    /// </summary>
-    public DeviceCapabilities()
-    {
-        SupportsStreaming = true;
-        HasSdCard = false;
-        HasWiFi = false;
-        HasWincWifiModule = false;
-        HasUsb = false;
-        AnalogInputChannels = 0;
-        AnalogOutputChannels = 0;
-        DigitalChannels = 0;
-        MaxSamplingRate = 1000;
-    }
+    public int MaxSamplingRate { get; init; } = 1000;
 
     /// <summary>
     /// Creates the capabilities a board is known to have, before the device has described itself.
@@ -132,26 +117,6 @@ public class DeviceCapabilities
                 MaxSamplingRate = 16000
             },
             _ => new DeviceCapabilities()
-        };
-    }
-
-    /// <summary>
-    /// Creates a deep copy of this <see cref="DeviceCapabilities"/> instance.
-    /// </summary>
-    /// <returns>A new <see cref="DeviceCapabilities"/> instance with the same field values.</returns>
-    public DeviceCapabilities Clone()
-    {
-        return new DeviceCapabilities
-        {
-            SupportsStreaming = SupportsStreaming,
-            HasSdCard = HasSdCard,
-            HasWiFi = HasWiFi,
-            HasWincWifiModule = HasWincWifiModule,
-            HasUsb = HasUsb,
-            AnalogInputChannels = AnalogInputChannels,
-            AnalogOutputChannels = AnalogOutputChannels,
-            DigitalChannels = DigitalChannels,
-            MaxSamplingRate = MaxSamplingRate
         };
     }
 }
