@@ -147,8 +147,7 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
     {
         // The reconfiguration sends its staged settings, the save and the apply, then holds for
         // the WiFi module's restart window. A competing caller's query must not run inside that
-        // window (or between the sends): it waits until the update has finished, by which point
-        // the device's local configuration already reflects the new network.
+        // window (or between the sends): it waits until the update has finished.
         var device = ConnectedDevice(new Queue<string>());
         var applySent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         device.OnSend = command =>
@@ -159,11 +158,9 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
             }
         };
 
-        string? ssidSeenByCompetitor = "(competitor never ran)";
         device.Responder = command =>
         {
             Assert.Equal(CompetingBadCommand, command);
-            ssidSeenByCompetitor = device.NetworkConfiguration.Ssid;
             return new[] { "**ERROR: -113, \"Undefined header\"" };
         };
 
@@ -188,7 +185,6 @@ public class DaqifiStreamingDeviceExclusiveOperationsTests
         endRestartWait.Cancel();
         await Task.WhenAll(update, competitor).WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal("NewNetwork", ssidSeenByCompetitor);
         Assert.Equal(ScpiMessageProducer.ApplyNetworkLan.Data, device.SentCommands[^2]); // nothing of the competitor's before the apply
         Assert.Equal(CompetingBadCommand, device.SentCommands[^1]);
     }

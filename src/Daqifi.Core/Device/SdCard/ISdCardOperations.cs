@@ -397,4 +397,37 @@ public interface ISdCardOperations
         string fileName,
         IProgress<SdCardTransferProgress>? progress = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Prepares the SD card interface for use. Over USB the LAN interface is disabled first to
+    /// free the shared SPI bus for the SD card. Over WiFi/TCP the LAN is left enabled.
+    /// </summary>
+    /// <remarks>
+    /// On older firmware the SD card and LAN interfaces share the same SPI bus and cannot be
+    /// used simultaneously, so over USB the LAN is disabled before accessing the SD card. On
+    /// firmware &gt;= v3.7.0 (#598/#599) the Harmony SPI driver arbitrates SD/WiFi transactions
+    /// on the shared bus, so over a WiFi/TCP control transport the LAN MUST stay enabled (the
+    /// SD reply routes back over that channel). The other operations on this interface switch the
+    /// bus themselves. Call this method only to hand the bus back to the SD card after something
+    /// else took it, such as
+    /// <see cref="Network.INetworkConfigurable.UpdateNetworkConfigurationAsync"/>, which leaves
+    /// the LAN enabled.
+    /// </remarks>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    void PrepareSdInterface();
+
+    /// <summary>
+    /// Prepares the LAN interface for use by disabling the SD card interface. Over USB the LAN
+    /// is re-enabled; over WiFi/TCP the LAN (never disabled) is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="PrepareSdInterface"/> for restoring the interface after an SD
+    /// card operation. Over USB it disables the SD subsystem and re-enables the LAN. Over a
+    /// WiFi/TCP control transport the LAN was never disabled, so it is left alone (re-enabling
+    /// it would re-initialize the WiFi module and drop the connection). Note: a
+    /// network-reconfiguration flow that must unconditionally bring the LAN back up should
+    /// enable it explicitly rather than rely on this transport-aware helper.
+    /// </remarks>
+    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    void PrepareLanInterface();
 }
