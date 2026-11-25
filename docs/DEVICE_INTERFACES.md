@@ -793,7 +793,7 @@ A single failed read never disconnects anything. Escalation requires a *run* of 
 successful transfer in between, so a stream that glitches and recovers stays connected. A read or
 write *timeout* is not a failure at all — it is what an idle or momentarily busy device looks
 like. To disable the serial presence poll and rely on I/O escalation alone, construct the transport
-with `livenessCheckInterval: TimeSpan.Zero`.
+with `new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero }`.
 
 When a drop is detected the transport closes its handle, so `IsConnected` already reads `false` by
 the time `StateChanged` fires. The device's message consumer and producer are *not* stopped
