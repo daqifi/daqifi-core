@@ -9,6 +9,7 @@
          settings are repo-wide and come from the root Directory.Build.targets. -->
     <PackageId>Daqifi.Core</PackageId>
     <Description>The official .NET SDK for DAQiFi Nyquist wireless data-acquisition devices. Discover devices, connect over WiFi or USB, stream calibrated analog and digital samples in real time, drive outputs, manage SD-card logging, and update firmware on Windows, macOS and Linux.</Description>
+    <PackageReleaseNotes>2.0 is a breaking release. Migrating from 1.x: https://github.com/daqifi/daqifi-core/blob/main/docs/migration/2.0.md. All releases: https://github.com/daqifi/daqifi-core/releases</PackageReleaseNotes>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>daqifi;daq;data-acquisition;measurement;instrumentation</PackageTags>
 

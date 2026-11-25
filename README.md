@@ -428,6 +428,12 @@ Assemblies are not strong-named and will not be.
 [ADR 0003](https://github.com/daqifi/daqifi-core/blob/main/docs/adr/0003-packaging-and-frameworks.md)
 has the reasoning.
 
+### Upgrading from 1.x
+
+2.0 removes, renames and re-types public members.
+[Migrating from 1.x to 2.0](https://github.com/daqifi/daqifi-core/blob/main/docs/migration/2.0.md)
+has the changes most callers need, with code, and a row for every changed member.
+
 ## Community & support
 
 - [Open an issue](https://github.com/daqifi/daqifi-core/issues) for bugs or feature requests

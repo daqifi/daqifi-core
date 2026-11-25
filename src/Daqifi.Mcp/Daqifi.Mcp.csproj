@@ -19,6 +19,7 @@
          settings are repo-wide and come from the root Directory.Build.targets. -->
     <PackageId>Daqifi.Mcp</PackageId>
     <Description>Model Context Protocol (MCP) server for DAQiFi Nyquist data-acquisition devices. Lets an AI agent discover, connect, configure channels, read live measurements, and run on-device SD-card logging.</Description>
+    <PackageReleaseNotes>2.0 changes tool names, parameters and results. Migrating from 1.x: https://github.com/daqifi/daqifi-core/blob/main/docs/migration/2.0.md#mcp-server. All releases: https://github.com/daqifi/daqifi-core/releases</PackageReleaseNotes>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>daqifi;daq;data-acquisition;mcp;model-context-protocol;ai;dotnet-tool</PackageTags>
   </PropertyGroup>

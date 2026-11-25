@@ -103,6 +103,10 @@ name in the message is already the exact line to add).
 And a *removal* is never automatic: the `*REMOVED*` line is the deliberate act of declaring a
 breaking change, and ADR 0002 says what that costs.
 
+Until 2.0 ships, a break also needs a row in [docs/migration/2.0.md](docs/migration/2.0.md).
+`python3 scripts/check-migration-guide.py` lists what the guide misses and any name in it that no longer
+exists; `--compile` also builds its code samples. CI does not run it.
+
 ### Regenerating `DaqifiOutMessage`
 
 `src/Daqifi.Core/Communication/Messages/DaqifiOutMessage.cs` is protoc output; never change it by
