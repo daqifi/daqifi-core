@@ -20,7 +20,7 @@ public class DeviceFeatureSupportTests
         string firmwareVersion = "",
         DeviceCapabilities? capabilities = null)
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with
         {
             DeviceType = board,

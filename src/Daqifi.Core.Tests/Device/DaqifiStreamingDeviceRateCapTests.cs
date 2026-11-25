@@ -8,7 +8,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -450,8 +449,8 @@ public class DaqifiStreamingDeviceRateCapTests
     /// <summary>A device that records what was sent instead of writing to hardware.</summary>
     private class CapturingStreamingDevice : DaqifiStreamingDevice
     {
-        public CapturingStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public CapturingStreamingDevice(string name)
+            : base(name)
         {
         }
 

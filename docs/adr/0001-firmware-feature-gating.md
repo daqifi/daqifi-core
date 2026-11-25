@@ -252,7 +252,8 @@ The seam shipped. Two details differ from the sketch above, both settled during 
   `EnsureSupported(DeviceFeature)` are therefore on
   [`DaqifiDevice`](../../src/Daqifi.Core/Device/DaqifiDevice.cs), which already owns
   `MinSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
-  evaluation rule above is unchanged and now enforced by test.
+  evaluation rule above is unchanged and now enforced by test. Since 2.0 `Supports` is a member of
+  `IDevice`, so no cast is needed to ask.
 - **The two axes fail differently.** The firmware-version axis **fails closed** — absent or
   unparseable reports as unsupported, preserving #347's conservative rule. The board/hardware axis
   is evaluated **only once the board is known**: while `DeviceType` is `Unknown`,

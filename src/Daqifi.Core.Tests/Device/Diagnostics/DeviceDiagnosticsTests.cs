@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Messages;
@@ -451,8 +450,8 @@ public class DeviceDiagnosticsTests
         public List<string> SentCommands { get; } = new();
         public List<string> CannedTextResponse { get; } = new();
 
-        public TestableDiagnosticsDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableDiagnosticsDevice(string name)
+            : base(name)
         {
         }
 

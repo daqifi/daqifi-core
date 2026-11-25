@@ -3,7 +3,6 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Tests.TestSupport;
 using System.Linq;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -266,7 +265,7 @@ public class ChannelStateVersionTests
     /// </summary>
     private sealed class VersionProbeDevice : DaqifiStreamingDevice
     {
-        public VersionProbeDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public VersionProbeDevice(string name) : base(name)
         {
         }
 

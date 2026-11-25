@@ -59,7 +59,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// paths can be tested without hardware; production always uses
     /// <see cref="DaqifiDeviceFactory.ConnectFromDeviceInfoAsync"/>.
     /// </summary>
-    internal delegate Task<DaqifiDevice> DeviceConnector(
+    internal delegate Task<DaqifiStreamingDevice> DeviceConnector(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken);
@@ -96,13 +96,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// </param>
     internal DaqifiDeviceRegistry(DeviceConnector? connector)
     {
-        // Async, not a direct method-group forward: DaqifiDeviceFactory.ConnectFromDeviceInfoAsync
-        // returns Task<DaqifiStreamingDevice> (#333), one step narrower than this delegate's
-        // Task<DaqifiDevice> — the implicit reference conversion on the awaited result only applies
-        // to an async method's return statement, not to the Task instance itself.
-        _connector = connector ?? (async (info, options, cancellationToken) =>
-            await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(info, options, cancellationToken)
-                .ConfigureAwait(false));
+        _connector = connector ?? DaqifiDeviceFactory.ConnectFromDeviceInfoAsync;
     }
 
     #endregion
@@ -307,7 +301,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// <exception cref="ArgumentException"><paramref name="device"/> is not connected.</exception>
     /// <exception cref="ObjectDisposedException">The registry has been disposed.</exception>
     public DeviceRegistrationResult Register(
-        DaqifiDevice device,
+        DaqifiStreamingDevice device,
         IDeviceInfo? deviceInfo = null,
         string? key = null)
     {
@@ -355,7 +349,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// <param name="key">The key the device was filed under.</param>
     /// <param name="device">The device, or <c>null</c> when the key is unknown.</param>
     /// <returns><c>true</c> when a device was found.</returns>
-    public bool TryGetDevice(string key, out DaqifiDevice? device)
+    public bool TryGetDevice(string key, out DaqifiStreamingDevice? device)
     {
         var found = TryGet(key, out var registration);
         device = registration?.Device;
@@ -412,7 +406,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// </summary>
     /// <param name="device">The device to remove.</param>
     /// <returns><c>true</c> when the device was in the live set and was removed.</returns>
-    public bool Remove(DaqifiDevice device)
+    public bool Remove(DaqifiStreamingDevice device)
     {
         if (device is null)
         {
@@ -530,7 +524,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// prompts its user is asked once per connection attempt rather than twice.
     /// </param>
     private DeviceRegistrationResult RegisterCore(
-        DaqifiDevice device,
+        DaqifiStreamingDevice device,
         IDeviceInfo? deviceInfo,
         string? key,
         DeviceRegistration? approvedReplacement)
@@ -648,7 +642,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// filed under the requested key, the entry holding this very device instance, or one
     /// describing the same physical unit. Caller must hold <see cref="_lock"/>.
     /// </summary>
-    private DeviceRegistration? FindDuplicateLocked(string? key, DeviceIdentity identity, DaqifiDevice? device = null)
+    private DeviceRegistration? FindDuplicateLocked(string? key, DeviceIdentity identity, DaqifiStreamingDevice? device = null)
     {
         if (!string.IsNullOrEmpty(key) && _devices.TryGetValue(key!, out var byKey))
         {
@@ -826,7 +820,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// Disconnects and disposes a device the registry owns. Disconnect failures are ignored: the
     /// transport is being torn down either way, and disposal must still run.
     /// </summary>
-    private static void DisposeDevice(DaqifiDevice device)
+    private static void DisposeDevice(DaqifiStreamingDevice device)
     {
         try
         {

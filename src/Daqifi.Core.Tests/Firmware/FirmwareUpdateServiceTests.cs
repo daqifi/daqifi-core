@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
@@ -3769,6 +3770,124 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
 
+    /// <summary>
+    /// The application boots dormant, so the update initializes the device it reconnected to, through
+    /// <see cref="IDevice"/> and so whatever its class (issue #1038). A failure there does not fail
+    /// an update that has already been written, and neither does a cancellation of the device's own.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(typeof(TimeoutException))]
+    [InlineData(typeof(OperationCanceledException))]
+    public async Task UpdateFirmwareAsync_InitializesTheReconnectedDevice(Type? failure)
+    {
+        var device = new FakeStreamingDevice("COM3")
+        {
+            OnInitialize = _ => failure is null
+                ? Task.CompletedTask
+                : Task.FromException((Exception)Activator.CreateInstance(failure)!)
+        };
+        var service = CreateUpdateThatReconnects(CreateFastOptions());
+
+        await RunUpdateAsync(service, device);
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(1, device.InitializeCalls);
+    }
+
+    /// <summary>
+    /// A caller who cancels while the reconnected device is initializing hears of the cancel, whatever
+    /// the interrupted initialization threw. It was logged like any other failure, and the update
+    /// reported as completed. No probe, so nothing after it observes the token.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UpdateFirmwareAsync_CanceledWhileInitializingTheReconnectedDevice_ReportsTheCancel(
+        bool initializeThrowsTheCancel)
+    {
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM3")
+        {
+            OnInitialize = token =>
+            {
+                cts.Cancel();
+                return initializeThrowsTheCancel
+                    ? Task.FromCanceled(token)
+                    : Task.FromException(new DeviceNotConnectedException("torn down by the cancel"));
+            }
+        };
+        var service = CreateUpdateThatReconnects(CreateFastOptions());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RunUpdateAsync(service, device, cts.Token));
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Equal(1, device.InitializeCalls);
+    }
+
+    /// <summary>
+    /// The budget for the whole jump-and-reconnect step running out during the initialization is that
+    /// step's timeout, not a completed update.
+    /// </summary>
+    [Fact]
+    public async Task UpdateFirmwareAsync_StepTimesOutWhileInitializingTheReconnectedDevice_ReportsTheTimeout()
+    {
+        var options = CreateFastOptions();
+        // Covers the reconnect too, so it is long enough that only the initialization can use it up.
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(1);
+        var device = new FakeStreamingDevice("COM3")
+        {
+            OnInitialize = token => Task.Delay(Timeout.InfiniteTimeSpan, token)
+        };
+        var service = CreateUpdateThatReconnects(options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(() => RunUpdateAsync(service, device));
+
+        Assert.IsType<TimeoutException>(ex.InnerException);
+        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Equal(1, device.InitializeCalls);
+    }
+
+    /// <summary>A service whose bootloader accepts a whole update, through to the jump.</summary>
+    private static FirmwareUpdateService CreateUpdateThatReconnects(FirmwareUpdateServiceOptions options)
+    {
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        return new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            new FakeHidDeviceEnumerator([
+                Array.Empty<HidDeviceInfo>(),
+                [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+            ]),
+            options);
+    }
+
+    private static async Task RunUpdateAsync(
+        FirmwareUpdateService service,
+        IStreamingDevice device,
+        CancellationToken cancellationToken = default)
+    {
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath, cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+    }
+
     [Fact]
     public async Task UpdateFirmwareAsync_PostReconnectReadinessProbe_AwaitedBeforeComplete()
     {
@@ -4990,6 +5109,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -5114,6 +5241,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => IsConnected = false;
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }
@@ -6024,6 +6159,14 @@ public class FirmwareUpdateServiceTests
         public void SetPwmFrequency(int frequencyHz) { }
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public int PwmFrequencyFloorHz => 0;
+        public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage) { }
+        public void LatchAnalogOutputs() { }
+        public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default) => Task.FromResult(0.0);
+        public bool Supports(DeviceFeature feature) => false;
+        public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
         public void Reboot() => Disconnect();
         public Task StartStreamingAsync(CancellationToken cancellationToken = default) { StartStreaming(); return Task.CompletedTask; }
         public Task StopStreamingAsync(CancellationToken cancellationToken = default) { StopStreaming(); return Task.CompletedTask; }

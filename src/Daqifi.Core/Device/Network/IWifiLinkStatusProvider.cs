@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device.Network;
 /// <para>
 /// A separate interface rather than new members on <see cref="INetworkConfigurable"/>, so existing
 /// implementers of that interface are not broken. <see cref="DaqifiStreamingDevice"/> implements
-/// both. Check <see cref="DaqifiDevice.Supports"/> before calling, since older firmware is refused:
+/// both. Check <see cref="IDevice.Supports"/> before calling, since older firmware is refused:
 /// </para>
 /// <code>
 /// if (device is IWifiLinkStatusProvider wifi &amp;&amp; device.Supports(DeviceFeature.WifiLinkStatus))

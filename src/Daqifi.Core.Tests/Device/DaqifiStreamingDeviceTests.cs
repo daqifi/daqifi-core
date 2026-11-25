@@ -2,7 +2,6 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using System.Collections.Generic;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -13,7 +12,7 @@ public class DaqifiStreamingDeviceTests
     public void Constructor_InitializesStreamingFrequency()
     {
         // Arrange & Act
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         // Assert
         Assert.Equal(100, device.StreamingFrequency);
@@ -27,7 +26,7 @@ public class DaqifiStreamingDeviceTests
     public void StreamingFrequency_WithinRange_IsAccepted(int frequency)
     {
         // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         // Act
         device.StreamingFrequency = frequency;
@@ -42,7 +41,7 @@ public class DaqifiStreamingDeviceTests
     public void StreamingFrequency_AboveTheCeiling_ThrowsAndQuotesTheCeiling(int frequency)
     {
         // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         // Act & Assert
         var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = frequency);
@@ -58,7 +57,7 @@ public class DaqifiStreamingDeviceTests
         // nothing else. It used to report "must be between 1 and <ceiling> Hz (the device's
         // maximum sampling rate)", which named a ceiling the value never approached — and named
         // it as if it were the limit a stream is held to, which it is not.
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = frequency);
 
@@ -70,7 +69,7 @@ public class DaqifiStreamingDeviceTests
     public void StreamingFrequency_OutOfRange_LeavesPreviousValueUnchanged()
     {
         // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice") { StreamingFrequency = 250 };
+        var device = new TransportlessStreamingDevice("TestDevice") { StreamingFrequency = 250 };
 
         // Act
         Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = 5000);
@@ -83,7 +82,7 @@ public class DaqifiStreamingDeviceTests
     public void StreamingFrequency_UsesCapabilitiesMaxSamplingRate_NotAHardcodedConstant()
     {
         // Arrange: lower the device's advertised max and confirm the guard tracks it.
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with
         {
             Capabilities = metadata.Capabilities with { MaxSamplingRate = 200 }
@@ -102,7 +101,7 @@ public class DaqifiStreamingDeviceTests
     {
         // Arrange: MaxSamplingRate is unvalidated. An invalid value from a subclass
         // must not produce an impossible range that rejects every frequency.
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with
         {
             Capabilities = metadata.Capabilities with { MaxSamplingRate = invalidMax }
@@ -160,7 +159,7 @@ public class DaqifiStreamingDeviceTests
     {
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
 
-        public TestableDaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public TestableDaqifiStreamingDevice(string name) : base(name)
         {
         }
 

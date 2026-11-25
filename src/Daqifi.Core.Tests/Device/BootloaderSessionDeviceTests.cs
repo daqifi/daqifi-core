@@ -1,4 +1,5 @@
 using System.Reflection;
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Firmware;
@@ -240,6 +241,34 @@ public class BootloaderSessionDeviceTests
         Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, new BootloaderSessionDevice().PwmFrequencyHz);
     }
 
+    [Fact]
+    public void Supports_IsFalseForEveryFeature()
+    {
+        var device = new BootloaderSessionDevice();
+
+        Assert.All(Enum.GetValues<DeviceFeature>(), feature => Assert.False(device.Supports(feature)));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_LeavesTheSessionConnected()
+    {
+        var device = new BootloaderSessionDevice();
+
+        await device.InitializeAsync();
+
+        Assert.Equal(DeviceState.Connected, device.State);
+    }
+
+    [Fact]
+    public async Task Reads_ReportThatThereIsNothingToRead()
+    {
+        var device = new BootloaderSessionDevice();
+
+        Assert.Null(await device.ReadCapabilityDocumentAsync());
+        Assert.True(double.IsNaN(await device.GetAnalogOutputAsync(new AnalogOutputChannel(0))));
+        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+    }
+
     #endregion
 
     #region Cancellation
@@ -259,6 +288,10 @@ public class BootloaderSessionDeviceTests
             () => device.StartStreamingAsync(token),
             () => device.StopStreamingAsync(token),
             () => device.RebootAsync(token),
+            () => device.InitializeAsync(null, token),
+            () => device.RefreshDeviceStatusAsync(null, token),
+            () => device.ReadCapabilityDocumentAsync(token),
+            () => device.GetAnalogOutputAsync(new AnalogOutputChannel(0), token),
             () => device.SaveAdcCalibrationAsync(token),
             () => device.LoadAdcCalibrationAsync(token),
             () => device.SetAdcCalibrationSlopeAsync(0, 1.0, token),

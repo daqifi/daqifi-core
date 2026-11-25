@@ -613,8 +613,8 @@ public class NetworkConfigurableTests
     {
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
 
-        public TestableDaqifiStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableDaqifiStreamingDevice(string name)
+            : base(name)
         {
         }
 
@@ -650,8 +650,8 @@ public class NetworkConfigurableTests
     /// <summary>Non-USB (WiFi/TCP) variant for the transport-aware interface-prep tests.</summary>
     private sealed class TestableNonUsbDaqifiStreamingDevice : TestableDaqifiStreamingDevice
     {
-        public TestableNonUsbDaqifiStreamingDevice(string name, IPAddress? ipAddress = null)
-            : base(name, ipAddress)
+        public TestableNonUsbDaqifiStreamingDevice(string name)
+            : base(name)
         {
         }
 

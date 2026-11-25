@@ -55,7 +55,7 @@ public sealed record ConnectedDeviceInfo(
     int DigitalChannelCount,
     int AnalogOutputChannelCount)
 {
-    public static ConnectedDeviceInfo From(string id, DaqifiDevice device)
+    public static ConnectedDeviceInfo From(string id, IStreamingDevice device)
     {
         var analog = 0;
         var digital = 0;
@@ -81,11 +81,9 @@ public sealed record DeviceStatus(
     IReadOnlyList<int> EnabledAnalogChannels,
     IReadOnlyList<int> EnabledDigitalChannels)
 {
-    public static DeviceStatus From(string id, DaqifiDevice device)
+    public static DeviceStatus From(string id, DaqifiStreamingDevice device)
     {
-        var streaming = (device as IStreamingDevice)?.IsStreaming ?? false;
-        var rate = (device as IStreamingDevice)?.StreamingFrequency ?? 0;
-        var logging = (device as ISdCardOperations)?.IsLoggingToSdCard ?? false;
+        ISdCardOperations sd = device;
         var channels = device.GetChannelsSnapshot();
         var enabledAnalog = channels
             .Where(c => c.Type == ChannelType.Analog && c.IsEnabled)
@@ -98,7 +96,8 @@ public sealed record DeviceStatus(
             .OrderBy(n => n)
             .ToList();
         return new DeviceStatus(
-            id, device.Name, device.State.ToWire(), streaming, logging, rate, enabledAnalog, enabledDigital);
+            id, device.Name, device.State.ToWire(), device.IsStreaming, sd.IsLoggingToSdCard, device.StreamingFrequency,
+            enabledAnalog, enabledDigital);
     }
 }
 

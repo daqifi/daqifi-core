@@ -2,7 +2,6 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using System;
 using System.Collections.Generic;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -141,7 +140,7 @@ public class ClassifiedEventSubscriberIsolationTests
 
     private sealed class RaiseProbeDevice : DaqifiStreamingDevice
     {
-        public RaiseProbeDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public RaiseProbeDevice(string name) : base(name)
         {
         }
 

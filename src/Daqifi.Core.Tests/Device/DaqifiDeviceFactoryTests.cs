@@ -551,14 +551,12 @@ public class DaqifiDeviceFactoryTests
             var networked = Assert.IsAssignableFrom<INetworkAddressedDevice>(device);
 
             Assert.Equal(IPAddress.Loopback, networked.IpAddress);
-            Assert.Equal(IPAddress.Loopback, device.IpAddress);
 
             await transport.DisconnectAsync();
             target = (IPEndPoint)second.LocalEndpoint;
             await transport.ConnectAsync(BareConnect.ConnectionRetry);
 
             Assert.Equal(IPAddress.IPv6Loopback, networked.IpAddress);
-            Assert.Equal(IPAddress.IPv6Loopback, device.IpAddress);
         }
         finally
         {

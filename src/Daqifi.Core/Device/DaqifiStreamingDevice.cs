@@ -15,7 +15,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,7 +26,7 @@ namespace Daqifi.Core.Device;
 /// Represents a DAQiFi device that supports data streaming functionality.
 /// Extends the base DaqifiDevice with streaming-specific operations.
 /// </summary>
-public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
+public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIdentification, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
     /// Shortest time <see cref="StartStreamingAsync"/> gives the device to send its first stream
@@ -291,13 +290,20 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public event EventHandler<TimestampGapEventArgs>? GapDetected;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class.
+    /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class with no transport.
     /// </summary>
+    /// <remarks><inheritdoc cref="DaqifiDevice(string)" path="/remarks/node()"/></remarks>
     /// <param name="name">The name of the device.</param>
-    /// <param name="ipAddress">The IP address of the device, if known.</param>
-    /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
-    public DaqifiStreamingDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
-        : base(name, ipAddress, logger)
+    protected DaqifiStreamingDevice(string name)
+        : this(name, logger: null)
+    {
+    }
+
+    /// <inheritdoc cref="DaqifiStreamingDevice(string)"/>
+    /// <param name="name">The name of the device.</param>
+    /// <param name="logger">Logger for device diagnostics; a no-op logger is used when null.</param>
+    protected DaqifiStreamingDevice(string name, ILogger? logger)
+        : base(name, logger)
     {
         InitializeStreamingDevice();
     }
@@ -1260,17 +1266,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </remarks>
     public const int MinPwmFrequencyHz = 6;
 
-    /// <summary>
-    /// Gets the lowest frequency <see cref="SetPwmFrequency"/> accepts on this device, in hertz.
-    /// </summary>
-    /// <remarks>
-    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.PwmFrequencyFloor"/>) with a
-    /// capability document read, this is the floor the device advertises
-    /// (<see cref="Capabilities.CapabilityChannel.PwmMinimumFrequencyHz"/>), which the firmware
-    /// computes from its actual peripheral clock and enforces itself. Otherwise it is
-    /// <see cref="MinPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
-    /// Read it when bounding a frequency input rather than hard-coding the constant.
-    /// </remarks>
+    /// <inheritdoc />
     public int PwmFrequencyFloorHz => _channelControl.PwmFrequencyFloorHz;
 
     /// <summary>
@@ -1302,94 +1298,15 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <inheritdoc />
     public void SetPwmFrequency(int frequencyHz) => _channelControl.SetPwmFrequency(frequencyHz);
 
-    /// <summary>
-    /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
-    /// updates <see cref="DaqifiDevice.Metadata"/>'s <see cref="DeviceMetadata.FriendlyName"/>.
-    /// </summary>
-    /// <remarks>
-    /// Composes the firmware sequence <c>SYSTem:DEVice:NAME "name"</c> then
-    /// <c>SYSTem:DEVice:NAME:SAVE</c> (producer commands added in #302). The device does not echo
-    /// the new name back synchronously — and may not stream another status frame for a while — so
-    /// the local metadata is updated optimistically once both commands are sent. This is the
-    /// device-level composition desktop hand-rolled (its "no producer helper exists" note is stale).
-    ///
-    /// <para>Completion semantics: the returned task completes once the commands are enqueued to
-    /// the outbound producer — it does <b>not</b> await on-device application or NVM persistence,
-    /// which the firmware does not acknowledge. This matches the other fire-and-forget device
-    /// commands (e.g. <see cref="LoadNetworkConfigurationAsync"/>, <see cref="FactoryResetNetworkAsync"/>);
-    /// the async signature exists for cancellation and device-surface consistency.</para>
-    /// </remarks>
-    /// <param name="name">
-    /// 1-<see cref="ScpiMessageProducer.MaxFriendlyNameLength"/> printable ASCII characters
-    /// (0x20-0x7E), excluding <c>"</c> and <c>\</c> — see <see cref="ScpiMessageProducer.IsFriendlyNameValid"/>.
-    /// </param>
-    /// <param name="cancellationToken">A cancellation token observed before the commands are sent.</param>
-    /// <returns>A task that completes once both commands have been sent.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    /// <inheritdoc />
     public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
         => _administration.SetFriendlyNameAsync(name, cancellationToken);
 
-    /// <summary>
-    /// Starts or stops flashing both of the device's LEDs, so the user can tell which physical
-    /// board this connection is talking to (<c>SYSTem:IDENtify 1</c> / <c>0</c>).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// While on, the LEDs repeat a pattern of about one second of fast flashing followed by about
-    /// one second off, and that pattern replaces every other LED indication (power, charging,
-    /// streaming, errors) until it is turned off. The firmware puts <b>no time limit</b> on it:
-    /// it flashes until <c>SetIdentifyAsync(false)</c> or a reboot, so a caller that starts it
-    /// owns turning it off. Disconnecting does not stop it.
-    /// </para>
-    /// <para>
-    /// A single write with no reply, like <see cref="SetFriendlyNameAsync"/>: the task completes
-    /// once the command is sent, and it is safe to call while streaming. Use
-    /// <see cref="GetIdentifyAsync"/> to read the state back.
-    /// </para>
-    /// <para>Requires firmware v3.9.0 or newer (<see cref="DeviceFeature.Identify"/>).</para>
-    /// </remarks>
-    /// <param name="enabled"><c>true</c> to start flashing, <c>false</c> to stop.</param>
-    /// <param name="cancellationToken">A cancellation token observed before the command is sent.</param>
-    /// <returns>A task that completes once the command has been sent.</returns>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="FeatureNotSupportedException">
-    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown.
-    /// </exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    /// <inheritdoc />
     public Task SetIdentifyAsync(bool enabled, CancellationToken cancellationToken = default)
         => _administration.SetIdentifyAsync(enabled, cancellationToken);
 
-    /// <summary>
-    /// Asks the device whether it is currently flashing its LEDs to identify itself
-    /// (<c>SYSTem:IDENtify?</c>).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Reads the device's own flag, so it also reports an identify started by another
-    /// connection or an earlier session.
-    /// </para>
-    /// <para>
-    /// This runs a text-mode exchange, which stops decoding protobuf frames for its duration.
-    /// Do not call it while streaming.
-    /// </para>
-    /// <para>Requires firmware v3.9.0 or newer (<see cref="DeviceFeature.Identify"/>).</para>
-    /// </remarks>
-    /// <param name="cancellationToken">Cancels the exchange.</param>
-    /// <returns><c>true</c> while the device is identifying; otherwise <c>false</c>.</returns>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="FeatureNotSupportedException">
-    /// Thrown when the device's firmware is older than v3.9.0, or its version is unknown — or when
-    /// the device itself answers the query with SCPI <c>-113</c> "Undefined header", whatever
-    /// version it reported.
-    /// </exception>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when the device rejected the query with any other error, or answered with something
-    /// other than <c>1</c> or <c>0</c>.
-    /// </exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    /// <inheritdoc />
     public Task<bool> GetIdentifyAsync(CancellationToken cancellationToken = default)
         => _administration.GetIdentifyAsync(cancellationToken);
 
@@ -1397,59 +1314,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     public void SetAnalogOutput(IAnalogOutputChannel channel, double voltage)
         => _channelControl.SetAnalogOutput(channel, voltage);
 
-    /// <summary>
-    /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
-    /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
-    /// </summary>
-    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
-    /// <param name="voltage">
-    /// The output voltage, in volts. Must be within the channel's range.
-    /// </param>
-    /// <remarks>
-    /// This is the device's own two-step protocol made explicit:
-    /// <see cref="SetAnalogOutput"/> is exactly a stage followed by a latch. Until the latch,
-    /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.PendingVoltage"/> reports the staged
-    /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
-    /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
-    /// </remarks>
-    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The voltage falls outside the channel's range.</exception>
-    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
-    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    /// <inheritdoc />
     public void StageAnalogOutput(IAnalogOutputChannel channel, double voltage)
         => _channelControl.StageAnalogOutput(channel, voltage);
 
-    /// <summary>
-    /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
-    /// channels change together.
-    /// </summary>
-    /// <remarks>
-    /// Latching with nothing staged is harmless — the device re-applies what it already holds.
-    /// Analog output is available on NQ3 hardware only.
-    /// </remarks>
-    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
-    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    /// <inheritdoc />
     public void LatchAnalogOutputs() => _channelControl.LatchAnalogOutputs();
 
-    /// <summary>
-    /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
-    /// on the channel.
-    /// </summary>
-    /// <param name="channel">The analog output. Must belong to this device's <c>Channels</c> collection.</param>
-    /// <param name="cancellationToken">Cancels the exchange.</param>
-    /// <returns>The voltage the device reports, in volts.</returns>
-    /// <remarks>
-    /// The DAC has no hardware readback, so the device answers with the value it was last told
-    /// to drive. That still makes this the authoritative round-trip: it reflects what the
-    /// device actually accepted, including a write made before this session connected.
-    /// Analog output is available on NQ3 hardware only.
-    /// </remarks>
-    /// <exception cref="ArgumentException">The channel does not belong to this device.</exception>
-    /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
-    /// <exception cref="InvalidOperationException">
-    /// The device rejected the query or answered with something that is not a voltage.
-    /// </exception>
-    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
+    /// <inheritdoc />
     public Task<double> GetAnalogOutputAsync(IAnalogOutputChannel channel, CancellationToken cancellationToken = default)
         => _channelControl.GetAnalogOutputAsync(channel, cancellationToken);
 

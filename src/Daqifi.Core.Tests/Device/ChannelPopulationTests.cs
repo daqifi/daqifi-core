@@ -17,7 +17,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithNullMessage_ThrowsArgumentNullException()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
 
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() => device.PopulateChannelsFromStatus(null!));
@@ -27,7 +27,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithEmptyMessage_ReturnsEmptyChannelList()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage();
 
         // Act
@@ -41,7 +41,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_RaisesChannelsPopulatedEvent()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -67,7 +67,7 @@ public class ChannelPopulationTests
         // A later status refresh (e.g. reconnect / metadata re-query) updates channel instances
         // whose identity (type, number) is unchanged in place, so previously-applied
         // configuration — and the IChannel reference itself — survives untouched.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535, DigitalPortNum = 2 };
         device.PopulateChannelsFromStatus(message);
 
@@ -102,7 +102,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_CreatesCorrectNumberOfAnalogChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 8,
@@ -121,7 +121,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectNames()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -143,7 +143,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectDirection()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -162,7 +162,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsAreDisabledByDefault()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -181,7 +181,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectCalibrationParameters()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -221,7 +221,7 @@ public class ChannelPopulationTests
         // A corrupted device response can carry NaN/Infinity or nonsensical coefficients. Population
         // must not throw (which would abort channel population mid-stream) and must fall back to safe
         // defaults rather than propagating garbage into every scaled sample (daqifi-core#300).
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -265,7 +265,7 @@ public class ChannelPopulationTests
         // A non-zero but out-of-range AnalogInRes must not reach the AnalogChannel constructor
         // (which now rejects it) and abort channel population — it should fall back to the assumed
         // default and flag ResolutionIsAssumed, on both the new-channel and reuse paths.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -294,7 +294,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectResolution()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -317,7 +317,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 1,
@@ -341,7 +341,7 @@ public class ChannelPopulationTests
     {
         // A channel first populated with an assumed resolution should stop being flagged once
         // a later status report supplies a real value (e.g. after a firmware update).
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
         var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
         Assert.True(((IAnalogChannel)analog0).ResolutionIsAssumed);
@@ -364,7 +364,7 @@ public class ChannelPopulationTests
         // whose 16-channel status reported AnalogInPortEnabled as 2 bytes, [5,0], after enabling
         // channels 0 and 2 — the same little-endian bit-per-channel layout Core sends outbound
         // via EnableAdcChannels, not a byte-per-channel array (#409).
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -389,7 +389,7 @@ public class ChannelPopulationTests
         // Arrange - a device with more than 8 analog channels packs the mask across multiple
         // bytes; channel 9 is bit 1 of byte 1. Mirrors the bench-observed 2-byte mask for a
         // 16-channel Nq1.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 16,
@@ -413,7 +413,7 @@ public class ChannelPopulationTests
         // A later status refresh must resync IsEnabled from the device's report rather than
         // preserving whatever Core last set locally, so Core's view can't drift from the
         // device's (#409).
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 };
         device.PopulateChannelsFromStatus(message);
 
@@ -440,7 +440,7 @@ public class ChannelPopulationTests
     {
         // Arrange - device reports fewer enabled-mask bytes than channels need (e.g. a truncated
         // frame): channels 8+ have no byte to read and must default to disabled rather than throw.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 9,
@@ -465,7 +465,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_CreatesCorrectNumberOfDigitalChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             DigitalPortNum = 16
@@ -483,7 +483,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_DigitalChannelsHaveCorrectNames()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             DigitalPortNum = 4
@@ -504,7 +504,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_DigitalChannelsDefaultToInput_WhenTheDeviceReportsNoDirections()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             DigitalPortNum = 2
@@ -525,7 +525,7 @@ public class ChannelPopulationTests
         // is the truth, and it survives a reconnect on the board even though Core's init sequence
         // never resets it.
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             DigitalPortNum = 16,
@@ -547,7 +547,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_DigitalChannelsAreDisabledByDefault()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             DigitalPortNum = 2
@@ -569,7 +569,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_CreatesBothAnalogAndDigitalChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 8,
@@ -590,7 +590,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_AnalogChannelsComeBforeDigitalChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -621,7 +621,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithMissingCalibrationData_UsesDefaults()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -659,7 +659,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithExcessCalibrationData_IgnoresExtra()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -686,7 +686,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_ClearsExistingChannelsBeforePopulating()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message1 = new DaqifiOutMessage
         {
             AnalogInPortNum = 8,
@@ -715,7 +715,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_ReusesExistingChannelInstancesWhenIdentityUnchanged()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535, DigitalPortNum = 4 };
         device.PopulateChannelsFromStatus(message);
         var originalChannels = device.Channels.ToList();
@@ -736,7 +736,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_DropsChannelsNoLongerPresent()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535 });
         var analog2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
 
@@ -752,7 +752,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_MultipleCallsRaiseMultipleEvents()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 2 };
         var eventCount = 0;
         device.ChannelsPopulated += (_, _) => eventCount++;
@@ -774,7 +774,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_Nyquist1Configuration()
     {
         // Arrange - Simulates a Nyquist 1 device with 8 analog and 16 digital channels
-        var device = new DaqifiDevice("Nyquist1");
+        var device = new TransportlessDevice("Nyquist1");
         var message = new DaqifiOutMessage
         {
             DevicePn = "Nq1",
@@ -810,7 +810,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_Nyquist3Configuration()
     {
         // Arrange - Simulates a Nyquist 3 device with 16 analog and 32 digital channels
-        var device = new DaqifiDevice("Nyquist3");
+        var device = new TransportlessDevice("Nyquist3");
         var message = new DaqifiOutMessage
         {
             DevicePn = "Nq3",
@@ -845,7 +845,7 @@ public class ChannelPopulationTests
     public void ChannelsPopulatedEventArgs_ContainsCorrectChannelCounts()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 5,
@@ -870,7 +870,7 @@ public class ChannelPopulationTests
     public void ChannelsPopulatedEventArgs_ChannelsMatchDeviceChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -900,7 +900,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithOnlyAnalogChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -920,7 +920,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithOnlyDigitalChannels()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 0,
@@ -939,7 +939,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_ChannelNumbersAreSequential()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = 4,
@@ -971,7 +971,7 @@ public class ChannelPopulationTests
     public void TimestampFrequency_DefaultsToZero()
     {
         // Arrange & Act
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
 
         // Assert
         Assert.Equal(0u, device.TimestampFrequency);
@@ -981,7 +981,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithTimestampFreq_PopulatesTimestampFrequency()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage { TimestampFreq = 48000000 };
 
         // Act
@@ -995,7 +995,7 @@ public class ChannelPopulationTests
     public void PopulateChannelsFromStatus_WithZeroTimestampFreq_DoesNotOverwriteExistingValue()
     {
         // Arrange
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { TimestampFreq = 48000000 });
 
         // Act — message with TimestampFreq = 0 should not reset the value

@@ -160,7 +160,7 @@ public class SerialUnplugValidationTests
 
         using var registry = new DaqifiDeviceRegistry();
         var transport = new SerialStreamTransport(portName, new SerialTransportOptions { BaudRate = baudRate });
-        var device = new DaqifiDevice("Unplug Validation", transport);
+        var device = new DaqifiStreamingDevice("Unplug Validation", transport);
 
         var removals = new List<DeviceRemovalReason>();
         registry.DeviceRemoved += (_, e) =>

@@ -335,7 +335,7 @@ public class WifiLinkStatusTests
     [InlineData("3.9.0", true)]
     public void Supports_WifiLinkStatus_AcrossTheV3_9_0Boundary(string firmware, bool expected)
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with
         {
             DeviceType = DeviceType.Nyquist1,

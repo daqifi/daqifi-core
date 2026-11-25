@@ -23,7 +23,7 @@ public class SdCardDeviceConfigurationTests
     [Fact]
     public void FromDevice_ReportsAnalogAndDigitalCounts()
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 4, DigitalPortNum = 2 });
 
         var config = SdCardDeviceConfiguration.FromDevice(device);
@@ -42,7 +42,7 @@ public class SdCardDeviceConfigurationTests
     [Fact]
     public async Task FromDevice_WhileStatusMessagesRepopulateChannels_DoesNotThrow()
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         var status = new DaqifiOutMessage { AnalogInPortNum = 16, DigitalPortNum = 16, TimestampFreq = 42_000_000 };
         device.PopulateChannelsFromStatus(status);
 

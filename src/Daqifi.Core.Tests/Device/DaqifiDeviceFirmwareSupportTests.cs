@@ -15,7 +15,7 @@ public class DaqifiDeviceFirmwareSupportTests
     [Fact]
     public void IsFirmwareVersionSupported_WhenFirmwareVersionNotYetReported_ReturnsFalse()
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
 
         Assert.Equal(string.Empty, device.Metadata.FirmwareVersion);
         Assert.False(device.IsFirmwareVersionSupported);
@@ -26,7 +26,7 @@ public class DaqifiDeviceFirmwareSupportTests
     [InlineData("")]
     public void IsFirmwareVersionSupported_WhenFirmwareVersionUnparseable_ReturnsFalse(string firmwareVersion)
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.False(device.IsFirmwareVersionSupported);
@@ -38,7 +38,7 @@ public class DaqifiDeviceFirmwareSupportTests
     [InlineData("v3.0.0")]
     public void IsFirmwareVersionSupported_WhenFirmwareBelowFloor_ReturnsFalse(string firmwareVersion)
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.False(device.IsFirmwareVersionSupported);
@@ -51,7 +51,7 @@ public class DaqifiDeviceFirmwareSupportTests
     [InlineData("3.6.1")]
     public void IsFirmwareVersionSupported_WhenFirmwareAtOrAboveFloor_ReturnsTrue(string firmwareVersion)
     {
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with { FirmwareVersion = firmwareVersion });
 
         Assert.True(device.IsFirmwareVersionSupported);
@@ -62,7 +62,7 @@ public class DaqifiDeviceFirmwareSupportTests
     {
         // Guards against caching a version-derived bool: the property must reflect the
         // firmware version most recently reported, not a value snapshotted earlier.
-        var device = new DaqifiDevice("TestDevice");
+        var device = new TransportlessDevice("TestDevice");
         device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.4.3" });
         Assert.False(device.IsFirmwareVersionSupported);
 
