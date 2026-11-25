@@ -7,16 +7,9 @@ using Daqifi.Core.Device.Internal;
 namespace Daqifi.Core.Device.Network;
 
 /// <summary>
-/// The WiFi/LAN configuration half of <see cref="INetworkConfigurable"/>, extracted from
-/// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it. Owns the
-/// last-known configuration the device reports.
+/// The implementation of <see cref="INetworkConfigurable"/>, extracted from
+/// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it.
 /// </summary>
-/// <remarks>
-/// Deliberately not an <see cref="INetworkConfigurable"/> itself: that interface also carries
-/// <c>PrepareSdInterface</c> / <c>PrepareLanInterface</c>, which are the shared-SPI-bus handover
-/// every SD operation depends on and therefore belong with the SD operations. The device
-/// implements the interface and routes each member to whichever collaborator owns it.
-/// </remarks>
 internal sealed class NetworkConfigurationOperations
 {
     /// <summary>
@@ -25,15 +18,11 @@ internal sealed class NetworkConfigurationOperations
     private const int WIFI_MODULE_RESTART_DELAY_MS = 2000;
 
     private readonly IDeviceOperationHost _host;
-    private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
 
     internal NetworkConfigurationOperations(IDeviceOperationHost host)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
     }
-
-    /// <inheritdoc cref="INetworkConfigurable.NetworkConfiguration" />
-    internal NetworkConfiguration NetworkConfiguration => _networkConfiguration.Clone();
 
     /// <inheritdoc cref="INetworkConfigurable.UpdateNetworkConfigurationAsync" />
     internal async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
@@ -122,9 +111,8 @@ internal sealed class NetworkConfigurationOperations
         // Hold for the module restart window before returning, so the apply is flushed to the
         // transport rather than left buffered in a connection that is about to go away.
         // Cancelling here ends the wait but does NOT fail the operation: the device has already
-        // persisted and applied the new configuration, so reporting "canceled" — and skipping
-        // the local-state update below — would leave the caller believing nothing happened
-        // while the device is sitting on a different network.
+        // persisted and applied the new configuration, so reporting "canceled" would leave the
+        // caller believing nothing happened while the device is sitting on a different network.
         try
         {
             await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken).ConfigureAwait(false);
@@ -132,26 +120,6 @@ internal sealed class NetworkConfigurationOperations
         catch (OperationCanceledException)
         {
             // Already committed on the device; stop waiting early and complete normally.
-        }
-
-        // Update local configuration. Static IP fields use null = "leave
-        // unchanged" semantics, so only overwrite when the caller provided
-        // a value — otherwise we'd clobber the previously known static IP.
-        _networkConfiguration.Mode = configuration.Mode;
-        _networkConfiguration.SecurityType = configuration.SecurityType;
-        _networkConfiguration.Ssid = configuration.Ssid;
-        _networkConfiguration.Password = configuration.Password;
-        if (configuration.StaticIP != null)
-        {
-            _networkConfiguration.StaticIP = configuration.StaticIP;
-        }
-        if (configuration.SubnetMask != null)
-        {
-            _networkConfiguration.SubnetMask = configuration.SubnetMask;
-        }
-        if (configuration.Gateway != null)
-        {
-            _networkConfiguration.Gateway = configuration.Gateway;
         }
     }
 
