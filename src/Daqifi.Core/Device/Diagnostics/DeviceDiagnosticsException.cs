@@ -9,13 +9,8 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// structured type. Carries the raw response lines so callers can surface or log the underlying
 /// device output without re-parsing the wire data.
 /// </summary>
-public class DeviceDiagnosticsException : Exception
+public class DeviceDiagnosticsException : DaqifiDeviceException
 {
-    /// <summary>
-    /// Gets the raw response lines captured from the device when the failure was detected.
-    /// </summary>
-    public IReadOnlyList<string> RawDeviceResponse { get; }
-
     /// <summary>
     /// Initializes a new instance of the <see cref="DeviceDiagnosticsException"/> class.
     /// </summary>
@@ -23,8 +18,7 @@ public class DeviceDiagnosticsException : Exception
         string message,
         IReadOnlyList<string> rawDeviceResponse,
         Exception? innerException = null)
-        : base(message, innerException)
+        : base(message, rawDeviceResponse, innerException)
     {
-        RawDeviceResponse = rawDeviceResponse ?? Array.Empty<string>();
     }
 }

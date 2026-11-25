@@ -93,7 +93,7 @@ public class WifiLinkStatusTests
         var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.GetWifiLinkStateAsync());
 
         Assert.Equal(ConnectedQuery, ex.Command);
-        Assert.Equal(reply, ex.DeviceResponse);
+        Assert.Equal(new[] { reply }, ex.RawDeviceResponse);
         Assert.Null(ex.ErrorCode);
     }
 
@@ -105,7 +105,7 @@ public class WifiLinkStatusTests
         var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.GetWifiLinkStateAsync());
 
         Assert.Null(ex.ErrorCode);
-        Assert.Null(ex.DeviceResponse);
+        Assert.Empty(ex.RawDeviceResponse);
     }
 
     #endregion
@@ -252,6 +252,7 @@ public class WifiLinkStatusTests
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetWifiLinkStateAsync());
 
         Assert.Equal(DeviceFeature.WifiLinkStatus, ex.Feature);
+        Assert.Equal(new[] { "**ERROR: -113, \"Undefined header\"" }, ex.RawDeviceResponse);
     }
 
     #endregion
@@ -288,7 +289,7 @@ public class WifiLinkStatusTests
 
         var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.GetActiveWifiModeAsync());
 
-        Assert.Equal(reply, ex.DeviceResponse);
+        Assert.Equal(new[] { reply }, ex.RawDeviceResponse);
         Assert.Equal(ActiveModeQuery, ex.Command);
     }
 
@@ -356,6 +357,7 @@ public class WifiLinkStatusTests
         {
             Assert.Equal(DeviceFeature.WifiLinkStatus, ex.Feature);
             Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+            Assert.Empty(ex.RawDeviceResponse);
         });
         Assert.Empty(device.SentCommands);
     }

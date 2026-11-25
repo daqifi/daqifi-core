@@ -83,6 +83,7 @@ public class DaqifiStreamingDeviceIdentifyTests
 
         Assert.Equal(DeviceFeature.Identify, ex.Feature);
         Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new[] { "**ERROR: -113, \"Undefined header\"" }, ex.RawDeviceResponse);
     }
 
     [Fact]

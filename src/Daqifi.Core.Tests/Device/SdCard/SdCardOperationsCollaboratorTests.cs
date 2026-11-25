@@ -2816,8 +2816,8 @@ public partial class SdCardOperationsCollaboratorTests
             }
         }
 
-        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
-            => new(feature);
+        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
+            => new(feature, rawDeviceResponse: rawDeviceResponse);
 
         public void RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e)
         {

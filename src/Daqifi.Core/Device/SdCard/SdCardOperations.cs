@@ -1115,7 +1115,7 @@ internal sealed class SdCardOperations
                 && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var scpiErrorCode)
                 && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
             {
-                throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdStorageQuery);
+                throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdStorageQuery, lines);
             }
 
             throw new SdCardOperationException(
@@ -1541,7 +1541,7 @@ internal sealed class SdCardOperations
                 case ScpiErrorCodeSettingsConflict:
                     throw new SdCardBusyException(lines, refusal);
                 case ScpiErrorCodeUndefinedHeader:
-                    throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+                    throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection, lines);
             }
         }
 
@@ -1585,7 +1585,7 @@ internal sealed class SdCardOperations
             && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var code)
             && code == ScpiErrorCodeUndefinedHeader)
         {
-            throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection);
+            throw _host.CreateFeatureNotSupportedException(DeviceFeature.SdCardCrcProtection, lines);
         }
 
         throw new SdCardOperationException(
@@ -2603,7 +2603,7 @@ internal sealed class SdCardOperations
     /// than one arrives anyway, the newest matching entry wins, because the device queues its
     /// open failure at the latest command boundary. Entries with other codes are not about this
     /// file and do not change the answer. They are still carried in the exception's
-    /// <see cref="SdCardOperationException.RawDeviceResponse"/>.
+    /// <see cref="DaqifiDeviceException.RawDeviceResponse"/>.
     /// </remarks>
     internal static SdCardFilesystemException? ClassifySdGetOpenFailure(
         string fileName, IReadOnlyList<string> queuedErrors)

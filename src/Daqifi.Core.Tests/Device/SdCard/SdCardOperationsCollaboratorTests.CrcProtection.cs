@@ -299,6 +299,7 @@ public partial class SdCardOperationsCollaboratorTests
             () => ops.SetSdCardCrcProtectionAsync(true));
 
         Assert.Equal(DeviceFeature.SdCardCrcProtection, ex.Feature);
+        Assert.Contains(ex.RawDeviceResponse, line => line.Contains("Undefined header"));
     }
 
     [Fact]
@@ -695,6 +696,7 @@ public partial class SdCardOperationsCollaboratorTests
             () => ops.GetSdCardCrcProtectionAsync());
 
         Assert.Equal(DeviceFeature.SdCardCrcProtection, ex.Feature);
+        Assert.Equal(new[] { "**ERROR: -113, \"Undefined header\"" }, ex.RawDeviceResponse);
     }
 
     #endregion

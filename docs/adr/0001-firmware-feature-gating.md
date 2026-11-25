@@ -215,7 +215,7 @@ public enum DeviceFeature
 }
 
 // Device/FeatureNotSupportedException.cs — the typed backstop.
-public sealed class FeatureNotSupportedException : Exception
+public sealed class FeatureNotSupportedException : DaqifiDeviceException
 {
     public DeviceFeature Feature { get; }
     public FirmwareVersion? RequiredVersion { get; }  // e.g. the v3.5.0 floor, or a feature min

@@ -52,7 +52,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
                 return WifiLinkState.Unavailable;
             }
 
-            throw Refusal(command, errorLine);
+            throw Refusal(command, errorLine, lines);
         }
 
         var reply = FirstReplyLine(lines);
@@ -83,7 +83,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
         var errorLine = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
         if (errorLine != null)
         {
-            throw Refusal(command, errorLine);
+            throw Refusal(command, errorLine, lines);
         }
 
         var reply = FirstReplyLine(lines);
@@ -170,7 +170,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
     /// Translates a SCPI error reply into the exception for it: an undefined header is the
     /// firmware-gating backstop (ADR 0001), anything else a refusal of the query.
     /// </summary>
-    private Exception Refusal(string command, string errorLine)
+    private Exception Refusal(string command, string errorLine, IReadOnlyList<string> lines)
     {
         if (!ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var code) || code == 0)
         {
@@ -178,7 +178,7 @@ internal sealed class WifiLinkStatusOperations : IWifiLinkStatusProvider
         }
 
         return code == ScpiErrorUndefinedHeader
-            ? _host.CreateFeatureNotSupportedException(DeviceFeature.WifiLinkStatus)
+            ? _host.CreateFeatureNotSupportedException(DeviceFeature.WifiLinkStatus, lines)
             : new DeviceCommandFailedException(command, code, errorLine);
     }
 
