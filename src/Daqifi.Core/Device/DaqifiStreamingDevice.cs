@@ -876,30 +876,15 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// How many analog <i>input</i> channels are enabled right now — the one figure the device's
-    /// sample-rate cap moves with.
+    /// How many analog <i>input</i> channels are enabled right now, counting an enable that is held
+    /// back, which a start goes out behind — the one figure the device's sample-rate cap moves with.
     /// </summary>
     /// <remarks>
     /// Analog outputs are not streamed and digital pins are captured on the analog sample tick
     /// rather than driving one of their own, which is why neither counts here; see
     /// <see cref="SampleRateCap"/>.
     /// </remarks>
-    private int EnabledAnalogInputCount()
-    {
-        var count = 0;
-
-        foreach (var channel in GetChannelsSnapshot())
-        {
-            if (channel.Type == ChannelType.Analog
-                && channel.Direction == ChannelDirection.Input
-                && channel.IsEnabled)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
+    private int EnabledAnalogInputCount() => _channelControl.RequestedAnalogInputCount;
 
     /// <inheritdoc />
     /// <remarks>
@@ -989,10 +974,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <param name="message">The message to send.</param>
     public override void Send<T>(IOutboundMessage<T> message)
     {
-        if (message is ITrackedSend tracked)
+        if (message is TrackedMessage tracked)
         {
             // A channel command, whose state its sender keeps.
-            SendOrHoldBack(message, tracked);
+            SendOrHoldBack(message, tracked.Command);
         }
         else if (message is IOutboundMessage<string> textCommand)
         {
@@ -2020,7 +2005,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.EndSdCardLogSession() => _sdCardOperations.EndLoggingSession();
 
-    void IStreamingSessionHost.WithChannelsLock(Action action) => WithChannelsLock(action);
+    ITrackedSend IStreamingSessionHost.TrackAdcEnableMask(uint mask) => _channelControl.RawAdcMask(mask);
 
     IReadOnlyList<IChannel> IStreamingSessionHost.SnapshotChannels() => GetChannelsSnapshot();
 

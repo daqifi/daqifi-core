@@ -1170,9 +1170,9 @@ calls above are.
 > internal state and bitmask stay in sync).
 
 Channel state is read-only: `IsEnabled`, `Direction`, the PWM mode and the duty cycle change through
-these methods, and through what the device reports. A command that is held back behind another
-operation is recorded when it is sent and taken back if it is dropped instead; an analog output's
-`PendingVoltage` and `OutputVoltage` change once the command has gone out.
+these methods, and through what the device reports. It changes once the command has gone out, which
+is as the method returns unless another caller's operation has the device (see
+[Thread safety](#thread-safety)). A command that is dropped instead changes nothing.
 
 `Reboot()` sends and disconnects without knowing whether the device took the command;
 `await device.RebootAsync(cancellationToken)` waits for the device to acknowledge it.

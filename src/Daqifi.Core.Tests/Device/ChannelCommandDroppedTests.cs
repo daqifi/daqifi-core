@@ -171,6 +171,121 @@ public class ChannelCommandDroppedTests
         Assert.Equal([2.5], samples);
     }
 
+    [Fact]
+    public async Task HeldBackEnable_DoesNotTakeTheReadingsOfTheChannelsTheDeviceStreams()
+    {
+        // A frame has one value per channel the device streams, so counting a channel it does not
+        // stream yet gives it another channel's reading.
+        using var device = await HeldDevice.CreateAsync();
+        device.DisableChannel(device.Analog(0));
+        device.EnableChannel(device.Analog(1));
+        device.StartStreaming();
+        var sampled = new List<int>();
+        foreach (var number in new[] { 0, 1 })
+        {
+            device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
+        }
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.EnableChannel(device.Analog(0));
+            device.DeliverFrame(1000);
+            device.DropWhatIsHeldBack();
+        });
+
+        Assert.Equal([1], sampled);
+    }
+
+    [Fact]
+    public async Task HeldBackEnables_BuildOnOneAnother()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b0011));
+            device.EnableChannel(device.Analog(2));
+            device.DisableChannel(device.Analog(0));
+            Assert.Equal("AI0", device.Enabled);
+        });
+
+        Assert.Equal("AI1 AI2", device.Enabled);
+    }
+
+    [Fact]
+    public async Task NotSentAtAll_LeavesTheOtherChannelTypesItWasForToo()
+    {
+        using var device = await HeldDevice.CreateAsync();
+        device.FailNextSend = true;
+
+        Assert.Throws<IOException>(() => device.EnableChannels([device.Analog(1), device.Digital(3)]));
+
+        Assert.Equal("AI0", device.Enabled);
+    }
+
+    [Fact]
+    public async Task Dropped_AfterAStatusReportedTheSame_LeavesThat()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.EnableChannel(device.Analog(1));
+            device.PopulateChannelsFromStatus(HeldDevice.Status(analogEnabled: 0b011));
+            device.DropWhatIsHeldBack();
+        });
+
+        Assert.Equal("AI0 AI1", device.Enabled);
+    }
+
+    [Fact]
+    public async Task ADirection_WhosePwmOffWasDropped_IsNotRecorded()
+    {
+        // The firmware ignores a direction write while PWM drives the pin.
+        using var device = await HeldDevice.CreateAsync(backlogCap: 1);
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.SetPwmEnabled(device.Digital(4), false);
+            device.SetDioDirection(device.Digital(4), ChannelDirection.Output);
+        });
+        Assert.True(device.Digital(4).IsPwmEnabled);
+        device.SetPwmEnabled(device.Digital(4), false);
+
+        Assert.Equal(ChannelDirection.Input, device.Digital(4).Direction);
+    }
+
+    [Fact]
+    public async Task ADigitalWrite_BehindAHeldBackPwmOff_IsAccepted()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.SetPwmEnabled(device.Digital(4), false);
+            device.SetDioDirection(device.Digital(4), ChannelDirection.Output);
+            device.SetDioValue(device.Digital(4), true);
+            device.SetPwmEnabled(device.Digital(4), true);
+            Assert.Throws<InvalidOperationException>(() => device.SetDioValue(device.Digital(4), true));
+        });
+
+        Assert.True(device.Digital(4).IsPwmEnabled);
+    }
+
+    [Fact]
+    public async Task ADroppedRawAdcMask_LeavesTheChannelsTheDeviceStreams()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b0110));
+            device.DropWhatIsHeldBack();
+        });
+
+        Assert.Equal("AI0", device.Enabled);
+    }
+
     /// <summary>
     /// A connected device with analog channel 0 enabled and PWM running on digital channel 4, whose
     /// operation lock a test can hold.
@@ -246,6 +361,14 @@ public class ChannelCommandDroppedTests
 
             release.SetResult();
             await operation;
+        }
+
+        /// <summary>Delivers a stream frame with these analog counts.</summary>
+        public void DeliverFrame(params int[] counts)
+        {
+            var frame = new DaqifiOutMessage { MsgTimeStamp = 50_000_000 };
+            frame.AnalogInData.AddRange(counts);
+            OnStreamMessageReceived(frame);
         }
 
         /// <summary>Disconnects without waiting for the operation that has the device.</summary>

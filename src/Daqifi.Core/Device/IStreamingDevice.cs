@@ -173,7 +173,8 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <remarks>
     /// For analog channels the device-level ADC enable bitmask is recomputed over all enabled
     /// analog channels and sent to the device. For digital channels the global DIO enable state
-    /// is updated. The channel's <see cref="IChannel.IsEnabled"/> flag is set to <c>true</c>.
+    /// is updated. The channel's <see cref="IChannel.IsEnabled"/> flag is <c>true</c> once the command
+    /// has gone out.
     /// </remarks>
     void EnableChannel(IChannel channel);
 

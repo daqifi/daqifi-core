@@ -1,21 +1,36 @@
 using Daqifi.Core.Communication.Messages;
 using System;
-using System.Collections.Generic;
 using System.Threading;
 
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
-/// A text command that hears what becomes of it. The message itself carries that, so it survives an
-/// override of <see cref="DaqifiDevice.Send{T}"/> that passes the message on.
+/// A command that records what it does when it goes out: at once, or when its turn comes if it is
+/// held back behind another operation, and not at all if it is dropped.
 /// </summary>
-internal abstract class TrackedCommand(IOutboundMessage<string> message) : IOutboundMessage<string>, ITrackedSend
+/// <param name="wentOut">Runs once the command has gone out.</param>
+/// <param name="notSent">Runs when it will not be.</param>
+internal sealed class TrackedCommand(Action wentOut, Action? notSent = null) : ITrackedSend
 {
-    /// <inheritdoc />
-    public string Data => message.Data;
+    private int _finished;
 
-    /// <inheritdoc />
-    public byte[] GetBytes() => message.GetBytes();
+    /// <summary>Counts the command as gone out, unless it is already known what became of it.</summary>
+    internal void WentOut()
+    {
+        if (Interlocked.Exchange(ref _finished, 1) == 0)
+        {
+            wentOut();
+        }
+    }
+
+    /// <summary>Counts the command as not sent, unless it is already known what became of it.</summary>
+    internal void NotSent()
+    {
+        if (Interlocked.Exchange(ref _finished, 1) == 0)
+        {
+            notSent?.Invoke();
+        }
+    }
 
     void ITrackedSend.GoOut(Action send)
     {
@@ -31,129 +46,111 @@ internal abstract class TrackedCommand(IOutboundMessage<string> message) : IOutb
 
     void ITrackedSend.NotSent(Exception? reason) => NotSent();
 
-    /// <summary>The command has gone out.</summary>
-    protected abstract void WentOut();
-
-    /// <summary>The command was held back and will not be sent.</summary>
-    protected abstract void NotSent();
-}
-
-/// <summary>
-/// A piece of device state that Core records when it sends the command for it, and takes back when
-/// that command is held back behind another operation and then dropped instead of sent.
-/// </summary>
-/// <remarks>
-/// Recorded at once rather than when the command goes out, because the next command is worked out
-/// from it: an ADC mask from every enabled channel, a digital write from whether PWM drives the pin.
-/// Only the command sent last takes anything back, to what the device has, and only while nothing
-/// else (a status message, a raw command) has moved the state since.
-/// </remarks>
-/// <param name="get">Reads the recorded state.</param>
-/// <param name="set">Records the state.</param>
-/// <param name="comparer">Compares two states; the default one when <c>null</c>.</param>
-internal sealed class CommandedState<T>(Func<T> get, Action<T> set, IEqualityComparer<T>? comparer = null)
-{
-    private readonly IEqualityComparer<T> _comparer = comparer ?? EqualityComparer<T>.Default;
-
-    /// <summary>
-    /// Guards the two fields below. Taken before the channels lock, and released before a send.
-    /// </summary>
-    private readonly Lock _lock = new();
-
-    /// <summary>The command sent last, until it has gone out.</summary>
-    private Command? _last;
-
-    /// <summary>What the device has while there is a <see cref="_last"/>.</summary>
-    private T _onDevice = default!;
-
-    /// <summary>Reads the recorded state.</summary>
-    internal T Current => get();
-
-    private void Record(T state) => set(state);
-
-    /// <summary>
-    /// Sends the command for <paramref name="after"/> and records it. A command that cannot be sent
-    /// leaves the state as it was.
-    /// </summary>
-    /// <param name="send">Sends the command it is given.</param>
-    /// <param name="message">The command.</param>
-    /// <param name="before">The state before the call, which may have recorded the new one already.</param>
-    /// <param name="after">The state the command commands.</param>
-    internal void Send(Action<IOutboundMessage<string>> send, IOutboundMessage<string> message, T before, T after)
+    /// <summary>Sends <paramref name="message"/> as this command.</summary>
+    internal void Send(IDeviceOperationHost host, IOutboundMessage<string> message)
     {
-        var command = new Command(this, message, after);
-        Command? previous;
-        lock (_lock)
-        {
-            previous = _last;
-            if (previous == null)
-            {
-                _onDevice = before;
-            }
-
-            _last = command;
-        }
-
         try
         {
-            send(command);
+            host.Send(new TrackedMessage(message, this));
         }
         catch
         {
-            lock (_lock)
-            {
-                _last = previous;
-                if (_comparer.Equals(Current, after))
-                {
-                    Record(before);
-                }
-            }
-
+            NotSent();
             throw;
         }
 
-        lock (_lock)
+        // An override of Send can have sent it some other way, or not at all.
+        if (!host.HasDeferredSends)
         {
-            if (!command.Dropped)
+            WentOut();
+        }
+    }
+}
+
+/// <summary>
+/// The message of a <see cref="TrackedCommand"/>. It carries the command, so that an override of
+/// <see cref="DaqifiDevice.Send{T}"/> that passes the message on passes that on too.
+/// </summary>
+internal sealed class TrackedMessage(IOutboundMessage<string> message, TrackedCommand command) : IOutboundMessage<string>
+{
+    /// <summary>What hears what becomes of the message.</summary>
+    internal TrackedCommand Command => command;
+
+    /// <inheritdoc />
+    public string Data => message.Data;
+
+    /// <inheritdoc />
+    public byte[] GetBytes() => message.GetBytes();
+}
+
+/// <summary>
+/// A piece of device state that Core records when the command for it goes out, and what has been
+/// requested of it while one is held back.
+/// </summary>
+/// <remarks>
+/// The two differ only meanwhile. What is recorded is what the device has, which is what the decoder
+/// and every reader go by; what is requested is what the next command is worked out from, such as an
+/// ADC mask from every enabled channel. A command that is dropped changes neither.
+/// </remarks>
+/// <param name="get">Reads the recorded state.</param>
+/// <param name="record">Records the state.</param>
+internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
+{
+    /// <summary>Guards the two fields below. Taken before the channels lock, and never held across a send.</summary>
+    private readonly Lock _lock = new();
+
+    /// <summary>The command sent last, until it is known what became of it.</summary>
+    private TrackedCommand? _last;
+
+    private T _requested = default!;
+
+    /// <summary>What the last command asked for, or the recorded state when none is outstanding.</summary>
+    internal T Requested
+    {
+        get
+        {
+            lock (_lock)
             {
-                Record(after);
+                return _last == null ? get() : _requested;
             }
         }
     }
 
-    private sealed class Command(CommandedState<T> state, IOutboundMessage<string> message, T after)
-        : TrackedCommand(message)
+    /// <summary>Makes the command for <paramref name="state"/> the one sent last.</summary>
+    internal TrackedCommand Command(T state)
     {
-        internal bool Dropped { get; private set; }
-
-        protected override void WentOut()
-        {
-            lock (state._lock)
+        TrackedCommand command = null!;
+        command = new TrackedCommand(
+            () =>
             {
-                state._onDevice = after;
-                if (ReferenceEquals(state._last, this))
+                lock (_lock)
                 {
-                    state._last = null;
+                    record(state);
+                    Finish(command);
                 }
-            }
+            },
+            () =>
+            {
+                lock (_lock)
+                {
+                    Finish(command);
+                }
+            });
+
+        lock (_lock)
+        {
+            _last = command;
+            _requested = state;
         }
 
-        protected override void NotSent()
-        {
-            lock (state._lock)
-            {
-                Dropped = true;
-                if (!ReferenceEquals(state._last, this))
-                {
-                    return;
-                }
+        return command;
+    }
 
-                state._last = null;
-                if (state._comparer.Equals(state.Current, after))
-                {
-                    state.Record(state._onDevice);
-                }
-            }
+    private void Finish(TrackedCommand command)
+    {
+        if (ReferenceEquals(_last, command))
+        {
+            _last = null;
         }
     }
 }

@@ -109,8 +109,11 @@ internal interface IStreamingSessionHost
     /// </summary>
     void EndSdCardLogSession();
 
-    /// <inheritdoc cref="IDeviceOperationHost.WithChannelsLock"/>
-    void WithChannelsLock(Action action);
+    /// <summary>
+    /// Makes a raw ADC enable mask the last one sent, so that it is recorded when it goes out and a
+    /// typed enable builds on it meanwhile.
+    /// </summary>
+    ITrackedSend TrackAdcEnableMask(uint mask);
 
     /// <inheritdoc cref="DaqifiDevice.GetChannelsSnapshot"/>
     IReadOnlyList<IChannel> SnapshotChannels();
