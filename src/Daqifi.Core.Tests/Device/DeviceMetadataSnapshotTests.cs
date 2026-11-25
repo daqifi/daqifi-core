@@ -1,8 +1,14 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
+using Daqifi.Core.Tests.Device.Capabilities;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -124,6 +130,98 @@ public class DeviceMetadataSnapshotTests
         Assert.Throws<ArgumentNullException>(() => device.UpdateMetadata(null!));
         Assert.Throws<InvalidOperationException>(() => device.UpdateMetadata(_ => null!));
         Assert.Same(before, device.Metadata);
+    }
+
+    [Fact]
+    public void AConsumerCannotChangeTheChannelCount_ThroughAHeldSnapshotsDocument()
+    {
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"channels\":[{\"id\":0,\"kind\":\"analog-input\"},{\"id\":1,\"kind\":\"analog-input\"}]}",
+            out var document));
+        var device = new StatusDrivenDevice();
+        device.UpdateMetadata(metadata => metadata.WithCapabilityDocument(document!));
+        var held = device.Metadata;
+
+        Assert.Throws<NotSupportedException>(
+            () => ((IList<CapabilityChannel>)held.CapabilityDocument!.Channels).RemoveAt(0));
+        device.ReceiveStatus(new DaqifiOutMessage { DevicePn = "Nq1" });
+
+        Assert.Equal(2, held.CapabilityDocument!.Channels.Count);
+        Assert.Equal(2, device.Metadata.Capabilities.AnalogInputChannels);
+    }
+
+    [Fact]
+    public void EveryObjectReachableFromTheMetadata_IsReadOnly()
+    {
+        Assert.True(CapabilityDocumentParser.TryParse(
+            CapabilityDocumentSamples.Nyquist1Firmware372, out var document));
+        var visited = new HashSet<Type>();
+
+        AssertReadOnly(new DeviceMetadata().WithCapabilityDocument(document!), visited);
+
+        // The walk reached both ends of the graph, including the nested streaming block.
+        Assert.Contains(typeof(DeviceHealth), visited);
+        Assert.Contains(typeof(CapabilityChannel), visited);
+        Assert.Contains(typeof(CapabilityRateModel), visited);
+    }
+
+    [Fact]
+    public void ADocumentBuiltByACaller_OwnsItsCollections()
+    {
+        // A wrapper or test double builds its own document and keeps the list it passed in.
+        var channels = new List<CapabilityChannel> { new() { Id = 0 } };
+        string[] encodings = ["protobuf"];
+        string[] transports = ["usb"];
+        var document = new CapabilityDocument
+        {
+            Channels = channels,
+            Streaming = new CapabilityStreaming { Encodings = encodings, Transports = transports },
+        };
+
+        channels.Clear();
+        encodings[0] = transports[0] = "changed";
+
+        Assert.Single(document.Channels);
+        Assert.Equal(["protobuf"], document.Streaming.Encodings);
+        Assert.Equal(["usb"], document.Streaming.Transports);
+        AssertReadOnly(document, []);
+    }
+
+    /// <summary>
+    /// Fails on a collection that can be written through a cast, or a property with a plain
+    /// setter, anywhere in the object graph.
+    /// </summary>
+    private static void AssertReadOnly(object? value, HashSet<Type> visited)
+    {
+        if (value is null or string || value.GetType().IsValueType)
+        {
+            return;
+        }
+
+        if (value is IEnumerable items)
+        {
+            // An array reports IList.IsReadOnly as false through the non-generic interface, and
+            // its elements can be assigned; a ReadOnlyCollection reports true.
+            Assert.True(
+                value is IList { IsReadOnly: true } or Array { Length: 0 },
+                $"{value.GetType()} can be written through a cast.");
+            foreach (var item in items)
+            {
+                AssertReadOnly(item, visited);
+            }
+
+            return;
+        }
+
+        visited.Add(value.GetType());
+        foreach (var property in value.GetType().GetProperties())
+        {
+            Assert.True(
+                property.SetMethod is not { IsPublic: true } setter
+                || setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit)),
+                $"{property.DeclaringType}.{property.Name} has a public setter.");
+            AssertReadOnly(property.GetValue(value), visited);
+        }
     }
 
     private sealed class StatusDrivenDevice() : DaqifiDevice("Test Device")

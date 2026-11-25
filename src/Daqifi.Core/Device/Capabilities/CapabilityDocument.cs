@@ -47,9 +47,13 @@ public sealed class CapabilityDocument
 
     /// <summary>
     /// Gets the device's channels — analog inputs, analog outputs and digital I/O in one flat
-    /// list. Empty when the document omitted the array.
+    /// list. Empty when the document omitted the array. The document owns a read-only copy.
     /// </summary>
-    public IReadOnlyList<CapabilityChannel> Channels { get; init; } = Array.Empty<CapabilityChannel>();
+    public IReadOnlyList<CapabilityChannel> Channels
+    {
+        get;
+        init => field = Array.AsReadOnly(value.ToArray());
+    } = Array.Empty<CapabilityChannel>();
 
     /// <summary>Gets the streaming block, or <c>null</c> when the document omitted it.</summary>
     public CapabilityStreaming? Streaming { get; init; }
