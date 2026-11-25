@@ -406,10 +406,26 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 ## Requirements
 
-- .NET 10.0 on Windows, macOS, or Linux
+- .NET 10.0 or later on Windows, macOS, or Linux
 - WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast (224.0.0.251)
   if you use `MDnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
+
+### Supported frameworks
+
+DAQiFi Core targets `net10.0` (an LTS release) and nothing else. .NET Framework, Unity and
+other netstandard hosts are not supported. Adding a target framework is a minor release; dropping
+one is a major release.
+
+The assembly is marked trimmable and NativeAOT-compatible, and the build enforces that for its own
+code. Two dependencies make no such promise: HidSharp (firmware update on Windows and Linux) and
+System.Management (USB port lookup on Windows). Test those paths in your published app before
+relying on them. A trimmed app that reaches this library's types by reflection (a XAML reflection
+binding, for example) must keep them with `<TrimmerRootAssembly Include="Daqifi.Core" />`.
+
+Assemblies are not strong-named and will not be.
+[ADR 0003](https://github.com/daqifi/daqifi-core/blob/main/docs/adr/0003-packaging-and-frameworks.md)
+has the reasoning.
 
 ## Community & support
 
@@ -429,6 +445,13 @@ This library follows semantic versioning. Releases are automated via GitHub Acti
 4. After a stable release, run `python3 scripts/post-release.py X.Y.Z` and open a PR with the result ([CONTRIBUTING.md](https://github.com/daqifi/daqifi-core/blob/main/CONTRIBUTING.md#after-a-release))
 
 The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and, unless it is a pre-release, lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`, whose committed version is a placeholder that the release stamps from the tag.
+
+Both packages are also attached to the GitHub Release with a build-provenance attestation. Check a
+package downloaded from there (nuget.org re-signs its copy, so that one has a different hash):
+
+```bash
+gh attestation verify Daqifi.Core.X.Y.Z.nupkg --repo daqifi/daqifi-core
+```
 
 Semver here tracks **source** compatibility, not binary compatibility. Snapshot, result and
 progress types are nominal records (`init` properties, no positional constructor), so they gain

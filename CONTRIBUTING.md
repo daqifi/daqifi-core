@@ -153,8 +153,18 @@ appearing in a diff is the signal ADR 0002 wants a reviewer to see.
 ### Releases
 
 A GitHub Release tagged `vX.Y.Z` publishes both packages to NuGet and lists the MCP server in the
-MCP Registry. A prerelease tag (`vX.Y.Z-rc.1`) publishes to NuGet only. `release.yml` refuses a
+MCP Registry. A prerelease tag (`vX.Y.Z-rc.1`) publishes to NuGet only. Either way the packages are
+attached to the GitHub Release with a build-provenance attestation. `release.yml` refuses a
 release whose prerelease box disagrees with its tag, or whose tag is not on `main`.
+
+If a release run fails part-way, use **Re-run failed jobs**, not **Re-run all jobs**. The packages
+are packed once and every later job uses those archives, so a retry pushes and attaches the same
+ones. Re-running everything deletes them and packs again. That still pushes a package NuGet does not
+have yet, but `release-assets` refuses to attest or attach anything unless it matches what NuGet
+published, and leaves the files already on the GitHub Release alone.
+
+The tag alone decides the released version. `VersionPrefix` in `Directory.Build.props` only names
+the builds in between: a local or CI build is the next version with `-dev` on the end.
 
 #### After a release
 
@@ -166,11 +176,11 @@ git fetch --tags
 python3 scripts/post-release.py X.Y.Z
 ```
 
-It bumps `PackageValidationBaselineVersion`, folds `PublicAPI.Unshipped.txt` as of the tag into
-`PublicAPI.Shipped.txt` (applying the `*REMOVED*` lines; anything merged since the tag stays in
-`Unshipped`), regenerates or deletes `CompatibilitySuppressions.xml`, and packs to check the
-result. Commit what it changed and open a PR. There is nothing to do after a prerelease, which is
-never the baseline.
+It bumps `PackageValidationBaselineVersion`, moves `VersionPrefix` past the release, folds
+`PublicAPI.Unshipped.txt` as of the tag into `PublicAPI.Shipped.txt` (applying the `*REMOVED*`
+lines; anything merged since the tag stays in `Unshipped`), regenerates or deletes
+`CompatibilitySuppressions.xml`, and packs to check the result. Commit what it changed and open a
+PR. There is nothing to do after a prerelease, which is never the baseline.
 
 ## Security
 
