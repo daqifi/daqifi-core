@@ -913,7 +913,7 @@ public sealed class DaqifiAgent
 
             // Core owns the naming convention and reports the effective on-card filename back to
             // us, so we no longer duplicate the log_{timestamp} generation here.
-            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, ct)
+            var session = await sd.StartSdCardLoggingAsync(fileName, fmt, ct)
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
@@ -1285,9 +1285,11 @@ public sealed class DaqifiAgent
     /// </summary>
     private static Exception? Rewrite(Exception ex, string deviceId) => ex switch
     {
-        SdCardBusyException => new InvalidOperationException(
-            $"Device '{deviceId}' is busy with the SD card, which usually means it is still logging. " +
-            "Call stop_sd_logging first, then retry.", ex),
+        // Core's message says what holds the card: an abandoned download needs a reconnect, and
+        // stopping a log that is not running would not help it.
+        SdCardBusyException busy => new InvalidOperationException(
+            $"Device '{deviceId}' is busy with the SD card: {busy.Message} " +
+            "If it is still logging, call stop_sd_logging first, then retry.", ex),
 
         SdCardEmptyTransferException empty => new InvalidOperationException(
             $"{empty.Message} This is also what a live-streaming session does to the SD subsystem: " +

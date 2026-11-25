@@ -124,10 +124,22 @@ public interface ISdCardOperations
     /// <c>-200 "Execution error"</c> rather than silently truncating. This is the optional hand-off to the
     /// firmware gate; the client-side <see cref="LowSdSpaceWarning"/> remains the primary UX surface.
     /// </summary>
+    /// <remarks>
+    /// The device checks the floor when an SD log starts, so setting it during a log affects the
+    /// next one and leaves the running one alone. The value is read back from the device to
+    /// confirm it, and for that a live stream this object is running is paused and resumed
+    /// afterwards; an SD log is not. The device forgets the floor when it reboots.
+    /// </remarks>
     /// <param name="bytes">The minimum free space to keep available, in bytes. Use 0 to disable the gate.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns>A task that completes once the device reports the new floor.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="bytes"/> is negative.</exception>
-    void SetSdCardMinimumFreeSpace(long bytes);
+    /// <exception cref="SdCardOperationException">
+    /// Thrown when the device reports a different floor or refuses the command, or does not
+    /// answer, in which case whether the floor changed is unknown.
+    /// </exception>
+    Task SetSdCardMinimumFreeSpaceAsync(long bytes, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Turns CRC-protected SD card writes on or off (firmware v3.9.0 and later).
@@ -223,59 +235,38 @@ public interface ISdCardOperations
     Task<bool> GetSdCardCrcProtectionAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Starts logging data to the SD card.
+    /// Starts logging data to the SD card and returns the effective session details.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The log records the channels enabled on the device when it starts. Choose them first with
+    /// <see cref="IStreamingDevice.EnableChannels"/> and <see cref="IStreamingDevice.DisableAllChannels"/>.
+    /// </para>
+    /// <para>
     /// This method does not perform a free-space pre-flight. To warn the user about a near-full card
     /// before committing to a capture, call <see cref="CheckSdCardSpaceAsync"/> first and let the user
     /// decide whether to proceed.
+    /// </para>
     /// </remarks>
     /// <param name="fileName">
     /// The name of the log file. If null or empty, a timestamped name is generated automatically
     /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
     /// (.bin for Protobuf, .json for JSON, .csv for CSV).
     /// </param>
-    /// <param name="channelMask">
-    /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
-    /// The firmware parses this as a decimal integer where each bit enables a channel.
-    /// If null or empty, the current device channel configuration is used.
-    /// </param>
-    /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
-    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    /// <remarks>
-    /// To learn the effective on-card file name (especially when it was auto-generated), call
-    /// <see cref="StartSdCardLoggingSessionAsync"/> instead, which returns an
-    /// <see cref="SdCardRecording"/>.
-    /// </remarks>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="ArgumentException"><paramref name="channelMask"/> is not a decimal bitmask.</exception>
-    Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Starts logging data to the SD card and returns the effective session details. Behaves
-    /// exactly like <see cref="StartSdCardLoggingAsync"/> but resolves to an
-    /// <see cref="SdCardRecording"/> carrying the effective on-card file name (supplied or
-    /// auto-generated) and the logging format, so callers can report, download, or later delete
-    /// the log without re-deriving Core's naming convention.
-    /// </summary>
-    /// <param name="fileName">
-    /// The name of the log file. If null or empty, a timestamped name is generated automatically
-    /// using the pattern "log_YYYYMMDD_HHMMSS" with a format-appropriate extension.
-    /// </param>
-    /// <param name="channelMask">
-    /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
-    /// If null or empty, the current device channel configuration is used.
-    /// </param>
     /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// A task that resolves to an <see cref="SdCardRecording"/> with the effective on-card
-    /// file name and logging format.
+    /// A task that resolves to an <see cref="SdCardRecording"/> carrying the effective on-card
+    /// file name (supplied or auto-generated) and the logging format, so callers can report,
+    /// download, or later delete the log without re-deriving Core's naming convention.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="ArgumentException"><paramref name="channelMask"/> is not a decimal bitmask.</exception>
-    Task<SdCardRecording> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
+    /// <exception cref="SdCardRequiresUsbException">
+    /// Thrown when the device is not connected over USB/serial. Nothing is sent.
+    /// </exception>
+    /// <exception cref="SdCardBusyException">Thrown when an SD log is already starting, recording or stopping.</exception>
+    /// <exception cref="System.ArgumentException">Thrown when the file name contains invalid characters.</exception>
+    Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stops logging data to the SD card and returns the device to the state a live stream
@@ -328,7 +319,11 @@ public interface ISdCardOperations
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
     /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-    /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
+    /// <exception cref="SdCardBusyException">
+    /// Thrown when the device is currently logging to SD card, or when an earlier download on it
+    /// is still in flight — including one that was abandoned and still holds the transport, which
+    /// only a reconnect clears.
+    /// </exception>
     /// <exception cref="SdCardEmptyTransferException">
     /// Thrown when the device serves a marker-only (0-byte) transfer for a file the last
     /// listing reported as non-empty (or whose listed size is unknown). A file the listing
@@ -363,15 +358,14 @@ public interface ISdCardOperations
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
     /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
-    /// closed transport and from an elapsed transfer deadline.
-    /// </exception>
-    /// <exception cref="System.TimeoutException">
-    /// Thrown when the transfer does not finish within the implementation's download deadline.
+    /// closed transport and from an elapsed transfer deadline
+    /// (<see cref="SdCardTransferStallReason.TransferTimeout"/>).
     /// The deadline is enforced by the download itself, so it holds even when the transfer is
     /// parked in a call that cannot observe a cancellation token; the in-flight transfer is
     /// then abandoned rather than awaited (#399). An abandoned transfer still owns the
     /// transport, so the interface it switched is left as-is rather than restored over the top
-    /// of it — reconnect before using the device again.
+    /// of it — reconnect before using the device again. The exception message says when the
+    /// transfer was abandoned.
     /// </exception>
     Task<SdCardDownloadResult> DownloadSdCardFileAsync(
         string fileName,
@@ -389,10 +383,15 @@ public interface ISdCardOperations
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
     /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-    /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
-    /// <exception cref="System.TimeoutException">
-    /// Thrown when the transfer does not finish within the implementation's download deadline
-    /// (see the <see cref="Stream"/> overload above); the temporary file is removed.
+    /// <exception cref="SdCardBusyException">
+    /// Thrown when the device is currently logging to SD card, or when an earlier download on it
+    /// is still in flight — including one that was abandoned and still holds the transport, which
+    /// only a reconnect clears.
+    /// </exception>
+    /// <exception cref="SdCardTransferStalledException">
+    /// Thrown when the transfer stops making progress or does not finish within the
+    /// implementation's download deadline (see the <see cref="Stream"/> overload above); the
+    /// temporary file is removed.
     /// </exception>
     Task<SdCardDownloadResult> DownloadSdCardFileAsync(
         string fileName,

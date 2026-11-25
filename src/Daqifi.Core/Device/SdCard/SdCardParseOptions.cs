@@ -6,16 +6,20 @@ namespace Daqifi.Core.Device.SdCard;
 /// <summary>
 /// Options for controlling SD card log file parsing.
 /// </summary>
-public sealed class SdCardParseOptions
+/// <remarks>
+/// Immutable: set what you need in the initializer, or change a copy with a <c>with</c>
+/// expression, e.g. <c>SdCardParseOptions.ForDevice(device) with { SessionStartTime = start }</c>.
+/// </remarks>
+public sealed record SdCardParseOptions
 {
     /// <summary>
-    /// Gets or sets the session start time override.
+    /// Gets the session start time override.
     /// When set, this is used as the timestamp anchor instead of the filename-derived date.
     /// </summary>
-    public DateTime? SessionStartTime { get; set; }
+    public DateTime? SessionStartTime { get; init; }
 
     /// <summary>
-    /// Gets or sets the read buffer size in bytes. Default is 64 KB. Must be greater than zero.
+    /// Gets the read buffer size in bytes. Default is 64 KB. Must be greater than zero.
     /// </summary>
     /// <remarks>
     /// Zero is rejected along with negative values, even though <see cref="System.IO.FileStream"/>
@@ -23,19 +27,20 @@ public sealed class SdCardParseOptions
     /// allocates a <c>byte[]</c> of this size to read into, and a zero-length read buffer can
     /// never make progress — so one contract for all three log formats has to be the stricter one.
     /// </remarks>
-    public int BufferSize { get; set; } = 64 * 1024;
+    public int BufferSize { get; init; } = 64 * 1024;
 
     /// <summary>
-    /// Gets or sets an optional progress reporter.
+    /// Gets an optional progress reporter.
     /// </summary>
     /// <remarks>
     /// Progress is reported while <see cref="SdCardLogSession.Samples"/> is being enumerated,
-    /// because that is when the file is actually read.
+    /// because that is when the file is actually read. That is why it is an option of the session
+    /// rather than an argument of the parse call, which has returned by then.
     /// </remarks>
-    public IProgress<SdCardParseProgress>? Progress { get; set; }
+    public IProgress<SdCardParseProgress>? Progress { get; init; }
 
     /// <summary>
-    /// Gets or sets how many leading protobuf messages are examined when looking for the
+    /// Gets how many leading protobuf messages are examined when looking for the
     /// device configuration fields (timestamp clock, calibration, port counts) that firmware
     /// embeds in the log. Default is 512; set to 0 to scan the whole file.
     /// </summary>
@@ -47,10 +52,10 @@ public sealed class SdCardParseOptions
     /// Applies to <c>.bin</c> logs only — the CSV and JSON headers are at the top of the file
     /// by construction.
     /// </remarks>
-    public int ConfigurationScanMessageLimit { get; set; } = 512;
+    public int ConfigurationScanMessageLimit { get; init; } = 512;
 
     /// <summary>
-    /// Gets or sets a fallback timestamp frequency (in Hz) to use when no
+    /// Gets a fallback timestamp frequency (in Hz) to use when no
     /// <c>TimestampFreq</c> field is found in the file's protobuf messages.
     /// <para>
     /// Device firmware may not include <c>TimestampFreq</c> in SD card log data.
@@ -75,10 +80,10 @@ public sealed class SdCardParseOptions
     /// converted with a default.
     /// </para>
     /// </summary>
-    public uint FallbackTimestampFrequency { get; set; } = 42_000_000;
+    public uint FallbackTimestampFrequency { get; init; } = 42_000_000;
 
     /// <summary>
-    /// Gets or sets a device configuration override. When set, fields from this
+    /// Gets a device configuration override. When set, fields from this
     /// config fill in any gaps not found in the file itself.
     /// <para>
     /// This is useful when the device is connected during download — the device's
@@ -87,10 +92,10 @@ public sealed class SdCardParseOptions
     /// <see cref="SdCardDeviceConfiguration.FromDevice"/>.
     /// </para>
     /// </summary>
-    public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }
+    public SdCardDeviceConfiguration? ConfigurationOverride { get; init; }
 
     /// <summary>
-    /// Gets or sets what a whole-number analog value in a CSV or JSON log means: a raw ADC code
+    /// Gets what a whole-number analog value in a CSV or JSON log means: a raw ADC code
     /// or a millivolt reading. Leave it unset only when the recording used raw mode.
     /// </summary>
     /// <remarks>
@@ -110,7 +115,7 @@ public sealed class SdCardParseOptions
     /// which unit the parser actually applied.
     /// </para>
     /// </remarks>
-    public SdCardIntegerValueUnits? IntegerValueUnits { get; set; }
+    public SdCardIntegerValueUnits? IntegerValueUnits { get; init; }
 
     /// <summary>
     /// Options for parsing a log downloaded from <paramref name="device"/>, carrying that

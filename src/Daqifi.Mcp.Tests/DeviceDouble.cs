@@ -262,8 +262,8 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             ? Task.FromException<SdCardStorageInfo>(failure)
             : Task.FromResult(SdStorage);
 
-    Task<SdCardRecording> ISdCardOperations.StartSdCardLoggingSessionAsync(
-        string? fileName, string? channelMask, SdCardLogFormat format, CancellationToken cancellationToken)
+    Task<SdCardRecording> ISdCardOperations.StartSdCardLoggingAsync(
+        string? fileName, SdCardLogFormat format, CancellationToken cancellationToken)
     {
         if (SdFailure is { } failure)
         {

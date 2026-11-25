@@ -216,7 +216,7 @@ internal sealed class SdCardOperations
     /// <remarks>
     /// Written only by the transition methods: <see cref="PrepareSdInterface"/>,
     /// <see cref="PrepareLanInterface"/>, <see cref="ClaimBusForLogStart"/>,
-    /// <see cref="StartSdCardLoggingSessionAsync"/>, <see cref="TryEndLoggingSessionFrom"/>,
+    /// <see cref="StartSdCardLoggingAsync"/>, <see cref="TryEndLoggingSessionFrom"/>,
     /// <see cref="FormatSdCardAsync"/> and <see cref="IsBusHeldByLog"/>.
     /// <para>
     /// Remaining limit: the file operations check this at their guard and only record
@@ -1158,8 +1158,21 @@ internal sealed class SdCardOperations
     }
 
 
-    /// <inheritdoc />
-    internal void SetSdCardMinimumFreeSpace(long bytes)
+    /// <inheritdoc cref="ISdCardOperations.SetSdCardMinimumFreeSpaceAsync" />
+    /// <remarks>
+    /// <para>
+    /// The set has no reply of its own, and firmware 3.5.0 to 3.9.1 stores any value it can parse
+    /// without conditions (<c>SCPI_StorageSDMinFreeSet</c>), so the confirmation is the value read
+    /// back by the <c>MINFree?</c> sent after it in the same exchange. It is a config-only write,
+    /// consulted at stream start, so it is safe during a log: no bus switch, and no stop.
+    /// </para>
+    /// <para>
+    /// A live stream is paused, because its data would bury the reply. The pause is a device-wide
+    /// stop, so it must not land on a log: log starts claim the bus only while holding
+    /// <see cref="_sdProtectGate"/>, so a check made under it holds until it is released.
+    /// </para>
+    /// </remarks>
+    internal async Task SetSdCardMinimumFreeSpaceAsync(long bytes, CancellationToken cancellationToken = default)
     {
         // Argument validation precedes the connection (state) check so misuse surfaces the same
         // exception type regardless of connection state (matches SetAnalogOutput / SetDioDirection).
@@ -1170,7 +1183,73 @@ internal sealed class SdCardOperations
 
         _host.EnsureConnected();
 
-        _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
+        await _sdProtectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            var wasStreaming = !IsBusHeldByLog() && _host.IsStreaming && PauseStreamingForSdOperation();
+
+            try
+            {
+                var lines = await _host.ExecuteTextCommandAsync(
+                    () =>
+                    {
+                        _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
+                        _host.Send(ScpiMessageProducer.GetSdMinFreeSpace);
+                    },
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                ThrowIfMinimumFreeSpaceNotConfirmed(lines, bytes);
+            }
+            finally
+            {
+                RestoreStreamingIfNeeded(wasStreaming);
+            }
+        }
+        finally
+        {
+            _sdProtectGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Checks the reply to <c>SYSTem:STORage:SD:MINFree n</c> + <c>MINFree?</c>: its last bare
+    /// whole number is the floor the device holds, and it has to be the one just set.
+    /// </summary>
+    private static void ThrowIfMinimumFreeSpaceNotConfirmed(IReadOnlyList<string> lines, long bytes)
+    {
+        // The value the device holds settles it, whatever else is in the reply: an error line can
+        // belong to the stop that paused a live stream.
+        ulong? held = null;
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            if (ulong.TryParse(lines[i].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+            {
+                held = value;
+                break;
+            }
+        }
+
+        if (held == (ulong)bytes)
+        {
+            return;
+        }
+
+        var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
+
+        if (lastScpiError != null)
+        {
+            throw new SdCardOperationException(
+                "The device refused the SD card minimum free space: " + lastScpiError,
+                lines,
+                lastScpiError);
+        }
+
+        throw new SdCardOperationException(
+            held is { } reported
+                ? $"The device did not take the SD card minimum free space of {bytes} bytes; it reports {reported}."
+                : "The device did not answer the SD card minimum free space command, so whether the setting changed is unknown.",
+            lines);
     }
 
     /// <inheritdoc cref="ISdCardOperations.SetSdCardCrcProtectionAsync" />
@@ -1518,32 +1597,12 @@ internal sealed class SdCardOperations
     }
 
     /// <summary>
-    /// Starts logging data to the SD card. Compatibility overload preserving the original
-    /// <see cref="Task"/> return; use <see cref="StartSdCardLoggingSessionAsync"/> to also learn
-    /// the effective on-card file name.
-    /// </summary>
-    /// <param name="fileName">The log file name, or null/empty to auto-generate a timestamped name.</param>
-    /// <param name="channelMask">Optional decimal channel bitmask; null/empty uses the current config.</param>
-    /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
-    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-    internal Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
-        => StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
-
-    /// <summary>
     /// Starts logging data to the SD card and returns the effective session details.
     /// </summary>
     /// <param name="fileName">
     /// The name of the log file. If null or empty, a timestamped name is generated automatically
     /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
     /// (.bin for Protobuf, .json for JSON, .csv for CSV).
-    /// </param>
-    /// <param name="channelMask">
-    /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
-    /// The firmware parses this as a decimal integer where each bit enables a channel.
-    /// If null or empty, the current device channel configuration is used.
     /// </param>
     /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
@@ -1552,15 +1611,16 @@ internal sealed class SdCardOperations
     /// file name (supplied or auto-generated) and the logging format.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="SdCardRequiresUsbException">Thrown when the device is not connected over USB/serial.</exception>
     /// <exception cref="SdCardBusyException">Thrown when an SD log is already starting, recording or stopping.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-    internal async Task<SdCardRecording> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+    internal async Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
     {
         _host.EnsureConnected();
 
         if (!_host.IsUsbConnection)
         {
-            throw new InvalidOperationException(
+            throw new SdCardRequiresUsbException(
                 "SD card logging requires a USB/serial connection. Starting a logging session " +
                 "disables the LAN interface to give the SD card the shared SPI bus, which over " +
                 "a network connection would drop the very link the command arrived on. " +
@@ -1587,7 +1647,6 @@ internal sealed class SdCardOperations
 
         // Before the first send: a bad name must not leave LAN switched off behind it.
         ScpiMessageProducer.ValidateSdFileName(logFileName);
-        var adcMask = ParseChannelMask(channelMask);
 
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
@@ -1632,12 +1691,6 @@ internal sealed class SdCardOperations
             _host.Send(formatCommand);
             await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
-            if (adcMask is { } mask)
-            {
-                _host.Send(ScpiMessageProducer.EnableAdcChannels(mask));
-                await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
-            }
-
             // Checked here, once the stream is routed to the card in its format and channel set:
             // that is the configuration the device checks the rate against. A rate inherited
             // from a faster USB stream would otherwise be refused, and nothing recorded.
@@ -1678,18 +1731,6 @@ internal sealed class SdCardOperations
         }
 
         return new SdCardRecording(logFileName, format);
-    }
-
-    private static uint? ParseChannelMask(string? channelMask)
-    {
-        if (string.IsNullOrWhiteSpace(channelMask))
-        {
-            return null;
-        }
-
-        return uint.TryParse(channelMask.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var mask)
-            ? mask
-            : throw new ArgumentException("Channel mask must be a decimal bitmask, such as \"3\".", nameof(channelMask));
     }
 
     /// <summary>
@@ -1758,7 +1799,7 @@ internal sealed class SdCardOperations
     /// the stop sequence, or returns <c>false</c> without sending anything when the bus was no
     /// longer in <paramref name="from"/>. Called directly, from
     /// <see cref="SdBusMode.LogStarting"/>, only by the failure cleanup of
-    /// <see cref="StartSdCardLoggingSessionAsync"/>, which owns that mode.
+    /// <see cref="StartSdCardLoggingAsync"/>, which owns that mode.
     /// </summary>
     private bool TryEndLoggingSessionFrom(SdBusMode from)
     {
@@ -1793,7 +1834,7 @@ internal sealed class SdCardOperations
 
         // Put the stream encoding back to protobuf, the format the library runs live streaming in
         // (DaqifiDevice.InitializeAsync sets it at connect time, and the frame decoder reads
-        // nothing else). StartSdCardLoggingSessionAsync sets SYSTem:STReam:FORmat to the session's
+        // nothing else). StartSdCardLoggingAsync sets SYSTem:STReam:FORmat to the session's
         // log format, and the firmware holds ONE encoding for every interface
         // (SCPIInterface.c, streaming.c), so a JSON or CSV session left live streaming emitting
         // text that the protobuf framing silently dropped until the next reconnect (closes #851).
@@ -2138,7 +2179,6 @@ internal sealed class SdCardOperations
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
     /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-    /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
     /// <exception cref="SdCardEmptyTransferException">
     /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
     /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
@@ -2173,12 +2213,16 @@ internal sealed class SdCardOperations
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
     /// the transport returned an empty read, closed, or — the only signal a socket gives —
-    /// went quiet for longer than <see cref="DaqifiStreamingDevice.SdCardTransferIdleTimeout"/>.
-    /// </exception>
-    /// <exception cref="TimeoutException">
-    /// Thrown when the download does not finish within <see cref="DaqifiStreamingDevice.SdCardDownloadTimeout"/>.
-    /// The deadline is enforced by this method itself, so it still applies when the transfer
+    /// went quiet for longer than <see cref="DaqifiStreamingDevice.SdCardTransferIdleTimeout"/> —
+    /// or when the download does not finish within
+    /// <see cref="DaqifiStreamingDevice.SdCardDownloadTimeout"/>
+    /// (<see cref="SdCardTransferStallReason.TransferTimeout"/>).
+    /// That deadline is enforced by this method itself, so it still applies when the transfer
     /// is parked in a call that cannot observe a cancellation token (#399).
+    /// </exception>
+    /// <exception cref="SdCardBusyException">
+    /// Thrown when the device is logging to the SD card, or an earlier download is still in
+    /// flight or was abandoned and still holds the transport.
     /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
     /// <remarks>
@@ -2216,7 +2260,7 @@ internal sealed class SdCardOperations
     /// </para>
     /// <para>
     /// Until an abandoned transfer unwinds it still owns the transport, so a further download
-    /// on the same device fails fast with <see cref="InvalidOperationException"/> rather than
+    /// on the same device fails fast with <see cref="SdCardBusyException"/> rather than
     /// putting a second reader on the same stream. A caller looping over many files against a
     /// wedged card therefore gets one timeout and then immediate, cheap failures — not a
     /// growing pile of blocked threads.
@@ -2253,6 +2297,7 @@ internal sealed class SdCardOperations
         var clock = Clock;
         var startedAt = clock.GetTimestamp();
         long fileSize = 0;
+        var received = new ReceivedByteCounter(progress);
         var budget = _host.SdCardDownloadTimeout;
 
         // Set when the transfer was given up on and left running (#399/#401). Read only by the
@@ -2272,6 +2317,7 @@ internal sealed class SdCardOperations
                     : ReceiveSdFileAsync(attempt: 0, token),
                 budget,
                 fileName,
+                () => received.Bytes,
                 cancellationToken,
                 onWorkerAbandoned: () => workerAbandoned = true).ConfigureAwait(false);
 
@@ -2375,7 +2421,7 @@ internal sealed class SdCardOperations
                             bytesReceived = await receiver.ReceiveAsync(
                                 destinationStream,
                                 fileName,
-                                progress,
+                                received,
                                 timeout: RemainingBudget(budget, clock.GetElapsedTime(startedAt)),
                                 cancellationToken: ct,
                                 listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
@@ -2629,6 +2675,24 @@ internal sealed class SdCardOperations
 
 
     /// <summary>
+    /// Passes transfer progress on to the caller's reporter and remembers the last count, so a
+    /// transfer that had to be abandoned can still say how much of the file arrived. Written by
+    /// the transfer's thread and read by the one that gave up on it.
+    /// </summary>
+    private sealed class ReceivedByteCounter(IProgress<SdCardTransferProgress>? inner) : IProgress<SdCardTransferProgress>
+    {
+        private long _bytes;
+
+        internal long Bytes => Volatile.Read(ref _bytes);
+
+        public void Report(SdCardTransferProgress value)
+        {
+            Volatile.Write(ref _bytes, value.BytesReceived);
+            inner?.Report(value);
+        }
+    }
+
+    /// <summary>
     /// The part of <paramref name="budget"/> not yet consumed, floored at zero (a negative
     /// timeout is not a legal <see cref="CancellationTokenSource"/> delay).
     /// </summary>
@@ -2657,14 +2721,15 @@ internal sealed class SdCardOperations
     /// </summary>
     /// <param name="operation">The transfer. Receives a token cancelled by caller cancellation or the deadline, whichever comes first.</param>
     /// <param name="budget">The cooperative budget; the hard deadline is <see cref="HardDeadlineFor"/> of it.</param>
-    /// <param name="fileName">Used only in the <see cref="TimeoutException"/> message.</param>
+    /// <param name="fileName">Used only in the <see cref="SdCardTransferStalledException"/>.</param>
+    /// <param name="bytesReceived">How much of the file has arrived so far, for the same exception.</param>
     /// <param name="cancellationToken">The caller's token, observed by the race itself and not only by the worker.</param>
     /// <param name="onWorkerAbandoned">
     /// Invoked, before this method throws, when the worker is given up on while still running.
     /// Lets the caller skip any cleanup that would touch the transport the abandoned worker
     /// still owns.
     /// </param>
-    /// <exception cref="InvalidOperationException">
+    /// <exception cref="SdCardBusyException">
     /// Thrown when a previous download still owns <see cref="_sdDownloadGate"/> — it is either
     /// genuinely in flight or was abandoned and is still parked on the transport.
     /// </exception>
@@ -2672,6 +2737,7 @@ internal sealed class SdCardOperations
         Func<CancellationToken, Task> operation,
         TimeSpan budget,
         string fileName,
+        Func<long> bytesReceived,
         CancellationToken cancellationToken,
         Action? onWorkerAbandoned = null)
     {
@@ -2688,7 +2754,7 @@ internal sealed class SdCardOperations
             // report about a different download.
             cancellationToken.ThrowIfCancellationRequested();
 
-            throw new InvalidOperationException(
+            throw new SdCardBusyException(
                 "A previous SD card download is still in flight, or was abandoned after timing out and " +
                 "is still parked on the transport. Reconnect the device before retrying.");
         }
@@ -2785,10 +2851,7 @@ internal sealed class SdCardOperations
                 // Prefer surfacing caller cancellation over a generic timeout when both raced.
                 cancellationToken.ThrowIfCancellationRequested();
 
-                throw new TimeoutException(
-                    $"SD card download of '{fileName}' did not complete within " +
-                    $"{hardDeadline.TotalSeconds:0.#}s and was abandoned. The device's SD " +
-                    "subsystem is not responding; reconnect (or power-cycle) before retrying.");
+                throw SdCardTransferStalledException.ForAbandonedTransfer(fileName, bytesReceived(), hardDeadline);
             }
 
             // Propagate success or the transfer's own exception unchanged.

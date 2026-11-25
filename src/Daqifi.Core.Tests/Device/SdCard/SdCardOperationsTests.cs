@@ -291,14 +291,14 @@ public partial class SdCardOperationsTests
     }
 
     [Fact]
-    public async Task StartSdCardLoggingAsync_OverNonUsbConnection_ThrowsInvalidOperationException()
+    public async Task StartSdCardLoggingAsync_OverNonUsbConnection_ThrowsRequiresUsb()
     {
         // Arrange — use a device that reports IsUsbConnection = false
         var device = new TestableNonUsbStreamingDevice("TestDevice");
         device.Connect();
 
         // Act & Assert
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<SdCardRequiresUsbException>(
             () => device.StartSdCardLoggingAsync("test.bin"));
         Assert.Contains("USB", ex.Message);
     }
@@ -327,7 +327,7 @@ public partial class SdCardOperationsTests
         device.Connect();
 
         // Act
-        var session = await device.StartSdCardLoggingSessionAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
+        var session = await device.StartSdCardLoggingAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
 
         // Assert: the returned name is exactly what was sent to the device.
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -344,7 +344,7 @@ public partial class SdCardOperationsTests
         device.Connect();
 
         // Act
-        var session = await device.StartSdCardLoggingSessionAsync(format: SdCardLogFormat.Json);
+        var session = await device.StartSdCardLoggingAsync(format: SdCardLogFormat.Json);
 
         // Assert: the auto-generated name the caller receives is the one that reached the device,
         // so consumers no longer have to re-derive Core's naming convention.
@@ -2184,27 +2184,32 @@ public partial class SdCardOperationsTests
 
     #endregion
 
-    #region SetSdCardMinimumFreeSpace Tests
+    #region SetSdCardMinimumFreeSpaceAsync Tests
 
     [Fact]
-    public void SetSdCardMinimumFreeSpace_WhenConnected_SendsCommand()
+    public async Task SetSdCardMinimumFreeSpaceAsync_WhenConnected_SendsAndConfirms()
     {
-        var device = new TestableSdCardStreamingDevice("TestDevice");
+        var device = new TestableSdCardStreamingDevice("TestDevice")
+        {
+            CannedTextResponse = ["52428800"],
+        };
         device.Connect();
 
-        device.SetSdCardMinimumFreeSpace(52428800);
+        await device.SetSdCardMinimumFreeSpaceAsync(52428800);
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Contains("SYSTem:STORage:SD:MINFree 52428800", sentCommands);
+        Assert.Equal(
+            new[] { "SYSTem:STORage:SD:MINFree 52428800", "SYSTem:STORage:SD:MINFree?" },
+            sentCommands.TakeLast(2));
     }
 
     [Fact]
-    public void SetSdCardMinimumFreeSpace_WithNegativeValue_Throws()
+    public async Task SetSdCardMinimumFreeSpaceAsync_WithNegativeValue_Throws()
     {
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetSdCardMinimumFreeSpace(-1));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => device.SetSdCardMinimumFreeSpaceAsync(-1));
     }
 
     #endregion
@@ -2988,7 +2993,7 @@ public partial class SdCardOperationsTests
             var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
             Assert.Same((Task)opTask, winner);
 
-            var ex = await Assert.ThrowsAsync<TimeoutException>(() => opTask);
+            var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(() => opTask);
             Assert.Contains("data.bin", ex.Message);
 
             var sent = device.SentCommandsSnapshot();
@@ -3021,7 +3026,7 @@ public partial class SdCardOperationsTests
             var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
             Assert.Same((Task)opTask, winner);
 
-            await Assert.ThrowsAsync<TimeoutException>(() => opTask);
+            await Assert.ThrowsAsync<SdCardTransferStalledException>(() => opTask);
         }
         finally
         {
@@ -3074,18 +3079,18 @@ public partial class SdCardOperationsTests
 
         try
         {
-            await Assert.ThrowsAsync<TimeoutException>(
+            await Assert.ThrowsAsync<SdCardTransferStalledException>(
                 () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
 
             // The first transfer is still parked, so the gate is still held. The exception TYPE
             // is what proves the refusal came from the gate: waiting out another deadline would
-            // have produced TimeoutException, never InvalidOperationException. The wall-clock
+            // have produced a stall, never SdCardBusyException. The wall-clock
             // bound is only a hang guard, kept loose so a contended CI runner can't fail it.
             var secondCall = device.DownloadSdCardFileAsync("other.bin", secondDestination);
             var winner = await Task.WhenAny(secondCall, Task.Delay(TimeSpan.FromSeconds(30)));
             Assert.Same((Task)secondCall, winner);
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => secondCall);
+            var ex = await Assert.ThrowsAsync<SdCardBusyException>(() => secondCall);
             Assert.Contains("abandoned", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -3106,7 +3111,7 @@ public partial class SdCardOperationsTests
 
         try
         {
-            await Assert.ThrowsAsync<TimeoutException>(
+            await Assert.ThrowsAsync<SdCardTransferStalledException>(
                 () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
 
             // Cancel from inside the pre-flight StopStreaming send: that lands in the exact
@@ -3134,13 +3139,13 @@ public partial class SdCardOperationsTests
         device.Connect();
         using var destination = new MemoryStream();
 
-        await Assert.ThrowsAsync<TimeoutException>(
+        await Assert.ThrowsAsync<SdCardTransferStalledException>(
             () => device.DownloadSdCardFileAsync("data.bin", destination));
 
         // Let the abandoned worker unwind, then wait for the gate to come back.
         device.Release();
 
-        InvalidOperationException? lastRefusal = null;
+        SdCardBusyException? lastRefusal = null;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (DateTime.UtcNow < deadline)
         {
@@ -3152,7 +3157,7 @@ public partial class SdCardOperationsTests
                 lastRefusal = null;
                 break;
             }
-            catch (InvalidOperationException ex)
+            catch (SdCardBusyException ex)
             {
                 lastRefusal = ex;
                 await Task.Delay(25);

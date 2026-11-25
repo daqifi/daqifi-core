@@ -252,6 +252,7 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
     private static MethodInfo[] DiscoverParseEntryPoints() =>
         typeof(Sd.SdCardParseOptions).Assembly
             .GetTypes()
+            .Where(t => t != typeof(Sd.SdCardParseOptions)) // a record: its own Equals takes one
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(m => Array.Exists(m.GetParameters(), p => p.ParameterType == typeof(Sd.SdCardParseOptions)))
             .ToArray();

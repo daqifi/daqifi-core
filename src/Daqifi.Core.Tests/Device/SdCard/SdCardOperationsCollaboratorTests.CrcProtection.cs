@@ -170,7 +170,7 @@ public partial class SdCardOperationsCollaboratorTests
         // not even the defensive stream stop the other SD operations open with.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StartSdCardLoggingAsync("session.bin");
         var callsBeforeTheSet = host.Calls
             .Append("ensure:" + DeviceFeature.SdCardCrcProtection)
             .ToArray();
@@ -187,7 +187,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StartSdCardLoggingAsync("session.bin");
         await ops.StopSdCardLoggingAsync();
         EnqueueAppliedChange(host, crcOn: true);
 
@@ -375,7 +375,7 @@ public partial class SdCardOperationsCollaboratorTests
         var ops = new SdCardOperations(host);
 
         await ops.SetSdCardCrcProtectionAsync(true);
-        await ops.StartSdCardLoggingSessionAsync("after.bin");
+        await ops.StartSdCardLoggingAsync("after.bin");
 
         Assert.True(host.IsLoggingToSdCard);
     }
@@ -517,7 +517,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var first = Task.Run(() => ops.SetSdCardCrcProtectionAsync(true));
         Assert.True(firstIsMounting.Wait(TimeSpan.FromSeconds(10)));
-        var log = ops.StartSdCardLoggingSessionAsync("queued.bin");
+        var log = ops.StartSdCardLoggingAsync("queued.bin");
         var second = ops.SetSdCardCrcProtectionAsync(false);
         Assert.False(log.IsCompleted, "The log start claimed the bus during the first change.");
         Assert.False(second.IsCompleted);
@@ -647,7 +647,7 @@ public partial class SdCardOperationsCollaboratorTests
         // A plain query: no defensive stream stop, which during an SD log would end it.
         var host = new FakeHost();
         var ops = new SdCardOperations(host);
-        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StartSdCardLoggingAsync("session.bin");
         var stopsBefore = host.Calls.Count(c => c == "send:" + StopStreaming);
         host.EnqueueResponse("1");
 
