@@ -169,11 +169,11 @@ internal sealed class SdCardCsvFileParser
         var config = SdCardConfigurationMerge.Merge(header.Config, options.ConfigurationOverride);
 
         var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
-            header.Config.TimestampFrequency,
-            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
-            options.FallbackTimestampFrequency);
+            header.Config.TimestampFrequencyHz,
+            options.ConfigurationOverride?.TimestampFrequencyHz ?? 0u,
+            options.FallbackTimestampFrequencyHz);
 
-        config = config with { TimestampFrequency = timestampFrequency };
+        config = config with { TimestampFrequencyHz = timestampFrequency };
 
         if (header.DataStartIndex < 0)
         {
@@ -184,7 +184,7 @@ internal sealed class SdCardCsvFileParser
                 config,
                 SdCardTextFileSource.EmptySamples())
             {
-                TimestampFrequency = timestampFrequency,
+                TimestampFrequencyHz = timestampFrequency,
                 TimestampFrequencySource = timestampSource
             };
         }
@@ -205,7 +205,7 @@ internal sealed class SdCardCsvFileParser
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
-            TimestampFrequency = timestampFrequency,
+            TimestampFrequencyHz = timestampFrequency,
             TimestampFrequencySource = timestampSource
         };
     }
@@ -365,7 +365,7 @@ internal sealed class SdCardCsvFileParser
         {
             AnalogPortCount = analogChannelCount,
             DigitalPortCount = digitalChannelCount,
-            TimestampFrequency = timestampFreq,
+            TimestampFrequencyHz = timestampFreq,
             DeviceSerialNumber = serialNumber,
             DevicePartNumber = deviceName,
             FirmwareVersion = null,
@@ -461,7 +461,7 @@ internal sealed class SdCardCsvFileParser
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var timestampReconstructor =
-            SdCardTimestampReconstructor.ForTimestampFrequency(config.TimestampFrequency);
+            SdCardTimestampReconstructor.ForTimestampFrequency(config.TimestampFrequencyHz);
 
         var linesProcessed = 0;
         var bytesRead = 0L;

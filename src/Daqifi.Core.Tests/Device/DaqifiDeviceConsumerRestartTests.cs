@@ -455,7 +455,7 @@ public class DaqifiDeviceConsumerRestartTests
         await ParkBehindAnOperationAsync(
             device =>
             {
-                device.StreamingFrequency = 100;
+                device.SampleRateHz = 100;
                 device.StartStreaming();
             },
             device =>
@@ -468,7 +468,7 @@ public class DaqifiDeviceConsumerRestartTests
             device =>
             {
                 Assert.True(device.IsStreaming);
-                Assert.Equal(100, device.StreamingFrequency);
+                Assert.Equal(100, device.SampleRateHz);
             });
     }
 
@@ -478,16 +478,16 @@ public class DaqifiDeviceConsumerRestartTests
         await ParkBehindAnOperationAsync(
             device =>
             {
-                device.StreamingFrequency = 100;
+                device.SampleRateHz = 100;
                 device.StartStreaming();
             },
             device =>
             {
                 device.Send(ScpiMessageProducer.StartStreaming(200));
-                Assert.Equal(100, device.StreamingFrequency);
+                Assert.Equal(100, device.SampleRateHz);
             },
             _ => { },
-            device => Assert.Equal(200, device.StreamingFrequency));
+            device => Assert.Equal(200, device.SampleRateHz));
     }
 
     [Fact]
@@ -498,29 +498,29 @@ public class DaqifiDeviceConsumerRestartTests
             device =>
             {
                 device.Send(ScpiMessageProducer.StartStreaming(200));
-                device.StreamingFrequency = 300;
+                device.SampleRateHz = 300;
             },
             _ => { },
-            device => Assert.Equal(300, device.StreamingFrequency));
+            device => Assert.Equal(300, device.SampleRateHz));
     }
 
     [Fact]
     public async Task AStartEvictedFromTheBacklog_DoesNotLowerTheRate()
     {
         await ParkBehindAnOperationAsync(
-            device => device.StreamingFrequency = 1000,
+            device => device.SampleRateHz = 1000,
             device =>
             {
                 device.BacklogCap = 2;
                 device.UpdateMetadata(metadata => metadata with
                 {
-                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 500 }
+                    Capabilities = metadata.Capabilities with { MaximumSampleRateHz = 500 }
                 });
                 device.StartStreaming();
                 SendFillers(device, 2);
             },
             _ => { },
-            device => Assert.Equal(1000, device.StreamingFrequency));
+            device => Assert.Equal(1000, device.SampleRateHz));
     }
 
     [Fact]
@@ -669,7 +669,7 @@ public class DaqifiDeviceConsumerRestartTests
         var clock = new FakeTimeProvider();
         device.SetTimeProviderForTesting(clock);
         device.Connect();
-        device.StreamingFrequency = 1;
+        device.SampleRateHz = 1;
         device.StartStreaming();
 
         var inOperation = new TaskCompletionSource();

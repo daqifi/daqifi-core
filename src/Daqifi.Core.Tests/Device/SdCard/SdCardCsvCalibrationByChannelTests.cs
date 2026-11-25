@@ -49,7 +49,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
     {
         AnalogPortCount = 8,
         DigitalPortCount = 1,
-        TimestampFrequency = TickRate,
+        TimestampFrequencyHz = TickRate,
         DeviceSerialNumber = "SN849",
         DevicePartNumber = "Nyquist 1",
         FirmwareVersion = "3.8.0",
@@ -170,7 +170,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
         {
             AnalogPortCount = 8,
             DigitalPortCount = 0,
-            TimestampFrequency = 1000u,
+            TimestampFrequencyHz = 1000u,
             DeviceSerialNumber = null,
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = null,

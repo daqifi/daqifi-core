@@ -965,16 +965,16 @@ public class ChannelPopulationTests
 
     #endregion
 
-    #region TimestampFrequency Tests
+    #region TimestampFrequencyHz Tests
 
     [Fact]
-    public void TimestampFrequency_DefaultsToZero()
+    public void TimestampFrequencyHz_DefaultsToZero()
     {
         // Arrange & Act
         var device = new TransportlessDevice("TestDevice");
 
         // Assert
-        Assert.Equal(0u, device.TimestampFrequency);
+        Assert.Equal(0u, device.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -988,7 +988,7 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(message);
 
         // Assert
-        Assert.Equal(48000000u, device.TimestampFrequency);
+        Assert.Equal(48000000u, device.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -1002,7 +1002,7 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { TimestampFreq = 0 });
 
         // Assert
-        Assert.Equal(48000000u, device.TimestampFrequency);
+        Assert.Equal(48000000u, device.TimestampFrequencyHz);
     }
 
     #endregion

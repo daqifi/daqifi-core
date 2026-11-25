@@ -11,7 +11,7 @@ namespace Daqifi.Core.Tests.Device.Internal;
 /// </summary>
 public class SessionCommandInterpreterTests
 {
-    private const int MaxSamplingRate = 1000;
+    private const int MaximumSampleRateHz = 1000;
 
     [Theory]
     [InlineData(null)]
@@ -19,7 +19,7 @@ public class SessionCommandInterpreterTests
     [InlineData("   ")]
     public void ABlankCommand_MeansNothing(string? command)
     {
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.None, effect.Kind);
     }
@@ -33,7 +33,7 @@ public class SessionCommandInterpreterTests
         // The global DIO enable is deliberately in this group: it is one switch for the whole port
         // rather than a per-channel mask, so it carries no information about which digital channels
         // were wanted and none is inferred.
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.None, effect.Kind);
     }
@@ -41,7 +41,7 @@ public class SessionCommandInterpreterTests
     [Fact]
     public void AStopCommand_EndsTheSession()
     {
-        var effect = SessionCommandInterpreter.Interpret("SYSTem:StopStreamData", MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret("SYSTem:StopStreamData", MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StopStreaming, effect.Kind);
     }
@@ -52,14 +52,14 @@ public class SessionCommandInterpreterTests
         // The constants are duplicated from the producer's output rather than derived from it, so
         // this is the guard that keeps the two from drifting apart silently.
         var start = SessionCommandInterpreter.Interpret(
-            ScpiMessageProducer.StartStreaming(250).Data, MaxSamplingRate);
+            ScpiMessageProducer.StartStreaming(250).Data, MaximumSampleRateHz);
         var stop = SessionCommandInterpreter.Interpret(
-            ScpiMessageProducer.StopStreaming.Data, MaxSamplingRate);
+            ScpiMessageProducer.StopStreaming.Data, MaximumSampleRateHz);
         var enable = SessionCommandInterpreter.Interpret(
-            ScpiMessageProducer.EnableAdcChannels(10).Data, MaxSamplingRate);
+            ScpiMessageProducer.EnableAdcChannels(10).Data, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, start.Kind);
-        Assert.Equal(250, start.StreamingFrequency);
+        Assert.Equal(250, start.SampleRateHz);
         Assert.Equal(SessionCommandEffectKind.StopStreaming, stop.Kind);
         Assert.Equal(SessionCommandEffectKind.SetAdcEnableMask, enable.Kind);
         Assert.Equal(10u, enable.AdcEnableMask);
@@ -72,19 +72,19 @@ public class SessionCommandInterpreterTests
     {
         // SCPI's short/long forms differ only in case, so a caller writing the long form must be
         // recognized exactly like the producer's mixed-case output.
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, effect.Kind);
-        Assert.Equal(100, effect.StreamingFrequency);
+        Assert.Equal(100, effect.SampleRateHz);
     }
 
     [Fact]
     public void SurroundingWhitespace_DoesNotHideACommand()
     {
-        var effect = SessionCommandInterpreter.Interpret("  SYSTem:StartStreamData 100  ", MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret("  SYSTem:StartStreamData 100  ", MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, effect.Kind);
-        Assert.Equal(100, effect.StreamingFrequency);
+        Assert.Equal(100, effect.SampleRateHz);
     }
 
     [Theory]
@@ -100,16 +100,16 @@ public class SessionCommandInterpreterTests
         // Reported as its own kind rather than as None so the caller can trace the rejection, but
         // carrying no rate: marking a session started here would leave the streaming frequency
         // holding a rate from an earlier session, which a reconnect would then faithfully restore.
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.UnusableStreamingStart, effect.Kind);
-        Assert.Equal(0, effect.StreamingFrequency);
+        Assert.Equal(0, effect.SampleRateHz);
     }
 
     [Fact]
     public void ARejectedRate_IsReportedAsItWasWritten()
     {
-        var effect = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData  not-a-rate ", MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData  not-a-rate ", MaximumSampleRateHz);
 
         Assert.Equal("not-a-rate", effect.RejectedRate);
     }
@@ -117,26 +117,26 @@ public class SessionCommandInterpreterTests
     [Fact]
     public void TheCeilingIsInclusive()
     {
-        var atCeiling = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1000", MaxSamplingRate);
-        var pastCeiling = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1001", MaxSamplingRate);
+        var atCeiling = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1000", MaximumSampleRateHz);
+        var pastCeiling = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1001", MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, atCeiling.Kind);
-        Assert.Equal(1000, atCeiling.StreamingFrequency);
+        Assert.Equal(1000, atCeiling.SampleRateHz);
         Assert.Equal(SessionCommandEffectKind.UnusableStreamingStart, pastCeiling.Kind);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public void AnUnusableCeiling_FallsBackToOneRatherThanRejectingEverything(int maxSamplingRate)
+    public void AnUnusableCeiling_FallsBackToOneRatherThanRejectingEverything(int maximumSampleRateHz)
     {
-        // MaxSamplingRate is a mutable, unvalidated public property. An uninitialized value must not
+        // MaximumSampleRateHz is a mutable, unvalidated public property. An uninitialized value must not
         // produce an impossible range like "1..0" that turns every rate into a rejection.
-        var atFloor = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1", maxSamplingRate);
-        var aboveFloor = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 2", maxSamplingRate);
+        var atFloor = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 1", maximumSampleRateHz);
+        var aboveFloor = SessionCommandInterpreter.Interpret("SYSTem:StartStreamData 2", maximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.StartStreaming, atFloor.Kind);
-        Assert.Equal(1, atFloor.StreamingFrequency);
+        Assert.Equal(1, atFloor.SampleRateHz);
         Assert.Equal(SessionCommandEffectKind.UnusableStreamingStart, aboveFloor.Kind);
     }
 
@@ -147,7 +147,7 @@ public class SessionCommandInterpreterTests
     [InlineData("ENAble:VOLTage:DC 4294967295", uint.MaxValue)]
     public void AnAdcEnableCommand_CarriesItsMask(string command, uint expected)
     {
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.SetAdcEnableMask, effect.Kind);
         Assert.Equal(expected, effect.AdcEnableMask);
@@ -162,7 +162,7 @@ public class SessionCommandInterpreterTests
     {
         // A mask that cannot be read is not evidence that no channels are enabled — clearing the
         // set from it would be inventing a state the device never reported.
-        var effect = SessionCommandInterpreter.Interpret(command, MaxSamplingRate);
+        var effect = SessionCommandInterpreter.Interpret(command, MaximumSampleRateHz);
 
         Assert.Equal(SessionCommandEffectKind.None, effect.Kind);
     }

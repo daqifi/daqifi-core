@@ -44,7 +44,7 @@ ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sam
 
 // Enable channel 0, then stream at 100 Hz
 device.EnableChannel(ai0);
-device.StreamingFrequency = 100;
+device.SampleRateHz = 100;
 device.StartStreaming();
 
 // Let samples arrive for a while before the device is disposed
@@ -217,7 +217,7 @@ using Daqifi.Core.Device;
 
 using var stats = new AcquisitionStatistics(device);
 
-device.StreamingFrequency = 1000;
+device.SampleRateHz = 1000;
 device.StartStreaming();
 await Task.Delay(TimeSpan.FromSeconds(5));
 device.StopStreaming();
@@ -247,7 +247,7 @@ grow with its length, and it hands back what reached the file and what did not.
 ```csharp
 using Daqifi.Core.Export;
 
-device.StreamingFrequency = 100;
+device.SampleRateHz = 100;
 device.StartStreaming();
 
 await using var writer = new StreamWriter("run.csv");

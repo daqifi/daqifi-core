@@ -256,7 +256,7 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// <summary>
     /// Stored but never acted on, so a caller that round-trips the value sees what it set.
     /// </summary>
-    public int StreamingFrequency { get; set; } = 1;
+    public int SampleRateHz { get; set; } = 1;
 
     /// <summary>
     /// Always <c>false</c>. See the remarks on the type: the update flow calls

@@ -48,7 +48,7 @@ public class SdCardFileParserTests
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
         Assert.Equal("2.1.0", session.DeviceConfig.FirmwareVersion);
         Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("99999", session.DeviceConfig.DeviceSerialNumber);
@@ -128,7 +128,7 @@ public class SdCardFileParserTests
 
         // Assert — config should be extracted from scanning
         Assert.NotNull(session.DeviceConfig);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
 
         // Timestamps should be properly reconstructed (not all the same)
         var samples = await ToListAsync(session.Samples);
@@ -163,7 +163,7 @@ public class SdCardFileParserTests
         // Assert — first message should still be treated as a stream sample
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(2, session.DeviceConfig.AnalogPortCount);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
 
         var samples = await ToListAsync(session.Samples);
         Assert.Equal(2, samples.Count);
@@ -201,7 +201,7 @@ public class SdCardFileParserTests
 
         // Assert — config merges fields from all messages
         Assert.NotNull(session.DeviceConfig);
-        Assert.Equal(80_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(80_000_000u, session.DeviceConfig.TimestampFrequencyHz);
         Assert.Equal("123456789", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("3.2.0", session.DeviceConfig.FirmwareVersion);
@@ -236,7 +236,7 @@ public class SdCardFileParserTests
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -293,7 +293,7 @@ public class SdCardFileParserTests
 
         var options = new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 50_000_000, // 50 MHz fallback
+            FallbackTimestampFrequencyHz = 50_000_000, // 50 MHz fallback
             SessionStartTime = new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)
         };
 
@@ -333,7 +333,7 @@ public class SdCardFileParserTests
 
         var options = new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 1_000_000, // Different frequency — should be ignored
+            FallbackTimestampFrequencyHz = 1_000_000, // Different frequency — should be ignored
             SessionStartTime = new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)
         };
 
@@ -1017,7 +1017,7 @@ public class SdCardFileParserTests
                 analogFloatValues: new[] { 2.0f }));
 
         using var stream = builder.Build();
-        var options = new SdCardParseOptions { FallbackTimestampFrequency = 0 };
+        var options = new SdCardParseOptions { FallbackTimestampFrequencyHz = 0 };
 
         // Act
         var session = await _parser.ParseAsync(stream, "no_freq.bin", options);

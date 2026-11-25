@@ -24,7 +24,7 @@ public class DeviceCapabilitiesTests
         Assert.Equal(0, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(0, capabilities.DigitalChannels);
-        Assert.Equal(1000, capabilities.MaxSamplingRate);
+        Assert.Equal(1000, capabilities.MaximumSampleRateHz);
     }
 
     [Theory]
@@ -55,7 +55,7 @@ public class DeviceCapabilitiesTests
         Assert.Equal(16, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class DeviceCapabilitiesTests
         Assert.Equal(8, capabilities.AnalogInputChannels);
         Assert.Equal(8, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(16000, capabilities.MaxSamplingRate);
+        Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class DeviceCapabilitiesTests
         Assert.Equal(0, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(0, capabilities.DigitalChannels);
-        Assert.Equal(16000, capabilities.MaxSamplingRate);
+        Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -99,6 +99,6 @@ public class DeviceCapabilitiesTests
         Assert.Equal(0, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(0, capabilities.DigitalChannels);
-        Assert.Equal(1000, capabilities.MaxSamplingRate);
+        Assert.Equal(1000, capabilities.MaximumSampleRateHz);
     }
 }

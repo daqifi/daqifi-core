@@ -117,7 +117,7 @@ public class CapabilityDocumentParserTests
         Assert.Equal(500, streaming.ConservativeEnvelopeHz);
         // Captured with no channels enabled: the firmware reports 0, and 0 is a real answer that
         // must survive parsing rather than collapse to "not stated".
-        Assert.Equal(0, streaming.CurrentMaximumRateHz);
+        Assert.Equal(0, streaming.CurrentMaximumSampleRateHz);
         Assert.Equal("error", streaming.RateValidation);
         Assert.Equal(new[] { "pb", "csv", "json" }, streaming.Encodings);
         Assert.Equal(new[] { "usb", "wifi", "sd" }, streaming.Transports);

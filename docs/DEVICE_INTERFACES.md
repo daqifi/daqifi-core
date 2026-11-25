@@ -516,7 +516,7 @@ protection beyond both sides opting in to `PreserveActiveStream`.
 
 The stopped stream keeps its rate: the device stores the last rate it was started at, and a stop
 does not revert it. On firmware **3.9.0 and newer**, initialization reads that stored rate
-(`SYSTem:STReam:START?`) and `StreamingFrequency` reports it — so a device another client, an SD
+(`SYSTem:STReam:START?`) and `SampleRateHz` reports it — so a device another client, an SD
 log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming()` without setting a
 rate keeps it there.
 
@@ -526,9 +526,9 @@ at is adopted — the capability document read in the same exchange says whether
 configured since power-up (`streaming.timing.actual_rate_millihz` is 0 until one has).
 
 This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
-through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect
+through `SampleRateHz`, or used to start a stream, typed or raw — it stands, and a reconnect
 resumes at it whatever the device reports when it comes back. On firmware below 3.9.0 the device
-cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
+cannot be asked, so `SampleRateHz` starts at 100 Hz until you set it.
 
 A stored rate was accepted for the stream that set it, which is often a USB one, and an SD log can
 have a lower ceiling: on an NQ1, one channel with onboard diagnostics off logs protobuf to the card
@@ -1003,7 +1003,7 @@ ai0.SampleReceived += (sender, e) =>
 };
 
 device.EnableChannel(ai0);
-device.StreamingFrequency = 100; // Hz
+device.SampleRateHz = 100; // Hz
 device.StartStreaming();
 
 await Task.Delay(TimeSpan.FromSeconds(10));
@@ -1064,7 +1064,7 @@ the decoded `IDataSample` with the `IChannel` that produced it.
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 device.EnableChannels(device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Analog));
-device.StreamingFrequency = 100; // Hz
+device.SampleRateHz = 100; // Hz
 device.StartStreaming();
 
 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));

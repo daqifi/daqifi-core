@@ -130,7 +130,7 @@ public class DeviceReconnectTests
         var digital0 = device.Channels.Single(c => c.Type == ChannelType.Digital && c.ChannelNumber == 0);
         device.EnableChannels(new[] { analog1, analog3, digital0 });
 
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
         device.StartStreaming();
 
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
@@ -187,7 +187,7 @@ public class DeviceReconnectTests
 
         // Core's view tracks the commands regardless of which API sent them.
         Assert.True(device.IsStreaming);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
         Assert.True(device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0).IsEnabled);
 
         var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
@@ -219,7 +219,7 @@ public class DeviceReconnectTests
 
         var analog0 = device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
         device.EnableChannels(new[] { analog0 });
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
         device.StartStreaming();
 
         device.StoredRateReportedOnInitialize = 1000;
@@ -230,7 +230,7 @@ public class DeviceReconnectTests
         var result = await reconnected;
 
         Assert.True(result.StreamingResumed);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
         Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
         Assert.DoesNotContain("SYSTem:StartStreamData 1000", device.SentCommands);
     }
@@ -257,7 +257,7 @@ public class DeviceReconnectTests
         var result = await reconnected;
 
         Assert.True(result.StreamingResumed);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
         Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
     }
 
@@ -274,7 +274,7 @@ public class DeviceReconnectTests
 
         var analog0 = device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
         device.EnableChannels(new[] { analog0 });
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
         device.StartStreaming();
 
         device.StoredRateReportedOnInitialize = 1;
@@ -286,7 +286,7 @@ public class DeviceReconnectTests
         var result = await reconnected;
 
         Assert.True(result.StreamingResumed);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
         Assert.Contains("SYSTem:StartStreamData 250", device.SentCommands);
     }
 
@@ -302,7 +302,7 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
 
-        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Equal(500, device.SampleRateHz);
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public class DeviceReconnectTests
         device.Send(ScpiMessageProducer.StartStreaming(400));
 
         Assert.True(device.IsStreaming);
-        Assert.Equal(400, device.StreamingFrequency);
+        Assert.Equal(400, device.SampleRateHz);
 
         // Not a new session: the running tally is left alone.
         Assert.Equal(1, device.DecodeFailureCount);
@@ -435,7 +435,7 @@ public class DeviceReconnectTests
     [Fact]
     public async Task TrackingARate_NeverThrowsOutOfSend_WhileCapabilitiesChangeUnderneath()
     {
-        // MaxSamplingRate is a mutable public property, and a status message can update it at any
+        // MaximumSampleRateHz is a mutable public property, and a status message can update it at any
         // moment on the consumer thread. Validating a rate against one read and then assigning it
         // through the public setter — which reads it again and throws on a value it dislikes —
         // leaves a window where tracking turns a command that has ALREADY reached the device into
@@ -456,11 +456,11 @@ public class DeviceReconnectTests
             {
                 device.UpdateMetadata(metadata => metadata with
                 {
-                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 1000 }
+                    Capabilities = metadata.Capabilities with { MaximumSampleRateHz = 1000 }
                 });
                 device.UpdateMetadata(metadata => metadata with
                 {
-                    Capabilities = metadata.Capabilities with { MaxSamplingRate = 1 }
+                    Capabilities = metadata.Capabilities with { MaximumSampleRateHz = 1 }
                 });
             }
         });
@@ -492,7 +492,7 @@ public class DeviceReconnectTests
     public void AStartStreamingCommandWithAnUnusableRate_DoesNotMarkTheDeviceStreaming(string command)
     {
         // The bench proved the happy path; a valid rate never reaches this branch. Marking the
-        // device as streaming here would leave StreamingFrequency holding a rate from some earlier
+        // device as streaming here would leave SampleRateHz holding a rate from some earlier
         // session, and a reconnect would then restore that rate — resuming at a number nobody asked
         // for, which is precisely the silent-wrong-data mode this feature exists to prevent.
         using var transport = new ScriptedReconnectTransport();
@@ -500,12 +500,12 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
 
-        var frequencyBefore = device.StreamingFrequency;
+        var frequencyBefore = device.SampleRateHz;
 
         device.Send(new ScpiMessage(command));
 
         Assert.False(device.IsStreaming);
-        Assert.Equal(frequencyBefore, device.StreamingFrequency);
+        Assert.Equal(frequencyBefore, device.SampleRateHz);
     }
 
     [Fact]
@@ -520,12 +520,12 @@ public class DeviceReconnectTests
 
         device.Send(ScpiMessageProducer.StartStreaming(250));
         Assert.True(device.IsStreaming);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
 
         device.Send(new ScpiMessage("SYSTem:StartStreamData wat"));
 
         Assert.True(device.IsStreaming);
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
     }
 
     [Fact]
@@ -541,7 +541,7 @@ public class DeviceReconnectTests
         device.Send(new ScpiMessage("SYSTem:StartStreamData not-a-rate"));
         device.ClearSentCommands();
 
-        device.StreamingFrequency = 200;
+        device.SampleRateHz = 200;
         device.StartStreaming();
 
         Assert.True(device.IsStreaming);
@@ -552,7 +552,7 @@ public class DeviceReconnectTests
     public async Task AnUnusableStartCommand_LeavesNothingForAReconnectToResume()
     {
         // The end-to-end consequence: no session was established, so a reconnect must not invent
-        // one at whatever rate happened to be left in StreamingFrequency.
+        // one at whatever rate happened to be left in SampleRateHz.
         using var transport = new ScriptedReconnectTransport();
         using var device = new ScriptedStreamingDevice("Nothing To Resume Device", transport);
         device.ReconnectOptions = FastPolicy();
@@ -1658,7 +1658,7 @@ public class DeviceReconnectTests
         };
 
         ConnectAndInitialize(device);
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
         device.StartStreaming();
 
         device.Disconnect();
@@ -1683,7 +1683,7 @@ public class DeviceReconnectTests
 
         ConnectAndInitialize(device);
         device.EnableChannels(new[] { device.Channels.First(c => c.Type == ChannelType.Analog) });
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
         device.StartStreaming();
 
         // What a consumer sees at Lost: the session has ended by then. The snapshot the reconnect

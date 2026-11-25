@@ -54,7 +54,7 @@ public sealed record DeviceCapabilities
     /// <summary>
     /// Gets the maximum sampling rate in Hz.
     /// </summary>
-    public int MaxSamplingRate { get; init; } = 1000;
+    public int MaximumSampleRateHz { get; init; } = 1000;
 
     /// <summary>
     /// Creates the capabilities a board is known to have, before the device has described itself.
@@ -93,7 +93,7 @@ public sealed record DeviceCapabilities
                 AnalogInputChannels = 16,
                 AnalogOutputChannels = 0,
                 DigitalChannels = 16,
-                MaxSamplingRate = 22000
+                MaximumSampleRateHz = 22000
             },
             DeviceType.Nyquist2 => new DeviceCapabilities
             {
@@ -102,7 +102,7 @@ public sealed record DeviceCapabilities
                 HasWifi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                MaxSamplingRate = 16000
+                MaximumSampleRateHz = 16000
             },
             DeviceType.Nyquist3 => new DeviceCapabilities
             {
@@ -114,7 +114,7 @@ public sealed record DeviceCapabilities
                 AnalogInputChannels = 8,
                 AnalogOutputChannels = 8,
                 DigitalChannels = 16,
-                MaxSamplingRate = 16000
+                MaximumSampleRateHz = 16000
             },
             _ => new DeviceCapabilities()
         };

@@ -45,7 +45,7 @@ public class SdCardAnalogScalingTests
         {
             AnalogPortCount = 3,
             DigitalPortCount = 0,
-            TimestampFrequency = 0u,
+            TimestampFrequencyHz = 0u,
             DeviceSerialNumber = null,
             DevicePartNumber = null,
             FirmwareVersion = null,

@@ -539,7 +539,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Used as the fallback frequency for SD card log file parsing when no
     /// per-message timestamp frequency is available.
     /// </summary>
-    public uint TimestampFrequency { get; private set; }
+    public uint TimestampFrequencyHz { get; private set; }
 
     /// <summary>
     /// Gets where the device is in its life.
@@ -3141,12 +3141,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// bootstrap and the fallback for every field the document does not state
     /// (<see cref="CapabilityDocument.OverlayOnto"/>). <see cref="InitializeAsync"/> calls this
     /// once, after the device reports its board and firmware version. Call it again whenever a
-    /// fresh <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed — that figure is
+    /// fresh <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> is needed — that figure is
     /// computed from the channel set enabled at the moment of the read, so it goes stale as
     /// soon as the enabled set changes.
     /// </para>
     /// <para>
-    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.StoredStreamingRateQuery"/>) the
+    /// On firmware v3.9.0 and newer (<see cref="DeviceFeature.StoredSampleRateQuery"/>) the
     /// same exchange also asks <c>SYSTem:STReam:START?</c>, the rate the device has stored, so
     /// that a <see cref="DaqifiStreamingDevice"/> reports the device's rate rather than its own
     /// default until a rate is chosen (#960). It rides here because a separate exchange would
@@ -3177,7 +3177,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
-        var readStoredStreamingRate = Supports(DeviceFeature.StoredStreamingRateQuery);
+        var readStoredStreamingRate = Supports(DeviceFeature.StoredSampleRateQuery);
 
         // Both queries go out in one text exchange. Each exchange costs far more than either
         // reply does — its settle window and completion window alone are hundreds of
@@ -3198,7 +3198,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 if (readStoredStreamingRate)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(CapabilityQuerySpacingMs), _timeProvider, token).ConfigureAwait(false);
-                    Send(ScpiMessageProducer.GetStoredStreamingRate);
+                    Send(ScpiMessageProducer.GetStoredSampleRate);
                 }
             },
             responseTimeout: CapabilityDocumentResponseTimeout,
@@ -3273,7 +3273,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return CapabilityDocumentParser.TryParseLines(lines, out var document)
-            ? document.Streaming?.CurrentMaximumRateHz
+            ? document.Streaming?.CurrentMaximumSampleRateHz
             : null;
     }
 
@@ -4956,7 +4956,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // Update timestamp frequency if present
         if (message.TimestampFreq != 0)
         {
-            TimestampFrequency = message.TimestampFreq;
+            TimestampFrequencyHz = message.TimestampFreq;
         }
 
         int analogCount;

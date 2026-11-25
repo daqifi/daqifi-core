@@ -772,7 +772,7 @@ public class WifiChipInfoProviderExtensionsTests
         public DeviceMetadata Metadata { get; } = new();
         public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
         public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
-        public int StreamingFrequency { get; set; }
+        public int SampleRateHz { get; set; }
         public bool IsStreaming { get; private set; }
 
         public event EventHandler<DeviceStateChangedEventArgs>? StateChanged

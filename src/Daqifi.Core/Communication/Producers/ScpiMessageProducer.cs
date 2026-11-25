@@ -470,10 +470,10 @@ public static class ScpiMessageProducer
     /// without one. That is the last rate a start set — a stop deliberately does not revert it —
     /// or the 1 Hz boot default before any start. It says nothing about whether a stream is
     /// running.
-    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.StoredStreamingRateQuery"/>).
+    /// Requires firmware v3.9.0 or newer (<see cref="Device.DeviceFeature.StoredSampleRateQuery"/>).
     /// Command: SYSTem:STReam:START?
     /// </remarks>
-    public static IOutboundMessage<string> GetStoredStreamingRate { get; } = new ScpiMessage("SYSTem:STReam:START?");
+    public static IOutboundMessage<string> GetStoredSampleRate { get; } = new ScpiMessage("SYSTem:STReam:START?");
 
     /// <summary>
     /// The wire command <see cref="StartStreaming"/> emits, without its frequency argument. Exposed so
@@ -508,20 +508,20 @@ public static class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to start data streaming at the specified frequency.
     /// </summary>
-    /// <param name="frequency">The streaming frequency in Hz.</param>
+    /// <param name="sampleRateHz">The streaming frequency in Hz.</param>
     /// <remarks>
     /// Starts streaming data from enabled channels at the specified frequency. The usable range is
     /// board- and configuration-dependent, not a fixed literal: the device's absolute ceiling is
-    /// <see cref="Device.DeviceCapabilities.MaxSamplingRate"/>, and the cap for the channel set
+    /// <see cref="Device.DeviceCapabilities.MaximumSampleRateHz"/>, and the cap for the channel set
     /// currently enabled is
-    /// <see cref="Device.Capabilities.CapabilityStreaming.CurrentMaximumRateHz"/>. Firmware
+    /// <see cref="Device.Capabilities.CapabilityStreaming.CurrentMaximumSampleRateHz"/>. Firmware
     /// rejects a frequency above that cap with SCPI <c>-222</c> and does not start streaming — it
     /// does not clamp — so pre-validate or handle the error.
     /// Command: SYSTem:StartStreamData frequency
     /// </remarks>
-    public static IOutboundMessage<string> StartStreaming(int frequency)
+    public static IOutboundMessage<string> StartStreaming(int sampleRateHz)
     {
-        return new ScpiMessage($"{StartStreamingCommand} {frequency}");
+        return new ScpiMessage($"{StartStreamingCommand} {sampleRateHz}");
     }
 
     /// <summary>

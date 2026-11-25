@@ -40,7 +40,7 @@ public class CapabilityDocumentMergeTests
         Assert.Equal(boardDerived.AnalogInputChannels, merged.AnalogInputChannels);
         Assert.Equal(boardDerived.AnalogOutputChannels, merged.AnalogOutputChannels);
         Assert.Equal(boardDerived.DigitalChannels, merged.DigitalChannels);
-        Assert.Equal(boardDerived.MaxSamplingRate, merged.MaxSamplingRate);
+        Assert.Equal(boardDerived.MaximumSampleRateHz, merged.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class CapabilityDocumentMergeTests
         Assert.Equal(16, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class CapabilityDocumentMergeTests
         Assert.Equal(8, capabilities.AnalogInputChannels);
         Assert.Equal(2, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(16000, capabilities.MaxSamplingRate);
+        Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class CapabilityDocumentMergeTests
         Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasUsb);
         Assert.Equal(16, capabilities.AnalogInputChannels);
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class CapabilityDocumentMergeTests
         var capabilities = Parse("{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":0}}}")
             .OverlayOnto(board);
 
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]

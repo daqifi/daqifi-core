@@ -139,11 +139,11 @@ internal sealed class SdCardJsonFileParser
         var config = SdCardConfigurationMerge.Merge(header.Config, options.ConfigurationOverride);
 
         var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
-            header.Config.TimestampFrequency,
-            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
-            options.FallbackTimestampFrequency);
+            header.Config.TimestampFrequencyHz,
+            options.ConfigurationOverride?.TimestampFrequencyHz ?? 0u,
+            options.FallbackTimestampFrequencyHz);
 
-        config = config with { TimestampFrequency = timestampFrequency };
+        config = config with { TimestampFrequencyHz = timestampFrequency };
 
         var samples = ParseJsonObjects(
             openLines,
@@ -158,7 +158,7 @@ internal sealed class SdCardJsonFileParser
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
-            TimestampFrequency = timestampFrequency,
+            TimestampFrequencyHz = timestampFrequency,
             TimestampFrequencySource = timestampSource
         };
     }
@@ -231,7 +231,7 @@ internal sealed class SdCardJsonFileParser
         {
             AnalogPortCount = analogChannelCount,
             DigitalPortCount = 0,  // The firmware's log states no digital port count.
-            TimestampFrequency = timestampFrequency,
+            TimestampFrequencyHz = timestampFrequency,
             DeviceSerialNumber = serialNumber,
             DevicePartNumber = deviceName,
             FirmwareVersion = null,
@@ -250,7 +250,7 @@ internal sealed class SdCardJsonFileParser
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var timestampReconstructor =
-            SdCardTimestampReconstructor.ForTimestampFrequency(config.TimestampFrequency);
+            SdCardTimestampReconstructor.ForTimestampFrequency(config.TimestampFrequencyHz);
 
         var samplesProduced = 0;
         var bytesRead = 0L;

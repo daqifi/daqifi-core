@@ -37,7 +37,7 @@ public class SdCardExportValueUnitTests
     {
         AnalogPortCount = 2,
         DigitalPortCount = 1,
-        TimestampFrequency = TickRate,
+        TimestampFrequencyHz = TickRate,
         DeviceSerialNumber = "9090539562006014104",
         DevicePartNumber = "Nyquist 1",
         FirmwareVersion = "3.8.0",
@@ -151,7 +151,7 @@ public class SdCardExportValueUnitTests
 
         Assert.NotNull(options.ConfigurationOverride);
         Assert.Equal(Resolution, options.ConfigurationOverride.Resolution);
-        Assert.Equal(TickRate, options.ConfigurationOverride.TimestampFrequency);
+        Assert.Equal(TickRate, options.ConfigurationOverride.TimestampFrequencyHz);
         Assert.Equal(2, options.ConfigurationOverride.AnalogPortCount);
     }
 

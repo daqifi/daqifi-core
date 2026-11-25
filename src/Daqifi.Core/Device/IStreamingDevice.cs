@@ -56,7 +56,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Best-effort: a device that does not support the document
     /// (<see cref="DeviceFeature.CapabilityDocument"/>), does not answer, or answers with one that
     /// cannot be trusted keeps the capabilities it already had. Read it again when a fresh
-    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed: the device computes that
+    /// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> is needed: the device computes that
     /// from the channels enabled at the moment of the read. This runs a text-mode exchange, so do
     /// not call it while streaming.
     /// </remarks>
@@ -98,12 +98,12 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <summary>
     /// Gets or sets the streaming frequency in Hz.
     /// </summary>
-    int StreamingFrequency { get; set; }
+    int SampleRateHz { get; set; }
 
     /// <summary>
     /// Gets the highest streaming frequency in Hz this device can actually sustain with the
     /// channels it has enabled right now — which is lower, usually far lower, than the absolute
-    /// ceiling <see cref="StreamingFrequency"/> validates against.
+    /// ceiling <see cref="SampleRateHz"/> validates against.
     /// </summary>
     /// <remarks>
     /// Zero is a real answer: it means no analog input is enabled, so there is no sampling
@@ -114,7 +114,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// whatever is enabled; see <see cref="SampleRateCap"/> for that case, for where the figure
     /// comes from, and for how fresh it is.
     /// </remarks>
-    int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+    int CurrentMaximumSampleRateHz => SampleRateCap.ComputeForDevice(this);
 
     /// <summary>
     /// Gets a value indicating whether the device is currently streaming data.
@@ -123,13 +123,13 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
 
     /// <summary>
     /// Starts streaming data from the device, at no more than
-    /// <see cref="MaximumStreamingFrequencyHz"/>.
+    /// <see cref="CurrentMaximumSampleRateHz"/>.
     /// </summary>
     /// <remarks>
     /// A rate above what the enabled channels sustain is lowered to the cap rather than sent.
     /// The device would otherwise answer the start with SCPI <c>-222</c> and stream nothing,
     /// which a caller cannot tell apart from a quiet signal (issue #899). Read
-    /// <see cref="StreamingFrequency"/> afterwards for the rate the stream is running at.
+    /// <see cref="SampleRateHz"/> afterwards for the rate the stream is running at.
     /// </remarks>
     void StartStreaming();
 

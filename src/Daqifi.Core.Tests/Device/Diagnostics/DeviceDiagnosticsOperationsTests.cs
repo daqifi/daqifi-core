@@ -451,7 +451,7 @@ public class DeviceDiagnosticsOperationsTests
         public bool IsConnected { get; set; } = true;
         public bool IsStreaming { get; set; }
         public bool SendStreamStop() => throw new NotSupportedException();
-        public int StreamingFrequency { get; set; } = 100;
+        public int SampleRateHz { get; set; } = 100;
         public long ChannelStateVersion { get; set; }
 
         public void EnqueueResponse(params string[] lines) => _responses.Enqueue(lines);

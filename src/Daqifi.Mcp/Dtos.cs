@@ -96,7 +96,7 @@ public sealed record DeviceStatus(
             .OrderBy(n => n)
             .ToList();
         return new DeviceStatus(
-            id, device.Name, device.State.ToWire(), device.IsStreaming, sd.IsLoggingToSdCard, device.StreamingFrequency,
+            id, device.Name, device.State.ToWire(), device.IsStreaming, sd.IsLoggingToSdCard, device.SampleRateHz,
             enabledAnalog, enabledDigital);
     }
 }

@@ -157,7 +157,7 @@ public sealed record DeviceMetadata
         // yet known", not "a different board": before the first status message there is no
         // previous board at all, and an unrecognized part number says nothing about the device
         // having been swapped. In both directions the document was still read from this device,
-        // and discarding it would regress capabilities — notably MaxSamplingRate back to the stale
+        // and discarding it would regress capabilities — notably MaximumSampleRateHz back to the stale
         // board-table ceiling — for no gain.
         var boardWasSwapped =
             board != DeviceType && board != DeviceType.Unknown && DeviceType != DeviceType.Unknown;

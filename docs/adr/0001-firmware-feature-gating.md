@@ -60,7 +60,7 @@ v3.7.3 and includes its fixes). SD file transfer over WiFi
 | WiFi throughput finder | `SYSTem:STReam:WIFI:FINd?` | v3.5.0 | WiFi | #521 |
 | In-firmware iperf2 | `SYSTem:WIFI:IPERF:*` | v3.5.0 | WiFi | #377 |
 | **SD file transfer over WiFi** (list/get/delete routed to the requesting interface) | `SYSTem:STORage:SD:LIST?` / `:GET` / `:DELete` over TCP | **v3.7.0** | **WiFi + SD HW** | [#598/#599](https://github.com/daqifi/daqifi-nyquist-firmware/pull/598) |
-| **Stored streaming rate readback** (seeds `StreamingFrequency` on connect) | `SYSTem:STReam:START?` | **v3.9.0** | all | [#1007](https://github.com/daqifi/daqifi-nyquist-firmware/issues/1007)/#1014 |
+| **Stored streaming rate readback** (seeds `SampleRateHz` on connect) | `SYSTem:STReam:START?` | **v3.9.0** | all | [#1007](https://github.com/daqifi/daqifi-nyquist-firmware/issues/1007)/#1014 |
 
 > **Read this table through the v3.5.0 floor (Decision 1).** Every command daqifi-core issues
 > over USB first shipped **at or before v3.5.0**, so over USB on *supported* firmware the only
@@ -319,7 +319,7 @@ turns the reply into a
 
 Bench-validated against the NQ1 on firmware 3.7.2: the document agrees with `FromDeviceType` on
 every flag it states (SD, WiFi, USB) and supplies the channel counts (16 analog in, 0 analog out,
-16 digital). The single disagreement is `MaxSamplingRate` — the table's hardcoded `1000` against
+16 digital). The single disagreement is `MaximumSampleRateHz` — the table's hardcoded `1000` against
 the device's `22000` — and it is the disagreement this reader exists to resolve: that literal
 predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528).
 

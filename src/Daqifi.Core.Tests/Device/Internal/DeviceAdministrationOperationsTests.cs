@@ -681,7 +681,7 @@ public class DeviceAdministrationOperationsTests
         // Outside this block's remit — reaching for any of these is a regression, not a refinement.
         public bool IsStreaming => throw new NotSupportedException();
         public bool SendStreamStop() => throw new NotSupportedException();
-        public int StreamingFrequency => throw new NotSupportedException();
+        public int SampleRateHz => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();

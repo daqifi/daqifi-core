@@ -10,8 +10,8 @@ namespace Daqifi.Core.Device.Capabilities;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="DeviceCapabilities.MaxSamplingRate"/> — the bound
-/// <see cref="IStreamingDevice.StreamingFrequency"/> validates against — is the board's absolute
+/// <see cref="DeviceCapabilities.MaximumSampleRateHz"/> — the bound
+/// <see cref="IStreamingDevice.SampleRateHz"/> validates against — is the board's absolute
 /// sampling-ISR ceiling, reachable only with almost nothing enabled. The rate a given channel
 /// selection can actually sustain is lower, and moves every time the selection changes. Asking for
 /// more than that is not a soft failure: since firmware v3.5.0 the device answers a start request
@@ -25,7 +25,7 @@ namespace Daqifi.Core.Device.Capabilities;
 /// application and every other library consumer without it (#481).
 /// </para>
 /// <para>
-/// <b>Freshness.</b> The device's own answer (<see cref="CapabilityStreaming.CurrentMaximumRateHz"/>)
+/// <b>Freshness.</b> The device's own answer (<see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/>)
 /// describes the set that was enabled when the capability document was read, so a caller that
 /// changes the enabled set should re-read it — <see cref="DaqifiDevice.ReadCapabilityDocumentAsync"/>
 /// — before trusting the cap again. When the device stated no cap at all, the published rate model
@@ -39,13 +39,13 @@ public static class SampleRateCap
     /// Combines the three rate sources into the effective ceiling in Hz.
     /// </summary>
     /// <param name="hardwareMaximumRateHz">
-    /// The board's absolute sampling-ISR ceiling (<see cref="DeviceCapabilities.MaxSamplingRate"/>).
+    /// The board's absolute sampling-ISR ceiling (<see cref="DeviceCapabilities.MaximumSampleRateHz"/>).
     /// Non-positive values are floored to 1: it is a mutable, unvalidated property, and an
     /// uninitialized 0 would otherwise produce an impossible "at most 0 Hz" that rejects every rate.
     /// </param>
     /// <param name="deviceReportedCapHz">
     /// The device's own cap for the channels enabled when the capability document was read
-    /// (<see cref="CapabilityStreaming.CurrentMaximumRateHz"/>), or <c>null</c> when no document has
+    /// (<see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/>), or <c>null</c> when no document has
     /// been read. Authoritative when present, and bounded to
     /// <paramref name="hardwareMaximumRateHz"/> — the two come from independently-parsed fields, so
     /// a stale or racing read could otherwise claim a cap above the absolute ceiling. <c>0</c> is a
@@ -90,7 +90,7 @@ public static class SampleRateCap
     /// </para>
     /// <para>
     /// A device that has stated neither — no capability document, or one carrying no
-    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> and no
+    /// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> and no
     /// <see cref="CapabilityStreaming.RateModel"/> — has said nothing about how its channel set
     /// affects the rate, so it reports the board ceiling whatever is enabled, exactly as it did
     /// before this cap existed. Reporting <c>0</c> for those devices would newly refuse rates they
@@ -111,7 +111,7 @@ public static class SampleRateCap
 
         var metadata = device.Metadata;
         var streaming = metadata.CapabilityDocument?.Streaming;
-        var deviceReportedCapHz = streaming?.CurrentMaximumRateHz;
+        var deviceReportedCapHz = streaming?.CurrentMaximumSampleRateHz;
 
         int? modelCapHz = null;
 
@@ -138,13 +138,13 @@ public static class SampleRateCap
                 // enabled" check downstream reads it as a live configuration.
                 modelCapHz = 0;
             }
-            else if (model.TryComputeMaximumRateHz(simultaneousCount, totalCount, out var predictedHz))
+            else if (model.TryComputeMaximumSampleRateHz(simultaneousCount, totalCount, out var predictedHz))
             {
                 modelCapHz = predictedHz;
             }
         }
 
-        return Compute(metadata.Capabilities.MaxSamplingRate, deviceReportedCapHz, modelCapHz);
+        return Compute(metadata.Capabilities.MaximumSampleRateHz, deviceReportedCapHz, modelCapHz);
     }
 
     /// <summary>
@@ -171,7 +171,7 @@ public static class SampleRateCap
     /// <summary>
     /// Counts the enabled analog <i>input</i> channels, and how many of those the capability
     /// document marks as dedicated-converter ("simultaneous") channels — the two figures
-    /// <see cref="CapabilityRateModel.TryComputeMaximumRateHz"/> takes.
+    /// <see cref="CapabilityRateModel.TryComputeMaximumSampleRateHz"/> takes.
     /// </summary>
     /// <remarks>
     /// Digital I/O is excluded because its cost is amortized into the model's per-tick overhead, and

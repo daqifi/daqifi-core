@@ -79,7 +79,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
         { () => ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
         { () => ScpiMessageProducer.SetCsvStreamFormat, "SYSTem:STReam:FORmat 2" },
-        { () => ScpiMessageProducer.GetStoredStreamingRate, "SYSTem:STReam:START?" },
+        { () => ScpiMessageProducer.GetStoredSampleRate, "SYSTem:STReam:START?" },
         { () => ScpiMessageProducer.GetStreamFormat, "SYSTem:STReam:FORmat?" },
         { () => ScpiMessageProducer.GetStreamInterface, "SYSTem:STReam:INTerface?" },
 

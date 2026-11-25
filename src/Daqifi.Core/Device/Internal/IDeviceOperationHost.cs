@@ -52,8 +52,8 @@ internal interface IDeviceOperationHost
     /// <returns><see cref="IsStreaming"/> as it stood immediately before the stop.</returns>
     bool SendStreamStop();
 
-    /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
-    int StreamingFrequency { get; }
+    /// <inheritdoc cref="DaqifiStreamingDevice.SampleRateHz"/>
+    int SampleRateHz { get; }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StopStreaming"/>
     void StopStreaming();

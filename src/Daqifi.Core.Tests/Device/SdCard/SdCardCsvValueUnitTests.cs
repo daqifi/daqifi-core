@@ -367,7 +367,7 @@ public sealed class SdCardCsvValueUnitTests
         {
             AnalogPortCount = channelCount,
             DigitalPortCount = 0,
-            TimestampFrequency = TickRate,
+            TimestampFrequencyHz = TickRate,
             DeviceSerialNumber = "7E2815916200E898",
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = "3.8.0",

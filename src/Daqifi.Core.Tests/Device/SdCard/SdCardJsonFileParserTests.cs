@@ -22,7 +22,7 @@ public sealed class SdCardJsonFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             SessionStartTime = new DateTime(2024, 1, 1, 12, 0, 0, DateTimeKind.Utc),
-            FallbackTimestampFrequency = 100  // 100 Hz for easy math
+            FallbackTimestampFrequencyHz = 100  // 100 Hz for easy math
         };
 
         // Act
@@ -60,7 +60,7 @@ public sealed class SdCardJsonFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act
@@ -84,7 +84,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -104,7 +104,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -130,7 +130,7 @@ public sealed class SdCardJsonFileParserTests
         stream.Position = 0;
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -153,7 +153,7 @@ public sealed class SdCardJsonFileParserTests
             "{\"ts\":200,\"analog\":[2.0]}");
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         var session = await parser.ParseAsync(stream, "test.json", options);
         var samples = await ToListAsync(session.Samples);
@@ -174,7 +174,7 @@ public sealed class SdCardJsonFileParserTests
             "{\"ts\":300,\"analog\":[3.0],\"digital\":\"\"}");
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         var session = await parser.ParseAsync(stream, "test.json", options);
         var samples = await ToListAsync(session.Samples);
@@ -194,7 +194,7 @@ public sealed class SdCardJsonFileParserTests
             "{\"ts\":300,\"analog\":[3.0],\"digital\":\"\"}");
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         var session = await parser.ParseAsync(stream, "test.json", options);
         var samples = await ToListAsync(session.Samples);
@@ -227,7 +227,7 @@ public sealed class SdCardJsonFileParserTests
     {
         // Arrange — JSON has no metadata headers, so override fills in device info gaps.
         // JSON lines carry no frequency of their own, so the connected device's frequency is
-        // the best information available and must beat the FallbackTimestampFrequency guess.
+        // the best information available and must beat the FallbackTimestampFrequencyHz guess.
         await using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
             (100u, new[] { 1.0, 2.0 }, "")
         );
@@ -236,7 +236,7 @@ public sealed class SdCardJsonFileParserTests
         {
             AnalogPortCount = 2,
             DigitalPortCount = 1,
-            TimestampFrequency = 1000,
+            TimestampFrequencyHz = 1000,
             DeviceSerialNumber = "TEST123",
             DevicePartNumber = "NQ1",
             FirmwareVersion = "1.0.0",
@@ -260,8 +260,8 @@ public sealed class SdCardJsonFileParserTests
         Assert.Equal("1.0.0", session.DeviceConfig.FirmwareVersion);
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
         // The device's reported frequency beats the fallback guess, and says so.
-        Assert.Equal(1000u, session.DeviceConfig.TimestampFrequency);
-        Assert.Equal(1000u, session.TimestampFrequency);
+        Assert.Equal(1000u, session.DeviceConfig.TimestampFrequencyHz);
+        Assert.Equal(1000u, session.TimestampFrequencyHz);
         Assert.Equal(
             global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.Device,
             session.TimestampFrequencySource);
@@ -278,7 +278,7 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 50_000_000
+            FallbackTimestampFrequencyHz = 50_000_000
         };
 
         // Act
@@ -287,7 +287,7 @@ public sealed class SdCardJsonFileParserTests
         // Assert
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(3, session.DeviceConfig.AnalogPortCount);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100,
+            FallbackTimestampFrequencyHz = 100,
             Progress = new SynchronousProgress<global::Daqifi.Core.Device.SdCard.SdCardParseProgress>(p =>
             {
                 progressCalls++;
@@ -333,7 +333,7 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act
@@ -358,7 +358,7 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act & Assert — ParseAsync reads all lines upfront and throws when the token is already cancelled.
@@ -378,7 +378,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -405,7 +405,7 @@ public sealed class SdCardJsonFileParserTests
         {
             AnalogPortCount = 3,
             DigitalPortCount = 0,
-            TimestampFrequency = 100u,
+            TimestampFrequencyHz = 100u,
             DeviceSerialNumber = "SN001",
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
@@ -419,7 +419,7 @@ public sealed class SdCardJsonFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            FallbackTimestampFrequency = 100,
+            FallbackTimestampFrequencyHz = 100,
             ConfigurationOverride = overrideConfig
         };
 
@@ -446,7 +446,7 @@ public sealed class SdCardJsonFileParserTests
         {
             AnalogPortCount = 3,
             DigitalPortCount = 0,
-            TimestampFrequency = 100u,
+            TimestampFrequencyHz = 100u,
             DeviceSerialNumber = "SN001",
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
@@ -460,7 +460,7 @@ public sealed class SdCardJsonFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            FallbackTimestampFrequency = 100,
+            FallbackTimestampFrequencyHz = 100,
             ConfigurationOverride = overrideConfig
         };
 
@@ -488,7 +488,7 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -509,7 +509,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 100 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -531,7 +531,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 0 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 0 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
@@ -663,7 +663,7 @@ public sealed class SdCardJsonFileParserTests
 
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal(2, session.DeviceConfig.AnalogPortCount);
-        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -682,19 +682,19 @@ public sealed class SdCardJsonFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 50_000_000
+            FallbackTimestampFrequencyHz = 50_000_000
         };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.json", options);
 
         // Assert
-        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(
             global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.LogFile,
             session.TimestampFrequencySource);
         Assert.NotNull(session.DeviceConfig);
-        Assert.Equal(42_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.DeviceConfig.TimestampFrequencyHz);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal(1, session.DeviceConfig.AnalogPortCount);
@@ -715,7 +715,7 @@ public sealed class SdCardJsonFileParserTests
         {
             AnalogPortCount = 1,
             DigitalPortCount = 0,
-            TimestampFrequency = 50_000_000,
+            TimestampFrequencyHz = 50_000_000,
             DeviceSerialNumber = "OTHER",
             DevicePartNumber = "OTHER",
             FirmwareVersion = "3.8.0",
@@ -730,7 +730,7 @@ public sealed class SdCardJsonFileParserTests
 
         var session = await parser.ParseAsync(stream, "test.json", options);
 
-        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(
             global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.LogFile,
             session.TimestampFrequencySource);
@@ -843,7 +843,7 @@ public sealed class SdCardJsonFileParserTests
         {
             AnalogPortCount = 2,
             DigitalPortCount = 0,
-            TimestampFrequency = 0u,
+            TimestampFrequencyHz = 0u,
             DeviceSerialNumber = null,
             DevicePartNumber = null,
             FirmwareVersion = null,
@@ -881,7 +881,7 @@ public sealed class SdCardJsonFileParserTests
         Assert.Empty(samples);
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(42_000_000u, session.TimestampFrequencyHz);
         Assert.Equal(0, session.DeviceConfig.AnalogPortCount);
     }
 
@@ -905,7 +905,7 @@ public sealed class SdCardJsonFileParserTests
         Assert.Single(samples);
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist {1}", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal(100u, session.TimestampFrequency);
+        Assert.Equal(100u, session.TimestampFrequencyHz);
     }
 
     [Fact]

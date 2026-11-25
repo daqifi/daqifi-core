@@ -162,15 +162,15 @@ public sealed class CapabilityDocument
                 ? CountChannels(CapabilityChannelKind.DigitalIo)
                 : capabilities.DigitalChannels,
 
-            // The absolute ISR ceiling, not the current or conservative rate: MaxSamplingRate is
+            // The absolute ISR ceiling, not the current or conservative rate: MaximumSampleRateHz is
             // the board's upper bound (DaqifiStreamingDevice validates the requested frequency
             // against it), and the other two figures move with the enabled channel set. A client
             // that needs the achievable rate for a specific configuration reads
-            // CurrentMaximumRateHz or evaluates RateModel; the device rejects an over-ask outright,
+            // CurrentMaximumSampleRateHz or evaluates RateModel; the device rejects an over-ask outright,
             // so this bound is a sanity check rather than the authority.
-            MaxSamplingRate = Streaming?.MaximumSampleRateHz is > 0 and var maximumHz
+            MaximumSampleRateHz = Streaming?.MaximumSampleRateHz is > 0 and var maximumHz
                 ? maximumHz
-                : capabilities.MaxSamplingRate
+                : capabilities.MaximumSampleRateHz
         };
     }
 }

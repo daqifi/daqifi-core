@@ -102,12 +102,12 @@ public class DeviceMetadataTests
         metadata = metadata.WithCapabilityDocument(document!);
 
         Assert.Same(document, metadata.CapabilityDocument);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
 
         // A later status message must not revert the device's own value to the board table's.
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
 
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
     }
 
@@ -124,12 +124,12 @@ public class DeviceMetadataTests
             + "\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}",
             out var document));
         metadata = metadata.WithCapabilityDocument(document!);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
 
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Null(metadata.CapabilityDocument);
-        Assert.Equal(16000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(16000, metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
     }
 
@@ -143,7 +143,7 @@ public class DeviceMetadataTests
     {
         // Per ADR 0001, Unknown means "not yet known", not "a different board". The device that
         // answered the capability query is the same one either way, so discarding the overlay
-        // would regress MaxSamplingRate to the stale board-table ceiling for no gain.
+        // would regress MaximumSampleRateHz to the stale board-table ceiling for no gain.
         var metadata = new DeviceMetadata();
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = firstPartNumber });
         Assert.True(CapabilityDocumentParser.TryParse(
@@ -154,7 +154,7 @@ public class DeviceMetadataTests
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = secondPartNumber });
 
         Assert.Same(document, metadata.CapabilityDocument);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Fact]

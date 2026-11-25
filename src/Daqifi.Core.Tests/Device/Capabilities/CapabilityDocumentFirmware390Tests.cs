@@ -33,7 +33,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.Equal(0, terms.SdAdditiveHz);
 
         Assert.Equal(CapabilityRateCapTerm.ScanBound, terms.BindingTerm);
-        Assert.Equal(6924, streaming.CurrentMaximumRateHz);
+        Assert.Equal(6924, streaming.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.Equal(0, terms.ScanBoundHz);
         Assert.Equal(0, terms.SdAdditiveHz);
         Assert.Null(terms.BindingTerm);
-        Assert.Equal(0, streaming.CurrentMaximumRateHz);
+        Assert.Equal(0, streaming.CurrentMaximumSampleRateHz);
 
         Assert.All(
             document.Channels.Where(c => c.Kind == CapabilityChannelKind.AnalogInput),
@@ -217,7 +217,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.NotNull(document.Streaming.Timing);
         Assert.Null(document.Streaming.Timing!.TimestampHz);
         Assert.Null(document.Streaming.Timing.ClockMatchesBuild);
-        Assert.Equal(500, document.Streaming.CurrentMaximumRateHz);
+        Assert.Equal(500, document.Streaming.CurrentMaximumSampleRateHz);
     }
 
     [Fact]

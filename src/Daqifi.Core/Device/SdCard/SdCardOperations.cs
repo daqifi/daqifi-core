@@ -1684,7 +1684,7 @@ internal sealed class SdCardOperations
             // from a faster USB stream would otherwise be refused, and nothing recorded.
             await _host.LowerInheritedStreamingFrequencyAsync(cancellationToken).ConfigureAwait(false);
 
-            _host.StartSdCardLogStream(_host.StreamingFrequency);
+            _host.StartSdCardLogStream(_host.SampleRateHz);
 
             // From the mode this start claimed. Nothing else leaves LogStarting — a stop is refused
             // on it and the cleanup below is this start's own — so this cannot miss.

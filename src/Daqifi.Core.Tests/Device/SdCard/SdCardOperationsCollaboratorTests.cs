@@ -1052,7 +1052,7 @@ public partial class SdCardOperationsCollaboratorTests
     [Fact]
     public async Task StartSdCardLoggingAsync_LeavesTheEnabledChannelsAlone()
     {
-        var host = new FakeHost { StreamingFrequency = 250 };
+        var host = new FakeHost { SampleRateHz = 250 };
         var ops = new SdCardOperations(host);
 
         await ops.StartSdCardLoggingAsync("data.bin");
@@ -1067,7 +1067,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         // #960 review: a rate inherited from a faster USB stream is checked against the SD
         // configuration once, before the start, and the start carries whatever the check left.
-        var host = new FakeHost { StreamingFrequency = 10000, InheritedRateLoweredTo = 7900 };
+        var host = new FakeHost { SampleRateHz = 10000, InheritedRateLoweredTo = 7900 };
         var ops = new SdCardOperations(host);
 
         await ops.StartSdCardLoggingAsync("data.bin");
@@ -2628,7 +2628,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         public bool IsConnected { get; set; } = true;
         public bool IsUsbConnection { get; set; } = true;
-        public int StreamingFrequency { get; set; } = 100;
+        public int SampleRateHz { get; set; } = 100;
 
         private bool _isStreaming;
 
@@ -2662,20 +2662,20 @@ public partial class SdCardOperationsCollaboratorTests
 
         /// <summary>
         /// The rate <see cref="LowerInheritedStreamingFrequencyAsync"/> lowers
-        /// <see cref="StreamingFrequency"/> to, standing in for an inherited rate the device's
+        /// <see cref="SampleRateHz"/> to, standing in for an inherited rate the device's
         /// current cap is below; <c>null</c> leaves the rate alone, as a chosen rate is.
         /// </summary>
         public int? InheritedRateLoweredTo { get; set; }
 
-        /// <summary>The value of <see cref="StreamingFrequency"/> when the rate was checked.</summary>
+        /// <summary>The value of <see cref="SampleRateHz"/> when the rate was checked.</summary>
         public List<int> InheritedRateChecks { get; } = new();
 
         public Task LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken)
         {
-            InheritedRateChecks.Add(StreamingFrequency);
+            InheritedRateChecks.Add(SampleRateHz);
             if (InheritedRateLoweredTo is { } lowered)
             {
-                StreamingFrequency = lowered;
+                SampleRateHz = lowered;
             }
 
             return Task.CompletedTask;
@@ -2987,7 +2987,7 @@ public partial class SdCardOperationsCollaboratorTests
                 throw new InvalidOperationException("Simulated StartStreaming failure.");
             }
 
-            Record("send:SYSTem:StartStreamData " + StreamingFrequency);
+            Record("send:SYSTem:StartStreamData " + SampleRateHz);
             IsStreaming = true;
         }
         public void Disconnect() => throw new NotSupportedException();

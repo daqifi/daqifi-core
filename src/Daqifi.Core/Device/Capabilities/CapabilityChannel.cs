@@ -38,7 +38,7 @@ public sealed class CapabilityChannel
     /// <summary>
     /// Gets a value indicating whether the channel is sampled by a dedicated converter (zero
     /// inter-channel skew) rather than through a shared multiplexer. This is the "Type-1" count
-    /// that feeds <see cref="CapabilityRateModel.TryComputeMaximumRateHz"/>.
+    /// that feeds <see cref="CapabilityRateModel.TryComputeMaximumSampleRateHz"/>.
     /// </summary>
     public bool IsSimultaneous { get; init; }
 

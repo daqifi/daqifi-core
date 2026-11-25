@@ -120,12 +120,12 @@ public enum DeviceFeature
     /// </summary>
     /// <remarks>
     /// Core asks it during the capability read so that
-    /// <see cref="DaqifiStreamingDevice.StreamingFrequency"/> reports the device's rate rather
+    /// <see cref="DaqifiStreamingDevice.SampleRateHz"/> reports the device's rate rather
     /// than Core's own default, for as long as no rate has been chosen on this device object. The
     /// 1 Hz boot placeholder is not adopted. Below v3.9.0 the query is not sent and the default
     /// stands.
     /// </remarks>
-    StoredStreamingRateQuery = 10,
+    StoredSampleRateQuery = 10,
 
     /// <summary>
     /// CRC-protected SD card writes (<c>SYSTem:STORage:SD:PROTect</c>), set and read by

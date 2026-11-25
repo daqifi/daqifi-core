@@ -44,7 +44,7 @@ internal static class SdCardConfigurationMerge
         {
             AnalogPortCount = parsed.AnalogPortCount > 0 ? parsed.AnalogPortCount : overrideConfig.AnalogPortCount,
             DigitalPortCount = parsed.DigitalPortCount > 0 ? parsed.DigitalPortCount : overrideConfig.DigitalPortCount,
-            TimestampFrequency = parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
+            TimestampFrequencyHz = parsed.TimestampFrequencyHz > 0 ? parsed.TimestampFrequencyHz : overrideConfig.TimestampFrequencyHz,
             DeviceSerialNumber = Stated(parsed.DeviceSerialNumber) ?? Stated(overrideConfig.DeviceSerialNumber),
             DevicePartNumber = Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
             FirmwareVersion = Stated(parsed.FirmwareVersion) ?? Stated(overrideConfig.FirmwareVersion),

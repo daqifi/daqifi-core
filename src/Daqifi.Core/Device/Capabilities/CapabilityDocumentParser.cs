@@ -323,7 +323,7 @@ internal static class CapabilityDocumentParser
             MinimumSampleRateHz = minimumRate,
             MaximumSampleRateHz = maximumRate,
             ConservativeEnvelopeHz = ReadInt(streaming, "conservative_envelope_hz"),
-            CurrentMaximumRateHz = ReadInt(streaming, "current_max_rate_hz"),
+            CurrentMaximumSampleRateHz = ReadInt(streaming, "current_max_rate_hz"),
             RateValidation = ReadString(streaming, "rate_validation"),
             CapTerms = ReadCapTerms(streaming),
             Timing = ReadTiming(streaming),

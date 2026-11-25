@@ -48,7 +48,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.Same(document, device.Metadata.CapabilityDocument);
         Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
         Assert.Equal(16, device.Metadata.Capabilities.DigitalChannels);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(new[] { ApiVersionCommand, DocumentCommand }, device.SentCommands);
     }
 
@@ -66,7 +66,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.Null(document);
         Assert.Null(device.Metadata.CapabilityDocument);
         Assert.Empty(device.SentCommands);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
     }
 
@@ -91,7 +91,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Theory]
@@ -106,7 +106,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Theory]
@@ -142,7 +142,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.NotNull(document);
         Assert.Equal(1, document!.SchemaVersion);
-        Assert.Equal(16000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(16000, device.Metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
         Assert.True(device.Metadata.Capabilities.HasSdCard);
     }
 
@@ -185,7 +185,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         await device.ReadCapabilityDocumentAsync();
         device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" }));
 
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
         Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);
     }
 

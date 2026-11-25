@@ -83,7 +83,7 @@ public class DeviceMetadataSnapshotTests
                 Assert.Equal(expected, metadata.FirmwareVersion);
                 Assert.Equal(expected, metadata.Ssid);
                 Assert.Equal(int.Parse(expected), metadata.Capabilities.AnalogInputChannels);
-                Assert.Equal(expected == "1" ? 22000 : 16000, metadata.Capabilities.MaxSamplingRate);
+                Assert.Equal(expected == "1" ? 22000 : 16000, metadata.Capabilities.MaximumSampleRateHz);
                 Assert.Equal(int.Parse(expected), metadata.Health.BatteryPercent);
             }
         }

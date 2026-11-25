@@ -178,7 +178,7 @@ public class DaqifiStreamingDeviceConfirmationTests
     public async Task Start_RunningStreamStillDelivering_IsConfirmedByItsNextFrame()
     {
         var device = ConnectedDevice();
-        device.StreamingFrequency = 10;
+        device.SampleRateHz = 10;
         device.SendFrameOnStart = true;
         await device.StartStreamingAsync();
 
@@ -297,7 +297,7 @@ public class DaqifiStreamingDeviceConfirmationTests
     public async Task Start_ReplacedWhileWaitingForAFrame_IsNotConfirmedByTheReplacementsFrames()
     {
         var device = ConnectedDevice();
-        device.StreamingFrequency = 10;
+        device.SampleRateHz = 10;
         var start = device.StartStreamingAsync();
 
         device.StopStreaming();
@@ -354,13 +354,13 @@ public class DaqifiStreamingDeviceConfirmationTests
         device.StartStreaming();
         device.UpdateMetadata(metadata => metadata with
         {
-            Capabilities = metadata.Capabilities with { MaxSamplingRate = 10 }
+            Capabilities = metadata.Capabilities with { MaximumSampleRateHz = 10 }
         });
         reader.Release();
         await loser;
 
         Assert.Equal(["SYSTem:StartStreamData 1000"], device.Sent);
-        Assert.Equal(1000, device.StreamingFrequency);
+        Assert.Equal(1000, device.SampleRateHz);
     }
 
     [Fact]
@@ -553,7 +553,7 @@ public class DaqifiStreamingDeviceConfirmationTests
     public async Task Stop_OvertakenByAnotherCallersStart_LeavesThatStartToBeConfirmed()
     {
         var device = StreamingDevice();
-        device.StreamingFrequency = 1;
+        device.SampleRateHz = 1;
         device.Replies.Enqueue(["1"]);
         Task? start = null;
         device.DuringExchange = () =>
@@ -721,7 +721,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         public ScriptedDevice()
             : base("Scripted")
         {
-            StreamingFrequency = 1000;
+            SampleRateHz = 1000;
         }
 
         public List<string> Sent { get; } = new();

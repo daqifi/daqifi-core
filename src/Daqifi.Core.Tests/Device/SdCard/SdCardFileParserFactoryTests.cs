@@ -125,7 +125,7 @@ public sealed class SdCardFileParserFactoryTests
 
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act
@@ -149,7 +149,7 @@ public sealed class SdCardFileParserFactoryTests
 
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act
@@ -172,7 +172,7 @@ public sealed class SdCardFileParserFactoryTests
 
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act
@@ -200,7 +200,7 @@ public sealed class SdCardFileParserFactoryTests
 
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 100
+            FallbackTimestampFrequencyHz = 100
         };
 
         // Act

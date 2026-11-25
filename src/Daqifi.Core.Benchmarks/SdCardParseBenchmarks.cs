@@ -39,7 +39,7 @@ public class SdCardParseBenchmarks
 
     private const int AnalogChannelCount = 8;
 
-    private const uint TimestampFrequency = 50_000_000;
+    private const uint TimestampFrequencyHz = 50_000_000;
 
     private const uint TicksPerRow = 50_000;
 
@@ -109,7 +109,7 @@ public class SdCardParseBenchmarks
             AnalogInPortNum = AnalogChannelCount,
             DigitalPortNum = 0,
             AnalogInRes = 65535,
-            TimestampFreq = TimestampFrequency,
+            TimestampFreq = TimestampFrequencyHz,
             DevicePn = "Nyquist1",
             DeviceFwRev = "3.7.2",
             DeviceSn = 9090539562006014104,
@@ -145,7 +145,7 @@ public class SdCardParseBenchmarks
         var text = new StringBuilder();
         text.Append("# Device: Nyquist 1\n");
         text.Append("# Serial Number: AABBCCDDEEFF0011\n");
-        text.Append(CultureInfo.InvariantCulture, $"# Timestamp Tick Rate: {TimestampFrequency} Hz\n");
+        text.Append(CultureInfo.InvariantCulture, $"# Timestamp Tick Rate: {TimestampFrequencyHz} Hz\n");
 
         for (var channel = 0; channel < AnalogChannelCount; channel++)
         {

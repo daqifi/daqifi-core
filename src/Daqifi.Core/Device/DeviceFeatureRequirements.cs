@@ -189,7 +189,7 @@ internal static class DeviceFeatureRequirements
                 Boards: null,
                 Hardware: HardwareRequirement.SdCard),
 
-            [DeviceFeature.StoredStreamingRateQuery] = new(
+            [DeviceFeature.StoredSampleRateQuery] = new(
                 MinVersion: StoredStreamingRateQueryMinFirmware,
                 Boards: null,
                 Hardware: HardwareRequirement.None),

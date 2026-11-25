@@ -19,12 +19,12 @@ public class StreamingSessionFrequencySourceTests
         var host = new FakeHost();
         var session = new StreamingSessionController(host);
         session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
-        host.OnMaxSamplingRateRead = () => session.StreamingFrequency = 250;
+        host.OnMaximumSampleRateRead = () => session.SampleRateHz = 250;
 
         var adopted = session.TryAdoptStoredFrequency(500, rateConfigured: true);
 
         Assert.False(adopted);
-        Assert.Equal(250, session.StreamingFrequency);
+        Assert.Equal(250, session.SampleRateHz);
         Assert.False(session.IsFrequencyInherited);
     }
 
@@ -33,15 +33,15 @@ public class StreamingSessionFrequencySourceTests
     {
         // The caller lowers the rate to 100 Hz while the start reads the 500 Hz ceiling. Clamping
         // the rate as it stood before the read (1000 Hz) would overwrite the choice with 500 Hz.
-        var host = new FakeHost { MaximumStreamingFrequencyHz = 500 };
+        var host = new FakeHost { CurrentMaximumSampleRateHz = 500 };
         var session = new StreamingSessionController(host);
         session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
-        session.StreamingFrequency = 1000;
-        host.OnMaximumStreamingFrequencyRead = () => session.StreamingFrequency = 100;
+        session.SampleRateHz = 1000;
+        host.OnCurrentMaximumSampleRateRead = () => session.SampleRateHz = 100;
 
         session.StartStreaming();
 
-        Assert.Equal(100, session.StreamingFrequency);
+        Assert.Equal(100, session.SampleRateHz);
     }
 
     [Fact]
@@ -49,11 +49,11 @@ public class StreamingSessionFrequencySourceTests
     {
         // A caller choosing a rate while the start is configuring the decoder must not leave the
         // decoder at one rate and the device started at another (or at a rate the cap never saw).
-        var host = new FakeHost { MaximumStreamingFrequencyHz = 500 };
+        var host = new FakeHost { CurrentMaximumSampleRateHz = 500 };
         var session = new StreamingSessionController(host);
         session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
-        session.StreamingFrequency = 200;
-        host.OnBeginDecoderSession = () => session.StreamingFrequency = 900;
+        session.SampleRateHz = 200;
+        host.OnBeginDecoderSession = () => session.SampleRateHz = 900;
 
         session.StartStreaming();
 
@@ -157,44 +157,44 @@ public class StreamingSessionFrequencySourceTests
 
     private sealed class FakeHost : IStreamingSessionHost
     {
-        private Action? _onMaxSamplingRateRead;
+        private Action? _onMaximumSampleRateRead;
 
-        /// <summary>Runs once, on the next read of <see cref="MaxSamplingRate"/>.</summary>
-        public Action? OnMaxSamplingRateRead
+        /// <summary>Runs once, on the next read of <see cref="MaximumSampleRateHz"/>.</summary>
+        public Action? OnMaximumSampleRateRead
         {
-            set => _onMaxSamplingRateRead = value;
+            set => _onMaximumSampleRateRead = value;
         }
 
-        public int MaxSamplingRate
+        public int MaximumSampleRateHz
         {
             get
             {
-                var action = _onMaxSamplingRateRead;
-                _onMaxSamplingRateRead = null;
+                var action = _onMaximumSampleRateRead;
+                _onMaximumSampleRateRead = null;
                 action?.Invoke();
                 return 1000;
             }
         }
 
-        private Action? _onMaximumStreamingFrequencyRead;
-        private int _maximumStreamingFrequencyHz = 1000;
+        private Action? _onCurrentMaximumSampleRateRead;
+        private int _currentMaximumSampleRateHz = 1000;
 
-        /// <summary>Runs once, on the next read of <see cref="MaximumStreamingFrequencyHz"/>.</summary>
-        public Action? OnMaximumStreamingFrequencyRead
+        /// <summary>Runs once, on the next read of <see cref="CurrentMaximumSampleRateHz"/>.</summary>
+        public Action? OnCurrentMaximumSampleRateRead
         {
-            set => _onMaximumStreamingFrequencyRead = value;
+            set => _onCurrentMaximumSampleRateRead = value;
         }
 
-        public int MaximumStreamingFrequencyHz
+        public int CurrentMaximumSampleRateHz
         {
             get
             {
-                var action = _onMaximumStreamingFrequencyRead;
-                _onMaximumStreamingFrequencyRead = null;
+                var action = _onCurrentMaximumSampleRateRead;
+                _onCurrentMaximumSampleRateRead = null;
                 action?.Invoke();
-                return _maximumStreamingFrequencyHz;
+                return _currentMaximumSampleRateHz;
             }
-            init => _maximumStreamingFrequencyHz = value;
+            init => _currentMaximumSampleRateHz = value;
         }
 
         public bool SendsAreNeverHeldBack => false;
