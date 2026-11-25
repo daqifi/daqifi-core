@@ -85,38 +85,49 @@ internal sealed class StateChangeQueue
     /// Releases a change for delivery and delivers everything that is ready, unless another caller
     /// is already doing that. Call it with no lock held.
     /// </summary>
-    internal void Publish(Change change)
-    {
-        MarkPublished(change);
-        Deliver();
-    }
+    internal void Publish(Change change) => Deliver(change);
 
     /// <summary>
-    /// As <see cref="Publish"/>, but stops after <paramref name="change"/>: for a caller in the middle
-    /// of an operation, which must not deliver what others publish meanwhile. The caller calls
-    /// <see cref="Deliver"/> once that operation is over.
+    /// Releases a change for delivery and delivers it if it is next in line; never any other. For a
+    /// caller in the middle of an operation, whose lock a subscriber to another change may be waiting
+    /// for. The caller calls <see cref="DeliverRest"/> once that operation is over.
     /// </summary>
     internal void PublishAlone(Change change)
     {
-        MarkPublished(change);
-        DeliverThrough(change);
-    }
-
-    /// <summary>Delivers everything that is ready, unless another caller is already doing that.</summary>
-    internal void Deliver() => DeliverThrough(last: null);
-
-    private void MarkPublished(Change change)
-    {
+        // Releasing a change and claiming its delivery is one step, here and in Deliver. In two, a
+        // change could be found released and unclaimed, and be delivered by the wrong caller.
         lock (_lock)
         {
             change.IsPublished = true;
+            if (_isDelivering || _pending.Peek() != change)
+            {
+                return;
+            }
+
+            _pending.Dequeue();
+            _isDelivering = true;
+        }
+
+        Raise(change);
+
+        lock (_lock)
+        {
+            _isDelivering = false;
         }
     }
 
-    private void DeliverThrough(Change? last)
+    /// <summary>Delivers everything that is ready, unless another caller is already doing that.</summary>
+    internal void DeliverRest() => Deliver(published: null);
+
+    private void Deliver(Change? published)
     {
         lock (_lock)
         {
+            if (published != null)
+            {
+                published.IsPublished = true;
+            }
+
             if (_isDelivering)
             {
                 return;
@@ -125,23 +136,23 @@ internal sealed class StateChangeQueue
             _isDelivering = true;
         }
 
-        Change? delivered = null;
         while (true)
         {
+            Change next;
             lock (_lock)
             {
                 // A head that is not published yet stops the line. Its author publishes it, and
-                // delivers it along with everything that queued up behind it.
-                if ((last != null && delivered == last) || !_pending.TryPeek(out var head) || !head.IsPublished)
+                // sees to it that everything that queued up behind it is delivered too.
+                if (!_pending.TryPeek(out var head) || !head.IsPublished)
                 {
                     _isDelivering = false;
                     return;
                 }
 
-                delivered = _pending.Dequeue();
+                next = _pending.Dequeue();
             }
 
-            Raise(new DeviceStateChangedEventArgs(delivered.Previous, delivered.Current));
+            Raise(next);
         }
     }
 
@@ -149,8 +160,9 @@ internal sealed class StateChangeQueue
     /// Calls each subscriber on its own, so one that throws costs neither the others nor whoever
     /// made the change (issue #494).
     /// </summary>
-    private void Raise(DeviceStateChangedEventArgs args)
+    private void Raise(Change change)
     {
+        var args = new DeviceStateChangedEventArgs(change.Previous, change.Current);
         foreach (var subscriber in Delegate.EnumerateInvocationList(_subscribers()))
         {
             try

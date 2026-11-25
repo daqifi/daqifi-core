@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Tests.TestSupport;
 using Xunit;
 using ReopeningTransport = Daqifi.Core.Tests.Device.DaqifiDeviceLifecycleStateTests.ReopeningTransport;
@@ -445,6 +447,39 @@ public class DeviceStateEventOrderTests
         }
     }
 
+    [Fact]
+    public async Task ADisconnectThatOvertakesAConnectsOutcome_DoesNotRaiseItInsideTheGate()
+    {
+        using var transport = new ReopeningTransport();
+        using var device = new PausingDevice("Device", transport);
+        var log = new StateLog(device);
+        bool? finished = null;
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == DeviceState.Connected)
+            {
+                finished = IndependentThread(device.Disconnect).Wait(StallLimit);
+            }
+        };
+
+        // The connect has released the gate and not raised Connected yet.
+        var connecting = IndependentThread(device.Connect);
+        Assert.True(device.Released.Wait(WaitUntil.DefaultTimeout), "the connect never released the gate");
+        await IndependentThread(device.Disconnect).WaitAsync(WaitUntil.DefaultTimeout);
+        Assert.Null(finished);
+
+        device.Resume.Set();
+        await connecting.WaitAsync(WaitUntil.DefaultTimeout);
+
+        Assert.True(finished);
+        log.AssertWalked(
+            DeviceState.Disconnected,
+            DeviceState.Connecting,
+            DeviceState.Connected,
+            DeviceState.Disconnecting,
+            DeviceState.Disconnected);
+    }
+
     /// <summary>
     /// The two that are raised while their operation runs: another one waits for it, so for the
     /// handler too.
@@ -675,6 +710,30 @@ public class DeviceStateEventOrderTests
         InitialDelay = TimeSpan.FromMilliseconds(5),
         MaxDelay = TimeSpan.FromMilliseconds(20)
     };
+
+    /// <summary>Stops a connect between releasing the lifecycle gate and raising its outcome.</summary>
+    private sealed class PausingDevice(string name, ReopeningTransport transport) : DaqifiDevice(name, transport)
+    {
+        internal ManualResetEventSlim Released { get; } = new(false);
+
+        internal ManualResetEventSlim Resume { get; } = new(false);
+
+        internal override void OnStateChanged(DeviceState previous, DeviceState current)
+        {
+            if (current == DeviceState.Connected)
+            {
+                // Queued ahead of the event itself, which is queued once this returns.
+                var gate = (LifecycleGate)typeof(DaqifiDevice)
+                    .GetField("_lifecycleGate", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(this)!;
+                gate.RunOnceReleased(() =>
+                {
+                    Released.Set();
+                    Resume.Wait(WaitUntil.DefaultTimeout);
+                });
+            }
+        }
+    }
 
     /// <summary>Records every change a device raises, from the state it was in when this was built.</summary>
     private sealed class StateLog

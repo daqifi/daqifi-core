@@ -1017,7 +1017,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 // The start of a connect or a disconnect. Raised while it runs: told afterwards,
                 // these two would say nothing. Nothing else is raised with them.
                 _stateChanges.PublishAlone(change);
-                _lifecycleGate.RunOnceReleased(_stateChanges.Deliver);
+                _lifecycleGate.RunOnceReleased(_stateChanges.DeliverRest);
             }
             else
             {
