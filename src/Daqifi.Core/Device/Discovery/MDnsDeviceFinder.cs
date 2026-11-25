@@ -95,6 +95,22 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     private readonly IReadOnlyList<string> _serviceLabels;
     private readonly byte[] _queryBytes;
 
+    /// <summary>
+    /// Test seam: when set, supplies the interfaces to browse on in place of the host's own.
+    /// </summary>
+    internal Func<IReadOnlyList<LocalInterface>>? InterfaceProvider { get; init; }
+
+    /// <summary>
+    /// Test seam: when set, supplies the listening socket in place of the shared mDNS port.
+    /// </summary>
+    internal Func<UdpClient>? ListenerFactory { get; init; }
+
+    /// <summary>
+    /// Test seam: when set, stands in for sending one query out of one interface, so a test does not
+    /// depend on the host having a multicast route.
+    /// </summary>
+    internal Func<LocalInterface, Task>? QuerySender { get; init; }
+
     #endregion
 
     #region Constructor
@@ -133,81 +149,71 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
     #region Public Methods
 
+    /// <inheritdoc />
+    private protected override TimeSpan DefaultTimeout => DefaultListenWindow;
+
     /// <summary>
-    /// Browses for devices asynchronously until the token is cancelled.
+    /// Browses for devices until the pass ends. Like <see cref="WiFiDeviceFinder"/>, a browse has
+    /// no natural end, so every pass ends with its token.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token to end the browse.</param>
-    /// <returns>A task containing the devices that answered.</returns>
-    /// <remarks>
-    /// Like <see cref="WiFiDeviceFinder"/>, this overload runs until cancelled — a browse has
-    /// no natural end. Prefer <see cref="DeviceFinderBase.DiscoverAsync(TimeSpan)"/>, or pass a
-    /// token that will actually fire.
-    /// </remarks>
-    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
     {
-        ThrowIfDisposed();
+        var discoveredDevices = new List<IDeviceInfo>();
+        var interfaces = InterfaceProvider?.Invoke() ?? GetMulticastInterfaces();
 
-        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (interfaces.Count == 0)
         {
-            var discoveredDevices = new List<IDeviceInfo>();
-            var interfaces = GetMulticastInterfaces();
-
-            if (interfaces.Count == 0)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            // One socket bound to the wildcard address, not one per NIC as the broadcast finder
-            // uses: responders answer to the multicast group, and on Linux/macOS a socket bound
-            // to a unicast address never sees a datagram addressed to 224.0.0.251. The receiving
-            // NIC is therefore recovered per reply (see ResolveLocalInterfaceAddress) instead of
-            // being read off the socket.
-            using var udp = TryCreateListener();
-            if (udp is null)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            var joined = new List<LocalInterface>();
-            foreach (var localInterface in interfaces)
-            {
-                try
-                {
-                    udp.JoinMulticastGroup(MulticastGroup, localInterface.Address);
-                    joined.Add(localInterface);
-                }
-                catch (SocketException)
-                {
-                    // This NIC cannot join the group (no multicast route, adapter going down).
-                    // Others still work, so skip it rather than failing the pass.
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-            }
-
-            if (joined.Count == 0)
-            {
-                OnDiscoveryCompleted();
-                return discoveredDevices;
-            }
-
-            await Task.WhenAll(
-                    ReceiveLoopAsync(udp, interfaces, discoveredDevices, cancellationToken),
-                    SendQueriesAsync(udp, joined, cancellationToken))
-                .ConfigureAwait(false);
-
-            OnDiscoveryCompleted();
             return discoveredDevices;
         }
-        finally
+
+        // One socket bound to the wildcard address, not one per NIC as the broadcast finder
+        // uses: responders answer to the multicast group, and on Linux/macOS a socket bound
+        // to a unicast address never sees a datagram addressed to 224.0.0.251. The receiving
+        // NIC is therefore recovered per reply (see ResolveLocalInterfaceAddress) instead of
+        // being read off the socket.
+        using var udp = (ListenerFactory ?? CreateListener)();
+
+        var joined = new List<LocalInterface>();
+        SocketException? joinFailure = null;
+        foreach (var localInterface in interfaces)
         {
-            DiscoverySemaphore.Release();
+            try
+            {
+                udp.JoinMulticastGroup(MulticastGroup, localInterface.Address);
+                joined.Add(localInterface);
+            }
+            catch (SocketException ex)
+            {
+                // This NIC cannot join the group (no multicast route, adapter going down).
+                // Others still work, so skip it rather than failing the pass.
+                joinFailure ??= ex;
+            }
         }
+
+        if (joined.Count == 0)
+        {
+            // Every NIC failed, so nothing was asked and an empty answer would mean nothing.
+            EndFailedPass(joinFailure!, devicesFound: 0);
+        }
+
+        // Either half failing ends the other: nothing is heard once the listener has died, and there
+        // is nothing to hear when not one query went out. Without this a pass with no timeout would
+        // listen on an unasked network until it was cancelled.
+        using var browseCts = CancellationTokenSource.CreateLinkedTokenSource(passToken);
+        var failures = await Task.WhenAll(
+                EndBrowseOnFailureAsync(
+                    ReceiveLoopAsync(udp, interfaces, discoveredDevices, browseCts.Token), browseCts),
+                EndBrowseOnFailureAsync(
+                    SendQueriesAsync(udp, joined, browseCts.Token), browseCts))
+            .ConfigureAwait(false);
+
+        if ((failures[0] ?? failures[1]) is { } failure)
+        {
+            EndFailedPass(failure, discoveredDevices.Count);
+        }
+
+        return discoveredDevices;
     }
 
     #endregion
@@ -215,14 +221,29 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     #region Private Methods
 
     /// <summary>
-    /// Creates the listening socket bound to the mDNS port, or null if the port cannot be shared.
+    /// Ends the browse when <paramref name="half"/> of it reports a failure, and passes that on.
     /// </summary>
-    private static UdpClient? TryCreateListener()
+    private static async Task<Exception?> EndBrowseOnFailureAsync(Task<Exception?> half, CancellationTokenSource browseCts)
     {
-        UdpClient? udp = null;
+        var failure = await half.ConfigureAwait(false);
+        if (failure != null)
+        {
+            await browseCts.CancelAsync().ConfigureAwait(false);
+        }
+
+        return failure;
+    }
+
+    /// <summary>
+    /// Creates the listening socket bound to the mDNS port. Throws when the port cannot be shared,
+    /// because another process on this host holds it exclusively.
+    /// </summary>
+    private static UdpClient CreateListener()
+    {
+        var udp = new UdpClient(AddressFamily.InterNetwork);
         try
         {
-            udp = new UdpClient(AddressFamily.InterNetwork) { ExclusiveAddressUse = false };
+            udp.ExclusiveAddressUse = false;
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             TryEnableReusePort(udp.Client);
             udp.Client.Bind(new IPEndPoint(IPAddress.Any, MDnsMessage.MulticastPort));
@@ -239,17 +260,10 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
             return udp;
         }
-        catch (SocketException)
+        catch
         {
-            // Port 5353 is held exclusively by another process on this host. Nothing to do but
-            // report an empty pass; the broadcast finder is the fallback.
-            udp?.Dispose();
-            return null;
-        }
-        catch (ObjectDisposedException)
-        {
-            udp?.Dispose();
-            return null;
+            udp.Dispose();
+            throw;
         }
     }
 
@@ -287,9 +301,13 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// <summary>
     /// Sends the browse query out of every joined NIC on the retransmission schedule.
     /// </summary>
-    private async Task SendQueriesAsync(UdpClient udp, IReadOnlyList<LocalInterface> interfaces, CancellationToken cancellationToken)
+    /// <returns>The first failure when every send failed, otherwise null.</returns>
+    private async Task<Exception?> SendQueriesAsync(UdpClient udp, IReadOnlyList<LocalInterface> interfaces, CancellationToken cancellationToken)
     {
         var target = new IPEndPoint(MulticastGroup, MDnsMessage.MulticastPort);
+
+        var anySent = false;
+        Exception? firstFailure = null;
 
         foreach (var gap in QueryGaps)
         {
@@ -302,32 +320,45 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             }
             catch (OperationCanceledException)
             {
-                return;
+                break;
             }
 
             foreach (var localInterface in interfaces)
             {
                 try
                 {
-                    // Pick the egress NIC explicitly: the default multicast route sends out one
-                    // adapter only, which on a multi-homed host is regularly the wrong one.
-                    udp.Client.SetSocketOption(
-                        SocketOptionLevel.IP,
-                        SocketOptionName.MulticastInterface,
-                        localInterface.Address.GetAddressBytes());
+                    if (QuerySender != null)
+                    {
+                        await QuerySender(localInterface).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Pick the egress NIC explicitly: the default multicast route sends out one
+                        // adapter only, which on a multi-homed host is regularly the wrong one.
+                        udp.Client.SetSocketOption(
+                            SocketOptionLevel.IP,
+                            SocketOptionName.MulticastInterface,
+                            localInterface.Address.GetAddressBytes());
 
-                    await udp.SendAsync(_queryBytes, _queryBytes.Length, target).ConfigureAwait(false);
+                        await udp.SendAsync(_queryBytes, _queryBytes.Length, target).ConfigureAwait(false);
+                    }
+
+                    anySent = true;
                 }
-                catch (SocketException)
+                catch (SocketException ex)
                 {
                     // This NIC failed to send; the others still carry the query.
+                    firstFailure ??= ex;
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
-                    return;
+                    // The listener is gone, which its receive loop reports too.
+                    return anySent ? null : firstFailure ?? ex;
                 }
             }
         }
+
+        return anySent ? null : firstFailure;
     }
 
     /// <summary>
@@ -335,7 +366,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// no exception from a datagram or a subscriber may fault the task, because it is awaited
     /// with <see cref="Task.WhenAll(Task[])"/> and a faulted task would hang the pass.
     /// </summary>
-    private async Task ReceiveLoopAsync(
+    private async Task<Exception?> ReceiveLoopAsync(
         UdpClient udp,
         IReadOnlyList<LocalInterface> interfaces,
         List<IDeviceInfo> discoveredDevices,
@@ -352,17 +383,10 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             {
                 break;
             }
-            catch (SocketException)
+            catch (Exception ex)
             {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch
-            {
-                break;
+                // Returned rather than thrown: the pass decides what a dead listener means.
+                return cancellationToken.IsCancellationRequested ? null : ex;
             }
 
             try
@@ -374,6 +398,8 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 // Swallow malformed payloads and subscriber exceptions; keep receiving.
             }
         }
+
+        return null;
     }
 
     /// <summary>
@@ -698,9 +724,14 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
                 continue;
             }
 
-            var ipProperties = networkInterface.GetIPProperties();
-            if (ipProperties == null)
+            IPInterfaceProperties ipProperties;
+            try
             {
+                ipProperties = networkInterface.GetIPProperties();
+            }
+            catch (NetworkInformationException)
+            {
+                // This adapter went away while it was being read; the others still work.
                 continue;
             }
 

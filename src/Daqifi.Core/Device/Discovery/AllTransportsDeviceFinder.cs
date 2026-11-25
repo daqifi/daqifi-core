@@ -24,12 +24,16 @@ namespace Daqifi.Core.Device.Discovery;
 /// to one. A single transport finder throwing (e.g. WiFi discovery with no network) is logged and
 /// skipped so the other transports still return results.
 /// </remarks>
-public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter, IPartialResultReporter, IDisposable
+public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter, IPartialResultReporter
 {
     private readonly IReadOnlyList<IDeviceFinder> _finders;
     private readonly Func<IDeviceInfo, string>? _identitySelector;
     private readonly bool _ownsFinders;
     private bool _disposed;
+
+    // 1 when a transport answered its timeout by throwing, so the merged list lacks whatever it
+    // would have found (see IPartialResultReporter).
+    private int _transportTimedOut;
 
     /// <inheritdoc />
     public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
@@ -135,7 +139,7 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
     /// </remarks>
     bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()
     {
-        var partial = false;
+        var partial = Interlocked.Exchange(ref _transportTimedOut, 0) == 1;
         foreach (var reporter in _finders.OfType<IPartialResultReporter>())
         {
             partial |= reporter.TakeResultsWerePartialFromLastPass();
@@ -145,40 +149,44 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// <paramref name="timeout"/> goes to every transport finder unchanged, so null lets each one
+    /// apply its own default. A transport that fails — or that breaks
+    /// <see cref="IDeviceFinder.DiscoverAsync"/>'s contract by throwing on its timeout — is logged
+    /// and skipped, so the others still return results.
+    /// </remarks>
+    public async Task<IReadOnlyList<IDeviceInfo>> DiscoverAsync(
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
     {
+        // Checked here because a transport's own rejection would be skipped as a failed transport.
+        DeviceFinderBase.ThrowIfInvalidTimeout(timeout);
         ThrowIfDisposed();
 
-        // Fan out concurrently; results[i] corresponds to _finders[i], giving a stable,
-        // finder-ordered "first wins" for deduplication. A caller-supplied token that fires
-        // surfaces as OperationCanceledException (SafeDiscoverAsync rethrows it).
-        var results = await Task.WhenAll(_finders.Select(f => SafeDiscoverAsync(f, cancellationToken)))
-            .ConfigureAwait(false);
+        Volatile.Write(ref _transportTimedOut, 0);
+        try
+        {
+            // Fan out concurrently; results[i] corresponds to _finders[i], giving a stable,
+            // finder-ordered "first wins" for deduplication.
+            var results = await Task.WhenAll(
+                    _finders.Select(f => SafeDiscoverAsync(f, timeout, cancellationToken)))
+                .ConfigureAwait(false);
 
-        return MergeAndPublish(results);
-    }
-
-    /// <inheritdoc />
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-    {
-        ThrowIfDisposed();
-
-        // Delegate to each finder's own timeout overload so a timeout is a normal end-of-pass
-        // (return what was found), matching WiFiDeviceFinder/SerialDeviceFinder — rather than
-        // routing through the cancellation path, where a finder observing the timeout token
-        // would throw OperationCanceledException and skip DiscoveryCompleted.
-        var results = await Task.WhenAll(_finders.Select(f => SafeDiscoverAsync(f, timeout)))
-            .ConfigureAwait(false);
-
-        return MergeAndPublish(results);
+            cancellationToken.ThrowIfCancellationRequested();
+            return MergeAndPublish(results);
+        }
+        finally
+        {
+            RaiseIsolated(() => DiscoveryCompleted?.Invoke(this, EventArgs.Empty), nameof(DiscoveryCompleted));
+        }
     }
 
     /// <summary>
-    /// Deduplicates the per-finder results (finder-ordered, first-wins) and publishes the
-    /// <see cref="DeviceDiscovered"/> / <see cref="DiscoveryCompleted"/> events, isolating
-    /// subscriber exceptions so a throwing consumer callback cannot abort discovery.
+    /// Deduplicates the per-finder results (finder-ordered, first-wins) and publishes
+    /// <see cref="DeviceDiscovered"/>, isolating subscriber exceptions so a throwing consumer
+    /// callback cannot abort discovery.
     /// </summary>
-    private IEnumerable<IDeviceInfo> MergeAndPublish(IEnumerable<IEnumerable<IDeviceInfo>> results)
+    private IReadOnlyList<IDeviceInfo> MergeAndPublish(IEnumerable<IEnumerable<IDeviceInfo>> results)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var unique = new List<IDeviceInfo>();
@@ -191,7 +199,6 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
             }
         }
 
-        RaiseIsolated(() => DiscoveryCompleted?.Invoke(this, EventArgs.Empty), nameof(DiscoveryCompleted));
         return unique;
     }
 
@@ -211,44 +218,33 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
         }
     }
 
-    private async Task<IEnumerable<IDeviceInfo>> SafeDiscoverAsync(IDeviceFinder finder, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<IDeviceInfo>> SafeDiscoverAsync(
+        IDeviceFinder finder,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return await finder.DiscoverAsync(cancellationToken).ConfigureAwait(false)
-                ?? Enumerable.Empty<IDeviceInfo>();
+            return await finder.DiscoverAsync(timeout, cancellationToken).ConfigureAwait(false) ?? [];
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Caller-requested cancellation must surface, not be swallowed as a transport failure.
-            throw;
+            // The caller's cancellation. DiscoverAsync throws it once every transport has ended,
+            // so it surfaces as that even when another transport failed on the way out.
+            return [];
         }
         catch (Exception ex)
         {
+            if (ex is OperationCanceledException)
+            {
+                Volatile.Write(ref _transportTimedOut, 1);
+            }
+
             // One transport failing (e.g. WiFi with no network) must not sink the whole discovery.
             // Composed inside the lambda so a throwing Exception.ToString stays in the guard.
             SafeTrace(() =>
                 $"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
-            return Enumerable.Empty<IDeviceInfo>();
-        }
-    }
-
-    private async Task<IEnumerable<IDeviceInfo>> SafeDiscoverAsync(IDeviceFinder finder, TimeSpan timeout)
-    {
-        try
-        {
-            return await finder.DiscoverAsync(timeout).ConfigureAwait(false)
-                ?? Enumerable.Empty<IDeviceInfo>();
-        }
-        catch (Exception ex)
-        {
-            // Timeout is a normal end-of-pass here (no caller token to honor); any failure —
-            // timeout, socket error, disposed resource — must not sink the other transports'
-            // results. Message stays generic since the cause is not necessarily the timeout.
-            // Composed inside the lambda so a throwing Exception.ToString stays in the guard.
-            SafeTrace(() =>
-                $"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed during a timed pass: {ex}");
-            return Enumerable.Empty<IDeviceInfo>();
+            return [];
         }
     }
 
@@ -289,7 +285,7 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
 
         if (_ownsFinders)
         {
-            foreach (var finder in _finders.OfType<IDisposable>())
+            foreach (var finder in _finders)
             {
                 finder.Dispose();
             }

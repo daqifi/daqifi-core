@@ -5,74 +5,81 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Represents discovered device metadata.
 /// </summary>
-public class DeviceInfo : IDeviceInfo
+/// <remarks>
+/// Immutable, because one instance is shared: a <see cref="ContinuousDeviceFinder"/> hands the same
+/// instances it keeps in its live set to every subscriber. Use a <c>with</c> expression to get a
+/// changed copy. Two instances are equal when every property is equal, including
+/// <see cref="LocalInterfaceAddress"/>, so equality answers "is this the same report", not "is this
+/// the same device"; compare a serial number or a <see cref="DeviceIdentity"/> for that.
+/// </remarks>
+public sealed record DeviceInfo : IDeviceInfo
 {
     /// <summary>
-    /// Gets or sets the device name/hostname.
+    /// Gets the device name/hostname.
     /// </summary>
-    public string Name { get; set; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the device serial number.
+    /// Gets the device serial number.
     /// </summary>
-    public string SerialNumber { get; set; } = string.Empty;
+    public string SerialNumber { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the firmware version.
+    /// Gets the firmware version as the device reported it. See <see cref="IDeviceInfo.FirmwareVersion"/>.
     /// </summary>
-    public string FirmwareVersion { get; set; } = string.Empty;
+    public string FirmwareVersion { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the IP address (for network devices).
+    /// Gets the IP address (for network devices).
     /// </summary>
-    public IPAddress? IPAddress { get; set; }
+    public IPAddress? IPAddress { get; init; }
 
     /// <summary>
-    /// Gets or sets the MAC address (for network devices).
+    /// Gets the MAC address (for network devices).
     /// </summary>
-    public string? MacAddress { get; set; }
+    public string? MacAddress { get; init; }
 
     /// <summary>
-    /// Gets or sets the TCP port (for network devices).
+    /// Gets the TCP port (for network devices).
     /// </summary>
-    public int? Port { get; set; }
+    public int? Port { get; init; }
 
     /// <summary>
-    /// Gets or sets the local interface address that discovered this device (for network devices).
+    /// Gets the local interface address that discovered this device (for network devices).
     /// Used for binding TCP connections in multi-NIC scenarios.
     /// </summary>
-    public IPAddress? LocalInterfaceAddress { get; set; }
+    public IPAddress? LocalInterfaceAddress { get; init; }
 
     /// <summary>
-    /// Gets or sets the device type.
+    /// Gets the device type.
     /// </summary>
-    public DeviceType Type { get; set; } = DeviceType.Unknown;
+    public DeviceType Type { get; init; } = DeviceType.Unknown;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device is powered on.
+    /// Gets a value indicating whether the device is powered on.
     /// </summary>
-    public bool IsPowerOn { get; set; } = true;
+    public bool IsPowerOn { get; init; } = true;
 
     /// <summary>
-    /// Gets or sets the connection type.
+    /// Gets the connection type.
     /// </summary>
-    public ConnectionType ConnectionType { get; set; } = ConnectionType.Unknown;
+    public ConnectionType ConnectionType { get; init; } = ConnectionType.Unknown;
 
     /// <summary>
-    /// Gets or sets the port name (for serial devices).
+    /// Gets the port name (for serial devices).
     /// </summary>
-    public string? PortName { get; set; }
+    public string? PortName { get; init; }
 
     /// <summary>
-    /// Gets or sets the device path (for HID devices).
+    /// Gets the device path (for HID devices).
     /// </summary>
-    public string? DevicePath { get; set; }
+    public string? DevicePath { get; init; }
 
     /// <summary>
-    /// Gets or sets the USB physical-location key (e.g. <c>Port_#0001.Hub_#0001</c>), or null
+    /// Gets the USB physical-location key (e.g. <c>Port_#0001.Hub_#0001</c>), or null
     /// if it could not be resolved. See <see cref="IDeviceInfo.LocationKey"/>.
     /// </summary>
-    public string? LocationKey { get; set; }
+    public string? LocationKey { get; init; }
 
     /// <summary>
     /// Returns a string representation of the device info.

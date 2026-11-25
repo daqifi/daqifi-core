@@ -11,14 +11,15 @@ namespace Daqifi.Core.Device.Discovery;
 /// <see cref="SerialDeviceFinder"/> can break it: when
 /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/> fires mid-sweep it catches the
 /// cancellation and returns the port probes that already finished, so the ports it never reached
-/// are missing from a list that otherwise looks whole.
+/// are missing from a list that otherwise looks whole. <see cref="HidDeviceFinder"/> can too, when
+/// its time runs out during the enumeration or while it works through what that returned.
 /// </para>
 /// <para>
 /// This must be reported by the finder, because it cannot be inferred from the outside. In
 /// particular it cannot be inferred from the pass deadline having elapsed:
 /// <see cref="WiFiDeviceFinder"/> and <see cref="MDnsDeviceFinder"/> have no natural end, so
-/// their <see cref="IDeviceFinder.DiscoverAsync(System.Threading.CancellationToken)"/> listens
-/// until the caller's token fires and then returns a COMPLETE answer. Reading an elapsed deadline
+/// their <see cref="IDeviceFinder.DiscoverAsync"/> listens
+/// until the timeout elapses and then returns a COMPLETE answer. Reading an elapsed deadline
 /// as "incomplete" would mark every one of their passes partial, and a pass that is always
 /// partial can never age a device out of the live set at all.
 /// </para>

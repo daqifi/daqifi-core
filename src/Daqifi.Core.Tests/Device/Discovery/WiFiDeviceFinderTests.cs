@@ -18,18 +18,10 @@ public class WiFiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DeviceTypeDetectorTests (issue #283).
-    [NetworkBrowseFact]
+    [Fact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
-        // Not port 0, for the reason given in DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing:
-        // on port 0 the pass ended at once on Linux, so the timeout was never what ended it.
-        int discoveryPort;
-        using (var probe = new UdpClient(0))
-        {
-            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
-        }
-
-        using var finder = new WiFiDeviceFinder(discoveryPort);
+        using var finder = FinderOn(Loopback());
         var timeout = TimeSpan.FromSeconds(2);
 
         var browse = finder.DiscoverAsync(timeout);
@@ -45,25 +37,14 @@ public class WiFiDeviceFinderTests
         Assert.NotNull(devices);
     }
 
-    [NetworkBrowseFact]
-    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
+    [Fact]
+    public async Task DiscoverAsync_CancelledMidBrowse_ThrowsOperationCanceledException()
     {
-        // This overload has no timeout of its own, so cancelling is how a caller ends the browse:
-        // what answered by then is the result, not an OperationCanceledException.
-        //
-        // Not port 0: the discovery port is also where the query is sent, Linux rejects a send to
-        // port 0, and a pass whose every send failed ends at once. Borrow a free port instead, so
-        // the query goes out and nothing answers it.
-        int discoveryPort;
-        using (var probe = new UdpClient(0))
-        {
-            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
-        }
-
-        using var finder = new WiFiDeviceFinder(discoveryPort);
+        // A timeout ends a browse with what answered by then; a cancellation never does.
+        using var finder = FinderOn(Loopback());
         using var cts = new CancellationTokenSource();
 
-        var browse = finder.DiscoverAsync(cts.Token);
+        var browse = finder.DiscoverAsync(Timeout.InfiniteTimeSpan, cts.Token);
 
         // A pass that finds nothing to browse on returns at once. Still running after a moment
         // means it is waiting on replies, so what ends it below is the cancellation.
@@ -73,8 +54,7 @@ public class WiFiDeviceFinderTests
         cts.Cancel();
 
         // Bounded, so a browse that ignored the token fails instead of hanging the run.
-        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
-        Assert.Null(failure);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
@@ -85,14 +65,14 @@ public class WiFiDeviceFinderTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cancellationToken: cts.Token));
     }
 
     [Fact]
     public async Task DiscoverAsync_RaisesDiscoveryCompletedEvent()
     {
-        // Arrange - Use port 0 to let system assign random port (avoid conflicts)
-        using var finder = new WiFiDeviceFinder(0);
+        // Arrange
+        using var finder = FinderOn(Loopback());
         var eventRaised = false;
         finder.DiscoveryCompleted += (sender, args) => eventRaised = true;
 
@@ -112,6 +92,79 @@ public class WiFiDeviceFinderTests
 
         // Act & Assert
         await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync());
+    }
+
+    // 192.0.2.0/24 is reserved for documentation (RFC 5737), so no host has it to bind to.
+    private static WiFiDeviceFinder.NetworkInterfaceInfo Unusable() => new()
+    {
+        LocalAddress = IPAddress.Parse("192.0.2.1"),
+        BroadcastEndpoint = new IPEndPoint(IPAddress.Parse("192.0.2.255"), 9)
+    };
+
+    // The query goes to a socket nobody reads, so the interface works and nothing replies.
+    private static WiFiDeviceFinder.NetworkInterfaceInfo Loopback() => new()
+    {
+        LocalAddress = IPAddress.Loopback,
+        BroadcastEndpoint = new IPEndPoint(IPAddress.Loopback, SilentPeerPort)
+    };
+
+    // Held for the life of the run: an unbound port would answer with ICMP, which Windows turns
+    // into a receive error.
+    private static readonly UdpClient SilentPeer = new(new IPEndPoint(IPAddress.Loopback, 0));
+    private static int SilentPeerPort => ((IPEndPoint)SilentPeer.Client.LocalEndPoint!).Port;
+
+    private static WiFiDeviceFinder FinderOn(params WiFiDeviceFinder.NetworkInterfaceInfo[] interfaces)
+        => new(0) { InterfaceProvider = () => interfaces };
+
+    [Fact]
+    public async Task DiscoverAsync_EveryInterfaceFails_ThrowsAndRaisesCompleted()
+    {
+        using var finder = FinderOn(Unusable(), Unusable());
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        await Assert.ThrowsAsync<SocketException>(() => finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_OneInterfaceFails_TheOthersStillListen()
+    {
+        using var finder = FinderOn(Unusable(), Loopback());
+
+        // Nothing replies, which is a complete and healthy answer.
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromMilliseconds(200)));
+        Assert.False(((IPartialResultReporter)finder).TakeResultsWerePartialFromLastPass());
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_NoInterfaces_FindsNothing()
+    {
+        using var finder = FinderOn();
+
+        Assert.Empty(await finder.DiscoverAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact]
+    public async Task ContinuousDiscovery_EveryInterfaceFails_ReportsTheErrorAndLosesNothing()
+    {
+        var inner = FinderOn(Unusable());
+        await using var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            MissThreshold = 1,
+            Interval = TimeSpan.FromMilliseconds(10)
+        });
+        finder.Reconcile([new DeviceInfo { ConnectionType = ConnectionType.WiFi, MacAddress = "AA:BB" }]);
+        var errors = 0;
+        finder.ScanError += (_, e) => Interlocked.Increment(ref errors);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => Volatile.Read(ref errors) >= 2, "the failed passes were never reported", TimeSpan.FromSeconds(10));
+        await finder.StopAsync();
+
+        Assert.Single(finder.Devices);
     }
 
     // Virtual / tunnel adapter filter — issue #179.
