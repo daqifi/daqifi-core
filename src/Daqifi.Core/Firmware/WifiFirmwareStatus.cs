@@ -43,18 +43,16 @@ public sealed record WifiFirmwareStatus
 
     /// <summary>
     /// The minimum WINC firmware version Core considers supported
-    /// (<see cref="FirmwareUpdateServiceOptions.MinimumSupportedWifiFirmwareVersion"/>),
-    /// or null if that option could not be parsed. Reported on every result — including
-    /// the ones where the device could not be read — so a caller can always state the bar
-    /// it was judging against.
+    /// (<see cref="FirmwareUpdateServiceOptions.MinimumSupportedWifiFirmwareVersion"/>).
+    /// Reported on every result — including the ones where the device could not be read —
+    /// so a caller can always state the bar it was judging against.
     /// </summary>
     public FirmwareVersion? MinimumSupportedVersion { get; init; }
 
     /// <summary>
     /// Whether the device's reported WiFi firmware is at least
     /// <see cref="MinimumSupportedVersion"/>, or null when that could not be determined
-    /// (no chip info was read, the device version did not parse, or the configured
-    /// minimum did not parse).
+    /// (no chip info was read, or the device version did not parse).
     /// </summary>
     /// <remarks>
     /// Unlike <see cref="IsUpToDate"/> this needs no network access: it compares the

@@ -215,9 +215,9 @@ internal sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
         return Task.FromResult<string?>(null);
     }
 
-    public Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
+    public Task<WifiFirmwareDownloadResult?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<(string ExtractedPath, string Version)?>(null);
+        return Task.FromResult<WifiFirmwareDownloadResult?>(null);
     }
 
     /// <summary>

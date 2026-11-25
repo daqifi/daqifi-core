@@ -23,7 +23,7 @@ public class DropPathSubscriberIsolationTests
     [Fact]
     public void SerialTransport_WhenAStatusSubscriberThrowsOnAnIoFaultDrop_ThePortIsStillDisposed()
     {
-        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
         var port = new DisposalTrackingSerialPort();
         transport.SetSerialPortForTesting(port);
 
@@ -54,7 +54,7 @@ public class DropPathSubscriberIsolationTests
         // where the subscriber exception is least visible — the watchdog's poll loop absorbs it —
         // so the handle release cannot be left depending on the subscriber behaving.
         var present = true;
-        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.FromHours(1))
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.FromHours(1) })
         {
             PortPresenceProbe = _ => Volatile.Read(ref present)
         };
@@ -89,7 +89,7 @@ public class DropPathSubscriberIsolationTests
         // the subscriber's exception somewhere those loops have to absorb it again, so the drop
         // path swallows it — the device-level StatusChanged, which is where real consumers
         // subscribe, is the surface that reports it (DaqifiDevice raises ErrorOccurred).
-        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
         transport.SetSerialPortForTesting(new DisposalTrackingSerialPort());
         transport.StatusChanged += (_, _) => throw new InvalidOperationException("a badly behaved subscriber");
 
@@ -114,7 +114,7 @@ public class DropPathSubscriberIsolationTests
         // same situation is the only diagnosability a bare-transport consumer gets. The listener is
         // synchronized and only asserted with Contains, so traffic from tests running in parallel
         // can neither corrupt it nor fail this.
-        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
         transport.SetSerialPortForTesting(new DisposalTrackingSerialPort());
         transport.StatusChanged += (_, _) => throw new InvalidOperationException("a badly behaved subscriber");
 
@@ -151,7 +151,7 @@ public class DropPathSubscriberIsolationTests
         // let a throwing ToString() escape the catch that exists to contain the subscriber — the
         // handle still went out in the finally, but the watchdog/reader thread was disrupted anyway,
         // which is the very thing the isolation is for.
-        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", new SerialTransportOptions { LivenessCheckInterval = TimeSpan.Zero });
         var port = new DisposalTrackingSerialPort();
         transport.SetSerialPortForTesting(port);
         transport.StatusChanged += (_, _) => throw new UnrenderableException();

@@ -7,16 +7,6 @@ namespace Daqifi.Core.Device.Discovery;
 /// </summary>
 public class HidDeviceFinder : DeviceFinderBase
 {
-    /// <summary>
-    /// Default DAQiFi bootloader vendor ID.
-    /// </summary>
-    public const int DefaultVendorId = 0x04D8;
-
-    /// <summary>
-    /// Default DAQiFi bootloader product ID.
-    /// </summary>
-    public const int DefaultProductId = 0x003C;
-
     private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
     private readonly IUsbLocationProvider _usbLocationProvider;
 
@@ -51,8 +41,8 @@ public class HidDeviceFinder : DeviceFinderBase
         _usbLocationProvider = usbLocationProvider
             ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
 
-        VendorIdFilter = DefaultVendorId;
-        ProductIdFilter = DefaultProductId;
+        VendorIdFilter = DaqifiUsbIds.VendorId;
+        ProductIdFilter = DaqifiUsbIds.BootloaderProductId;
     }
 
     /// <summary>

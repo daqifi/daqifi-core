@@ -340,15 +340,9 @@ internal sealed class WifiModuleUpdater
         IStreamingDevice device,
         CancellationToken cancellationToken)
     {
-        // Resolved up front so every return path below can state the bar it judged
-        // against, including the ones that never get to read the device. Parsed
-        // defensively rather than trusting Validate(): the options object stays mutable
-        // after the service is constructed, and an unparseable minimum must degrade to
-        // "no minimum opinion" (null) instead of throwing out of a read-only probe.
-        FirmwareVersion? minimumSupported =
-            FirmwareVersion.TryParse(Options.MinimumSupportedWifiFirmwareVersion, out var parsedMinimum)
-                ? parsedMinimum
-                : null;
+        // Read once, up front, so every return path below states the bar it judged against,
+        // including the ones that never get to read the device.
+        var minimumSupported = Options.MinimumSupportedWifiFirmwareVersion;
 
         if (device is not ILanChipInfoProvider lanChipInfoProvider)
         {
@@ -418,9 +412,7 @@ internal sealed class WifiModuleUpdater
         // Parsed once here, before the release lookup, because the minimum-supported
         // answer must survive that lookup failing — that is the whole point of it.
         var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion);
-        bool? meetsMinimum = deviceVersionParsed && minimumSupported is { } minimum
-            ? deviceVersion >= minimum
-            : null;
+        bool? meetsMinimum = deviceVersionParsed ? deviceVersion >= minimumSupported : null;
 
         FirmwareReleaseInfo? latestWifi;
         try
