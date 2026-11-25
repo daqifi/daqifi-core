@@ -6,15 +6,21 @@
 
 1. Every *REMOVED* line in PublicAPI.Unshipped.txt has a table row that is about it: a code span in the
    left column is that type, or that type's member. Mentioning it as a parameter or in another row does
-   not count, nor does a "Behaviour" row or the summary. A lost setter may be in a "Setters" row; a lost or re-typed
-   getter may not. A line that differs only in a namespace needs a row for the type that moved.
-   Overloads are not told apart: one row naming a method covers all its removed overloads.
+   not count, nor does a "Behaviour" row or the summary. A lost setter may be in a "Setters" row; a lost
+   or re-typed getter may not. A line that differs only in a namespace needs a row for the type that moved.
+   A type that only changed its name covers the members that came with it unchanged, and no others.
 2. Per CompatibilitySuppressions.xml: every member that implementers now have to add (CP0005, CP0006) is
    in that type's row under "If you implement", and every type that became sealed (CP0009) is in
    the list of newly sealed types there.
 3. Every Core name in a right column or a 2.0 sample exists in the current API.
 4. With --compile, the 1.x samples build against the 1.10.0 package and the 2.0 ones against this
    checkout.
+
+What it cannot see, because no API file records it: rows about behaviour, MCP, base classes, default bodies,
+class or struct, members that also moved up to an interface, a second way to call an overload, or what an
+implementer drops (the tables for the members themselves have it); and whether a replacement that exists
+is the right one. Overloads are told apart by their parameter count and by the types the row names, so a
+row that writes `...` or no parentheses covers every overload.
 
 Each run first checks itself on guides that are wrong on purpose.
 
@@ -118,14 +124,22 @@ def names(text):
 
 
 class Row:
-    def __init__(self, intro, left, right, section):
+    def __init__(self, intro, left, right, section, header=""):
         self.right, self.section = right, section
         self.behaviour = intro.startswith("Behaviour")
+        # What to implement says what to add; that something went is for the other tables.
+        self.summary = section.startswith("The changes most") or section.startswith("If you") and "implement" in header
         self.setters = re.match(r"setters?\b", left, re.I) is not None
-        self.types, self.members = set(), set()  # what the row is about
+        self.types, self.members = set(), []  # what the row is about; a member with its arguments
         # `A.X`, `.Y`, `Z` is about three members of A; `X` alone, of the types the intro names.
         current, scope = None, names(" ".join(spans(intro)))
-        for span in spans(left):
+        first = spans(right)[:1]
+        self.successor = first[0] if first and right.startswith(f"`{first[0]}`") else None
+        # "`A.X` as `Y`" is about A.X; `Y` is what it was typed as.
+        for span in spans(re.sub(r"\b(?:as|returning|deriving from) `[^`]*`", "", left)):
+            if "==" in span:
+                continue
+            arguments = argument_list(span)
             alone = re.fullmatch(rf"(?:Daqifi\.[\w.]+\.)?({IDENT})(?:<{IDENT}>)?", span)
             if alone:
                 self.types.add(alone[1])
@@ -134,20 +148,55 @@ class Row:
                 continue
             path = head[-1].split(".")
             if span.startswith("new "):
-                self.members.add((path[-1], path[-1]))
+                self.members.append((path[-1], path[-1], arguments))
             elif len(path) == 1:
-                self.members |= {(owner, path[0]) for owner in scope | {current}}
+                self.members += [(owner, path[0], arguments) for owner in (scope | {current}) - {path[0]}]
             else:
                 current = path[-2] or current
-                self.members.add((current, path[-1]))
+                self.members.append((current, path[-1], arguments))
 
-    def covers(self, type_name, member, setter=False):
-        return (type_name, member) in self.members and (setter or not self.setters)
+    def covers(self, type_name, member, parameters):
+        return any((t, m) == (type_name, member) and same_overload(arguments, parameters)
+                   for t, m, arguments in self.members)
+
+
+def argument_list(span):
+    """What the span's first parentheses hold; None for no parentheses, or with a `...` among them."""
+    opened = span.find("(")
+    if opened < 0:
+        return None
+    depth, found = 0, [""]
+    for character in span[opened + 1:]:
+        if character == ")" and depth == 0:
+            break
+        depth += (character in "(<[{") - (character in ")>]}")
+        if character == "," and depth == 0:
+            found.append("")
+        else:
+            found[-1] += character
+    if any("..." in argument for argument in found):
+        return None
+    return [argument.strip() for argument in found if argument.strip()]
+
+
+def same_overload(arguments, parameters):
+    """Whether a row's arguments can be those parameters: as many, and where one is a type, that type."""
+    if arguments is None or parameters is None:
+        return True
+
+    def agrees(argument, parameter):
+        named = re.match(IDENT, argument)
+        if not named or not (named[0][0].isupper() or named[0] in ("int", "uint", "bool", "double", "string")):
+            return True
+        type_name = re.sub(r"<.*", "", re.sub(r"^(?:out|this) ", "", parameter)).split(" ")[0].rstrip("!?")
+        return named[0] == type_name.split(".")[-1]
+
+    return len(arguments) == len(parameters) and all(map(agrees, arguments, parameters))
 
 
 def tables(guide):
     """Every two-column row, with the paragraph directly above its table."""
-    rows, intro, paragraph, section = [], "", [], ""
+    rows, intro, header, paragraph, section = [], "", "", [], ""
     in_table = in_code = ended = False
     for line in guide.splitlines():
         if line.startswith("```"):
@@ -156,11 +205,11 @@ def tables(guide):
             continue
         elif line.startswith("|"):
             if not in_table:
-                intro, in_table, paragraph = " ".join(paragraph), True, []
+                intro, header, in_table, paragraph = " ".join(paragraph), line, True, []
                 continue
             cells = [cell.strip() for cell in line.strip("|").split(" | ")]
             if len(cells) == 2 and not line.startswith("|---"):
-                rows.append(Row(intro, cells[0], cells[1], section))
+                rows.append(Row(intro, cells[0], cells[1], section, header))
         else:
             in_table = False
             if line.startswith("## "):
@@ -192,7 +241,17 @@ def check_removed(rows, removed, current):
 
     live_names = set(map(local, live_types))
     still = set(map(local, current))
-    rows = [row for row in rows if not row.behaviour and not row.section.startswith("The changes most")]
+    rows = [row for row in rows if not row.behaviour and not row.summary]
+    removed_names = set(map(local, removed_types)) - live_names
+    renamed = {t: row.successor for row in rows for t in row.types & removed_names
+               if len(row.types) == 1 and row.successor in live_names}
+
+    # Renamed and nothing else; otherwise a member of an enum can have kept its name and changed its meaning.
+    only_renamed = {t for row in rows for t in row.types if row.right == f"`{row.successor}`"}
+
+    def after_renames(text):
+        return re.sub(IDENT, lambda match: renamed.get(match[0], match[0]), text)
+
     problems = []
     for line in removed:
         type_name, member = symbol(line)
@@ -200,12 +259,23 @@ def check_removed(rows, removed, current):
                 or member in ("Equals", "GetHashCode", "ToString", "PrintMembers", "<Clone>$") or re.search(r"\(\S+ original\)", line):
             continue  # what the compiler generates for a record
         of_removed = next((t for t in removed_types if declaration(line).startswith(t + ".")), None)
-        if is_type(line) or of_removed and (local(of_removed) not in live_names or local(line) in still):
+        went = of_removed and local(of_removed) not in live_names and type_name not in renamed
+        changed_enum = type_name in renamed and type_name not in only_renamed and re.search(r" = -?\d+ -> ", line)
+        if is_type(line) or went or of_removed and not changed_enum and after_renames(local(line)) in still:
             if not any(type_name in row.types for row in rows):
                 problems.append(f"type {type_name}")
         else:
-            setter = re.search(r"\.set -> ", line) is not None
-            if not any(row.covers(type_name, member, setter) for row in rows):
+            parameters = argument_list(declaration(line).split(" -> ")[0])
+            covering = [row for row in rows if row.covers(type_name, member, parameters)]
+            if re.search(r"\.set -> ", line):
+                # A property that can now only be initialized needs that said, even if it was renamed too.
+                owner = renamed.get(type_name, type_name)
+                now = {f"{owner}.{member}"}.union(*(re.findall(rf"\b{owner}\.{IDENT}", row.right) for row in covering))
+                if any(f"{name}.init -> void" in still and f"{name}.set -> void" not in still for name in now):
+                    covering = [row for row in covering if row.setters]
+            else:
+                covering = [row for row in covering if not row.setters]
+            if not covering:
                 problems.append(f"{type_name}.{member}: {local(line)}")
     return sorted(set(problems))
 
@@ -233,7 +303,9 @@ def without_drops(row):
 
 def self_test():
     def removed(guide, line, *current):
-        return check_removed(tables(guide), [line], list(current))
+        owner = declaration(line).split("(")[0].split(" ")[0].split(".")[:2]
+        gone_too = [] if ".".join(owner) in current else [".".join(owner)]
+        return check_removed(tables(guide), [line] + gone_too, list(current))
 
     def table(left, right="x", intro="", section="Reference"):
         return f"## {section}\n\n{intro}\n\n| 1.x | 2.0 |\n|---|---|\n| {left} | {right} |\n"
@@ -270,6 +342,25 @@ def self_test():
             (0, removed(table("Setters `Kept.More`, `.Value`"), setter, "N.Kept")),
             (0, removed(table("`int Kept.Value`"), getter, "N.Kept")),
             (0, removed(table("`Value`", intro="On `Kept`:"), getter, "N.Kept")),
+            # A renamed type covers the members that came with it; a member that changed too needs a row.
+            (0, removed(table("`Old`", "`New`"), "N.Old.Kept.get -> int", "N.New", "N.New.Kept.get -> int")),
+            (1, removed(table("`LanChipInfo`", "`WifiChipInfo`"), "N.LanChipInfo.FwVersion.get -> string!",
+                        "N.WifiChipInfo", "N.WifiChipInfo.FirmwareVersion.get -> string!")),
+            (0, removed(table("`LanChipInfo`", "`WifiChipInfo`") + "| `LanChipInfo.FwVersion` | x |\n",
+                        "N.LanChipInfo.FwVersion.get -> string!", "N.WifiChipInfo")),
+            # An overload is told apart by how many parameters it has.
+            (1, removed(table("`Kept.Go(a)`"), "N.Kept.Go(int a, int b = 0) -> void", "N.Kept")),
+            (0, removed(table("`Kept.Go(a, b)`"), "N.Kept.Go(int a, System.Func<int, int>! b) -> void", "N.Kept")),
+            (0, removed(table("`Kept.Go(...)`"), "N.Kept.Go(int a, int b = 0) -> void", "N.Kept")),
+            (1, removed(table("`Kept.Go(TimeSpan)`"), "N.Kept.Go(System.Threading.CancellationToken t) -> void", "N.Kept")),
+            # A member of an enum that was replaced, not renamed, needs a row even if a namesake exists.
+            (1, removed(table("`Old`", "`New`, with more"), "N.Old.On = 1 -> N.Old", "N.New", "N.New.On = 1 -> N.New")),
+            (1, removed(table("`Old`", "`New`, with more") + "| `x.Y == Old.On` | x |\n", "N.Old.On = 1 -> N.Old",
+                        "N.New", "N.New.On = 1 -> N.New")),
+            (0, removed(table("`Old`", "`New`"), "N.Old.On = 1 -> N.Old", "N.New", "N.New.On = 1 -> N.New")),
+            # Losing the setter has to be said even when the property was renamed.
+            (1, removed(table("`Kept.Value`", "`Kept.Other`"), setter, "N.Kept", "N.Kept.Other.init -> void")),
+            (0, removed(table("`Kept.Value`", "`Kept.Other`"), setter, "N.Kept", "N.Kept.Other.set -> void")),
             # A constructor is not the type.
             (1, removed(table("`Kept`"), "N.Kept.Kept() -> void", "N.Kept")),
             (0, removed(table("`new Kept()`"), "N.Kept.Kept() -> void", "N.Kept"))):
