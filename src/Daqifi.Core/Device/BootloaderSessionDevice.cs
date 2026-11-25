@@ -242,9 +242,21 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     }
 
     /// <summary>No-op: a bootloader session cannot stream.</summary>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task StartStreamingAsync(CancellationToken cancellationToken = default)
+        => Completed(cancellationToken);
+
+    /// <summary>No-op: a bootloader session cannot stream.</summary>
     public void StopStreaming()
     {
     }
+
+    /// <summary>No-op: a bootloader session cannot stream.</summary>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task StopStreamingAsync(CancellationToken cancellationToken = default)
+        => Completed(cancellationToken);
 
     #endregion
 
@@ -333,77 +345,34 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     {
     }
 
+    /// <summary>No-op: see <see cref="Reboot"/>.</summary>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task RebootAsync(CancellationToken cancellationToken = default)
+        => Completed(cancellationToken);
+
     #endregion
 
     #region ADC calibration and voltage precision
 
-    // No-ops for the same reason as the control members above. The confirming twins complete
-    // successfully rather than throwing DeviceCommandFailedException: there is no device to refuse
-    // the command, so there is no failure to report.
+    // No-ops for the same reason as the control members above. The confirming members, here and
+    // among the streaming ones, complete successfully rather than throwing
+    // DeviceCommandFailedException: there is no device to refuse the command, so there is no
+    // failure to report.
 
     /// <summary>No-op: see the remarks on this type.</summary>
-    public void SaveAdcCalibration()
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    public void LoadAdcCalibration()
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calM">Ignored.</param>
-    public void SetAdcCalibrationSlope(int channelNumber, double calM)
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calB">Ignored.</param>
-    public void SetAdcCalibrationOffset(int channelNumber, double calB)
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    public void SaveFactoryAdcCalibration()
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    public void LoadFactoryAdcCalibration()
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    /// <param name="bank">Ignored.</param>
-    public void UseAdcCalibration(AdcCalibrationBank bank)
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    public void SaveVoltagePrecision()
-    {
-    }
-
-    /// <summary>No-op: see the remarks on this type.</summary>
-    public void LoadVoltagePrecision()
-    {
-    }
-
-    /// <inheritdoc cref="SaveAdcCalibration" />
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="LoadAdcCalibration" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="SetAdcCalibrationSlope" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
     /// <param name="calM">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
@@ -411,7 +380,7 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="SetAdcCalibrationOffset" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
     /// <param name="calB">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
@@ -419,32 +388,32 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="SaveFactoryAdcCalibration" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="LoadFactoryAdcCalibration" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="UseAdcCalibration" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="bank">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="SaveVoltagePrecision" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
-    /// <inheritdoc cref="LoadVoltagePrecision" />
+    /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
     public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)

@@ -59,77 +59,6 @@ public class DeviceAdministrationOperationsTests
 
     #endregion
 
-    #region One command, and nothing else
-
-    public static IEnumerable<object[]> SingleCommandOperations()
-    {
-        yield return new object[] { "SaveAdcCalibration", "CONFigure:ADC:SAVEcal" };
-        yield return new object[] { "LoadAdcCalibration", "CONFigure:ADC:LOADcal" };
-        yield return new object[] { "SaveFactoryAdcCalibration", "CONFigure:ADC:SAVEFcal" };
-        yield return new object[] { "LoadFactoryAdcCalibration", "CONFigure:ADC:LOADFcal" };
-        yield return new object[] { "SaveVoltagePrecision", "CONFigure:VOLTage:SAVE" };
-        yield return new object[] { "LoadVoltagePrecision", "CONFigure:VOLTage:LOAD" };
-        yield return new object[] { "UseAdcCalibration(0)", "CONFigure:ADC:USECal 0" };
-        yield return new object[] { "UseAdcCalibration(1)", "CONFigure:ADC:USECal 1" };
-    }
-
-    /// <summary>
-    /// Each of these is a single fire-and-forget command. The assertion is not only that the right
-    /// text goes out but that the whole interaction with the device is that one send — no stream
-    /// stop, no channels lock, no metadata write, no disconnect. Every one of those would throw
-    /// from <see cref="FakeHost"/>, and a second send would fail the equality below.
-    /// </summary>
-    [Theory]
-    [MemberData(nameof(SingleCommandOperations))]
-    public void SingleCommandOperation_SendsExactlyThatCommandAndTouchesNothingElse(
-        string operation,
-        string expectedCommand)
-    {
-        var host = new FakeHost { IsConnected = true };
-        var administration = new DeviceAdministrationOperations(host);
-
-        // Dispatched by name rather than by a delegate parameter: the collaborator is internal, so
-        // an Action<DeviceAdministrationOperations> cannot appear on a public test method.
-        switch (operation)
-        {
-            case "SaveAdcCalibration": administration.SaveAdcCalibration(); break;
-            case "LoadAdcCalibration": administration.LoadAdcCalibration(); break;
-            case "SaveFactoryAdcCalibration": administration.SaveFactoryAdcCalibration(); break;
-            case "LoadFactoryAdcCalibration": administration.LoadFactoryAdcCalibration(); break;
-            case "SaveVoltagePrecision": administration.SaveVoltagePrecision(); break;
-            case "LoadVoltagePrecision": administration.LoadVoltagePrecision(); break;
-            case "UseAdcCalibration(0)": administration.UseAdcCalibration(AdcCalibrationBank.Factory); break;
-            case "UseAdcCalibration(1)": administration.UseAdcCalibration(AdcCalibrationBank.User); break;
-            default: throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unmapped operation.");
-        }
-
-        Assert.Equal(new[] { "send:" + expectedCommand }, host.Calls);
-    }
-
-    [Fact]
-    public void SetAdcCalibrationSlope_SendsExactlyOneCommand()
-    {
-        var host = new FakeHost { IsConnected = true };
-
-        new DeviceAdministrationOperations(host).SetAdcCalibrationSlope(2, 1.0025);
-
-        Assert.Single(host.Calls);
-        Assert.StartsWith("send:CONFigure:ADC:chanCALM ", host.Calls[0], StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void SetAdcCalibrationOffset_SendsExactlyOneCommand()
-    {
-        var host = new FakeHost { IsConnected = true };
-
-        new DeviceAdministrationOperations(host).SetAdcCalibrationOffset(3, -0.0031);
-
-        Assert.Single(host.Calls);
-        Assert.StartsWith("send:CONFigure:ADC:chanCALB ", host.Calls[0], StringComparison.Ordinal);
-    }
-
-    #endregion
-
     #region Friendly name
 
     [Fact]
@@ -350,7 +279,7 @@ public class DeviceAdministrationOperationsTests
 
     #endregion
 
-    #region Confirming variants
+    #region Confirming commands
 
     /// <summary>The reply a device gives to <c>SYSTem:ERRor?</c> when the queue is clean.</summary>
     private const string NoError = "0,\"No error\"";
@@ -362,7 +291,7 @@ public class DeviceAdministrationOperationsTests
     private const string ExecutionError = "-200,\"Execution error\"";
 
     /// <summary>
-    /// Every confirming variant, paired with the command text it must put on the wire. The two
+    /// Every confirming command, paired with the command text it must put on the wire. The two
     /// coefficient commands carry arguments, so the expected text is a prefix of what goes out.
     /// </summary>
     public static IEnumerable<object[]> ConfirmingOperations()
@@ -749,8 +678,7 @@ public class DeviceAdministrationOperationsTests
 
         // Outside this block's remit — reaching for any of these is a regression, not a refinement.
         public bool IsStreaming => throw new NotSupportedException();
-        public void EndStreamingSession() => throw new NotSupportedException();
-        public void MarkStreamingStartRefused() => throw new NotSupportedException();
+        public bool SendStreamStop() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();

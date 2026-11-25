@@ -81,15 +81,6 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("DisableAllChannels", d => d.DisableAllChannels());
         yield return Site("SetAnalogOutput", d => d.SetAnalogOutput(0, 1.0));
         yield return Site("SetPwmFrequency", d => d.SetPwmFrequency(1000));
-        yield return Site("SaveAdcCalibration", d => d.SaveAdcCalibration());
-        yield return Site("LoadAdcCalibration", d => d.LoadAdcCalibration());
-        yield return Site("SaveFactoryAdcCalibration", d => d.SaveFactoryAdcCalibration());
-        yield return Site("LoadFactoryAdcCalibration", d => d.LoadFactoryAdcCalibration());
-        yield return Site("UseAdcCalibration", d => d.UseAdcCalibration(AdcCalibrationBank.User));
-        yield return Site("SetAdcCalibrationSlope", d => d.SetAdcCalibrationSlope(0, 1.0));
-        yield return Site("SetAdcCalibrationOffset", d => d.SetAdcCalibrationOffset(0, 0.0));
-        yield return Site("SaveVoltagePrecision", d => d.SaveVoltagePrecision());
-        yield return Site("LoadVoltagePrecision", d => d.LoadVoltagePrecision());
         yield return Site("PrepareSdInterface", d => d.PrepareSdInterface());
         yield return Site("PrepareLanInterface", d => d.PrepareLanInterface());
         yield return Site("Send", d => d.Send(new ScpiMessage("*IDN?")));
@@ -139,6 +130,9 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("GetStreamStatsAsync", d => d.GetStreamStatsAsync());
         yield return Site("GetMemoryDiagnosticsAsync", d => d.GetMemoryDiagnosticsAsync());
         yield return Site("SetFriendlyNameAsync", d => d.SetFriendlyNameAsync("Lab Nq1"));
+        yield return Site("StartStreamingAsync", d => d.StartStreamingAsync());
+        yield return Site("StopStreamingAsync", d => d.StopStreamingAsync());
+        yield return Site("RebootAsync", d => d.RebootAsync());
         yield return Site("SaveAdcCalibrationAsync", d => d.SaveAdcCalibrationAsync());
         yield return Site("LoadAdcCalibrationAsync", d => d.LoadAdcCalibrationAsync());
         yield return Site("SaveFactoryAdcCalibrationAsync", d => d.SaveFactoryAdcCalibrationAsync());

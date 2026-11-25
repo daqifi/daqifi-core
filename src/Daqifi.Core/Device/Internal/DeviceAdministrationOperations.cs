@@ -16,20 +16,16 @@ namespace Daqifi.Core.Device.Internal;
 /// </summary>
 /// <remarks>
 /// <para>
-/// These are fire-and-forget SCPI commands with no reply to parse: each validates its arguments,
-/// checks the connection, and sends. They are grouped here because they share that shape and
-/// because none of them touches the channel collection, the streaming session, or any device
-/// state — the two exceptions being <see cref="Reboot"/>'s local teardown and
-/// <see cref="SetFriendlyNameAsync"/>'s optimistic metadata write, both of which go back through
-/// the host rather than being done here. <see cref="GetIdentifyAsync"/> is the one query: it reads
-/// a single <c>1</c>/<c>0</c> back in a text exchange.
+/// They are grouped here because none of them touches the channel collection, the streaming
+/// session, or any device state — the two exceptions being <see cref="Reboot"/>'s local teardown
+/// and <see cref="SetFriendlyNameAsync"/>'s optimistic metadata write, both of which go back
+/// through the host rather than being done here. <see cref="GetIdentifyAsync"/> is the one query:
+/// it reads a single <c>1</c>/<c>0</c> back in a text exchange.
 /// </para>
 /// <para>
-/// Each of those commands also has a confirming <c>...Async</c> twin here, which sends the same
-/// primitive and then reads the device's SCPI error queue so a refusal cannot pass for a success
-/// (see <see cref="SendConfirmedAsync"/>). The two shapes are kept side by side deliberately: the
-/// <c>void</c> ones stay usable mid-stream and cost one write, while the confirming ones need
-/// text exchanges and the device's full attention.
+/// The calibration and voltage-precision commands are confirming: each sends its primitive and then
+/// reads the device's SCPI error queue so a refusal cannot pass for a success (see
+/// <see cref="SendConfirmedAsync"/>). The others are fire-and-forget.
 /// </para>
 /// <para>
 /// Everything reaches the device through <see cref="IDeviceOperationHost"/>, so each command
@@ -163,85 +159,7 @@ internal sealed class DeviceAdministrationOperations
         _host.Disconnect();
     }
 
-    /// <inheritdoc cref="IStreamingDevice.SaveAdcCalibration" />
-    internal void SaveAdcCalibration()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.SaveAdcCalibration);
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.LoadAdcCalibration" />
-    internal void LoadAdcCalibration()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.LoadAdcCalibration);
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.SetAdcCalibrationSlope" />
-    internal void SetAdcCalibrationSlope(int channelNumber, double calM)
-    {
-        ValidateChannelNumber(channelNumber);
-
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.SetAdcCalibrationOffset" />
-    internal void SetAdcCalibrationOffset(int channelNumber, double calB)
-    {
-        ValidateChannelNumber(channelNumber);
-
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.SaveFactoryAdcCalibration" />
-    internal void SaveFactoryAdcCalibration()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.LoadFactoryAdcCalibration" />
-    internal void LoadFactoryAdcCalibration()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.UseAdcCalibration" />
-    internal void UseAdcCalibration(AdcCalibrationBank bank)
-    {
-        ValidateBank(bank);
-
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.UseAdcCalibration(bank));
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.SaveVoltagePrecision" />
-    internal void SaveVoltagePrecision()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.SaveVoltagePrecision);
-    }
-
-    /// <inheritdoc cref="IStreamingDevice.LoadVoltagePrecision" />
-    internal void LoadVoltagePrecision()
-    {
-        _host.EnsureConnected();
-
-        _host.Send(ScpiMessageProducer.LoadVoltagePrecision);
-    }
-
-    #region Confirming variants
+    #region Confirming commands
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.SaveAdcCalibrationAsync" />
     internal Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)

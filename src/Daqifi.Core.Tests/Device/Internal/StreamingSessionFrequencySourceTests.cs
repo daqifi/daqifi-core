@@ -6,6 +6,7 @@ namespace Daqifi.Core.Tests.Device.Internal;
 
 /// <summary>
 /// A caller's rate choice and a device-reported stored rate racing each other: the choice wins.
+/// And a raw start and a raw stop racing each other: what is recorded follows what went out.
 /// </summary>
 public class StreamingSessionFrequencySourceTests
 {
@@ -60,6 +61,100 @@ public class StreamingSessionFrequencySourceTests
         Assert.Equal("SYSTem:StartStreamData 200", host.StartCommand);
     }
 
+    [Fact]
+    public async Task ARawStop_ThatFollowsARawStartOut_IsRecordedAfterIt()
+    {
+        // The start is recorded after it went out. A stop that got in between would be recorded
+        // first, leaving a session recorded on a device that has stopped.
+        var session = new StreamingSessionController(new FakeHost());
+        Task? stop = null;
+
+        session.SendTracked(
+            "SYSTem:StartStreamData 100",
+            _ =>
+            {
+                stop = Task.Factory.StartNew(
+                    () => session.SendTracked("SYSTem:StopStreamData", _ => false),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                stop.Wait(TimeSpan.FromMilliseconds(200));
+                return false;
+            });
+        await stop!;
+
+        Assert.False(session.IsStreaming);
+    }
+
+    [Fact]
+    public void ARawStart_WhoseConnectionEndsAsItGoesOut_BeginsNoSession()
+    {
+        var session = new StreamingSessionController(new FakeHost());
+
+        session.SendTracked(
+            "SYSTem:StartStreamData 100",
+            _ =>
+            {
+                session.EndSessionOnConnectionEnd();
+                return false;
+            });
+
+        Assert.False(session.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AHeldBackCommandThatWillNotBeSent_TakesTheRecordBack(bool isStart)
+    {
+        var session = new StreamingSessionController(new FakeHost());
+        if (!isStart)
+        {
+            session.StartStreaming();
+        }
+
+        ITrackedSend? heldBack = null;
+        session.SendTracked(
+            isStart ? "SYSTem:StartStreamData 100" : "SYSTem:StopStreamData",
+            command =>
+            {
+                heldBack = command;
+                return true;
+            });
+        Assert.Equal(isStart, session.IsStreaming);
+
+        heldBack!.NotSent(new InvalidOperationException("not sent"));
+
+        Assert.Equal(!isStart, session.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AHeldBackCommandThatWillNotBeSent_LeavesWhatWasRecordedSinceAlone(bool connectionEnded)
+    {
+        var session = new StreamingSessionController(new FakeHost());
+        session.StartStreaming();
+        ITrackedSend? stop = null;
+        session.SendTracked(
+            "SYSTem:StopStreamData",
+            command =>
+            {
+                stop = command;
+                return true;
+            });
+        if (connectionEnded)
+        {
+            session.EndSessionOnConnectionEnd();
+        }
+
+        session.StartStreaming();
+        var current = session.Current;
+        stop!.NotSent(null);
+
+        Assert.Same(current, session.Current);
+    }
+
     private sealed class FakeHost : IStreamingSessionHost
     {
         private Action? _onMaxSamplingRateRead;
@@ -102,7 +197,13 @@ public class StreamingSessionFrequencySourceTests
             init => _maximumStreamingFrequencyHz = value;
         }
 
+        public bool SendsAreNeverHeldBack => false;
+
+        public bool SendsAreHeldBack => false;
+
         public bool PreserveActiveStream => false;
+
+        public TimeProvider Clock => TimeProvider.System;
 
         public void EnsureConnected()
         {
@@ -112,9 +213,9 @@ public class StreamingSessionFrequencySourceTests
         {
         }
 
-        public void Send<T>(IOutboundMessage<T> message)
-        {
-        }
+        public void Send<T>(IOutboundMessage<T> message) => StartCommand = message.Data as string;
+
+        public void SendNow<T>(IOutboundMessage<T> message) => throw new NotSupportedException();
 
         public string? StartCommand { get; private set; }
 
@@ -122,8 +223,7 @@ public class StreamingSessionFrequencySourceTests
 
         public Action? OnBeginDecoderSession { get; set; }
 
-        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
-            StartCommand = message.Data as string;
+        public bool ReaderRunsForHeldBackStart(Action<Exception> onNotSent) => true;
 
         public void BeginDecoderSession(int streamingFrequencyHz)
         {

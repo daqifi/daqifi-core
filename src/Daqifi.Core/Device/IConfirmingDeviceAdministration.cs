@@ -5,19 +5,15 @@ using System.Threading.Tasks;
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// The confirming counterparts to the fire-and-forget device-administration commands on
-/// <see cref="IStreamingDevice"/>: each sends the same firmware primitive and then asks the device
-/// whether it accepted it, so a refusal cannot pass for a success.
+/// The ADC calibration and voltage-precision commands. Each sends a firmware primitive and then asks
+/// the device whether it accepted it, so a refusal cannot pass for a success.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="IStreamingDevice.LoadAdcCalibration"/> and the rest of that block return <c>void</c>
-/// and parse no reply. Bench evidence on a Nyquist running firmware 3.7.2 shows what that costs:
+/// Bench evidence on a Nyquist running firmware 3.7.2 shows what asking is for:
 /// <c>CONFigure:ADC:LOADcal</c> answers <c>-200,"Execution error"</c> on a unit whose user
-/// calibration bank was never written, and the caller is told nothing — "load the user calibration
-/// bank" is a silent no-op that reports success. Sending the identical primitive by hand produced
-/// the same refusal, so this is the firmware's behavior rather than a defect in Core; what Core
-/// owes the caller is a way to find out.
+/// calibration bank was never written. Sent without asking, that is a silent no-op that looks like
+/// success.
 /// </para>
 /// <para>
 /// <see cref="IStreamingDevice"/> extends this interface, so any implementer of it gets the
@@ -36,12 +32,12 @@ namespace Daqifi.Core.Device;
 /// }
 /// </code>
 /// <para>
-/// Confirmation is not free: it needs text exchanges rather than a single write, so the
-/// <c>void</c> commands remain the right choice while streaming or when a silent no-op is
-/// acceptable. Nothing here changes what goes on the wire for those. Measured on the bench
-/// Nyquist (fw 3.7.2, USB CDC), one confirming command costs about <b>3 seconds</b> — a drain
-/// exchange plus the confirming exchange, each of which stops decoding protobuf frames and holds
-/// the device's operation lock. Budget for that before putting one in a loop over 16 channels.
+/// Confirmation is not free: it needs text exchanges rather than a single write. A caller who
+/// needs the bare write can send the matching
+/// <see cref="Communication.Producers.ScpiMessageProducer"/> message. Measured on the bench Nyquist
+/// (fw 3.7.2, USB CDC), one confirming command costs about <b>3 seconds</b> — a drain exchange plus
+/// the confirming exchange, each of which stops decoding protobuf frames and holds the device's
+/// operation lock. Budget for that before putting one in a loop over 16 channels.
 /// </para>
 /// </remarks>
 public interface IConfirmingDeviceAdministration
@@ -64,16 +60,16 @@ public interface IConfirmingDeviceAdministration
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Sends the same firmware primitive as the <c>void</c> command it mirrors, then reads the device's SCPI
-    /// error queue so a refusal surfaces as <see cref="DeviceCommandFailedException"/> instead of passing for
-    /// success. The queue is drained first, so the entry read afterwards belongs to this command and not to an
-    /// older one — which also means anything the queue was already holding is discarded; read it with
+    /// Sends the firmware primitive, then reads the device's SCPI error queue so a refusal surfaces as
+    /// <see cref="DeviceCommandFailedException"/> instead of passing for success. The queue is drained first,
+    /// so the entry read afterwards belongs to this command and not to an older one — which also means
+    /// anything the queue was already holding is discarded; read it with
     /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> beforehand if those entries matter.
     /// </para>
     /// <para>
     /// This costs two or more text exchanges, each of which stops decoding protobuf frames and takes the
     /// device's operation lock. Do not call it during active streaming or concurrently with another device
-    /// operation; the <c>void</c> command remains the one to use in those situations.
+    /// operation.
     /// </para>
     /// </remarks>
     /// <param name="cancellationToken">A cancellation token to observe while the exchange runs.</param>

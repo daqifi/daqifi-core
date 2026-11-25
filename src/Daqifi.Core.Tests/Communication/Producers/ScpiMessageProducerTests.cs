@@ -75,6 +75,7 @@ public class ScpiMessageProducerTests
 
         // Streaming
         { () => ScpiMessageProducer.StopStreaming, "SYSTem:StopStreamData" },
+        { () => ScpiMessageProducer.GetStreamingState, "SYSTem:StreamData?" },
         { () => ScpiMessageProducer.SetProtobufStreamFormat, "SYSTem:STReam:FORmat 0" },
         { () => ScpiMessageProducer.SetJsonStreamFormat, "SYSTem:STReam:FORmat 1" },
         { () => ScpiMessageProducer.SetCsvStreamFormat, "SYSTem:STReam:FORmat 2" },
