@@ -1314,7 +1314,7 @@ public class ChannelControlOperationsTests
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
+        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
             => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();

@@ -410,12 +410,18 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// version only when the version is the axis that actually failed.
     /// </remarks>
     /// <param name="feature">The feature the device does not support.</param>
+    /// <param name="rawDeviceResponse">The reply the device rejected the command with.</param>
     /// <returns>The exception to throw.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
     /// </exception>
-    private protected FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature) =>
-        BuildFeatureNotSupportedException(feature, DeviceFeatureRequirements.For(feature).MinVersion);
+    private protected FeatureNotSupportedException CreateFeatureNotSupportedException(
+        DeviceFeature feature,
+        IReadOnlyList<string> rawDeviceResponse) =>
+        BuildFeatureNotSupportedException(
+            feature,
+            DeviceFeatureRequirements.For(feature).MinVersion,
+            rawDeviceResponse);
 
     /// <summary>
     /// Assembles a <see cref="FeatureNotSupportedException"/> from the current
@@ -424,13 +430,15 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     private FeatureNotSupportedException BuildFeatureNotSupportedException(
         DeviceFeature feature,
-        FirmwareVersion? requiredVersion)
+        FirmwareVersion? requiredVersion,
+        IReadOnlyList<string>? rawDeviceResponse = null)
     {
         return new FeatureNotSupportedException(
             feature,
             requiredVersion,
             Metadata.FirmwareVersion,
-            Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+            Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType,
+            rawDeviceResponse);
     }
 
     /// <summary>

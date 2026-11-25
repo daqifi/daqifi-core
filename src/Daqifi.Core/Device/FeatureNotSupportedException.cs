@@ -1,4 +1,4 @@
-using System;
+using System.Collections.Generic;
 using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Device;
@@ -11,7 +11,7 @@ namespace Daqifi.Core.Device;
 /// on the command path; an up-front check against <see cref="DaqifiDevice.MinSupportedFirmware"/>
 /// or <see cref="DaqifiDevice.IsFirmwareVersionSupported"/> can pre-empt the round-trip for UI.
 /// </summary>
-public sealed class FeatureNotSupportedException : Exception
+public sealed class FeatureNotSupportedException : DaqifiDeviceException
 {
     /// <summary>
     /// Gets the feature the device does not support.
@@ -47,7 +47,21 @@ public sealed class FeatureNotSupportedException : Exception
         FirmwareVersion? requiredVersion = null,
         string? actualVersion = null,
         DeviceType? board = null)
-        : base(BuildMessage(feature, requiredVersion, actualVersion, board))
+        : this(feature, requiredVersion, actualVersion, board, rawDeviceResponse: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance that also carries the reply the device rejected the command with.
+    /// Kept apart from the public constructor, whose signature shipped in 1.x.
+    /// </summary>
+    internal FeatureNotSupportedException(
+        DeviceFeature feature,
+        FirmwareVersion? requiredVersion,
+        string? actualVersion,
+        DeviceType? board,
+        IReadOnlyList<string>? rawDeviceResponse)
+        : base(BuildMessage(feature, requiredVersion, actualVersion, board), rawDeviceResponse)
     {
         Feature = feature;
         RequiredVersion = requiredVersion;

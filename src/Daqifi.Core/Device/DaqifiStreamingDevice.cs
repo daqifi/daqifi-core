@@ -1717,8 +1717,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.EnsureSupported(DeviceFeature feature) => EnsureSupported(feature);
 
-    FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)
-        => CreateFeatureNotSupportedException(feature);
+    FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
+        => CreateFeatureNotSupportedException(feature, rawDeviceResponse);
 
     bool ISdCardOperationHost.IsUsbConnection => IsUsbConnection;
 
