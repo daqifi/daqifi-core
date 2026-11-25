@@ -11,7 +11,8 @@ namespace Daqifi.Core.Device.Internal;
 /// </summary>
 /// <param name="wentOut">Runs once the command has gone out.</param>
 /// <param name="notSent">Runs when it will not be.</param>
-internal sealed class TrackedCommand(Action wentOut, Action? notSent = null) : ITrackedSend
+/// <param name="goingOut">Runs when it is about to go out.</param>
+internal sealed class TrackedCommand(Action wentOut, Action? notSent = null, Action? goingOut = null) : ITrackedSend
 {
     private int _finished;
 
@@ -35,12 +36,14 @@ internal sealed class TrackedCommand(Action wentOut, Action? notSent = null) : I
 
     void ITrackedSend.GoOut(Action send)
     {
+        goingOut?.Invoke();
         send();
         WentOut();
     }
 
     void ITrackedSend.Replay(Action send)
     {
+        goingOut?.Invoke();
         send();
         WentOut();
     }
@@ -48,7 +51,10 @@ internal sealed class TrackedCommand(Action wentOut, Action? notSent = null) : I
     void ITrackedSend.NotSent(Exception? reason) => NotSent();
 
     /// <summary>Sends <paramref name="message"/> as this command.</summary>
-    internal void Send(IDeviceOperationHost host, IOutboundMessage<string> message)
+    internal void Send(IDeviceOperationHost host, IOutboundMessage<string> message) => Send(host, () => message);
+
+    /// <summary>Sends what <paramref name="message"/> gives when the command goes out as this command.</summary>
+    internal void Send(IDeviceOperationHost host, Func<IOutboundMessage<string>> message)
     {
         try
         {
@@ -72,16 +78,16 @@ internal sealed class TrackedCommand(Action wentOut, Action? notSent = null) : I
 /// The message of a <see cref="TrackedCommand"/>. It carries the command, so that an override of
 /// <see cref="DaqifiDevice.Send{T}"/> that passes the message on passes that on too.
 /// </summary>
-internal sealed class TrackedMessage(IOutboundMessage<string> message, TrackedCommand command) : IOutboundMessage<string>
+internal sealed class TrackedMessage(Func<IOutboundMessage<string>> message, TrackedCommand command) : IOutboundMessage<string>
 {
     /// <summary>What hears what becomes of the message.</summary>
     internal TrackedCommand Command => command;
 
     /// <inheritdoc />
-    public string Data => message.Data;
+    public string Data => message().Data;
 
     /// <inheritdoc />
-    public byte[] GetBytes() => message.GetBytes();
+    public byte[] GetBytes() => message().GetBytes();
 }
 
 /// <summary>
@@ -101,10 +107,21 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
     /// <summary>Guards the list below. Taken before the channels lock, and never held across a send.</summary>
     private readonly Lock _lock = new();
 
-    /// <summary>
-    /// The commands that have not gone out yet, in the order they were sent, with what they ask for.
-    /// </summary>
-    private readonly List<(TrackedCommand Command, T State)> _outstanding = new();
+    /// <summary>The commands that have not gone out yet, in the order they were sent.</summary>
+    private readonly List<Outstanding> _outstanding = new();
+
+    /// <summary>A command that has not gone out yet.</summary>
+    private sealed class Outstanding(T state)
+    {
+        /// <summary>What the command sets.</summary>
+        internal T Sets { get; set; } = state;
+
+        /// <summary>The state there will be once the command, and what went out ahead of it, have gone out.</summary>
+        internal T Requested { get; set; } = state;
+
+        /// <summary>Whether what it sets stays as it is.</summary>
+        internal bool IsFixed { get; set; }
+    }
 
     /// <summary>The recorded state.</summary>
     internal T Recorded => get();
@@ -119,7 +136,7 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
         {
             lock (_lock)
             {
-                return _outstanding.Count == 0 ? get() : _outstanding[^1].State;
+                return _outstanding.Count == 0 ? get() : _outstanding[^1].Requested;
             }
         }
     }
@@ -129,38 +146,72 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
     /// </summary>
     /// <param name="state">What the command sets.</param>
     /// <param name="change">
-    /// What it changes, for a command that sets more than its caller asked to change. It is applied
-    /// to the requests the command goes out ahead of, so that what is sent behind those keeps both.
+    /// What it changes, for a state that the next command is worked out from. It is applied to the
+    /// commands this one goes out ahead of, so that they do not undo it.
     /// </param>
     internal TrackedCommand Command(T state, Func<T, T>? change = null)
+        => Command(new Outstanding(state) { IsFixed = true }, change);
+
+    /// <summary>
+    /// Sends a command that sets what is there already with <paramref name="change"/> applied to it:
+    /// to <paramref name="current"/>, and to what goes out ahead of the command if it is held back.
+    /// </summary>
+    internal void Send(IDeviceOperationHost host, T current, Func<T, T> change, Func<T, IOutboundMessage<string>> message)
     {
-        TrackedCommand command = null!;
-        command = new TrackedCommand(
-            () =>
+        var outstanding = new Outstanding(change(current));
+
+        // Fails here if it cannot be sent at all.
+        _ = message(outstanding.Sets);
+
+        Command(outstanding, change).Send(host, () =>
+        {
+            lock (_lock)
+            {
+                return message(outstanding.Sets);
+            }
+        });
+    }
+
+    private TrackedCommand Command(Outstanding outstanding, Func<T, T>? change)
+    {
+        var command = new TrackedCommand(
+            wentOut: () =>
             {
                 lock (_lock)
                 {
-                    record(state);
+                    record(outstanding.Sets);
 
-                    var index = _outstanding.FindIndex(other => other.Command == command);
+                    var index = _outstanding.IndexOf(outstanding);
                     _outstanding.RemoveAt(index);
                     for (var i = 0; change != null && i < index; i++)
                     {
-                        _outstanding[i] = _outstanding[i] with { State = change(_outstanding[i].State) };
+                        var overtaken = _outstanding[i];
+                        overtaken.Requested = change(overtaken.Requested);
+                        if (!overtaken.IsFixed)
+                        {
+                            overtaken.Sets = overtaken.Requested;
+                        }
                     }
                 }
             },
-            () =>
+            notSent: () =>
             {
                 lock (_lock)
                 {
-                    _outstanding.RemoveAll(other => other.Command == command);
+                    _outstanding.Remove(outstanding);
+                }
+            },
+            goingOut: () =>
+            {
+                lock (_lock)
+                {
+                    outstanding.IsFixed = true;
                 }
             });
 
         lock (_lock)
         {
-            _outstanding.Add((command, state));
+            _outstanding.Add(outstanding);
         }
 
         return command;

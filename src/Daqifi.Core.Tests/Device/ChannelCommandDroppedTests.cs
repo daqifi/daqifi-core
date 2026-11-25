@@ -359,6 +359,21 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
+    public async Task AHeldBackDisable_KeepsTheDigitalChannelTheOperationEnabledMeanwhile()
+    {
+        // One command enables every digital channel or none.
+        using var device = await HeldDevice.CreateAsync();
+        device.DisableAllChannels();
+        device.EnableChannel(device.Digital(0));
+
+        await device.WhileHeldAsync(
+            () => device.DisableChannel(device.Digital(0)),
+            inOperation: () => device.EnableChannel(device.Digital(3)));
+
+        Assert.Equal(device.Digital(3).Name, device.Enabled);
+    }
+
+    [Fact]
     public async Task AnEnableBehindARawAdcMask_KeepsAChannelThatBecomesKnownMeanwhile()
     {
         using var device = await HeldDevice.CreateAsync();

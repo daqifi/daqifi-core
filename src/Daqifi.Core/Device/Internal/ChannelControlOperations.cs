@@ -698,17 +698,20 @@ internal sealed class ChannelControlOperations
 
             if (ChangeOf(ChannelType.Analog, channels, enabled, all) is { } analogChange)
             {
-                var analog = analogChange(AheadOfNextSend(_enabledAnalog));
-                var mask = ScpiMessageProducer.EnableAdcChannels(AdcEnableMask(analog));
-                _enabledAnalog.Command(analog, analogChange).Send(_host, mask);
+                _enabledAnalog.Send(
+                    _host,
+                    AheadOfNextSend(_enabledAnalog),
+                    analogChange,
+                    analog => ScpiMessageProducer.EnableAdcChannels(AdcEnableMask(analog)));
             }
 
             if (ChangeOf(ChannelType.Digital, channels, enabled, all) is { } digitalChange)
             {
-                var digital = digitalChange(AheadOfNextSend(_enabledDigital));
-                _enabledDigital.Command(digital, digitalChange).Send(
+                _enabledDigital.Send(
                     _host,
-                    digital.Count > 0 ? ScpiMessageProducer.EnableDioPorts : ScpiMessageProducer.DisableDioPorts);
+                    AheadOfNextSend(_enabledDigital),
+                    digitalChange,
+                    digital => digital.Count > 0 ? ScpiMessageProducer.EnableDioPorts : ScpiMessageProducer.DisableDioPorts);
             }
         }
     }
