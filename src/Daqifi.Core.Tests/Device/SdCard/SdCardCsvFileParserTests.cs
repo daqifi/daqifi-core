@@ -88,7 +88,7 @@ public sealed class SdCardCsvFileParserTests
         // Assert
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
         Assert.Equal(3, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(0, session.DeviceConfig.DigitalPortCount);
@@ -432,8 +432,8 @@ public sealed class SdCardCsvFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
         var session = await parser.ParseAsync(stream, "log_20240315_143022.csv");
 
-        Assert.NotNull(session.FileCreatedDate);
-        Assert.Equal(new DateTime(2024, 3, 15, 14, 30, 22), session.FileCreatedDate.Value);
+        Assert.NotNull(session.CreatedDate);
+        Assert.Equal(new DateTime(2024, 3, 15, 14, 30, 22), session.CreatedDate.Value);
     }
 
     [Fact]
@@ -454,13 +454,13 @@ public sealed class SdCardCsvFileParserTests
         var session = await parser.ParseAsync(stream, "log_20240315_143022.csv", options);
 
         // SessionStartTime wins over filename-derived date
-        Assert.Equal(overrideTime, session.FileCreatedDate);
+        Assert.Equal(overrideTime, session.CreatedDate);
     }
 
     [Fact]
     public async Task ParseAsync_ConfigurationOverride_OverridesEmbeddedHeaders()
     {
-        // Arrange — file has headers; override fills gaps (FirmwareRevision, DigitalPortCount)
+        // Arrange — file has headers; override fills gaps (FirmwareVersion, DigitalPortCount)
         // while file-parsed values take precedence for fields the file already provides.
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
             "Nyquist 1", "7E2815916200E898", 50_000_000u,
@@ -473,7 +473,7 @@ public sealed class SdCardCsvFileParserTests
             TimestampFrequency: 1_000_000u,
             DeviceSerialNumber: "OVERRIDE_SN",
             DevicePartNumber: "OVERRIDE_DEVICE",
-            FirmwareRevision: "9.9.9",
+            FirmwareVersion: "9.9.9",
             CalibrationValues: null
         );
 
@@ -487,11 +487,11 @@ public sealed class SdCardCsvFileParserTests
 
         Assert.NotNull(session.DeviceConfig);
         // File-parsed values take precedence
-        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
         // Override fills gaps not present in the file
-        Assert.Equal("9.9.9", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("9.9.9", session.DeviceConfig.FirmwareVersion);
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
     }
 
@@ -511,9 +511,9 @@ public sealed class SdCardCsvFileParserTests
             AnalogPortCount: 2,
             DigitalPortCount: 0,
             TimestampFrequency: 50_000_000u,
-            DeviceSerialNumber: "7E2815916200E898",
+            DeviceSerialNumber: "9090539562006014104",
             DevicePartNumber: "Nyquist 1",
-            FirmwareRevision: "3.7.2",
+            FirmwareVersion: "3.7.2",
             CalibrationValues: null
         );
 
@@ -528,7 +528,7 @@ public sealed class SdCardCsvFileParserTests
 
         // Assert
         Assert.NotNull(session.DeviceConfig);
-        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
     }
 
@@ -610,9 +610,9 @@ public sealed class SdCardCsvFileParserTests
             AnalogPortCount: 3,
             DigitalPortCount: 0,
             TimestampFrequency: 50_000_000u,
-            DeviceSerialNumber: "7E2815916200E898",
+            DeviceSerialNumber: "9090539562006014104",
             DevicePartNumber: "Nyquist 1",
-            FirmwareRevision: "3.4.4",
+            FirmwareVersion: "3.4.4",
             CalibrationValues: new[] { (1.0, 0.0), (1.02, -0.05), (0.98, 0.01) },
             Resolution: 65535,
             PortRange: new[] { 10.0, 5.0, 2.0 },
@@ -673,7 +673,7 @@ public sealed class SdCardCsvFileParserTests
             TimestampFrequency: 100u,
             DeviceSerialNumber: "SN001",
             DevicePartNumber: "TestDevice",
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: new[] { (1.02, -0.05) },  // calM=1.02, calB=-0.05
             Resolution: 65535,
             PortRange: new[] { 10.0 },
@@ -749,7 +749,7 @@ public sealed class SdCardCsvFileParserTests
             TimestampFrequency: 100u,
             DeviceSerialNumber: "SN001",
             DevicePartNumber: "Nyquist 1",
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: new[] { (1.0, 0.0) },
             Resolution: 65535,
             PortRange: new[] { 10.0 },

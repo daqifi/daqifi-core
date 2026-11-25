@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;

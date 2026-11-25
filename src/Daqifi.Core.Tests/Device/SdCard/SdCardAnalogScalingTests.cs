@@ -47,7 +47,7 @@ public class SdCardAnalogScalingTests
         TimestampFrequency: 0u,
         DeviceSerialNumber: null,
         DevicePartNumber: null,
-        FirmwareRevision: null,
+        FirmwareVersion: null,
         CalibrationValues: calibration ?? new[] { (2.0, 0.5), (3.0, -0.25), (4.0, 0.125) },
         Resolution: 1000u,
         PortRange: portRange ?? new[] { 10.0, 20.0, 40.0 },

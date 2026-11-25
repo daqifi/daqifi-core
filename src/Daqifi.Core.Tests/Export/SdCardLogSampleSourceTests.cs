@@ -1,9 +1,10 @@
 using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 /// <summary>
 /// Covers the SD-card-log-to-export adapter on its own — no device and no real log file, so every
@@ -21,15 +22,15 @@ public class SdCardLogSampleSourceTests
     [Fact]
     public void GetChannels_IsOneColumnPerAnalogPortThenTheDigitalPort()
     {
-        var source = new SdCardLogSampleSource(Entries(), "SN123", analogChannelCount: 3);
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 3, deviceName: null, "SN123");
 
-        var channels = source.GetChannels();
+        var channels = source.Channels;
 
         Assert.Equal(new[] { "AI0", "AI1", "AI2", "DIO" }, channels.Select(c => c.ChannelName).ToArray());
         Assert.Equal(
             new[]
             {
-                "Daqifi:SN123:AI0", "Daqifi:SN123:AI1", "Daqifi:SN123:AI2", "Daqifi:SN123:DIO",
+                "DAQiFi Device:SN123:AI0", "DAQiFi Device:SN123:AI1", "DAQiFi Device:SN123:AI2", "DAQiFi Device:SN123:DIO",
             },
             channels.Select(c => c.Key).ToArray());
         Assert.Equal(ChannelType.Analog, channels[0].ChannelType);
@@ -42,9 +43,9 @@ public class SdCardLogSampleSourceTests
     {
         // CsvExporter writes nothing at all for a source with no channels, so an analog-less
         // device has to keep at least one column or the export silently produces an empty file.
-        var source = new SdCardLogSampleSource(Entries(), "SN123", analogChannelCount: 0);
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 0, deviceName: null, "SN123");
 
-        Assert.Equal(new[] { "DIO" }, source.GetChannels().Select(c => c.ChannelName).ToArray());
+        Assert.Equal(new[] { "DIO" }, source.Channels.Select(c => c.ChannelName).ToArray());
         Assert.Equal(0, source.AnalogChannelCount);
     }
 
@@ -54,9 +55,9 @@ public class SdCardLogSampleSourceTests
     [InlineData("   ")]
     public void BlankSerialNumber_BecomesUnknown_RatherThanAnEmptyKeySegment(string? serial)
     {
-        var source = new SdCardLogSampleSource(Entries(), serial, analogChannelCount: 1);
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 1, deviceName: null, serial);
 
-        Assert.Equal("Daqifi:unknown:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:unknown:AI0", source.Channels[0].Key);
     }
 
     [Theory]
@@ -65,17 +66,17 @@ public class SdCardLogSampleSourceTests
     [InlineData("   ")]
     public void BlankDeviceName_BecomesTheDefault_BecauseALogCarriesNone(string? deviceName)
     {
-        var source = new SdCardLogSampleSource(Entries(), "SN", analogChannelCount: 1, deviceName);
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 1, deviceName, "SN");
 
-        Assert.Equal($"{SdCardLogSampleSource.DefaultDeviceName}:SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal($"{DeviceConnectionOptions.DefaultDeviceName}:SN:AI0", source.Channels[0].Key);
     }
 
     [Fact]
     public void ExplicitDeviceName_IsUsedInTheKeys()
     {
-        var source = new SdCardLogSampleSource(Entries(), "SN", analogChannelCount: 1, "Nyquist");
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 1, "Nyquist", "SN");
 
-        Assert.Equal("Nyquist:SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("Nyquist:SN:AI0", source.Channels[0].Key);
     }
 
     // ── Argument guards ─────────────────────────────────────────────────────
@@ -85,7 +86,7 @@ public class SdCardLogSampleSourceTests
     {
         Assert.Throws<ArgumentNullException>(
             "samples",
-            () => new SdCardLogSampleSource(null!, "SN", analogChannelCount: 1));
+            () => new SdCardLogSampleSource(null!, analogChannelCount: 1, deviceName: null, "SN"));
     }
 
     [Fact]
@@ -93,7 +94,7 @@ public class SdCardLogSampleSourceTests
     {
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             "analogChannelCount",
-            () => new SdCardLogSampleSource(Entries(), "SN", analogChannelCount: -1));
+            () => new SdCardLogSampleSource(Entries(), analogChannelCount: -1, deviceName: null, "SN"));
 
         Assert.Equal(-1, ex.ActualValue);
     }
@@ -104,12 +105,12 @@ public class SdCardLogSampleSourceTests
     public async Task StreamSamples_EmitsEveryAnalogValueThenTheDigitalPort()
     {
         var source = new SdCardLogSampleSource(
-            Entries(Entry(0, digital: 0b101, 1.5, -2.5)), "SN", analogChannelCount: 2);
+            Entries(Entry(0, digital: 0b101, 1.5, -2.5)), analogChannelCount: 2, deviceName: null, "SN");
 
         var rows = await Collect(source);
 
         Assert.Equal(
-            new[] { ("Daqifi:SN:AI0", 1.5), ("Daqifi:SN:AI1", -2.5), ("Daqifi:SN:DIO", 5.0) },
+            new[] { ("DAQiFi Device:SN:AI0", 1.5), ("DAQiFi Device:SN:AI1", -2.5), ("DAQiFi Device:SN:DIO", 5.0) },
             rows.Select(r => (r.ChannelKey, r.Value)).ToArray());
         Assert.All(rows, r => Assert.Equal(T0.Ticks, r.TimestampTicks));
     }
@@ -122,8 +123,9 @@ public class SdCardLogSampleSourceTests
                 Entry(0, 0b01, 1.0, 2.0),
                 Entry(0, 0b10, 3.0, 4.0),   // repeats the timestamp — the exporter merges the two
                 Entry(1, 0b11, 5.0, 6.0)),
-            "SN",
-            analogChannelCount: 2);
+            analogChannelCount: 2,
+            deviceName: null,
+            "SN");
 
         var rows = await Collect(source);
 
@@ -146,8 +148,9 @@ public class SdCardLogSampleSourceTests
                 Entry(0, 0b10, 3.0, 4.0),
                 Entry(1, 0b11, 5.0, 6.0),
                 Entry(2, 0b00, 7.0, 8.0)),
-            "SN",
-            analogChannelCount: 2);
+            analogChannelCount: 2,
+            deviceName: null,
+            "SN");
 
         var writer = new StringWriter();
         await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions { UseRelativeTime = false });
@@ -158,8 +161,8 @@ public class SdCardLogSampleSourceTests
             .ToList();
 
         Assert.Equal(source.RowCount, lines.Count - 1);   // minus the header
-        Assert.Contains("Daqifi:SN:AI0", lines[0]);
-        Assert.Contains("Daqifi:SN:DIO", lines[0]);
+        Assert.Contains("DAQiFi Device:SN:AI0", lines[0]);
+        Assert.Contains("DAQiFi Device:SN:DIO", lines[0]);
     }
 
     [Fact]
@@ -172,8 +175,9 @@ public class SdCardLogSampleSourceTests
                 Entry(0, 0, 1.0, 2.0),          // one value over
                 Entry(1, 0, 1.0, 2.0, 3.0),     // two over — the widest
                 Entry(2, 0, 1.0, 2.0)),         // one over again
-            "SN",
-            analogChannelCount: 1);
+            analogChannelCount: 1,
+            deviceName: null,
+            "SN");
 
         var rows = await Collect(source);
 
@@ -186,18 +190,18 @@ public class SdCardLogSampleSourceTests
     public async Task FewerAnalogValuesThanColumns_LeavesTheRestOfTheRowEmpty()
     {
         var source = new SdCardLogSampleSource(
-            Entries(Entry(0, 0, 1.0)), "SN", analogChannelCount: 3);
+            Entries(Entry(0, 0, 1.0)), analogChannelCount: 3, deviceName: null, "SN");
 
         var rows = await Collect(source);
 
-        Assert.Equal(new[] { "Daqifi:SN:AI0", "Daqifi:SN:DIO" }, rows.Select(r => r.ChannelKey).ToArray());
+        Assert.Equal(new[] { "DAQiFi Device:SN:AI0", "DAQiFi Device:SN:DIO" }, rows.Select(r => r.ChannelKey).ToArray());
         Assert.Equal(0, source.DroppedAnalogColumns);
     }
 
     [Fact]
     public async Task EmptyLog_ProducesNoRows_AndTheExporterWritesTheHeaderAlone()
     {
-        var source = new SdCardLogSampleSource(Entries(), "SN", analogChannelCount: 2);
+        var source = new SdCardLogSampleSource(Entries(), analogChannelCount: 2, deviceName: null, "SN");
 
         var writer = new StringWriter();
         await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions());
@@ -214,8 +218,9 @@ public class SdCardLogSampleSourceTests
         // caller is told the time column is not ascending.
         var source = new SdCardLogSampleSource(
             Entries(Entry(2, 0, 1.0), Entry(1, 0, 2.0), Entry(1, 0, 3.0), Entry(3, 0, 4.0)),
-            "SN",
-            analogChannelCount: 1);
+            analogChannelCount: 1,
+            deviceName: null,
+            "SN");
 
         var rows = await Collect(source);
 
@@ -228,7 +233,7 @@ public class SdCardLogSampleSourceTests
     public async Task Counters_AccumulateAcrossEnumerations_TheyAreNotResetPerExport()
     {
         var source = new SdCardLogSampleSource(
-            Entries(Entry(0, 0, 1.0), Entry(1, 0, 2.0)), "SN", analogChannelCount: 1);
+            Entries(Entry(0, 0, 1.0), Entry(1, 0, 2.0)), analogChannelCount: 1, deviceName: null, "SN");
 
         await Collect(source);
         await Collect(source);
@@ -246,14 +251,15 @@ public class SdCardLogSampleSourceTests
 
         var source = new SdCardLogSampleSource(
             Entries(Entry(0, 0, 1.0), Entry(1, 0, 2.0), Entry(2, 0, 3.0)),
-            "SN",
-            analogChannelCount: 1);
+            analogChannelCount: 1,
+            deviceName: null,
+            "SN");
 
         var rows = new List<SampleRow>();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var row in source.StreamSamples(cts.Token))
+            await foreach (var row in source.StreamSamplesAsync(cts.Token))
             {
                 rows.Add(row);
                 if (rows.Count == 2)
@@ -285,11 +291,11 @@ public class SdCardLogSampleSourceTests
 
         await cts.CancelAsync();
 
-        var source = new SdCardLogSampleSource(Watching(), "SN", analogChannelCount: 1);
+        var source = new SdCardLogSampleSource(Watching(), analogChannelCount: 1, deviceName: null, "SN");
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in source.StreamSamples(cts.Token))
+            await foreach (var _ in source.StreamSamplesAsync(cts.Token))
             {
             }
         });
@@ -301,13 +307,13 @@ public class SdCardLogSampleSourceTests
     // ── GetSampleCountAsync ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetSampleCountAsync_ReturnsZeroWithoutReadingTheLog()
+    public async Task GetSampleCountAsync_ReturnsNullWithoutReadingTheLog()
     {
         // Counting would mean a second pass, and a stream-backed session has one read cursor:
         // the pass taken to count is a pass the export cannot take.
-        var source = new SdCardLogSampleSource(Exploding(), "SN", analogChannelCount: 1);
+        var source = new SdCardLogSampleSource(Exploding(), analogChannelCount: 1, deviceName: null, "SN");
 
-        Assert.Equal(0, await source.GetSampleCountAsync(CancellationToken.None));
+        Assert.Null(await source.GetSampleCountAsync(CancellationToken.None));
     }
 
     // ── AsSampleSource over a parsed session ────────────────────────────────
@@ -320,7 +326,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource(Config(analogPorts: 8, serial: "LIVE-SN"));
 
         Assert.Equal(2, source.AnalogChannelCount);
-        Assert.Equal("Daqifi:LOG-SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:LOG-SN:AI0", source.Channels[0].Key);
     }
 
     [Fact]
@@ -329,7 +335,7 @@ public class SdCardLogSampleSourceTests
         var source = Session(config: null).AsSampleSource(Config(analogPorts: 2, serial: "LIVE-SN"));
 
         Assert.Equal(2, source.AnalogChannelCount);
-        Assert.Equal("Daqifi:LIVE-SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:LIVE-SN:AI0", source.Channels[0].Key);
     }
 
     [Fact]
@@ -340,7 +346,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource(Config(analogPorts: 8, serial: "LIVE-SN"));
 
         Assert.Equal(2, source.AnalogChannelCount);              // the log's width still wins
-        Assert.Equal("Daqifi:LIVE-SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:LIVE-SN:AI0", source.Channels[0].Key);
     }
 
     [Theory]
@@ -354,7 +360,7 @@ public class SdCardLogSampleSourceTests
 
         var source = session.AsSampleSource(Config(analogPorts: 8, serial: "LIVE-SN"));
 
-        Assert.Equal("Daqifi:LIVE-SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:LIVE-SN:AI0", source.Channels[0].Key);
     }
 
     [Fact]
@@ -362,7 +368,7 @@ public class SdCardLogSampleSourceTests
     {
         var source = Session(Config(analogPorts: 1, serial: "  ")).AsSampleSource(Config(analogPorts: 1, serial: ""));
 
-        Assert.Equal("Daqifi:unknown:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("DAQiFi Device:unknown:AI0", source.Channels[0].Key);
     }
 
     [Fact]
@@ -373,7 +379,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource(Config(analogPorts: 8, serial: "LIVE-SN"));
 
         Assert.Equal(0, source.AnalogChannelCount);
-        Assert.Single(source.GetChannels());
+        Assert.Single(source.Channels);
     }
 
     [Fact]
@@ -387,7 +393,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource();
 
         Assert.Equal(16, source.AnalogChannelCount);
-        Assert.Equal("Daqifi:unknown:AI15", source.GetChannels()[15].Key);
+        Assert.Equal("DAQiFi Device:unknown:AI15", source.Channels[15].Key);
     }
 
     [Fact]
@@ -424,7 +430,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource();
 
         Assert.Equal(0, source.AnalogChannelCount);
-        Assert.Equal(new[] { "Daqifi:LOG-SN:DIO" }, source.GetChannels().Select(c => c.Key).ToArray());
+        Assert.Equal(new[] { "DAQiFi Device:LOG-SN:DIO" }, source.Channels.Select(c => c.Key).ToArray());
     }
 
     [Fact]
@@ -432,7 +438,7 @@ public class SdCardLogSampleSourceTests
     {
         var source = Session(config: null).AsSampleSource();
 
-        Assert.Equal(new[] { "Daqifi:unknown:DIO" }, source.GetChannels().Select(c => c.Key).ToArray());
+        Assert.Equal(new[] { "DAQiFi Device:unknown:DIO" }, source.Channels.Select(c => c.Key).ToArray());
     }
 
     [Fact]
@@ -445,7 +451,7 @@ public class SdCardLogSampleSourceTests
         var source = session.AsSampleSource();
 
         Assert.Equal(0, source.AnalogChannelCount);
-        Assert.Single(source.GetChannels());
+        Assert.Single(source.Channels);
     }
 
     [Fact]
@@ -453,7 +459,7 @@ public class SdCardLogSampleSourceTests
     {
         var source = Session(Config(analogPorts: 1, serial: "SN")).AsSampleSource(deviceName: "Nyquist");
 
-        Assert.Equal("Nyquist:SN:AI0", source.GetChannels()[0].Key);
+        Assert.Equal("Nyquist:SN:AI0", source.Channels[0].Key);
     }
 
     [Fact]
@@ -471,7 +477,7 @@ public class SdCardLogSampleSourceTests
 
         var source = session.AsSampleSource();
 
-        Assert.Equal(2, source.GetChannels().Count);
+        Assert.Equal(2, source.Channels.Count);
         Assert.Equal(0, source.SampleCount);
     }
 
@@ -484,7 +490,7 @@ public class SdCardLogSampleSourceTests
         var rows = await Collect(session.AsSampleSource());
 
         Assert.Equal(
-            new[] { ("Daqifi:SN:AI0", 4.5), ("Daqifi:SN:DIO", 3.0) },
+            new[] { ("DAQiFi Device:SN:AI0", 4.5), ("DAQiFi Device:SN:DIO", 3.0) },
             rows.Select(r => (r.ChannelKey, r.Value)).ToArray());
     }
 
@@ -535,7 +541,7 @@ public class SdCardLogSampleSourceTests
     private static async Task<List<SampleRow>> Collect(SdCardLogSampleSource source)
     {
         var rows = new List<SampleRow>();
-        await foreach (var row in source.StreamSamples())
+        await foreach (var row in source.StreamSamplesAsync())
         {
             rows.Add(row);
         }

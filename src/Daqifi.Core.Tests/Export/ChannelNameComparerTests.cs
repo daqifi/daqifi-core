@@ -1,10 +1,10 @@
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 public class ChannelNameComparerTests
 {
-    private static readonly ChannelNameComparer Comparer = ChannelNameComparer.Instance;
+    private static readonly ChannelNameComparer Comparer = ChannelNameComparer.Default;
 
     private static int Sign(int value) => Math.Sign(value);
 

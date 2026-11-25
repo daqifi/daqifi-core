@@ -1,4 +1,4 @@
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// The unit names an <see cref="ISampleSource"/> reports through

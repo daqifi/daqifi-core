@@ -1,7 +1,7 @@
 using Daqifi.Core.Channel;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 public class ChannelDescriptorComparerTests
 {

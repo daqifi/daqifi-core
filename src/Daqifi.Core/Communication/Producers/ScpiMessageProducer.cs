@@ -351,6 +351,16 @@ public static class ScpiMessageProducer
     }
 
     /// <summary>
+    /// Creates a query message for the firmware-enforced minimum free-space floor on the SD card.
+    /// The reply is one whole number of bytes; 0 means the gate is off.
+    /// </summary>
+    /// <remarks>
+    /// Available on every supported firmware (v3.5.0+), like <see cref="SetSdMinFreeSpace"/>.
+    /// Command: SYSTem:STORage:SD:MINFree?
+    /// </remarks>
+    public static IOutboundMessage<string> GetSdMinFreeSpace { get; } = new ScpiMessage("SYSTem:STORage:SD:MINFree?");
+
+    /// <summary>
     /// Creates a command message to turn CRC-protected SD card writes on or off.
     /// </summary>
     /// <param name="enabled"><c>true</c> to turn protection on; <c>false</c> for the fast default.</param>

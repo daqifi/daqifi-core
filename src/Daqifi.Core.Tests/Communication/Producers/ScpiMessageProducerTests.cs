@@ -67,6 +67,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.GetSdMaxFileSize, "SYSTem:STORage:SD:MAXSize?" },
         { () => ScpiMessageProducer.GetSdBenchmarkResults, "SYSTem:STORage:SD:BENCHmark?" },
         { () => ScpiMessageProducer.GetSdSpace, "SYSTem:STORage:SD:SPACe?" },
+        { () => ScpiMessageProducer.GetSdMinFreeSpace, "SYSTem:STORage:SD:MINFree?" },
         { () => ScpiMessageProducer.GetSdCrcProtection, "SYSTem:STORage:SD:PROTect?" },
         { () => ScpiMessageProducer.GetSdCardInfo, "SYSTem:STORage:SD:INFO?" },
 

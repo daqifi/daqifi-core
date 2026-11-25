@@ -239,7 +239,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     internal Exception? SdFailure { get; set; }
 
     /// <summary>The logging session the last <c>start_sd_logging</c> opened, if any.</summary>
-    internal SdCardLoggingSession? StartedSession { get; private set; }
+    internal SdCardRecording? StartedSession { get; private set; }
 
     /// <summary>
     /// The names <c>delete_sd_file</c> actually put on the wire, in order. The firmware accepts a
@@ -262,16 +262,16 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             ? Task.FromException<SdCardStorageInfo>(failure)
             : Task.FromResult(SdStorage);
 
-    Task<SdCardLoggingSession> ISdCardOperations.StartSdCardLoggingSessionAsync(
-        string? fileName, string? channelMask, SdCardLogFormat format, CancellationToken cancellationToken)
+    Task<SdCardRecording> ISdCardOperations.StartSdCardLoggingAsync(
+        string? fileName, SdCardLogFormat format, CancellationToken cancellationToken)
     {
         if (SdFailure is { } failure)
         {
-            return Task.FromException<SdCardLoggingSession>(failure);
+            return Task.FromException<SdCardRecording>(failure);
         }
 
         _logging = true;
-        StartedSession = new SdCardLoggingSession(
+        StartedSession = new SdCardRecording(
             string.IsNullOrWhiteSpace(fileName) ? "log_20260813_000000" : fileName!, format);
         return Task.FromResult(StartedSession);
     }

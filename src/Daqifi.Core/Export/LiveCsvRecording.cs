@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// What a live CSV recording produced, and what it lost. A recording with silent drops is worse
@@ -38,7 +38,7 @@ namespace Daqifi.Core.Logging.Export;
 /// </param>
 /// <param name="NonMonotonicSampleCount">
 /// Samples whose timestamp went backwards relative to the one before. Expected to be zero; see
-/// <see cref="LiveSampleSource.NonMonotonicSampleCount"/> for when it might not be.
+/// <see cref="LiveStreamSampleSource.NonMonotonicSampleCount"/> for when it might not be.
 /// </param>
 public readonly record struct LiveCsvRecordingResult(
     long SampleCount,
@@ -162,7 +162,7 @@ public static class LiveCsvRecordingExtensions
             : null;
         var durationToken = durationCts?.Token ?? CancellationToken.None;
 
-        var source = new LiveSampleSource(
+        var source = new LiveStreamSampleSource(
             ReadUntilStoppedAsync(live, bufferCapacity, durationToken),
             channels,
             device.Name,

@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Adapts a live device stream — an <see cref="IAsyncEnumerable{T}"/> of <see cref="LiveSample"/>,
@@ -25,7 +25,7 @@ namespace Daqifi.Core.Logging.Export;
 /// </para>
 /// <para>
 /// <b>The channel set is fixed when this source is constructed</b>, because
-/// <see cref="ISampleSource.GetChannels"/> is synchronous and the exporter calls it before it reads
+/// <see cref="ISampleSource.Channels"/> is synchronous and the exporter reads it before it reads
 /// a single sample — a CSV cannot grow a column halfway down the file. A sample that arrives for a
 /// channel outside that set (one enabled by another caller after the recording started) is counted
 /// in <see cref="UnmappedSampleCount"/> and dropped, rather than silently emitted under a key with
@@ -39,10 +39,10 @@ namespace Daqifi.Core.Logging.Export;
 /// is why the type is part of the key.
 /// </para>
 /// </remarks>
-public sealed class LiveSampleSource : ISampleSource
+public sealed class LiveStreamSampleSource : ISampleSource
 {
     /// <summary>
-    /// Stands in for a device name or serial number that is missing or blank. A blank string is a
+    /// Stands in for a serial number that is missing or blank. A blank string is a
     /// gap rather than an answer, and letting one through would produce channel keys like
     /// <c>Daqifi::AI0</c> whose columns cannot be told apart between two unidentified devices.
     /// </summary>
@@ -57,7 +57,7 @@ public sealed class LiveSampleSource : ISampleSource
     /// </summary>
     /// <param name="samples">
     /// The live stream to read, normally <see cref="ILiveSampleSource.StreamSamplesAsync"/>. It is
-    /// enumerated once, when the exporter calls <see cref="StreamSamples"/>.
+    /// enumerated once, when the exporter calls <see cref="StreamSamplesAsync"/>.
     /// </param>
     /// <param name="channels">
     /// The channels to give columns to, in the order the columns should appear. Normally the
@@ -68,28 +68,30 @@ public sealed class LiveSampleSource : ISampleSource
     /// name gets the channel's canonical label appended, e.g. <c>Temp (AI0)</c> and
     /// <c>Temp (AI3)</c>. A name no other channel uses is left exactly as it is.
     /// </param>
-    /// <param name="deviceName">The device name to build channel keys from.</param>
+    /// <param name="deviceName">
+    /// The device name to build channel keys from, normally <see cref="IDevice.Name"/>. Null or
+    /// blank becomes <see cref="DeviceConnectionOptions.DefaultDeviceName"/>.
+    /// </param>
     /// <param name="deviceSerialNumber">
-    /// The device serial number to build channel keys from. Null or blank becomes
+    /// The decimal serial number to build channel keys from. Null or blank becomes
     /// <c>"unknown"</c>.
     /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="samples"/>, <paramref name="channels"/> or <paramref name="deviceName"/> is null.
+    /// <paramref name="samples"/> or <paramref name="channels"/> is null.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="channels"/> contains a null entry.</exception>
-    public LiveSampleSource(
+    public LiveStreamSampleSource(
         IAsyncEnumerable<LiveSample> samples,
         IEnumerable<IChannel> channels,
-        string deviceName,
+        string? deviceName,
         string? deviceSerialNumber)
     {
         ArgumentNullException.ThrowIfNull(samples);
         ArgumentNullException.ThrowIfNull(channels);
-        ArgumentNullException.ThrowIfNull(deviceName);
 
         _samples = samples;
 
-        var name = string.IsNullOrWhiteSpace(deviceName) ? Unknown : deviceName;
+        var name = string.IsNullOrWhiteSpace(deviceName) ? DeviceConnectionOptions.DefaultDeviceName : deviceName;
         var serial = string.IsNullOrWhiteSpace(deviceSerialNumber) ? Unknown : deviceSerialNumber;
 
         // Read each name once: IChannel.Name is settable from another thread, and the
@@ -231,7 +233,7 @@ public sealed class LiveSampleSource : ISampleSource
     /// Gets the number of samples whose timestamp went backwards relative to the sample before it.
     /// </summary>
     /// <remarks>
-    /// <see cref="ISampleSource.StreamSamples"/> is contractually ascending, and the live path is
+    /// <see cref="ISampleSource.StreamSamplesAsync"/> is contractually ascending, and the live path is
     /// expected to satisfy it: <see cref="TimestampProcessor"/> reconstructs a monotonic host
     /// timestamp across the device counter's ~86-second rollover, and the live buffer preserves
     /// arrival order. This counts the exception rather than assuming it away — a device clock reset,
@@ -254,20 +256,20 @@ public sealed class LiveSampleSource : ISampleSource
     public string? ValueUnit => SampleValueUnits.Volts;
 
     /// <inheritdoc />
-    public IReadOnlyList<ChannelDescriptor> GetChannels() => _channels;
+    public IReadOnlyList<ChannelDescriptor> Channels => _channels;
 
     /// <summary>
-    /// Always returns 0 — a live stream has no length until it ends.
+    /// Always returns <see langword="null"/> — a live stream has no length until it ends.
     /// </summary>
     /// <remarks>
-    /// This is exactly the "count is unavailable" case <see cref="ISampleSource.GetSampleCountAsync"/>
-    /// documents, and returning 0 is what makes <see cref="CsvExporter"/> skip percentage progress
+    /// This is exactly the "not known" case <see cref="ISampleSource.GetSampleCountAsync"/>
+    /// documents, and returning null is what makes <see cref="CsvExporter"/> skip percentage progress
     /// rather than divide by a total it does not have. Progress over a live recording is a sample
     /// count, not a percentage; read <see cref="SampleCount"/> or <see cref="RowCount"/> for that.
     /// </remarks>
     /// <param name="cancellationToken">Unused; the answer needs no work.</param>
-    public ValueTask<int> GetSampleCountAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(0);
+    public ValueTask<long?> GetSampleCountAsync(CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<long?>(null);
 
     /// <summary>
     /// Streams the live samples as export rows, one row per channel value, updating the counters as
@@ -280,7 +282,7 @@ public sealed class LiveSampleSource : ISampleSource
     /// <see cref="IDataSample.Value"/> would silently discard a conversion the user set up.
     /// </remarks>
     /// <param name="cancellationToken">Ends the enumeration, and with it the underlying live stream.</param>
-    public async IAsyncEnumerable<SampleRow> StreamSamples(
+    public async IAsyncEnumerable<SampleRow> StreamSamplesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         long? previousTicks = null;

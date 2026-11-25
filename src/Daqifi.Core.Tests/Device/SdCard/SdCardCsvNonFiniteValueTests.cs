@@ -139,8 +139,7 @@ public sealed class SdCardCsvNonFiniteValueTests
             "2000,0.123,2000,-inf,2000,nan");
 
         // Act
-        var options = Options(integerValueUnits: null);
-        options.ConfigurationOverride = Override(3);
+        var options = Options(integerValueUnits: null) with { ConfigurationOverride = Override(3) };
         var (samples, progress) = await ParseAsync(stream, options);
 
         // Assert
@@ -327,7 +326,7 @@ public sealed class SdCardCsvNonFiniteValueTests
             TimestampFrequency: TickRate,
             DeviceSerialNumber: "7E2815916200E898",
             DevicePartNumber: "Nyquist 1",
-            FirmwareRevision: "3.8.0",
+            FirmwareVersion: "3.8.0",
             CalibrationValues: Repeat((1.0, 0.0), channelCount),
             Resolution: AdcResolution,
             PortRange: Repeat(PortRangeVolts, channelCount),
@@ -352,7 +351,7 @@ public sealed class SdCardCsvNonFiniteValueTests
         // thread pool, so reports could arrive after the enumeration finishes. Collect them
         // synchronously instead, so the assertions see every report in order.
         var reports = new List<SdCardParseProgress>();
-        options.Progress = new SynchronousProgress(reports);
+        options = options with { Progress = new SynchronousProgress(reports) };
 
         var parser = new SdCardCsvFileParser();
         var session = await parser.ParseAsync(stream, "log_20261031_080550.csv", options);
@@ -370,8 +369,7 @@ public sealed class SdCardCsvNonFiniteValueTests
         Stream stream,
         List<SdCardParseProgress> reports)
     {
-        var options = Options(integerValueUnits: null);
-        options.Progress = new SynchronousProgress(reports);
+        var options = Options(integerValueUnits: null) with { Progress = new SynchronousProgress(reports) };
         var session = await parser.ParseAsync(stream, "log_20261031_080550.csv", options);
         await foreach (var _ in session.Samples)
         {

@@ -49,7 +49,7 @@ public class SdCardFileParserTests
         Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
         Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
-        Assert.Equal("2.1.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("2.1.0", session.DeviceConfig.FirmwareVersion);
         Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("99999", session.DeviceConfig.DeviceSerialNumber);
 
@@ -204,7 +204,7 @@ public class SdCardFileParserTests
         Assert.Equal(80_000_000u, session.DeviceConfig.TimestampFrequency);
         Assert.Equal("123456789", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal("3.2.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("3.2.0", session.DeviceConfig.FirmwareVersion);
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class SdCardFileParserTests
         // Assert — merge should treat empty strings as missing values
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal("3.2.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal("3.2.0", session.DeviceConfig.FirmwareVersion);
     }
 
     [Fact]
@@ -531,8 +531,8 @@ public class SdCardFileParserTests
 
             // Assert
             Assert.Equal("log_20240115_103000.bin", session.FileName);
-            Assert.NotNull(session.FileCreatedDate);
-            Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), session.FileCreatedDate);
+            Assert.NotNull(session.CreatedDate);
+            Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), session.CreatedDate);
             Assert.NotNull(session.DeviceConfig);
 
             var samples = await ToListAsync(session.Samples);
@@ -704,8 +704,8 @@ public class SdCardFileParserTests
         var session = await _parser.ParseAsync(stream, "log_20240320_153045.bin");
 
         // Assert
-        Assert.NotNull(session.FileCreatedDate);
-        Assert.Equal(new DateTime(2024, 3, 20, 15, 30, 45), session.FileCreatedDate);
+        Assert.NotNull(session.CreatedDate);
+        Assert.Equal(new DateTime(2024, 3, 20, 15, 30, 45), session.CreatedDate);
     }
 
     [Fact]
@@ -720,7 +720,7 @@ public class SdCardFileParserTests
         var session = await _parser.ParseAsync(stream, "log_20240320_153045.bin", options);
 
         // Assert — override takes precedence over filename
-        Assert.Equal(overrideTime, session.FileCreatedDate);
+        Assert.Equal(overrideTime, session.CreatedDate);
     }
 
     #endregion
