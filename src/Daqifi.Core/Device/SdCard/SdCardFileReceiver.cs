@@ -17,6 +17,12 @@ namespace Daqifi.Core.Device.SdCard;
 /// partial data without sending a terminator, by design, so the inactivity window below remains
 /// the only thing that ends such a transfer.
 /// <para>
+/// The device can also answer with no file at all: <c>Error !! No SD Card Detected</c> and its
+/// error line, sent while it believes no card is present. The first bytes of every transfer are
+/// held back until they show whether the reply opens with that answer, which ends the transfer
+/// with <see cref="SdCardNotPresentException"/> and leaves the destination untouched (#1077).
+/// </para>
+/// <para>
 /// Both markers are ASCII text, so a log file can hold the same bytes. The listed file size is
 /// what settles that: when the caller passes one, the receiver reads at least that many bytes of
 /// content and the marker text inside them is file content like any other (#852).
@@ -130,6 +136,23 @@ internal sealed class SdCardFileReceiver
     /// </para>
     /// </remarks>
     internal const int ListedEmptyFileReplyFramingLimitBytes = 256;
+
+    /// <summary>
+    /// The text of the device's answer to an SD <c>GET</c> when it believes no card is present,
+    /// sent in place of the file (#1077).
+    /// </summary>
+    internal const string NoSdCardAnswerText = "No SD Card Detected";
+
+    /// <summary>
+    /// How many bytes at the start of a transfer are held back from the destination stream while
+    /// they could still be the device's no-card answer rather than file content.
+    /// </summary>
+    /// <remarks>
+    /// The answer is 66 bytes as the bench device sends it, plus the command echo and prompt when
+    /// echo is on. A transfer that has sent more than this without opening with the answer is a
+    /// real transfer, and its bytes are released and written as they arrive from then on.
+    /// </remarks>
+    internal const int ReplyHeadLimitBytes = 256;
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -336,10 +359,24 @@ internal sealed class SdCardFileReceiver
         // as an empty file instead of as the framing around it (#888). A stale listing is still
         // honored — a marker commits whatever preceded it, and anything bigger than reply framing is
         // released and the transfer carries on as any other.
-        using var heldContent = listedFileSizeBytes is 0
-            ? new HeldContentStream(destinationStream, ListedEmptyFileReplyFramingLimitBytes)
-            : null;
-        var contentTarget = heldContent is null ? destinationStream : (Stream)heldContent;
+        //
+        // Every other transfer holds back its first bytes too, for a different reason: until they
+        // are known not to be the device's "No SD Card Detected" answer, they may not be file
+        // content at all, and the caller's stream must not receive them (#1077).
+        var listedEmpty = listedFileSizeBytes is 0;
+        using var heldContent = new HeldContentStream(
+            destinationStream,
+            listedEmpty ? ListedEmptyFileReplyFramingLimitBytes : ReplyHeadLimitBytes);
+        var contentTarget = (Stream)heldContent;
+
+        // The raw bytes the reply opened with, kept until they settle whether it is the no-card
+        // answer; null once they have settled that it is not.
+        var replyHead = new MemoryStream();
+
+        // Set when the reply opened with the no-card line. The transfer then ends at the first
+        // quiet moment instead of after the inactivity window, since the device sends nothing
+        // more after that answer.
+        var noCardAnswerSeen = false;
 
         // Set once any byte of the device's reply has arrived. Only then does the quiet window for
         // a listed-empty file apply; see ListedEmptyFileQuietWindow.
@@ -369,15 +406,25 @@ internal sealed class SdCardFileReceiver
         // transport and is only worked out once a stall is actually being reported: probing the
         // stream for a download that has already completed could fail it after the fact, since a
         // disconnected stream's CanRead may throw.
-        long EndWithoutTerminator(
+        async Task<long> EndWithoutTerminatorAsync(
             SdCardTransferStallReason? reason, TimeSpan? window = null, Exception? cause = null)
         {
-            if (heldContent is { HasReleasedContent: false })
+            if (noCardAnswerSeen && !heldContent.HasReleasedContent)
+            {
+                throw NoCardAnswer(heldContent, replyHead);
+            }
+
+            if (listedEmpty && !heldContent.HasReleasedContent)
             {
                 heldContent.DiscardHeldBytes();
                 progress?.Report(new SdCardTransferProgress { BytesReceived = 0, FileName = fileName });
                 return 0;
             }
+
+            // Whatever is still held back was content after all: it goes to the caller's stream,
+            // as everything outside the marker window always has on a transfer that ended early.
+            // Not cancellable, because the token may be the very deadline that ended the transfer.
+            await heldContent.ReleaseHeldBytesAsync(CancellationToken.None).ConfigureAwait(false);
 
             ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
@@ -406,8 +453,13 @@ internal sealed class SdCardFileReceiver
                 // completion it is rather than as a stall. Once content has been released to the
                 // destination the listing was stale, a real transfer is under way, and the
                 // ordinary inactivity window is the right one again.
+                //
+                // The same short window ends a reply that opened with the no-card answer: the
+                // device sends nothing after it, so waiting longer only delays the answer.
                 var idleWindow = _idleTimeout;
-                if (replyStarted && heldContent is { HasReleasedContent: false })
+                if (replyStarted
+                    && !heldContent.HasReleasedContent
+                    && (listedEmpty || noCardAnswerSeen))
                 {
                     idleWindow = idleWindow is { } configured && configured < ListedEmptyFileQuietWindow
                         ? configured
@@ -442,7 +494,7 @@ internal sealed class SdCardFileReceiver
                     // `token`: the deadline's own source is marked cancelled a moment before its
                     // cancellation reaches the linked token, and an idle window expiring in that
                     // moment must still be reported as the deadline.
-                    return EndWithoutTerminator(SdCardTransferStallReason.NoDataReceived, idleWindow, ex);
+                    return await EndWithoutTerminatorAsync(SdCardTransferStallReason.NoDataReceived, idleWindow, ex).ConfigureAwait(false);
                 }
 
                 // A read can complete without ever having observed the token: System.IO.Ports'
@@ -457,10 +509,36 @@ internal sealed class SdCardFileReceiver
                 {
                     // No reason given: whether zero bytes means quiet or closed is settled inside
                     // the helper, and only if a stall is actually being reported.
-                    return EndWithoutTerminator(reason: null);
+                    return await EndWithoutTerminatorAsync(reason: null).ConfigureAwait(false);
                 }
 
                 replyStarted = true;
+
+                if (replyHead is not null)
+                {
+                    replyHead.Write(buffer, 0, bytesRead);
+
+                    switch (ClassifyReplyHead(replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length)))
+                    {
+                        case ReplyHeadKind.NoCardAnswer:
+                            throw NoCardAnswer(heldContent, replyHead);
+                        case ReplyHeadKind.NoCardLine:
+                            noCardAnswerSeen = true;
+                            break;
+                        case ReplyHeadKind.Content:
+                            replyHead.Dispose();
+                            replyHead = null;
+                            break;
+                        default:
+                            if (replyHead.Length > ReplyHeadLimitBytes)
+                            {
+                                replyHead.Dispose();
+                                replyHead = null;
+                            }
+
+                            break;
+                    }
+                }
 
                 // The listed size is a floor for the EOF marker: the marker is ASCII text, so a log
                 // file can contain it, and below the floor it is the file's own content rather than
@@ -528,10 +606,7 @@ internal sealed class SdCardFileReceiver
                     // the listing was stale and they are file content, so they go to the caller's
                     // stream now. This has to happen before the two throws below, both of which
                     // document the content that arrived as left in the destination stream.
-                    if (heldContent is not null)
-                    {
-                        await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
-                    }
+                    await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
 
                     if (isTransferError)
                     {
@@ -644,8 +719,114 @@ internal sealed class SdCardFileReceiver
         }
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            return EndWithoutTerminator(SdCardTransferStallReason.TransferTimeout, effectiveTimeout, ex);
+            return await EndWithoutTerminatorAsync(SdCardTransferStallReason.TransferTimeout, effectiveTimeout, ex).ConfigureAwait(false);
         }
+        catch (Exception) when (!listedEmpty && !heldContent.HasReleasedContent)
+        {
+            // A transport failure or a cancellation part-way through: bytes held back only to
+            // rule out the no-card answer were real content, and they reach the caller's stream
+            // as they did before the hold existed. A no-card answer has been discarded already.
+            await heldContent.ReleaseHeldBytesAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            replyHead?.Dispose();
+        }
+    }
+
+    /// <summary>What the opening bytes of a reply to an SD <c>GET</c> have shown so far.</summary>
+    internal enum ReplyHeadKind
+    {
+        /// <summary>Not enough has arrived to tell.</summary>
+        Undecided,
+
+        /// <summary>The reply opens with something other than the no-card answer: file content.</summary>
+        Content,
+
+        /// <summary>The reply opens with the no-card line; an error line may still follow it.</summary>
+        NoCardLine,
+
+        /// <summary>The reply is the no-card line followed by the device's error line.</summary>
+        NoCardAnswer,
+    }
+
+    /// <summary>
+    /// Decides whether a reply opens with the device's "No SD Card Detected" answer (#1077).
+    /// </summary>
+    /// <remarks>
+    /// Only the opening counts: blank lines, the prompt and the echo of the <c>GET</c> may come
+    /// first, and the first other complete line has to be the answer. A log that quotes the same
+    /// words further in is file content, so a text file whose first line is anything else is
+    /// never mistaken for it.
+    /// </remarks>
+    internal static ReplyHeadKind ClassifyReplyHead(ReadOnlySpan<byte> head)
+    {
+        var text = Encoding.ASCII.GetString(head);
+        var seenNoCardLine = false;
+        var lineStart = 0;
+
+        while (true)
+        {
+            var newline = text.IndexOf('\n', lineStart);
+            if (newline < 0)
+            {
+                return seenNoCardLine ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Undecided;
+            }
+
+            var line = text.AsSpan(lineStart, newline - lineStart).Trim();
+            lineStart = newline + 1;
+
+            if (line.IsEmpty)
+            {
+                continue;
+            }
+
+            if (seenNoCardLine)
+            {
+                return line.StartsWith("**ERROR", StringComparison.Ordinal)
+                    ? ReplyHeadKind.NoCardAnswer
+                    : ReplyHeadKind.NoCardLine;
+            }
+
+            if (line.Contains(NoSdCardAnswerText, StringComparison.OrdinalIgnoreCase))
+            {
+                seenNoCardLine = true;
+                continue;
+            }
+
+            if (IsReplyFraming(line))
+            {
+                continue;
+            }
+
+            return ReplyHeadKind.Content;
+        }
+    }
+
+    private static bool IsReplyFraming(ReadOnlySpan<char> line) =>
+        line.StartsWith("DAQIFI>", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("SD:GET", StringComparison.OrdinalIgnoreCase);
+
+    private static SdCardNotPresentException NoCardAnswer(HeldContentStream heldContent, MemoryStream? replyHead)
+    {
+        heldContent.DiscardHeldBytes();
+
+        var lines = replyHead is null
+            ? Array.Empty<string>()
+            : Encoding.ASCII.GetString(replyHead.GetBuffer(), 0, (int)replyHead.Length)
+                .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        string? lastScpiError = null;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("**ERROR", StringComparison.Ordinal))
+            {
+                lastScpiError = line;
+            }
+        }
+
+        return new SdCardNotPresentException(lines, lastScpiError);
     }
 
     /// <summary>

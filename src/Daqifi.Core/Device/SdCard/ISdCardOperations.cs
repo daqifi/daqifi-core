@@ -355,6 +355,10 @@ public interface ISdCardOperations
     /// needs a size to compare against, so call <see cref="GetSdCardFilesAsync"/> before
     /// downloading; with no listing the download cannot tell a short reply from a small file.
     /// </exception>
+    /// <exception cref="SdCardNotPresentException">
+    /// Thrown when the device still answers "No SD Card Detected" after asking again three times
+    /// over about 6 s. Nothing is written to the destination in that case.
+    /// </exception>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
     /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
@@ -387,6 +391,10 @@ public interface ISdCardOperations
     /// Thrown when the device is currently logging to SD card, or when an earlier download on it
     /// is still in flight — including one that was abandoned and still holds the transport, which
     /// only a reconnect clears.
+    /// </exception>
+    /// <exception cref="SdCardNotPresentException">
+    /// Thrown when the device still answers "No SD Card Detected" after asking again three times
+    /// over about 6 s. Nothing is written to the destination in that case.
     /// </exception>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress or does not finish within the

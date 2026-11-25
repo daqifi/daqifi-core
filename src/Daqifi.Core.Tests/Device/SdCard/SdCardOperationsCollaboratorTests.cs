@@ -1909,6 +1909,46 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
     }
 
+    private static readonly byte[] NoCardReply =
+        Encoding.ASCII.GetBytes("\r\nError !! No SD Card Detected\r\n**ERROR: -200, \"Execution error\"\r\n");
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_DeviceAnswersNoCardThenSendsTheFile_ReturnsTheFile()
+    {
+        // #1077: the device answers "No SD Card Detected" for a card that is there, for a moment.
+        // A listing asks again (#896); a download now does too, and the answer never reaches the
+        // caller's stream.
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("log.bin", destination);
+
+        Assert.Equal(payload.Length, result.SizeInBytes);
+        Assert.Equal(payload, destination.ToArray());
+        Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"log.bin\""));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_DeviceKeepsAnsweringNoCard_ThrowsNotPresentAfterThreeRechecks()
+    {
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, NoCardReply, NoCardReply, NoCardReply, NoCardReply),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
+
+        Assert.Empty(destination.ToArray());
+        Assert.Equal(4, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"log.bin\""));
+    }
+
     [Fact]
     public async Task DownloadSdCardFileAsync_TwoListedFilesShareAName_TreatsTheSizeAsUnknown()
     {

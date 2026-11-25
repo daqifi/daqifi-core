@@ -34,6 +34,105 @@ public class SdCardFileReceiverTests
             destination, "growing.csv", listedFileSizeBytes: 1));
     }
 
+    // ---- #1077: the device's "No SD Card Detected" answer to SD:GET ----
+
+    /// <summary>
+    /// What firmware 3.9.1 sends instead of the file while it believes no card is present,
+    /// captured on the bench over both USB and WiFi (#1077).
+    /// </summary>
+    private static readonly byte[] NoCardReply =
+        Encoding.ASCII.GetBytes("\r\nError !! No SD Card Detected\r\n**ERROR: -200, \"Execution error\"\r\n");
+
+    [Theory]
+    [InlineData(4096, null)]
+    [InlineData(4096, 55514L)]
+    [InlineData(5, null)]
+    [InlineData(5, 55514L)]
+    public async Task ReceiveAsync_NoCardReply_ThrowsNotPresentAndWritesNothing(int chunkSize, long? listedSize)
+    {
+        // The bug: the 66-byte answer was taken for file content. The first 48 bytes went to the
+        // caller's stream, the rest sat in the marker window, and the transfer was reported as a
+        // stall twenty seconds later.
+        using var source = new ChunkedMemoryStream(NoCardReply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(() => receiver.ReceiveAsync(
+            destination, "log.bin", timeout: TimeSpan.FromSeconds(5), listedFileSizeBytes: listedSize));
+
+        Assert.Empty(destination.ToArray());
+        Assert.Contains(ex.RawDeviceResponse, line => line.Contains("No SD Card Detected", StringComparison.Ordinal));
+        Assert.Contains(ex.RawDeviceResponse, line => line.StartsWith("**ERROR", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NoCardReplyWithTheCommandEchoed_ThrowsNotPresent()
+    {
+        // With echo on, the device repeats the GET (and its prompt) ahead of the answer.
+        var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> SYSTem:STORage:SD:GET \"log.bin\"\r\n"), NoCardReply);
+        using var source = new ChunkedMemoryStream(reply, 4096);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, "log.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NoCardLineWithoutAnErrorLineOnASocket_EndsWithinTheQuietWindow()
+    {
+        // Firmware that stops printing **ERROR lines (#991) still answers with the no-card line,
+        // and then sends nothing. That must not cost the 20-second inactivity window.
+        using var source = new ThenSilentStream(Encoding.ASCII.GetBytes("\r\nError !! No SD Card Detected\r\n"));
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromSeconds(20));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, "log.bin", timeout: TimeSpan.FromSeconds(30)));
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData(4096)]
+    [InlineData(5)]
+    public async Task ReceiveAsync_FileWhoseContentQuotesTheNoCardText_DownloadsTheContent(int chunkSize)
+    {
+        // A text log can hold the same words. Only an answer that opens the reply is the device's.
+        var content = Encoding.ASCII.GetBytes(
+            "time,message\r\n1,Error !! No SD Card Detected\r\n2,**ERROR: -200, \"Execution error\"\r\n");
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        var received = await receiver.ReceiveAsync(destination, "notes.csv", listedFileSizeBytes: content.Length);
+
+        Assert.Equal(content.Length, received);
+        Assert.Equal(content, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShortReplyThatStalls_StillLeavesWhatArrivedInTheStream()
+    {
+        // Holding the first bytes back to recognise the answer must not swallow a real partial
+        // transfer: everything outside the marker window still reaches the caller, as before.
+        var partial = new byte[40];
+        for (var i = 0; i < partial.Length; i++) partial[i] = (byte)(i + 1);
+        using var source = new MemoryStream(partial);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destination, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(partial.Length - TrailingWindow, ex.BytesReceived);
+        Assert.Equal(partial[..(partial.Length - TrailingWindow)], destination.ToArray());
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {
@@ -1695,6 +1794,47 @@ public class SdCardFileReceiverTests
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Serves a payload in one read and then waits, honouring the token, the way a socket does
+    /// after the device has finished a reply that carried no terminator.
+    /// </summary>
+    private sealed class ThenSilentStream : Stream
+    {
+        private byte[]? _payload;
+
+        public ThenSilentStream(byte[] payload) => _payload = payload;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_payload is { } payload)
+            {
+                _payload = null;
+                Array.Copy(payload, 0, buffer, offset, payload.Length);
+                return payload.Length;
+            }
+
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return 0;
         }
