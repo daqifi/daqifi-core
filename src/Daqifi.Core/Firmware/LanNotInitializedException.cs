@@ -1,3 +1,5 @@
+using Daqifi.Core.Device;
+
 namespace Daqifi.Core.Firmware;
 
 /// <summary>
@@ -10,13 +12,17 @@ namespace Daqifi.Core.Firmware;
 /// startup window already covered by bounded retry (closes #144). A single
 /// <c>SYSTem:COMMunicate:LAN:APPLY</c> resolves it within a couple of seconds (#203).
 /// </summary>
-public sealed class LanNotInitializedException : Exception
+public sealed class LanNotInitializedException : DaqifiDeviceException
 {
     /// <summary>
     /// Initializes a new instance of <see cref="LanNotInitializedException"/>.
     /// </summary>
-    /// <param name="message">The raw SCPI error line reported by the device.</param>
-    public LanNotInitializedException(string message) : base(message)
+    /// <param name="message">
+    /// The raw SCPI error line reported by the device, which becomes both the message and the one
+    /// line of <see cref="DaqifiDeviceException.RawDeviceResponse"/>.
+    /// </param>
+    public LanNotInitializedException(string message)
+        : base(message, message is null ? null : [message])
     {
     }
 }

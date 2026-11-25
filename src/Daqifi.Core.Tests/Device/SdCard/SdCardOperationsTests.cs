@@ -2067,6 +2067,7 @@ public partial class SdCardOperationsTests
         Assert.Equal(DaqifiStreamingDevice.MinSupportedFirmware, ex.RequiredVersion);
         Assert.Equal("3.4.3", ex.ActualVersion);
         Assert.Equal(DeviceType.Nyquist1, ex.Board);
+        Assert.Equal(new[] { "**ERROR: -113, \"Undefined header\"" }, ex.RawDeviceResponse);
     }
 
     [Fact]

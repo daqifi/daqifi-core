@@ -98,7 +98,7 @@ internal sealed class DeviceAdministrationOperations
                 && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var scpiErrorCode)
                 && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
             {
-                throw _host.CreateFeatureNotSupportedException(DeviceFeature.Identify);
+                throw _host.CreateFeatureNotSupportedException(DeviceFeature.Identify, lines);
             }
 
             throw new InvalidOperationException(

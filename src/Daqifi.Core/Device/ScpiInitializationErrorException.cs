@@ -15,15 +15,8 @@ namespace Daqifi.Core.Device;
 /// (or another init-sequence command) on the very next USB connect, within the tight
 /// response window. See issue #310.
 /// </remarks>
-public class ScpiInitializationErrorException : Exception
+public class ScpiInitializationErrorException : DaqifiDeviceException
 {
-    /// <summary>
-    /// Gets the raw response lines that were captured from the device when the error
-    /// was classified. Useful for diagnostics and for surfacing actionable detail in
-    /// higher-level UIs.
-    /// </summary>
-    public IReadOnlyList<string> RawDeviceResponse { get; }
-
     /// <summary>
     /// Gets the last SCPI error line observed in the response (e.g.
     /// <c>**ERROR: -200, "Execution error"</c>), or <c>null</c> if none was present.
@@ -38,9 +31,8 @@ public class ScpiInitializationErrorException : Exception
         IReadOnlyList<string> rawDeviceResponse,
         string? lastScpiError = null,
         Exception? innerException = null)
-        : base(message, innerException)
+        : base(message, rawDeviceResponse, innerException)
     {
-        RawDeviceResponse = rawDeviceResponse ?? Array.Empty<string>();
         LastScpiError = lastScpiError;
     }
 }

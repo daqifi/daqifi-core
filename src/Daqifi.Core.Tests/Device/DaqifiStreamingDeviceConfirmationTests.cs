@@ -86,7 +86,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StartStreamingAsync());
 
         Assert.Null(failure.ErrorCode);
-        Assert.Equal("0", failure.DeviceResponse);
+        Assert.Equal(["0"], failure.RawDeviceResponse);
         Assert.Contains("StartStreamData", failure.Command, StringComparison.Ordinal);
 
         // Left true, the next start would be a silent no-op.
@@ -114,7 +114,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StartStreamingAsync());
 
         Assert.Null(failure.ErrorCode);
-        Assert.Null(failure.DeviceResponse);
+        Assert.Empty(failure.RawDeviceResponse);
 
         // Unknown, not refused: the start went out and nothing said it did not take.
         Assert.True(device.IsStreaming);
@@ -435,7 +435,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StopStreamingAsync());
 
         Assert.Equal(Stop, failure.Command);
-        Assert.Equal("1", failure.DeviceResponse);
+        Assert.Equal(["1"], failure.RawDeviceResponse);
         Assert.True(device.IsStreaming);
     }
 
@@ -472,7 +472,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var device = StreamingDevice();
 
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StopStreamingAsync());
-        Assert.Null(failure.DeviceResponse);
+        Assert.Empty(failure.RawDeviceResponse);
         Assert.Null(failure.ErrorCode);
 
         device.Sent.Clear();
@@ -631,7 +631,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.RebootAsync());
 
         Assert.Null(failure.ErrorCode);
-        Assert.Equal("-200,\"Execution error\"", failure.DeviceResponse);
+        Assert.Equal(["-200,\"Execution error\""], failure.RawDeviceResponse);
         Assert.True(device.IsConnected);
     }
 
@@ -643,7 +643,7 @@ public class DaqifiStreamingDeviceConfirmationTests
         var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.RebootAsync());
 
         Assert.Equal(Reboot, failure.Command);
-        Assert.Null(failure.DeviceResponse);
+        Assert.Empty(failure.RawDeviceResponse);
         Assert.False(device.IsConnected);
     }
 

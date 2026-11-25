@@ -679,7 +679,7 @@ public class DaqifiDeviceConsumerRestartTests
 
         var start = device.StartStreamingAsync();
         SendFillers(device, 1);
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+        var failure = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
 
         Assert.Contains("backlog", failure.Message, StringComparison.Ordinal);
         Assert.False(device.IsStreaming);

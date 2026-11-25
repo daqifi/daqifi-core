@@ -166,7 +166,7 @@ public class DaqifiStreamingDeviceRateCapTests
             () => device.StartStreamingAsync());
 
         Assert.Equal(-222, exception.ErrorCode);
-        Assert.Equal("-222,\"Data out of range\"", exception.DeviceResponse);
+        Assert.Equal(new[] { "-222,\"Data out of range\"" }, exception.RawDeviceResponse);
         Assert.Contains("StartStreamData", exception.Command);
 
         // The queue was read, so the entry is no longer on the device to break the next connect

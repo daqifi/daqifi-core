@@ -77,7 +77,7 @@ try
 }
 catch (DeviceCommandFailedException ex)
 {
-    Console.WriteLine($"Not streaming: {ex.Message}"); // ex.ErrorCode, ex.DeviceResponse
+    Console.WriteLine($"Not streaming: {ex.Message}"); // ex.ErrorCode, ex.RawDeviceResponse
 }
 ```
 
@@ -684,6 +684,45 @@ Notes:
   connected. Catch `DeviceNotConnectedException` for the device-state case and
   `TransportNotConnectedException` for the transport case — or both, since they classify the same
   way for reporting purposes.
+
+#### Catching what the device refused or failed at
+
+The exceptions that mean the device refused an operation, failed at it, or cannot do it share the
+base class `DaqifiDeviceException`, so one `catch` covers them, and `RawDeviceResponse` holds the
+lines the device sent about it (empty when it sent none):
+
+```csharp
+try
+{
+    await device.SaveAdcCalibrationAsync();
+    var files = await device.GetSdCardFilesAsync();
+}
+catch (FeatureNotSupportedException ex)
+{
+    // A derived type first, where it calls for something specific.
+    logger.LogWarning(ex, "Update the firmware to use {Feature}.", ex.Feature);
+}
+catch (DaqifiDeviceException ex)
+{
+    logger.LogError(ex, "The device reported: {Response}", string.Join(" | ", ex.RawDeviceResponse));
+}
+```
+
+| Derives from `DaqifiDeviceException` | Reports |
+| --- | --- |
+| `DeviceCommandFailedException` | A confirmed command the device refused, or never answered |
+| `ScpiInitializationErrorException` | A SCPI error during `InitializeAsync` |
+| `FeatureNotSupportedException` | A feature this firmware or board does not have |
+| `SdCardOperationException` and its subclasses | An SD card operation that failed or was refused |
+| `DeviceDiagnosticsException` and its subclass | A diagnostics query that failed or could not be read |
+| `LanNotInitializedException` | A WiFi chip that is not initialized yet |
+| `DeviceReconnectFailedException` | Automatic reconnect gave up (on `ErrorOccurred`, never thrown) |
+
+Connection failures keep the framework type they always had, and need their own `catch`:
+`DeviceNotConnectedException` (`InvalidOperationException`), `ChannelPopulationTimeoutException`
+(`TimeoutException`, with a `RawDeviceResponse` of its own) and `SerialPortConnectException`
+(`IOException`). `FirmwareUpdateException` is separate too. `GetAnalogOutputAsync` and
+`GetIdentifyAsync` still report a rejected query as a plain `InvalidOperationException`.
 
 ### Connection Status Monitoring
 

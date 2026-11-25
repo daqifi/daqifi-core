@@ -364,7 +364,7 @@ public class DeviceAdministrationOperationsTests
 
         Assert.StartsWith(expectedCommand, ex.Command, StringComparison.Ordinal);
         Assert.Equal(-200, ex.ErrorCode);
-        Assert.Equal(ExecutionError, ex.DeviceResponse);
+        Assert.Equal(new[] { ExecutionError }, ex.RawDeviceResponse);
     }
 
     /// <summary>
@@ -401,7 +401,7 @@ public class DeviceAdministrationOperationsTests
             () => new DeviceAdministrationOperations(host).SaveVoltagePrecisionAsync());
 
         Assert.Equal(-113, ex.ErrorCode);
-        Assert.Equal("**ERROR: -113,\"Undefined header\"", ex.DeviceResponse);
+        Assert.Equal(new[] { "**ERROR: -113,\"Undefined header\"" }, ex.RawDeviceResponse);
     }
 
     /// <summary>
@@ -423,7 +423,7 @@ public class DeviceAdministrationOperationsTests
             () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
 
         Assert.Null(ex.ErrorCode);
-        Assert.Equal(errorLine, ex.DeviceResponse);
+        Assert.Equal(new[] { errorLine }, ex.RawDeviceResponse);
         Assert.Contains(errorLine, ex.Message, StringComparison.Ordinal);
     }
 
@@ -468,7 +468,7 @@ public class DeviceAdministrationOperationsTests
             () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
 
         Assert.NotEqual(0, ex.ErrorCode ?? -1);
-        Assert.Equal(errorLine, ex.DeviceResponse);
+        Assert.Equal(new[] { errorLine }, ex.RawDeviceResponse);
         Assert.Contains(errorLine, ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("not readable", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("no readable", ex.Message, StringComparison.Ordinal);
@@ -486,7 +486,7 @@ public class DeviceAdministrationOperationsTests
         var ex = new DeviceCommandFailedException("CONFigure:ADC:LOADcal", 0, "**ERROR: 0,\"No error\"");
 
         Assert.Null(ex.ErrorCode);
-        Assert.Equal("**ERROR: 0,\"No error\"", ex.DeviceResponse);
+        Assert.Equal(new[] { "**ERROR: 0,\"No error\"" }, ex.RawDeviceResponse);
         Assert.Equal("CONFigure:ADC:LOADcal", ex.Command);
         Assert.DoesNotContain("rejected", ex.Message, StringComparison.Ordinal);
 
@@ -747,10 +747,10 @@ public class DeviceAdministrationOperationsTests
             }
         }
 
-        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
+        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
         {
             Calls.Add("create-unsupported:" + feature);
-            return new FeatureNotSupportedException(feature, null, null, null);
+            return new FeatureNotSupportedException(feature, null, null, null, rawDeviceResponse);
         }
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();

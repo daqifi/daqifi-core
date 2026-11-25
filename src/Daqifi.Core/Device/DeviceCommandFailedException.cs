@@ -1,5 +1,3 @@
-using System;
-
 namespace Daqifi.Core.Device;
 
 /// <summary>
@@ -18,7 +16,8 @@ namespace Daqifi.Core.Device;
 /// exception rather than report a success the device never gave.
 /// </para>
 /// <para>
-/// <see cref="ErrorCode"/> and <see cref="DeviceResponse"/> together say how much is known:
+/// <see cref="ErrorCode"/> and <see cref="DaqifiDeviceException.RawDeviceResponse"/> together say how
+/// much is known:
 /// </para>
 /// <list type="bullet">
 /// <item><description>
@@ -26,21 +25,26 @@ namespace Daqifi.Core.Device;
 /// take effect, and retrying it unchanged will be refused again.
 /// </description></item>
 /// <item><description>
-/// <b>No code, but a <see cref="DeviceResponse"/></b> — the device answered, but with nothing
-/// carrying a readable code: a bare <c>ERROR</c>, a queue reply whose code would not parse, or a
-/// state that contradicts the command. The command is not confirmed, and the raw line is all there
-/// is to go on.
+/// <b>No code, but a response line</b> — the device answered, but with nothing carrying a readable
+/// code: a bare <c>ERROR</c>, a queue reply whose code would not parse, or a state that contradicts
+/// the command. The command is not confirmed, and the raw line is all there is to go on.
 /// </description></item>
 /// <item><description>
-/// <b>Neither</b> — nothing readable came back at all, so whether the command was applied is
-/// <em>unknown</em>. Usually the link or the device needs attention before a retry is meaningful.
+/// <b>Neither</b> (no code and an empty response) — nothing readable came back at all, so
+/// whether the command was applied is <em>unknown</em>. Usually the link or the device needs
+/// attention before a retry is meaningful. A command that was never sent has neither too, and its
+/// message says so.
 /// </description></item>
 /// </list>
 /// <para>
 /// None of the three is a success, which is why all of them throw.
 /// </para>
+/// <para>
+/// <see cref="DaqifiDeviceException.RawDeviceResponse"/> holds at most one line here: the one the
+/// verdict was read from.
+/// </para>
 /// </remarks>
-public class DeviceCommandFailedException : Exception
+public class DeviceCommandFailedException : DaqifiDeviceException
 {
     /// <summary>
     /// The SCPI command whose outcome this exception reports, e.g. <c>CONFigure:ADC:LOADcal</c>.
@@ -51,16 +55,10 @@ public class DeviceCommandFailedException : Exception
     /// The SCPI error code the device reported, e.g. <c>-200</c> for an execution error; <c>null</c>
     /// when no code could be read — either because nothing came back or because what did carried no
     /// readable code. Never <c>0</c>: that is the value SCPI reserves for "no error", so a refusal
-    /// is never reported under it. Pair with <see cref="DeviceResponse"/> to tell an unreadable
-    /// refusal from silence.
+    /// is never reported under it. Pair with <see cref="DaqifiDeviceException.RawDeviceResponse"/>
+    /// to tell an unreadable refusal from silence.
     /// </summary>
     public int? ErrorCode { get; }
-
-    /// <summary>
-    /// The raw device line this verdict was read from; <c>null</c> when the device said nothing
-    /// readable at all.
-    /// </summary>
-    public string? DeviceResponse { get; }
 
     /// <summary>
     /// Initializes a new instance reporting that the device <em>refused</em> the command.
@@ -74,19 +72,18 @@ public class DeviceCommandFailedException : Exception
     /// Deliberately normalised rather than rejected with an <see cref="ArgumentOutOfRangeException"/>.
     /// Exceptions are constructed on failure paths, and a constructor that throws would replace a
     /// diagnosable device failure with an argument error — losing the diagnosis, which is the very
-    /// failure mode this type exists to prevent. <see cref="DeviceResponse"/> is preserved either
-    /// way, so nothing the device said is lost.
+    /// failure mode this type exists to prevent. The device's line is preserved either way, so
+    /// nothing the device said is lost.
     /// </para>
     /// </remarks>
     /// <param name="command">The SCPI command that was sent.</param>
     /// <param name="errorCode">The SCPI error code the device reported. <c>0</c> is normalised to <c>null</c> — see the remarks.</param>
     /// <param name="deviceResponse">The raw device line the code was read from.</param>
     public DeviceCommandFailedException(string command, int errorCode, string deviceResponse)
-        : base(BuildRefusalMessage(command, errorCode, deviceResponse))
+        : base(BuildRefusalMessage(command, errorCode, deviceResponse), ToLines(deviceResponse))
     {
         Command = command;
         ErrorCode = errorCode == 0 ? null : errorCode;
-        DeviceResponse = deviceResponse;
     }
 
     private static string BuildRefusalMessage(string command, int errorCode, string deviceResponse)
@@ -108,23 +105,22 @@ public class DeviceCommandFailedException : Exception
     /// <param name="command">The SCPI command that was sent.</param>
     /// <param name="deviceResponse">The raw device line, when there was one; <c>null</c> when nothing readable came back.</param>
     public DeviceCommandFailedException(string command, string? deviceResponse = null)
-        : base(BuildUnreadableVerdictMessage(command, deviceResponse))
+        : base(BuildUnreadableVerdictMessage(command, deviceResponse), ToLines(deviceResponse))
     {
         Command = command;
         ErrorCode = null;
-        DeviceResponse = deviceResponse;
     }
 
     /// <summary>
     /// Initializes a new instance with a message of its own, for a command whose confirmation is
     /// something other than the error queue.
     /// </summary>
-    private DeviceCommandFailedException(string command, string? deviceResponse, string message)
-        : base(message)
+    private DeviceCommandFailedException(
+        string command, string? deviceResponse, string message, Exception? innerException = null)
+        : base(message, ToLines(deviceResponse), innerException)
     {
         Command = command;
         ErrorCode = null;
-        DeviceResponse = deviceResponse;
     }
 
     /// <summary>
@@ -150,6 +146,17 @@ public class DeviceCommandFailedException : Exception
             deviceResponse,
             $"The device {what} after '{command}' (it answered {deviceResponse}). "
             + "The command did not take effect.");
+
+    /// <summary>
+    /// The command never reached the device.
+    /// </summary>
+    /// <param name="command">The SCPI command.</param>
+    /// <param name="reason">Why it was not sent.</param>
+    internal static DeviceCommandFailedException NotSent(string command, Exception reason)
+        => new(command, null, $"'{command}' was not sent to the device. {reason.Message}", reason);
+
+    private static string[]? ToLines(string? deviceResponse)
+        => deviceResponse == null ? null : [deviceResponse];
 
     private static string BuildUnreadableVerdictMessage(string command, string? deviceResponse)
         => deviceResponse == null

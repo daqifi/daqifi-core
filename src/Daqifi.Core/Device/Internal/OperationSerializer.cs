@@ -634,7 +634,7 @@ internal sealed class OperationSerializer : IDisposable
         if (evicted != null)
         {
             DiscardDeferredSends(evicted, new InvalidOperationException(
-                "The command was not sent: it was held back while another operation had exclusive use of the "
+                "It was held back while another operation had exclusive use of the "
                 + $"device, and the backlog of such commands overflowed its cap of {cap}."));
         }
 

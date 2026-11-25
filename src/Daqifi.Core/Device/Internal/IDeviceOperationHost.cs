@@ -168,7 +168,7 @@ internal interface IDeviceOperationHost
     void EnsureSupported(DeviceFeature feature);
 
     /// <inheritdoc cref="DaqifiDevice.CreateFeatureNotSupportedException"/>
-    FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature);
+    FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse);
 
     /// <summary>
     /// Raises the device's <see cref="DaqifiStreamingDevice.StreamFrameDiscarded"/> event,

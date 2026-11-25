@@ -115,7 +115,8 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <returns>A task that completes once the device has confirmed the stream.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="DeviceCommandFailedException">
-    /// Thrown when the device refused the start, reports that it is not streaming, or did not answer.
+    /// Thrown when the device refused the start, reports that it is not streaming, or did not answer, or
+    /// when the start was dropped before it could be sent.
     /// </exception>
     /// <exception cref="OperationCanceledException">
     /// Thrown when the operation is cancelled, or another caller stops the stream before it is confirmed.

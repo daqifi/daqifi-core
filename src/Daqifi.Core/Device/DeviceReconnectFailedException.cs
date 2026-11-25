@@ -9,8 +9,10 @@ namespace Daqifi.Core.Device;
 /// It exists so that giving up arrives on <see cref="DaqifiDevice.ErrorOccurred"/> as a typed
 /// failure carrying the attempt count, with whatever ended the final attempt as its
 /// <see cref="Exception.InnerException"/>.
+/// <see cref="DaqifiDeviceException.RawDeviceResponse"/> is always empty here; whatever the device
+/// said is on the inner exception.
 /// </remarks>
-public class DeviceReconnectFailedException : Exception
+public class DeviceReconnectFailedException : DaqifiDeviceException
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="DeviceReconnectFailedException"/> class.
@@ -21,6 +23,7 @@ public class DeviceReconnectFailedException : Exception
     public DeviceReconnectFailedException(string deviceName, int attemptsMade, Exception? innerException = null)
         : base(
             $"Device '{deviceName}' could not be reconnected after {attemptsMade} attempt(s).",
+            rawDeviceResponse: null,
             innerException)
     {
         DeviceName = deviceName;

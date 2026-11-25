@@ -1242,7 +1242,7 @@ public class StreamFrameDecoderTests
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public bool Supports(DeviceFeature feature) => throw new NotSupportedException();
         public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
-        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
+        public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
             => throw new NotSupportedException();
     }
 

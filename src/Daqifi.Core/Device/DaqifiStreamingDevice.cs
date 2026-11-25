@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication;
+using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
@@ -484,6 +485,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // start never reached the device goes out in place of either (issue #975).
         if (session.StartNotSent is { } notSent)
         {
+            if (notSent is not (ConsumerThreadNotExitedException or DeviceNotConnectedException))
+            {
+                throw DeviceCommandFailedException.NotSent(
+                    ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim(), notSent);
+            }
+
             ExceptionDispatchInfo.Capture(notSent).Throw();
         }
 
@@ -1919,8 +1926,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.EnsureSupported(DeviceFeature feature) => EnsureSupported(feature);
 
-    FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)
-        => CreateFeatureNotSupportedException(feature);
+    FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature, IReadOnlyList<string> rawDeviceResponse)
+        => CreateFeatureNotSupportedException(feature, rawDeviceResponse);
 
     bool ISdCardOperationHost.IsUsbConnection => IsUsbConnection;
 
