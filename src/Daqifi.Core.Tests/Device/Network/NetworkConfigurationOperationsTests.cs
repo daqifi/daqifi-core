@@ -430,6 +430,8 @@ public class NetworkConfigurationOperationsTests
         public void StartStreaming() => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();

@@ -90,7 +90,7 @@ public class DaqifiStreamingDeviceIdentifyTests
     public async Task SetIdentifyAsync_WhenNotConnected_Throws()
     {
         var device = new CapturingIdentifyDevice();
-        device.Metadata.FirmwareVersion = "3.9.0";
+        device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.9.0" });
 
         await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.SetIdentifyAsync(true));
         Assert.Empty(device.SentCommands);
@@ -100,8 +100,11 @@ public class DaqifiStreamingDeviceIdentifyTests
     {
         var device = new CapturingIdentifyDevice();
         device.Connect();
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.FirmwareVersion = firmwareVersion;
+        device.UpdateMetadata(metadata => metadata with
+        {
+            DeviceType = DeviceType.Nyquist1,
+            FirmwareVersion = firmwareVersion
+        });
         device.SentCommands.Clear();
         return device;
     }

@@ -1883,6 +1883,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
 
+    void IDeviceOperationHost.UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) =>
+        UpdateMetadata(change);
+
     void IDeviceOperationHost.Disconnect() => Disconnect();
 
     IReadOnlyList<IChannel> IDeviceOperationHost.SnapshotChannels() => SnapshotChannels();

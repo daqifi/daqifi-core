@@ -83,7 +83,7 @@ public class DeviceAdministrationOperationsTests
     public async Task SetFriendlyNameAsync_WhenTheSaveSendFails_LeavesMetadataUnchanged()
     {
         var host = new FakeHost { IsConnected = true, FailSendAt = 2 };
-        host.Metadata.FriendlyName = "Original";
+        host.UpdateMetadata(metadata => metadata with { FriendlyName = "Original" });
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => new DeviceAdministrationOperations(host).SetFriendlyNameAsync("Bench01"));
@@ -95,7 +95,7 @@ public class DeviceAdministrationOperationsTests
     public async Task SetFriendlyNameAsync_AlreadyCancelled_SendsNothingAndLeavesMetadataUnchanged()
     {
         var host = new FakeHost { IsConnected = true };
-        host.Metadata.FriendlyName = "Original";
+        host.UpdateMetadata(metadata => metadata with { FriendlyName = "Original" });
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -650,7 +650,9 @@ public class DeviceAdministrationOperationsTests
 
         public bool IsConnected { get; set; }
 
-        public DeviceMetadata Metadata { get; } = new();
+        public DeviceMetadata Metadata { get; private set; } = new();
+
+        public void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) => Metadata = change(Metadata);
 
         /// <summary>1-based index of the send that should throw, or 0 for none.</summary>
         public int FailSendAt { get; set; }

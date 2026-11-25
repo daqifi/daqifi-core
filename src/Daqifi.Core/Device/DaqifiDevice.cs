@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -198,9 +199,44 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Gets the device metadata containing part number, firmware version, etc.
+    /// Gets a snapshot of the device metadata: part number, firmware version, capabilities, etc.
     /// </summary>
-    public DeviceMetadata Metadata { get; } = new DeviceMetadata();
+    /// <remarks>
+    /// The snapshot never changes. Each status message replaces it whole, so a reader on another
+    /// thread sees all of a message or none of it. Read this property again for the latest
+    /// snapshot, and read it once when several values have to agree.
+    /// </remarks>
+    public DeviceMetadata Metadata => Volatile.Read(ref _metadata);
+
+    private DeviceMetadata _metadata = new();
+
+    /// <summary>
+    /// Replaces <see cref="Metadata"/> with what <paramref name="change"/> makes of it, without
+    /// losing an update made by another thread at the same time.
+    /// </summary>
+    /// <remarks>
+    /// For Core, and for a subclass that stands in for a device (a simulator or a test double).
+    /// The device's own status messages go through <see cref="OnStatusMessageReceived"/>.
+    /// A change that sets <see cref="DeviceMetadata.DeviceType"/> must set
+    /// <see cref="DeviceMetadata.Capabilities"/> with it: a status message derives them only when it
+    /// reports a different board.
+    /// </remarks>
+    /// <param name="change">
+    /// Returns the new snapshot. It runs again if another thread replaced the metadata meanwhile,
+    /// so it must have no side effects.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="change"/> is <c>null</c>.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="change"/> returned <c>null</c>.</exception>
+    protected internal void UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+
+        ImmutableInterlocked.Update(
+            ref _metadata,
+            static (current, change) => change(current)
+                ?? throw new InvalidOperationException("The metadata change returned null."),
+            change);
+    }
 
     /// <summary>
     /// Minimum firmware version daqifi-core is built and tested against (ADR 0001,
@@ -294,14 +330,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         var requirement = DeviceFeatureRequirements.For(feature);
 
+        // Read once, so the board and its capabilities come from the same status message.
+        var metadata = Metadata;
+
         if (requirement.MinVersion.HasValue
-            && (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
+            && (!FirmwareVersion.TryParse(metadata.FirmwareVersion, out var firmware)
                 || firmware < requirement.MinVersion.Value))
         {
             return SupportFailure.FirmwareVersion;
         }
 
-        var board = Metadata.DeviceType;
+        var board = metadata.DeviceType;
         if (board == DeviceType.Unknown)
         {
             return SupportFailure.None;
@@ -312,7 +351,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return SupportFailure.Board;
         }
 
-        var capabilities = Metadata.Capabilities;
+        var capabilities = metadata.Capabilities;
         if (requirement.Hardware.HasFlag(HardwareRequirement.SdCard) && !capabilities.HasSdCard)
         {
             return SupportFailure.Hardware;
@@ -393,11 +432,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         FirmwareVersion? requiredVersion,
         IReadOnlyList<string>? rawDeviceResponse = null)
     {
+        var metadata = Metadata;
         return new FeatureNotSupportedException(
             feature,
             requiredVersion,
-            Metadata.FirmwareVersion,
-            Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType,
+            metadata.FirmwareVersion,
+            metadata.DeviceType == DeviceType.Unknown ? null : metadata.DeviceType,
             rawDeviceResponse);
     }
 
@@ -3109,7 +3149,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <para>
     /// The overlay is a merge: <see cref="DeviceCapabilities.FromDeviceType"/> remains the
     /// bootstrap and the fallback for every field the document does not state
-    /// (<see cref="CapabilityDocument.MergeInto"/>). <see cref="InitializeAsync"/> calls this
+    /// (<see cref="CapabilityDocument.OverlayOnto"/>). <see cref="InitializeAsync"/> calls this
     /// once, after the device reports its board and firmware version. Call it again whenever a
     /// fresh <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed — that figure is
     /// computed from the channel set enabled at the moment of the read, so it goes stale as
@@ -3304,7 +3344,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return null;
         }
 
-        Metadata.ApplyCapabilityDocument(document);
+        UpdateMetadata(metadata => metadata.WithCapabilityDocument(document));
 
         // The document is also the only description of the device's DAC channels, so this is
         // the moment they can be modelled (#499).
@@ -4756,12 +4796,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // A connect waiting for the device to describe itself reads the message here, before
         // anything is applied, because the fields it has to judge -- the part number and the
         // firmware version -- are not on the ChannelsPopulated event, and Metadata cannot
-        // answer for them: UpdateFromProtobuf keeps what an earlier status already set, so a
+        // answer for them: a status update keeps what an earlier status already set, so a
         // status carrying no identity at all would inherit the identity of the one before it.
         _initialStatusWatcher?.Invoke(message);
 
         // Update device metadata
-        Metadata.UpdateFromProtobuf(message);
+        UpdateMetadata(metadata => metadata.WithStatus(message));
 
         // Populate channels from the status message
         PopulateChannelsFromStatus(message);
@@ -5033,8 +5073,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <c>analog_out_port_num</c>/<c>_res</c>/<c>_range</c> but never populates them, which is
     /// why analog outputs are not built in <see cref="PopulateChannelsFromStatus"/> with
     /// everything else. <see cref="ReadCapabilityDocumentAsync"/> calls this for you; call it
-    /// yourself only if you applied a document by hand through
-    /// <see cref="DeviceMetadata.ApplyCapabilityDocument"/>. With no document in hand, or on a
+    /// yourself only if you set <see cref="DeviceMetadata.CapabilityDocument"/> by hand through
+    /// <see cref="UpdateMetadata"/>. With no document in hand, or on a
     /// device whose document lists no analog outputs, the channel collection is left alone.
     /// Existing instances are refreshed in place so a consumer-held reference survives a
     /// re-read.

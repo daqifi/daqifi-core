@@ -23,10 +23,13 @@ public class DaqifiDeviceCapabilityDocumentTests
     private static TestableCapabilityDevice CreateSupportedDevice(string firmwareVersion = "3.7.2")
     {
         var device = new TestableCapabilityDevice("BenchNq1");
-        device.Metadata.FirmwareVersion = firmwareVersion;
-        device.Metadata.PartNumber = "Nq1";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = firmwareVersion,
+            PartNumber = "Nq1",
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.Connect();
         return device;
     }
@@ -180,7 +183,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
 
         await device.ReadCapabilityDocumentAsync();
-        device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        device.UpdateMetadata(metadata => metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" }));
 
         Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
         Assert.Equal(16, device.Metadata.Capabilities.AnalogInputChannels);

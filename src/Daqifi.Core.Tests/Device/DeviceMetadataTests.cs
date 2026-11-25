@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Network;
@@ -35,7 +37,7 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesPartNumberAndDeviceType()
+    public void WithStatus_UpdatesPartNumberAndDeviceType()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -45,7 +47,7 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("Nq3", metadata.PartNumber);
@@ -55,90 +57,76 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_RepeatedPartNumber_DoesNotDiscardChannelCounts()
+    public void WithStatus_RepeatedPartNumber_DoesNotDiscardChannelCounts()
     {
         // Status messages repeat the part number. Rebuilding the board-derived capabilities on
         // each one reset the channel counts, which a status message carrying no port fields does
         // not restore.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage
+        metadata = metadata.WithStatus(new DaqifiOutMessage
         {
             DevicePn = "Nq1",
             AnalogInPortNum = 16,
             DigitalPortNum = 16
         });
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" });
 
         Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
         Assert.Equal(16, metadata.Capabilities.DigitalChannels);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_ChangedPartNumber_RebuildsBoardDerivedCapabilities()
+    public void WithStatus_ChangedPartNumber_RebuildsBoardDerivedCapabilities()
     {
         // The board really did change (a reconnect against a different unit on the same object),
         // so the board-derived values must be rebuilt rather than carried over.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogOutPortNum = 4 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", AnalogOutPortNum = 4 });
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
         Assert.Equal(8, metadata.Capabilities.AnalogOutputChannels);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_BoardAssignedButCapabilitiesNeverDerived_StillDerivesThem()
-    {
-        // DeviceType has a public setter, so "the status message reports the board we already
-        // have" is not the same as "the capabilities were built for that board".
-        var metadata = new DeviceMetadata { DeviceType = DeviceType.Nyquist1 };
-
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
-
-        Assert.True(metadata.Capabilities.HasSdCard);
-        Assert.True(metadata.Capabilities.HasWiFi);
-        Assert.True(metadata.Capabilities.HasUsb);
-    }
-
-    [Fact]
-    public void ApplyCapabilityDocument_OverlaysDocumentAndSurvivesLaterStatusMessages()
+    public void WithCapabilityDocument_OverlaysDocumentAndSurvivesLaterStatusMessages()
     {
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
 
         Assert.True(CapabilityDocumentParser.TryParse(
             "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
             out var document));
-        metadata.ApplyCapabilityDocument(document!);
+        metadata = metadata.WithCapabilityDocument(document!);
 
         Assert.Same(document, metadata.CapabilityDocument);
         Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
 
         // A later status message must not revert the device's own value to the board table's.
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
 
         Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
         Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_ChangedPartNumber_DiscardsTheOldBoardsCapabilityDocument()
+    public void WithStatus_ChangedPartNumber_DiscardsTheOldBoardsCapabilityDocument()
     {
         // The overlay is durable across status messages by design, but it describes the board it
         // was read from — carrying it onto a different unit connected through the same object
         // would overlay the previous device's flags, channel counts and rate ceiling.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" });
         Assert.True(CapabilityDocumentParser.TryParse(
             "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}},"
             + "\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}",
             out var document));
-        metadata.ApplyCapabilityDocument(document!);
+        metadata = metadata.WithCapabilityDocument(document!);
         Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Null(metadata.CapabilityDocument);
         Assert.Equal(16000, metadata.Capabilities.MaxSamplingRate);
@@ -150,55 +138,35 @@ public class DeviceMetadataTests
     [InlineData("Xx9", "Nq1")]
     // The real board first, then an unrecognized part number — says nothing about a swap.
     [InlineData("Nq1", "Xx9")]
-    public void UpdateFromProtobuf_TransitionInvolvingUnknownBoard_KeepsTheCapabilityDocument(
+    public void WithStatus_TransitionInvolvingUnknownBoard_KeepsTheCapabilityDocument(
         string firstPartNumber, string secondPartNumber)
     {
         // Per ADR 0001, Unknown means "not yet known", not "a different board". The device that
         // answered the capability query is the same one either way, so discarding the overlay
         // would regress MaxSamplingRate to the stale board-table ceiling for no gain.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = firstPartNumber });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = firstPartNumber });
         Assert.True(CapabilityDocumentParser.TryParse(
             "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
             out var document));
-        metadata.ApplyCapabilityDocument(document!);
+        metadata = metadata.WithCapabilityDocument(document!);
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = secondPartNumber });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = secondPartNumber });
 
         Assert.Same(document, metadata.CapabilityDocument);
         Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
     }
 
     [Fact]
-    public void ApplyCapabilityDocument_NullDocument_Throws()
+    public void WithCapabilityDocument_NullDocument_Throws()
     {
         var metadata = new DeviceMetadata();
 
-        Assert.Throws<ArgumentNullException>(() => metadata.ApplyCapabilityDocument(null!));
+        Assert.Throws<ArgumentNullException>(() => metadata.WithCapabilityDocument(null!));
     }
 
     [Fact]
-    public void CopyFrom_CarriesTheCapabilityDocument()
-    {
-        // Without it, the target's next status message would rebuild from the board table with
-        // nothing to re-overlay, silently discarding the device's own values.
-        var source = new DeviceMetadata();
-        source.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
-        Assert.True(CapabilityDocumentParser.TryParse(
-            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
-            out var document));
-        source.ApplyCapabilityDocument(document!);
-
-        var target = new DeviceMetadata();
-        target.CopyFrom(source);
-        target.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
-
-        Assert.Same(document, target.CapabilityDocument);
-        Assert.Equal(22000, target.Capabilities.MaxSamplingRate);
-    }
-
-    [Fact]
-    public void UpdateFromProtobuf_UpdatesSerialNumber()
+    public void WithStatus_UpdatesSerialNumber()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -208,14 +176,14 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("12345", metadata.SerialNumber);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesFirmwareAndHardwareVersions()
+    public void WithStatus_UpdatesFirmwareAndHardwareVersions()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -226,7 +194,7 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("1.2.3", metadata.FirmwareVersion);
@@ -234,7 +202,7 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesNetworkInformation()
+    public void WithStatus_UpdatesNetworkInformation()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -248,7 +216,7 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("TestNetwork", metadata.Ssid);
@@ -259,17 +227,17 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_WpaThenOpenNetwork_AppliesOpenSecurityMode()
+    public void WithStatus_WpaThenOpenNetwork_AppliesOpenSecurityMode()
     {
         // #986: an open network is security mode 0, which proto3 drops on the wire. Round-trip
         // the SYSInfoPB-shaped status through the encoder so field 60 is genuinely absent.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 3, infMode: 1));
+        metadata = metadata.WithStatus(SysInfoStatus(securityMode: 3, infMode: 1));
         Assert.Equal(WifiSecurityType.WpaPskPhrase, metadata.WifiSecurityMode);
 
         var openStatus = DaqifiOutMessage.Parser.ParseFrom(
             SysInfoStatus(securityMode: 0, infMode: 4).ToByteArray());
-        metadata.UpdateFromProtobuf(openStatus);
+        metadata = metadata.WithStatus(openStatus);
 
         Assert.Equal(WifiSecurityType.None, metadata.WifiSecurityMode);
         Assert.Equal(WifiMode.SelfHosted, metadata.WifiInfrastructureMode);
@@ -280,12 +248,12 @@ public class DeviceMetadataTests
     [InlineData("sd-metadata")]
     [InlineData("stream")]
     [InlineData("empty")]
-    public void UpdateFromProtobuf_MessageWithoutWifiSettings_KeepsSecurityMode(string kind)
+    public void WithStatus_MessageWithoutWifiSettings_KeepsSecurityMode(string kind)
     {
         // Messages that carry no WiFi settings leave field 60 out for a different reason, and
         // must not be read as "the device is now on an open network".
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(SysInfoStatus(securityMode: 3, infMode: 1));
+        metadata = metadata.WithStatus(SysInfoStatus(securityMode: 3, infMode: 1));
 
         var message = kind switch
         {
@@ -314,7 +282,7 @@ public class DeviceMetadataTests
             _ => new DaqifiOutMessage(),
         };
 
-        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(message.ToByteArray()));
+        metadata = metadata.WithStatus(DaqifiOutMessage.Parser.ParseFrom(message.ToByteArray()));
 
         Assert.Equal(WifiSecurityType.WpaPskPhrase, metadata.WifiSecurityMode);
         Assert.Equal(WifiMode.ExistingNetwork, metadata.WifiInfrastructureMode);
@@ -326,7 +294,7 @@ public class DeviceMetadataTests
         // Not reported must not read as "open network" (#1039).
         var metadata = new DeviceMetadata();
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", DeviceFwRev = "3.9.1" });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", DeviceFwRev = "3.9.1" });
 
         Assert.Null(metadata.WifiSecurityMode);
         Assert.Null(metadata.WifiInfrastructureMode);
@@ -338,7 +306,7 @@ public class DeviceMetadataTests
     [InlineData(4u, WifiSecurityType.WpaPskPhrase)] // WPA_DEPRECATED, the older number for 3
     [InlineData(1u, null)] // WEP_40
     [InlineData(99u, null)]
-    public void UpdateFromProtobuf_SecurityMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiSecurityType? expected)
+    public void WithStatus_SecurityMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiSecurityType? expected)
     {
         // Start from a type the case does not expect, so a kept old value fails.
         var metadata = new DeviceMetadata
@@ -346,7 +314,7 @@ public class DeviceMetadataTests
             WifiSecurityMode = expected == WifiSecurityType.None ? WifiSecurityType.WpaPskPhrase : WifiSecurityType.None
         };
 
-        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(
+        metadata = metadata.WithStatus(DaqifiOutMessage.Parser.ParseFrom(
             SysInfoStatus(securityMode: wireValue, infMode: 1).ToByteArray()));
 
         Assert.Equal(expected, metadata.WifiSecurityMode);
@@ -357,14 +325,14 @@ public class DeviceMetadataTests
     [InlineData(4u, WifiMode.SelfHosted)]
     [InlineData(2u, null)]
     [InlineData(99u, null)]
-    public void UpdateFromProtobuf_InfrastructureMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiMode? expected)
+    public void WithStatus_InfrastructureMode_MapsKnownValuesAndClearsOnUnknown(uint wireValue, WifiMode? expected)
     {
         var metadata = new DeviceMetadata
         {
             WifiInfrastructureMode = expected == WifiMode.SelfHosted ? WifiMode.ExistingNetwork : WifiMode.SelfHosted
         };
 
-        metadata.UpdateFromProtobuf(DaqifiOutMessage.Parser.ParseFrom(
+        metadata = metadata.WithStatus(DaqifiOutMessage.Parser.ParseFrom(
             SysInfoStatus(securityMode: 3, infMode: wireValue).ToByteArray()));
 
         Assert.Equal(expected, metadata.WifiInfrastructureMode);
@@ -387,7 +355,7 @@ public class DeviceMetadataTests
     };
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesIpAddress()
+    public void WithStatus_UpdatesIpAddress()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -397,14 +365,14 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("192.168.1.100", metadata.IpAddress);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesMacAddress()
+    public void WithStatus_UpdatesMacAddress()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -414,14 +382,14 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("AA-BB-CC-DD-EE-FF", metadata.MacAddress);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesChannelCounts()
+    public void WithStatus_UpdatesChannelCounts()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -433,7 +401,7 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
@@ -442,7 +410,7 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_FromSerializedStatusPayload_DecodesHealthTelemetry()
+    public void WithStatus_FromSerializedStatusPayload_DecodesHealthTelemetry()
     {
         // Arrange: build a status message, serialize it to the wire bytes a device would send,
         // then decode it back through the protobuf parser — exercising the real frame decode path
@@ -461,7 +429,7 @@ public class DeviceMetadataTests
         var metadata = new DeviceMetadata();
 
         // Act
-        metadata.UpdateFromProtobuf(decoded);
+        metadata = metadata.WithStatus(decoded);
 
         // Assert
         Assert.Equal(87, metadata.Health.BatteryPercent);
@@ -474,77 +442,46 @@ public class DeviceMetadataTests
     [InlineData(101u)]      // above the documented 0-100 range
     [InlineData(500u)]      // clearly nonsensical
     [InlineData(uint.MaxValue)] // would wrap to -1 if cast straight to int
-    public void UpdateFromProtobuf_OutOfRangeBattery_IsIgnored(uint battStatus)
+    public void WithStatus_OutOfRangeBattery_IsIgnored(uint battStatus)
     {
         // Arrange: a prior valid reading, then a bad one.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 60 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { BattStatus = 60 });
 
         // Act
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = battStatus });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { BattStatus = battStatus });
 
         // Assert: out-of-range battery never surfaces (and never wraps negative); last-known kept.
         Assert.Equal(60, metadata.Health.BatteryPercent);
     }
 
     [Fact]
-    public void Health_SetToNull_IsCoercedToInstance_AndStatusUpdateDoesNotThrow()
-    {
-        // Health has a public setter; a consumer assigning null must not break the status path.
-        var metadata = new DeviceMetadata { Health = null! };
-
-        Assert.NotNull(metadata.Health);
-
-        var exception = Record.Exception(() =>
-            metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 42 }));
-
-        Assert.Null(exception);
-        Assert.Equal(42, metadata.Health.BatteryPercent);
-    }
-
-    [Fact]
-    public void Capabilities_SetToNull_IsCoercedToInstance_AndStatusUpdateDoesNotThrow()
-    {
-        // Capabilities has a public setter too, and the status path writes channel counts
-        // straight into it; a consumer assigning null must not break that.
-        var metadata = new DeviceMetadata { Capabilities = null! };
-
-        Assert.NotNull(metadata.Capabilities);
-
-        var exception = Record.Exception(() =>
-            metadata.UpdateFromProtobuf(new DaqifiOutMessage { AnalogInPortNum = 8 }));
-
-        Assert.Null(exception);
-        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
-    }
-
-    [Fact]
-    public void UpdateFromProtobuf_NegativeBoardTemperature_IsPreserved()
+    public void WithStatus_NegativeBoardTemperature_IsPreserved()
     {
         // TempStatus is a signed field; sub-zero board temperatures must round-trip.
         var metadata = new DeviceMetadata();
         var message = new DaqifiOutMessage { TempStatus = -10 };
 
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         Assert.Equal(-10, metadata.Health.BoardTemperatureCelsius);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_ZeroHealthFields_LeaveLastKnownValues()
+    public void WithStatus_ZeroHealthFields_LeaveLastKnownValues()
     {
         // A partial status message (all health fields 0) must not clobber a prior reading.
         var metadata = new DeviceMetadata();
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 90, TempStatus = 30 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { BattStatus = 90, TempStatus = 30 });
 
-        metadata.UpdateFromProtobuf(new DaqifiOutMessage { AnalogInPortNum = 8 });
+        metadata = metadata.WithStatus(new DaqifiOutMessage { AnalogInPortNum = 8 });
 
         Assert.Equal(90, metadata.Health.BatteryPercent);
         Assert.Equal(30, metadata.Health.BoardTemperatureCelsius);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_IgnoresEmptyOrZeroValues()
+    public void WithStatus_IgnoresEmptyOrZeroValues()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -559,7 +496,7 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal(string.Empty, metadata.PartNumber);
@@ -571,7 +508,7 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesFriendlyName()
+    public void WithStatus_UpdatesFriendlyName()
     {
         // Arrange
         var metadata = new DeviceMetadata();
@@ -581,14 +518,14 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("My Device", metadata.FriendlyName);
     }
 
     [Fact]
-    public void UpdateFromProtobuf_WithEmptyFriendlyName_LeavesFriendlyNameUnchanged()
+    public void WithStatus_WithEmptyFriendlyName_LeavesFriendlyNameUnchanged()
     {
         // Arrange
         var metadata = new DeviceMetadata { FriendlyName = "Previous Name" };
@@ -598,137 +535,68 @@ public class DeviceMetadataTests
         };
 
         // Act
-        metadata.UpdateFromProtobuf(message);
+        metadata = metadata.WithStatus(message);
 
         // Assert
         Assert.Equal("Previous Name", metadata.FriendlyName);
     }
 
-    [Fact]
-    public void CopyFrom_CopiesAllFieldValues()
+    [Theory]
+    [InlineData(typeof(DeviceMetadata))]
+    [InlineData(typeof(DeviceCapabilities))]
+    [InlineData(typeof(DeviceHealth))]
+    public void PublicProperties_CannotBeWrittenOnAnExistingInstance(Type type)
     {
-        // Arrange
-        var source = new DeviceMetadata
+        // #1048: a write to the device's own object changed which features Core allowed.
+        var writable = type.GetProperties()
+            .Where(property => property.SetMethod is { IsPublic: true } setter
+                && !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit)))
+            .Select(property => property.Name);
+
+        Assert.Empty(writable);
+    }
+
+    [Fact]
+    public void WithStatus_LeavesTheOriginalSnapshotAlone()
+    {
+        var before = new DeviceMetadata().WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", BattStatus = 80 });
+
+        var after = before.WithStatus(new DaqifiOutMessage
         {
-            PartNumber = "Nq3",
-            SerialNumber = "12345",
-            FirmwareVersion = "1.2.3",
-            HardwareRevision = "2.0",
-            DeviceType = DeviceType.Nyquist3,
-            Capabilities = new DeviceCapabilities
-            {
-                SupportsStreaming = true,
-                HasSdCard = true,
-                HasWiFi = true,
-                HasUsb = true,
-                AnalogInputChannels = 8,
-                AnalogOutputChannels = 2,
-                DigitalChannels = 16,
-                MaxSamplingRate = 5000
-            },
-            Health = new DeviceHealth
-            {
-                BatteryPercent = 75,
-                BoardTemperatureCelsius = 33,
-                PowerStatus = 1,
-                DeviceStatus = 4
-            },
-            IpAddress = "192.168.1.100",
-            MacAddress = "AA-BB-CC-DD-EE-FF",
-            Ssid = "TestNetwork",
-            HostName = "daqifi-001",
-            FriendlyName = "My Device",
-            DevicePort = 9760,
-            WifiSecurityMode = WifiSecurityType.WpaPskPhrase,
-            WifiInfrastructureMode = WifiMode.ExistingNetwork
-        };
-        var target = new DeviceMetadata();
+            DevicePn = "Nq3",
+            DeviceFwRev = "3.9.1",
+            AnalogInPortNum = 4,
+            BattStatus = 20
+        });
 
-        // Act
-        target.CopyFrom(source);
-
-        // Assert
-        Assert.Equal(source.PartNumber, target.PartNumber);
-        Assert.Equal(source.SerialNumber, target.SerialNumber);
-        Assert.Equal(source.FirmwareVersion, target.FirmwareVersion);
-        Assert.Equal(source.HardwareRevision, target.HardwareRevision);
-        Assert.Equal(source.DeviceType, target.DeviceType);
-        Assert.Equal(source.IpAddress, target.IpAddress);
-        Assert.Equal(source.MacAddress, target.MacAddress);
-        Assert.Equal(source.Ssid, target.Ssid);
-        Assert.Equal(source.HostName, target.HostName);
-        Assert.Equal(source.FriendlyName, target.FriendlyName);
-        Assert.Equal(source.DevicePort, target.DevicePort);
-        Assert.Equal(source.WifiSecurityMode, target.WifiSecurityMode);
-        Assert.Equal(source.WifiInfrastructureMode, target.WifiInfrastructureMode);
-        Assert.Equal(source.Capabilities.AnalogInputChannels, target.Capabilities.AnalogInputChannels);
-        Assert.Equal(source.Capabilities.AnalogOutputChannels, target.Capabilities.AnalogOutputChannels);
-        Assert.Equal(source.Capabilities.DigitalChannels, target.Capabilities.DigitalChannels);
-        Assert.Equal(source.Capabilities.MaxSamplingRate, target.Capabilities.MaxSamplingRate);
-        Assert.Equal(source.Capabilities.HasSdCard, target.Capabilities.HasSdCard);
-        Assert.Equal(source.Capabilities.HasWiFi, target.Capabilities.HasWiFi);
-        Assert.Equal(source.Capabilities.HasUsb, target.Capabilities.HasUsb);
-        Assert.Equal(source.Capabilities.SupportsStreaming, target.Capabilities.SupportsStreaming);
-        Assert.Equal(source.Health.BatteryPercent, target.Health.BatteryPercent);
-        Assert.Equal(source.Health.BoardTemperatureCelsius, target.Health.BoardTemperatureCelsius);
-        Assert.Equal(source.Health.PowerStatus, target.Health.PowerStatus);
-        Assert.Equal(source.Health.DeviceStatus, target.Health.DeviceStatus);
+        Assert.Equal("Nq1", before.PartNumber);
+        Assert.Equal(string.Empty, before.FirmwareVersion);
+        Assert.Equal(16, before.Capabilities.AnalogInputChannels);
+        Assert.Equal(80, before.Health.BatteryPercent);
+        Assert.Equal(4, after.Capabilities.AnalogInputChannels);
+        Assert.Equal(20, after.Health.BatteryPercent);
     }
 
     [Fact]
-    public void CopyFrom_HealthIsDeepCopiedNotShared()
+    public void With_OnAnExternallyBuiltInstance_ChangesOnlyTheNamedField()
     {
-        // Arrange
-        var source = new DeviceMetadata { Health = new DeviceHealth { BatteryPercent = 50 } };
-        var target = new DeviceMetadata();
+        // How a wrapper that keeps its own copy replaces a property write.
+        var metadata = new DeviceMetadata { SerialNumber = "1", FirmwareVersion = "3.8.0" };
 
-        // Act
-        target.CopyFrom(source);
-        source.Health.BatteryPercent = 10;
+        var moved = metadata with { IpAddress = "192.168.1.5" };
 
-        // Assert
-        Assert.NotSame(source.Health, target.Health);
-        Assert.Equal(50, target.Health.BatteryPercent);
+        Assert.Equal(string.Empty, metadata.IpAddress);
+        Assert.Equal(metadata, moved with { IpAddress = string.Empty });
     }
 
     [Fact]
-    public void CopyFrom_CapabilitiesAreDeepCopiedNotShared()
+    public void WithStatus_FirstStatusOfAnUnrecognizedBoard_KeepsEarlierChannelCounts()
     {
-        // Arrange
-        var source = new DeviceMetadata();
-        var target = new DeviceMetadata();
+        var metadata = new DeviceMetadata()
+            .WithStatus(new DaqifiOutMessage { AnalogInPortNum = 8 })
+            .WithStatus(new DaqifiOutMessage { DevicePn = "Xx9" });
 
-        // Act
-        target.CopyFrom(source);
-
-        // Assert
-        Assert.NotSame(source.Capabilities, target.Capabilities);
-    }
-
-    [Fact]
-    public void CopyFrom_MutatingSourceAfterCopyDoesNotAffectTarget()
-    {
-        // Arrange
-        var source = new DeviceMetadata { PartNumber = "Nq3" };
-        var target = new DeviceMetadata();
-        target.CopyFrom(source);
-
-        // Act
-        source.PartNumber = "Nq1";
-        source.Capabilities.AnalogInputChannels = 8;
-
-        // Assert
-        Assert.Equal("Nq3", target.PartNumber);
-        Assert.Equal(0, target.Capabilities.AnalogInputChannels);
-    }
-
-    [Fact]
-    public void CopyFrom_NullSource_ThrowsArgumentNullException()
-    {
-        // Arrange
-        var target = new DeviceMetadata();
-
-        // Act & Assert
-        Assert.Throws<ArgumentNullException>(() => target.CopyFrom(null!));
+        Assert.Equal(DeviceType.Unknown, metadata.DeviceType);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
     }
 }

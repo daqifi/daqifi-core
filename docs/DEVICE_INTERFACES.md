@@ -952,6 +952,21 @@ Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannels}");
 Console.WriteLine($"Digital I/O: {caps.DigitalChannels}");
 ```
 
+`Metadata` is an immutable snapshot. The device replaces it whole when a status message arrives, so
+a snapshot never mixes two messages, whichever thread reads it. Read `device.Metadata` again for the
+latest values. To keep a changed copy of your own, use a `with` expression:
+
+```csharp
+var mine = device.Metadata with { IpAddress = "192.168.1.100" }; // does not change the device
+```
+
+A subclass that stands in for a device, such as a simulator or a test double, sets its metadata with
+the protected `UpdateMetadata`:
+
+```csharp
+UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.9.1" });
+```
+
 ### Streaming Data
 
 Three ways to consume streamed data: decoded per-channel samples via `IChannel.SampleReceived`

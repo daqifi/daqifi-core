@@ -39,10 +39,13 @@ public class DaqifiStreamingDeviceStoredRateTests
     private static StoredRateDevice CreateDevice(string firmwareVersion = "3.9.0", string? storedRateReply = "1000")
     {
         var device = new StoredRateDevice();
-        device.Metadata.FirmwareVersion = firmwareVersion;
-        device.Metadata.PartNumber = "Nq1";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = firmwareVersion,
+            PartNumber = "Nq1",
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.Responses[ApiVersionCommand] = ["2"];
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
         if (storedRateReply != null)
@@ -503,10 +506,13 @@ public class DaqifiStreamingDeviceStoredRateTests
         // The version check lives in the base capability read, so the base device is held to it
         // too.
         var device = new PlainDevice();
-        device.Metadata.FirmwareVersion = "3.9.0";
-        device.Metadata.PartNumber = "Nq1";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = "3.9.0",
+            PartNumber = "Nq1",
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
         device.Responses[StoredRateCommand] = ["2"];
         device.Connect();
@@ -520,10 +526,13 @@ public class DaqifiStreamingDeviceStoredRateTests
     {
         // The query lives in the base capability read; only the streaming device keeps a rate.
         var device = new PlainDevice();
-        device.Metadata.FirmwareVersion = "3.9.0";
-        device.Metadata.PartNumber = "Nq1";
-        device.Metadata.DeviceType = DeviceType.Nyquist1;
-        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.UpdateMetadata(metadata => metadata with
+        {
+            FirmwareVersion = "3.9.0",
+            PartNumber = "Nq1",
+            DeviceType = DeviceType.Nyquist1,
+            Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1)
+        });
         device.Responses[ApiVersionCommand] = ["2"];
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
         device.Responses[StoredRateCommand] = ["1000"];
