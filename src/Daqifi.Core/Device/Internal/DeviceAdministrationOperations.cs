@@ -52,7 +52,7 @@ internal sealed class DeviceAdministrationOperations
         if (!ScpiMessageProducer.IsFriendlyNameValid(name))
         {
             throw new ArgumentException(
-                $"Device name must be 1-{ScpiMessageProducer.MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                $"Device name must be 1-{ScpiMessageProducer.MaximumFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
                 nameof(name));
         }
 
@@ -170,19 +170,19 @@ internal sealed class DeviceAdministrationOperations
         => SendConfirmedAsync(ScpiMessageProducer.LoadAdcCalibration, cancellationToken);
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync" />
-    internal Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+    internal Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default)
     {
         ValidateChannelNumber(channelNumber);
 
-        return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM), cancellationToken);
+        return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, slope), cancellationToken);
     }
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync" />
-    internal Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+    internal Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default)
     {
         ValidateChannelNumber(channelNumber);
 
-        return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB), cancellationToken);
+        return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, offset), cancellationToken);
     }
 
     /// <inheritdoc cref="IConfirmingDeviceAdministration.SaveFactoryAdcCalibrationAsync" />

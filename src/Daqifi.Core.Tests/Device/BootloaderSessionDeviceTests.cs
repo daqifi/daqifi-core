@@ -266,7 +266,7 @@ public class BootloaderSessionDeviceTests
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
         Assert.True(double.IsNaN(await device.GetAnalogOutputAsync(new AnalogOutputChannel(0))));
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, device.PwmFrequencyFloorHz);
     }
 
     #endregion

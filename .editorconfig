@@ -28,7 +28,7 @@ dotnet_diagnostic.CA2007.severity = warning
 # publishes a public surface, and test methods are named Method_Case_Expectation.
 # Left at the default `public` api_surface on purpose: `all` would also flag
 # private static readonly `_camelCase` fields such as
-# SdCardFileParserFactory._supportedExtensions, fighting the repo's own naming
+# SdCardLogFile._supportedExtensions, fighting the repo's own naming
 # convention for names no consumer can see.
 dotnet_diagnostic.CA1707.severity = warning
 

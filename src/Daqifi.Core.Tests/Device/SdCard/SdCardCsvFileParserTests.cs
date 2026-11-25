@@ -89,7 +89,7 @@ public sealed class SdCardCsvFileParserTests
         Assert.NotNull(session.DeviceConfig);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
         Assert.Equal(3, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(0, session.DeviceConfig.DigitalPortCount);
     }
@@ -106,7 +106,7 @@ public sealed class SdCardCsvFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            FallbackTimestampFrequency = 1000u
+            FallbackTimestampFrequencyHz = 1000u
         };
 
         var session = await parser.ParseAsync(stream, "test.csv", options);
@@ -120,7 +120,7 @@ public sealed class SdCardCsvFileParserTests
     [Fact]
     public async Task ParseAsync_FallbackTimestampFrequencyUsedWhenNoHeader()
     {
-        // Arrange — no # Timestamp Tick Rate comment, falls back to options.FallbackTimestampFrequency
+        // Arrange — no # Timestamp Tick Rate comment, falls back to options.FallbackTimestampFrequencyHz
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileNoHeaders(
             (0u, new[] { 1.0 }),
             (500u, new[] { 2.0 })  // 500 ticks @ 500 Hz = 1 second
@@ -130,7 +130,7 @@ public sealed class SdCardCsvFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            FallbackTimestampFrequency = 500u
+            FallbackTimestampFrequencyHz = 500u
         };
 
         var session = await parser.ParseAsync(stream, "test.csv", options);
@@ -471,7 +471,7 @@ public sealed class SdCardCsvFileParserTests
         {
             AnalogPortCount = 4,
             DigitalPortCount = 1,
-            TimestampFrequency = 1_000_000u,
+            TimestampFrequencyHz = 1_000_000u,
             DeviceSerialNumber = "OVERRIDE_SN",
             DevicePartNumber = "OVERRIDE_DEVICE",
             FirmwareVersion = "9.9.9",
@@ -490,7 +490,7 @@ public sealed class SdCardCsvFileParserTests
         // File-parsed values take precedence
         Assert.Equal("9090539562006014104", session.DeviceConfig.DeviceSerialNumber);
         Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequencyHz);
         // Override fills gaps not present in the file
         Assert.Equal("9.9.9", session.DeviceConfig.FirmwareVersion);
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
@@ -512,7 +512,7 @@ public sealed class SdCardCsvFileParserTests
         {
             AnalogPortCount = 2,
             DigitalPortCount = 0,
-            TimestampFrequency = 50_000_000u,
+            TimestampFrequencyHz = 50_000_000u,
             DeviceSerialNumber = "9090539562006014104",
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = "3.7.2",
@@ -612,12 +612,12 @@ public sealed class SdCardCsvFileParserTests
         {
             AnalogPortCount = 3,
             DigitalPortCount = 0,
-            TimestampFrequency = 50_000_000u,
+            TimestampFrequencyHz = 50_000_000u,
             DeviceSerialNumber = "9090539562006014104",
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = "3.4.4",
             CalibrationValues = new[] { (1.0, 0.0), (1.02, -0.05), (0.98, 0.01) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0, 5.0, 2.0 },
             InternalScaleM = new[] { 1.0, 2.0, 4.0 }
         };
@@ -675,12 +675,12 @@ public sealed class SdCardCsvFileParserTests
         {
             AnalogPortCount = 1,
             DigitalPortCount = 0,
-            TimestampFrequency = 100u,
+            TimestampFrequencyHz = 100u,
             DeviceSerialNumber = "SN001",
             DevicePartNumber = "TestDevice",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.02, -0.05) },  // calM=1.02, calB=-0.05
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0 },
             InternalScaleM = new[] { 2.0 }
         };
@@ -753,12 +753,12 @@ public sealed class SdCardCsvFileParserTests
         {
             AnalogPortCount = 1,
             DigitalPortCount = 1,
-            TimestampFrequency = 100u,
+            TimestampFrequencyHz = 100u,
             DeviceSerialNumber = "SN001",
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = null,
             CalibrationValues = new[] { (1.0, 0.0) },
-            Resolution = 65535,
+            FullScaleCount = 65535,
             PortRange = new[] { 10.0 },
             InternalScaleM = new[] { 1.0 }
         };
@@ -872,7 +872,7 @@ public sealed class SdCardCsvFileParserTests
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 0 };
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequencyHz = 0 };
 
         // Act
         var session = await parser.ParseAsync(stream, "test.csv", options);

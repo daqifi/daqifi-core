@@ -10,9 +10,9 @@ namespace Daqifi.Core.Device.Capabilities;
 /// The constants come from the firmware's own compile-time streaming budget. The result is an
 /// <i>optimistic</i> preview: it accounts for channel count and channel type only, so the rate the
 /// device will actually accept for a committed configuration
-/// (<see cref="CapabilityStreaming.CurrentMaximumRateHz"/>) can be lower once the per-interface,
+/// (<see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/>) can be lower once the per-interface,
 /// per-encoding transport cap is folded in. Treat this as UI guidance and
-/// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> as authoritative.
+/// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> as authoritative.
 /// </remarks>
 public sealed class CapabilityRateModel
 {
@@ -51,18 +51,18 @@ public sealed class CapabilityRateModel
     /// factor in — digital cost is amortized into <see cref="PerTickOverhead"/>, and analog output
     /// is not streamed.
     /// </param>
-    /// <param name="maxRateHz">The predicted ceiling in Hz, when the model can be evaluated.</param>
+    /// <param name="maximumSampleRateHz">The predicted ceiling in Hz, when the model can be evaluated.</param>
     /// <returns>
     /// <c>true</c> when the document supplied enough constants to evaluate at least one term of the
     /// formula; otherwise <c>false</c>, and the caller should fall back to
-    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> or the board-derived maximum.
+    /// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> or the board-derived maximum.
     /// </returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when either count is negative, or when <paramref name="simultaneousChannelCount"/>
     /// exceeds <paramref name="totalChannelCount"/> — a selection that cannot exist, and one that
     /// would otherwise silently produce a too-high ceiling.
     /// </exception>
-    public bool TryComputeMaxRateHz(int simultaneousChannelCount, int totalChannelCount, out int maxRateHz)
+    public bool TryComputeMaximumSampleRateHz(int simultaneousChannelCount, int totalChannelCount, out int maximumSampleRateHz)
     {
         if (simultaneousChannelCount < 0)
         {
@@ -110,7 +110,7 @@ public sealed class CapabilityRateModel
             }
         }
 
-        maxRateHz = ceiling ?? 0;
+        maximumSampleRateHz = ceiling ?? 0;
         return ceiling.HasValue;
     }
 }

@@ -53,7 +53,7 @@ public class DeviceMetadataTests
         Assert.Equal("Nq3", metadata.PartNumber);
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
         Assert.True(metadata.Capabilities.HasSdCard);
-        Assert.True(metadata.Capabilities.HasWiFi);
+        Assert.True(metadata.Capabilities.HasWifi);
     }
 
     [Fact]
@@ -72,8 +72,8 @@ public class DeviceMetadataTests
 
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1" });
 
-        Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
-        Assert.Equal(16, metadata.Capabilities.DigitalChannels);
+        Assert.Equal(16, metadata.Capabilities.AnalogInputChannelCount);
+        Assert.Equal(16, metadata.Capabilities.DigitalChannelCount);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class DeviceMetadataTests
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
-        Assert.Equal(8, metadata.Capabilities.AnalogOutputChannels);
+        Assert.Equal(8, metadata.Capabilities.AnalogOutputChannelCount);
     }
 
     [Fact]
@@ -102,13 +102,13 @@ public class DeviceMetadataTests
         metadata = metadata.WithCapabilityDocument(document!);
 
         Assert.Same(document, metadata.CapabilityDocument);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
 
         // A later status message must not revert the device's own value to the board table's.
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
 
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
-        Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
+        Assert.Equal(16, metadata.Capabilities.AnalogInputChannelCount);
     }
 
     [Fact]
@@ -124,13 +124,13 @@ public class DeviceMetadataTests
             + "\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}",
             out var document));
         metadata = metadata.WithCapabilityDocument(document!);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
 
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = "Nq3" });
 
         Assert.Null(metadata.CapabilityDocument);
-        Assert.Equal(16000, metadata.Capabilities.MaxSamplingRate);
-        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(16000, metadata.Capabilities.MaximumSampleRateHz);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannelCount);
     }
 
     [Theory]
@@ -143,7 +143,7 @@ public class DeviceMetadataTests
     {
         // Per ADR 0001, Unknown means "not yet known", not "a different board". The device that
         // answered the capability query is the same one either way, so discarding the overlay
-        // would regress MaxSamplingRate to the stale board-table ceiling for no gain.
+        // would regress MaximumSampleRateHz to the stale board-table ceiling for no gain.
         var metadata = new DeviceMetadata();
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = firstPartNumber });
         Assert.True(CapabilityDocumentParser.TryParse(
@@ -154,7 +154,7 @@ public class DeviceMetadataTests
         metadata = metadata.WithStatus(new DaqifiOutMessage { DevicePn = secondPartNumber });
 
         Assert.Same(document, metadata.CapabilityDocument);
-        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, metadata.Capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -404,9 +404,9 @@ public class DeviceMetadataTests
         metadata = metadata.WithStatus(message);
 
         // Assert
-        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
-        Assert.Equal(2, metadata.Capabilities.AnalogOutputChannels);
-        Assert.Equal(16, metadata.Capabilities.DigitalChannels);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannelCount);
+        Assert.Equal(2, metadata.Capabilities.AnalogOutputChannelCount);
+        Assert.Equal(16, metadata.Capabilities.DigitalChannelCount);
     }
 
     [Fact]
@@ -571,9 +571,9 @@ public class DeviceMetadataTests
 
         Assert.Equal("Nq1", before.PartNumber);
         Assert.Equal(string.Empty, before.FirmwareVersion);
-        Assert.Equal(16, before.Capabilities.AnalogInputChannels);
+        Assert.Equal(16, before.Capabilities.AnalogInputChannelCount);
         Assert.Equal(80, before.Health.BatteryPercent);
-        Assert.Equal(4, after.Capabilities.AnalogInputChannels);
+        Assert.Equal(4, after.Capabilities.AnalogInputChannelCount);
         Assert.Equal(20, after.Health.BatteryPercent);
     }
 
@@ -597,6 +597,6 @@ public class DeviceMetadataTests
             .WithStatus(new DaqifiOutMessage { DevicePn = "Xx9" });
 
         Assert.Equal(DeviceType.Unknown, metadata.DeviceType);
-        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannelCount);
     }
 }

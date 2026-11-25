@@ -12,7 +12,7 @@ namespace Daqifi.Core.Firmware;
 /// <c>EOT</c>. The two framing bytes are never escaped; every byte between them that collides with
 /// <c>SOH</c> (0x01), <c>EOT</c> (0x04) or <c>DLE</c> (0x10) becomes two bytes. The whole frame
 /// has to fit one HID OUT report, and the transports refuse a longer one
-/// (<c>HidLibraryPlatform.FormatOutputReport</c> and <c>MacOsHidPlatform.Write</c> both throw).
+/// (<c>HidSharpPlatform.FormatOutputReport</c> and <c>MacOsHidPlatform.Write</c> both throw).
 /// </para>
 /// <para>
 /// That refusal used to arrive during programming, after the erase. The board was then left with

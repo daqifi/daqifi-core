@@ -423,9 +423,9 @@ public class TimestampProcessorTests
     #region Device Timestamp Frequency Tests
 
     [Fact]
-    public void DefaultTimestampFrequency_MatchesDefaultTickPeriod()
+    public void DefaultTimestampFrequencyHz_MatchesDefaultTickPeriod()
     {
-        Assert.Equal(TimestampProcessor.DefaultTickPeriod, 1.0 / TimestampProcessor.DefaultTimestampFrequency);
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, 1.0 / TimestampProcessor.DefaultTimestampFrequencyHz);
     }
 
     [Fact]
@@ -617,7 +617,7 @@ public class TimestampProcessorTests
         // exactly why the silent fallback needed its own signal.
         // Arrange
         var processor = new TimestampProcessor();
-        processor.SetTimestampFrequency(TestDeviceId, TimestampProcessor.DefaultTimestampFrequency);
+        processor.SetTimestampFrequency(TestDeviceId, TimestampProcessor.DefaultTimestampFrequencyHz);
 
         // Act & Assert
         Assert.True(processor.HasTimestampFrequency(TestDeviceId));

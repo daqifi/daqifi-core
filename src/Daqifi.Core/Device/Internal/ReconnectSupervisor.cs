@@ -270,9 +270,9 @@ internal sealed class ReconnectSupervisor
         SafeLog(() => _host.Logger.LogInformation(
             "[Reconnect] Device '{DeviceName}' lost its connection; reconnecting (up to {MaxAttempts} attempt(s)).",
             _host.Name,
-            options.MaxAttempts));
+            options.MaximumAttempts));
 
-        while (attempt < options.MaxAttempts)
+        while (attempt < options.MaximumAttempts)
         {
             attempt++;
 
@@ -284,7 +284,7 @@ internal sealed class ReconnectSupervisor
 
             var delay = options.CalculateDelay(attempt);
             _host.RaiseReconnectAttempt(new ReconnectAttemptEventArgs(
-                attempt, options.MaxAttempts, delay, lastError));
+                attempt, options.MaximumAttempts, delay, lastError));
 
             try
             {
@@ -351,7 +351,7 @@ internal sealed class ReconnectSupervisor
                     ex,
                     "[Reconnect] Attempt {Attempt} of {MaxAttempts} to reconnect device '{DeviceName}' failed.",
                     attempt,
-                    options.MaxAttempts,
+                    options.MaximumAttempts,
                     _host.Name));
             }
         }

@@ -54,7 +54,7 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan VerifyingTimeout { get; set; } = TimeSpan.FromSeconds(45);
 
     /// <summary>
-    /// Timeout for the <see cref="FirmwareUpdateState.JumpingToApp"/> state.
+    /// Timeout for the <see cref="FirmwareUpdateState.JumpingToApplication"/> state.
     /// </summary>
     public TimeSpan JumpingToApplicationTimeout { get; set; } = TimeSpan.FromSeconds(45);
 
@@ -75,9 +75,9 @@ public sealed class FirmwareUpdateServiceOptions
     /// <see cref="WifiBridgeActivator"/> keeps between the same two commands on a raw serial port:
     /// the firmware sets the request flag in its SCPI handler and its WiFi manager reads it on the
     /// next REINIT, so the two commands are paced rather than written back to back. See
-    /// <see cref="PostLanBridgeEntryDelay"/> for the wait that follows the apply.
+    /// <see cref="PostWifiBridgeEntryDelay"/> for the wait that follows the apply.
     /// </summary>
-    public TimeSpan PostLanFirmwareModeDelay { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan PostWifiFirmwareModeDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Delay after the <c>SYSTem:COMMunicate:LAN:APPLY</c> that enters the USB-to-WINC bridge and
@@ -99,7 +99,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// — there is no queued transition to wait for, and that state is recovered with a reboot.
     /// </para>
     /// </summary>
-    public TimeSpan PostLanBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan PostWifiBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Delay after the managed serial connection is disconnected (entering WiFi update mode)
@@ -111,7 +111,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// failure. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit tests, or
     /// transports that release the port synchronously).
     /// </summary>
-    public TimeSpan PostLanDisconnectPortReleaseDelay { get; set; } = TimeSpan.FromSeconds(1.5);
+    public TimeSpan PostWifiDisconnectPortReleaseDelay { get; set; } = TimeSpan.FromSeconds(1.5);
 
     /// <summary>
     /// Delay before attempting to reconnect serial after WiFi tool execution.
@@ -142,11 +142,11 @@ public sealed class FirmwareUpdateServiceOptions
     /// fires — before the tool issues its first serial bridge query. Set to
     /// <see cref="TimeSpan.Zero"/> to respond immediately.
     /// </summary>
-    public TimeSpan WincBootPromptResponseDelay { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan WifiBootPromptResponseDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Optional callback awaited when the WINC "Power cycle WINC" prompt is detected, before the
-    /// <see cref="WincBootPromptResponseDelay"/> wait; the flash tool stays parked at its prompt
+    /// <see cref="WifiBootPromptResponseDelay"/> wait; the flash tool stays parked at its prompt
     /// until the returned task completes. Intended for the host to open a
     /// raw serial port and send the bridge-activation commands (LAN:FWUpdate / LAN:APPLY) that
     /// trigger the device's bridge-mode state machine immediately before the tool starts
@@ -154,7 +154,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// <c>LAN:APPLY</c> that enters it (#853), so a callback that re-sends the pair bounces an
     /// already-up bridge — the firmware's REINIT tears the bridge down and the preserved request
     /// flag brings it straight back, which is what
-    /// <see cref="WincBootPromptResponseDelay"/> then waits out. Leave it unset unless the board
+    /// <see cref="WifiBootPromptResponseDelay"/> then waits out. Leave it unset unless the board
     /// genuinely needs that bounce at the prompt. Kept injectable so the raw-serial specifics stay in the host while Core owns
     /// the flash lifecycle, prompt detection, and response timing. Exceptions from the callback are
     /// logged and swallowed — they must not abort the flash.
@@ -256,13 +256,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// 30s covers a slow PIC32 boot and downstream-firmware initialization.
     /// </summary>
     /// <remarks>
-    /// This budget runs INSIDE the JumpingToApp state, so the effective
+    /// This budget runs INSIDE the JumpingToApplication state, so the effective
     /// upper bound is <c>JumpingToApplicationTimeout - (serial reconnect
     /// elapsed)</c>. With the defaults (45s state timeout, ~1-5s typical
     /// reconnect, 30s readiness budget) the readiness probe gets its full
     /// budget; if you raise this near or above the state timeout, the
     /// outer state-timeout will fire first and callers will see a generic
-    /// JumpingToApp timeout instead of the readiness-specific message.
+    /// JumpingToApplication timeout instead of the readiness-specific message.
     /// </remarks>
     public TimeSpan PostReconnectReadinessTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -296,20 +296,20 @@ public sealed class FirmwareUpdateServiceOptions
     /// </summary>
     /// <remarks>
     /// Each attempt also incurs the per-attempt timeout from the device
-    /// implementation (e.g., <c>DaqifiStreamingDevice.GetLanChipInfoAsync</c>
+    /// implementation (e.g., <c>DaqifiStreamingDevice.GetWifiChipInfoAsync</c>
     /// uses 2s). Total wall-clock budget is therefore
-    /// <c>sum(attempt durations) + (MaxAttempts-1) * RetryDelay</c>; with the
+    /// <c>sum(attempt durations) + (MaximumAttempts-1) * RetryDelay</c>; with the
     /// 2s device default, 3 attempts and 2s delay sum to ~10s in the worst
     /// case. The retry loop holds <c>_operationLock</c>, so use
-    /// <see cref="LanChipInfoTotalTimeout"/> to cap the actual wall-clock
+    /// <see cref="WifiChipInfoTotalTimeout"/> to cap the actual wall-clock
     /// time independent of attempt counts.
     /// </remarks>
-    public int LanChipInfoMaxAttempts { get; set; } = 3;
+    public int WifiChipInfoMaximumAttempts { get; set; } = 3;
 
     /// <summary>
     /// Delay between LAN chip-info retry attempts (cancellation-aware).
     /// </summary>
-    public TimeSpan LanChipInfoRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan WifiChipInfoRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Hard upper bound on wall-clock time spent in the LAN chip-info
@@ -320,7 +320,7 @@ public sealed class FirmwareUpdateServiceOptions
     /// = ~10s) from stalling firmware flows or UI status probes that hold
     /// the operation lock.
     /// </summary>
-    public TimeSpan LanChipInfoTotalTimeout { get; set; } = TimeSpan.FromSeconds(8);
+    public TimeSpan WifiChipInfoTotalTimeout { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
     /// When true, <see cref="FirmwareUpdateService.CheckWifiFirmwareStatusAsync"/> sends
@@ -347,13 +347,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// gap. Defaults to <c>true</c>; set to <c>false</c> for consumers that have already powered
     /// the module on themselves and want the legacy prep sequence.
     /// </summary>
-    public bool PowerOnWifiModuleBeforeLanUpdateMode { get; set; } = true;
+    public bool PowerOnWifiModuleBeforeUpdateMode { get; set; } = true;
 
     /// <summary>
     /// Delay after sending the WINC power-on command, giving the module time to power up before
     /// the next command reaches it. Consulted in both places Core powers the module on: before
     /// the first chip-info probe (see <see cref="PowerOnWifiModuleBeforeProbe"/>) and before the
-    /// LAN firmware-update mode command (see <see cref="PowerOnWifiModuleBeforeLanUpdateMode"/>).
+    /// LAN firmware-update mode command (see <see cref="PowerOnWifiModuleBeforeUpdateMode"/>).
     /// Set to <see cref="TimeSpan.Zero"/> to skip the wait.
     /// </summary>
     public TimeSpan PowerOnWifiModuleSettleDelay { get; set; } = TimeSpan.FromSeconds(1);
@@ -365,13 +365,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// machine is not yet initialized even though <c>LAN:ENAbled? = 1</c>), then continues
     /// retrying within the existing budget. Without this, that steady-state condition (as
     /// opposed to the post-reboot transient #144 already retries for) exhausts the retry
-    /// budget and reports <see cref="WifiFirmwareStatusReason.LanNotInitialized"/>, sending
+    /// budget and reports <see cref="WifiFirmwareStatusReason.WifiNotInitialized"/>, sending
     /// callers into a needless multi-minute reflash of already-current WiFi firmware
     /// (closes #203). Sent at most once per probe to avoid repeatedly tearing down and
     /// re-initializing an already-associated WiFi link. Defaults to <c>true</c>; set to
     /// <c>false</c> to restore the legacy behavior of retrying without ever sending APPLY.
     /// </summary>
-    public bool KickLanApplyOnNotInitialized { get; set; } = true;
+    public bool KickWifiApplyOnNotInitialized { get; set; } = true;
 
     /// <summary>
     /// The minimum WINC1500 firmware version DAQiFi supports. This is a firmware-contract
@@ -419,7 +419,7 @@ public sealed class FirmwareUpdateServiceOptions
             // so it keeps the same budget — a host that tuned VerifyingTimeout for a slow
             // re-enumeration keeps that tuning.
             FirmwareUpdateState.ReconnectingAfterFlash => VerifyingTimeout,
-            FirmwareUpdateState.JumpingToApp => JumpingToApplicationTimeout,
+            FirmwareUpdateState.JumpingToApplication => JumpingToApplicationTimeout,
             // Cleanup re-erases the application flash, so it is bounded by the
             // same budget as a normal erase.
             FirmwareUpdateState.CleaningUp => ErasingFlashTimeout,
@@ -442,7 +442,7 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(JumpingToApplicationTimeout, nameof(JumpingToApplicationTimeout));
         ValidatePositive(BootloaderResponseTimeout, nameof(BootloaderResponseTimeout));
         ValidatePositive(PostForceBootDelay, nameof(PostForceBootDelay));
-        ValidatePositive(PostLanFirmwareModeDelay, nameof(PostLanFirmwareModeDelay));
+        ValidatePositive(PostWifiFirmwareModeDelay, nameof(PostWifiFirmwareModeDelay));
         ValidatePositive(PostWifiReconnectDelay, nameof(PostWifiReconnectDelay));
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
@@ -450,10 +450,10 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(WifiFlashRetryDelay, nameof(WifiFlashRetryDelay));
 
         // These four permit Zero (= "skip the wait"); only reject negatives.
-        ValidateNonNegative(PostLanDisconnectPortReleaseDelay, nameof(PostLanDisconnectPortReleaseDelay));
-        ValidateNonNegative(WincBootPromptResponseDelay, nameof(WincBootPromptResponseDelay));
+        ValidateNonNegative(PostWifiDisconnectPortReleaseDelay, nameof(PostWifiDisconnectPortReleaseDelay));
+        ValidateNonNegative(WifiBootPromptResponseDelay, nameof(WifiBootPromptResponseDelay));
         ValidateNonNegative(PostUsbTransparentModeExitDelay, nameof(PostUsbTransparentModeExitDelay));
-        ValidateNonNegative(PostLanBridgeEntryDelay, nameof(PostLanBridgeEntryDelay));
+        ValidateNonNegative(PostWifiBridgeEntryDelay, nameof(PostWifiBridgeEntryDelay));
 
         if (WifiFlashAttempts < 1)
         {
@@ -479,7 +479,7 @@ public sealed class FirmwareUpdateServiceOptions
 
             // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
             // so a probe budget that meets or exceeds it would always be cut off
-            // by the outer state-timeout — surfacing a generic JumpingToApp error
+            // by the outer state-timeout — surfacing a generic JumpingToApplication error
             // instead of the readiness-specific message. Reject the configuration
             // up front so misconfigurations fail fast.
             if (PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)
@@ -508,19 +508,19 @@ public sealed class FirmwareUpdateServiceOptions
                 "Flash write retry count must be at least 1.");
         }
 
-        if (LanChipInfoMaxAttempts < 1)
+        if (WifiChipInfoMaximumAttempts < 1)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(LanChipInfoMaxAttempts),
-                LanChipInfoMaxAttempts,
+                nameof(WifiChipInfoMaximumAttempts),
+                WifiChipInfoMaximumAttempts,
                 "LAN chip-info max attempts must be at least 1.");
         }
 
-        ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
-        ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
+        ValidatePositive(WifiChipInfoRetryDelay, nameof(WifiChipInfoRetryDelay));
+        ValidatePositive(WifiChipInfoTotalTimeout, nameof(WifiChipInfoTotalTimeout));
 
         // Only consulted when PowerOnWifiModuleBeforeProbe or
-        // PowerOnWifiModuleBeforeLanUpdateMode is true, but validated
+        // PowerOnWifiModuleBeforeUpdateMode is true, but validated
         // unconditionally so a misconfiguration surfaces even if a flag is
         // toggled on later without re-touching this value.
         ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));

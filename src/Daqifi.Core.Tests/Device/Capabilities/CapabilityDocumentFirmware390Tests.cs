@@ -33,7 +33,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.Equal(0, terms.SdAdditiveHz);
 
         Assert.Equal(CapabilityRateCapTerm.ScanBound, terms.BindingTerm);
-        Assert.Equal(6924, streaming.CurrentMaximumRateHz);
+        Assert.Equal(6924, streaming.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.Equal(0, terms.ScanBoundHz);
         Assert.Equal(0, terms.SdAdditiveHz);
         Assert.Null(terms.BindingTerm);
-        Assert.Equal(0, streaming.CurrentMaximumRateHz);
+        Assert.Equal(0, streaming.CurrentMaximumSampleRateHz);
 
         Assert.All(
             document.Channels.Where(c => c.Kind == CapabilityChannelKind.AnalogInput),
@@ -118,7 +118,7 @@ public class CapabilityDocumentFirmware390Tests
         // %.17g writes identity coefficients as the bare integers 1 and 0; both read as doubles.
         var channel = AnalogInput(document, 0);
         Assert.Equal(1.0, channel.CalibrationSlope);
-        Assert.Equal(0.0, channel.CalibrationIntercept);
+        Assert.Equal(0.0, channel.CalibrationOffset);
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class CapabilityDocumentFirmware390Tests
         Assert.NotNull(document.Streaming.Timing);
         Assert.Null(document.Streaming.Timing!.TimestampHz);
         Assert.Null(document.Streaming.Timing.ClockMatchesBuild);
-        Assert.Equal(500, document.Streaming.CurrentMaximumRateHz);
+        Assert.Equal(500, document.Streaming.CurrentMaximumSampleRateHz);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class CapabilityDocumentFirmware390Tests
 
         var affected = AnalogInput(document, 1);
         Assert.Null(affected.CalibrationSlope);
-        Assert.Null(affected.CalibrationIntercept);
+        Assert.Null(affected.CalibrationOffset);
         Assert.Null(affected.RangeMinimum);
         Assert.Null(affected.RangeMaximum);
         Assert.Equal(1670, affected.ScanOffsetTicks);
@@ -261,6 +261,6 @@ public class CapabilityDocumentFirmware390Tests
         var channel = Parse(json).Channels.Single();
 
         Assert.Equal(0.0012207031250000001, channel.CalibrationSlope);
-        Assert.Equal(-1.2345678901234567e-308, channel.CalibrationIntercept);
+        Assert.Equal(-1.2345678901234567e-308, channel.CalibrationOffset);
     }
 }

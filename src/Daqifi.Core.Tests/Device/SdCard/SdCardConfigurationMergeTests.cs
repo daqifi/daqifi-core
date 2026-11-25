@@ -19,7 +19,7 @@ public class SdCardConfigurationMergeTests
     {
         AnalogPortCount = 0,
         DigitalPortCount = 0,
-        TimestampFrequency = 0u,
+        TimestampFrequencyHz = 0u,
         DeviceSerialNumber = null,
         DevicePartNumber = null,
         FirmwareVersion = null,
@@ -47,15 +47,15 @@ public class SdCardConfigurationMergeTests
         {
             AnalogPortCount = 4,
             DigitalPortCount = 2,
-            TimestampFrequency = 42_000_000u,
-            Resolution = 4095u
+            TimestampFrequencyHz = 42_000_000u,
+            FullScaleCount = 4095u
         };
         var overrideConfig = Empty() with
         {
             AnalogPortCount = 16,
             DigitalPortCount = 8,
-            TimestampFrequency = 50_000_000u,
-            Resolution = 65_535u
+            TimestampFrequencyHz = 50_000_000u,
+            FullScaleCount = 65_535u
         };
 
         // Act
@@ -64,8 +64,8 @@ public class SdCardConfigurationMergeTests
         // Assert — the log describes itself; a live device never overrides better information.
         Assert.Equal(4, merged.AnalogPortCount);
         Assert.Equal(2, merged.DigitalPortCount);
-        Assert.Equal(42_000_000u, merged.TimestampFrequency);
-        Assert.Equal(4095u, merged.Resolution);
+        Assert.Equal(42_000_000u, merged.TimestampFrequencyHz);
+        Assert.Equal(4095u, merged.FullScaleCount);
     }
 
     [Fact]
@@ -78,8 +78,8 @@ public class SdCardConfigurationMergeTests
         {
             AnalogPortCount = 16,
             DigitalPortCount = 8,
-            TimestampFrequency = 50_000_000u,
-            Resolution = 65_535u
+            TimestampFrequencyHz = 50_000_000u,
+            FullScaleCount = 65_535u
         };
 
         // Act
@@ -88,8 +88,8 @@ public class SdCardConfigurationMergeTests
         // Assert — each zero is filled from its own matching field, not a neighbouring one.
         Assert.Equal(16, merged.AnalogPortCount);
         Assert.Equal(8, merged.DigitalPortCount);
-        Assert.Equal(50_000_000u, merged.TimestampFrequency);
-        Assert.Equal(65_535u, merged.Resolution);
+        Assert.Equal(50_000_000u, merged.TimestampFrequencyHz);
+        Assert.Equal(65_535u, merged.FullScaleCount);
     }
 
     [Theory]
@@ -116,7 +116,7 @@ public class SdCardConfigurationMergeTests
     {
         // Arrange — deliberately distinct values per slot so a transposed argument in the merge
         // (serial into part number, port range into internal scale) cannot pass unnoticed.
-        var calibration = new[] { (Slope: 1.5, Intercept: 0.25) };
+        var calibration = new[] { (Slope: 1.5, Offset: 0.25) };
         var portRange = new[] { 10.0 };
         var internalScale = new[] { 2.0 };
         var overrideConfig = Empty() with
@@ -145,7 +145,7 @@ public class SdCardConfigurationMergeTests
     public void Merge_WhenFileStatesReferenceFields_OverrideDoesNotReplaceThem()
     {
         // Arrange — both sides supply every reference field, with different values.
-        var fileCalibration = new[] { (Slope: 1.0, Intercept: 0.0) };
+        var fileCalibration = new[] { (Slope: 1.0, Offset: 0.0) };
         var filePortRange = new[] { 5.0 };
         var fileInternalScale = new[] { 1.0 };
         var parsed = Empty() with
@@ -162,7 +162,7 @@ public class SdCardConfigurationMergeTests
             DeviceSerialNumber = "SN-DEVICE",
             DevicePartNumber = "PN-DEVICE",
             FirmwareVersion = "1.2.3",
-            CalibrationValues = new[] { (Slope: 9.0, Intercept: 9.0) },
+            CalibrationValues = new[] { (Slope: 9.0, Offset: 9.0) },
             PortRange = new[] { 99.0 },
             InternalScaleM = new[] { 99.0 }
         };
@@ -185,7 +185,7 @@ public class SdCardConfigurationMergeTests
     {
         // Arrange — the CSV parser's real shape: the header names the device and its channel
         // layout, the connected device supplies the calibration and clock the file never wrote.
-        var calibration = new[] { (Slope: 1.5, Intercept: 0.25) };
+        var calibration = new[] { (Slope: 1.5, Offset: 0.25) };
         var parsed = Empty() with
         {
             AnalogPortCount = 4,
@@ -196,8 +196,8 @@ public class SdCardConfigurationMergeTests
         var overrideConfig = Empty() with
         {
             AnalogPortCount = 16,
-            TimestampFrequency = 42_000_000u,
-            Resolution = 4095u,
+            TimestampFrequencyHz = 42_000_000u,
+            FullScaleCount = 4095u,
             FirmwareVersion = "3.7.2",
             CalibrationValues = calibration
         };
@@ -210,8 +210,8 @@ public class SdCardConfigurationMergeTests
         Assert.Equal(1, merged.DigitalPortCount);
         Assert.Equal("7E2815916200E898", merged.DeviceSerialNumber);
         Assert.Equal("Nyquist 1", merged.DevicePartNumber);
-        Assert.Equal(42_000_000u, merged.TimestampFrequency);
-        Assert.Equal(4095u, merged.Resolution);
+        Assert.Equal(42_000_000u, merged.TimestampFrequencyHz);
+        Assert.Equal(4095u, merged.FullScaleCount);
         Assert.Equal("3.7.2", merged.FirmwareVersion);
         Assert.Same(calibration, merged.CalibrationValues);
         Assert.Null(merged.PortRange);
@@ -231,8 +231,8 @@ public class SdCardConfigurationMergeTests
         // Assert
         Assert.Equal(4, merged.AnalogPortCount);
         Assert.Equal(0, merged.DigitalPortCount);
-        Assert.Equal(0u, merged.TimestampFrequency);
-        Assert.Equal(0u, merged.Resolution);
+        Assert.Equal(0u, merged.TimestampFrequencyHz);
+        Assert.Equal(0u, merged.FullScaleCount);
         Assert.Null(merged.DeviceSerialNumber);
         Assert.Null(merged.DevicePartNumber);
         Assert.Null(merged.FirmwareVersion);

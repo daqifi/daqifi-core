@@ -36,23 +36,23 @@ namespace Daqifi.Core.Tests.Device.Diagnostics;
 /// </remarks>
 public class DeviceDiagnosticsOperationsTests
 {
-    #region GetSystemLogAsync — the "any line means answered" distinction (#543)
+    #region DrainSystemLogAsync — the "any line means answered" distinction (#543)
 
     [Fact]
-    public async Task GetSystemLogAsync_PopulatedLog_ParsesEntries()
+    public async Task DrainSystemLogAsync_PopulatedLog_ParsesEntries()
     {
         var host = new FakeHost();
         host.EnqueueResponse("first entry", "second entry", "");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        var entries = await ops.GetSystemLogAsync();
+        var entries = await ops.DrainSystemLogAsync();
 
         Assert.Equal(new[] { "first entry", "second entry" }, GetMessages(entries));
         Assert.Equal(new[] { "send:SYSTem:LOG?" }, host.Calls);
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_EmptyLogTerminatorOnly_ReturnsEmptyList()
+    public async Task DrainSystemLogAsync_EmptyLogTerminatorOnly_ReturnsEmptyList()
     {
         // The firmware always terminates the dump with a blank line, even for an empty buffer.
         // keepBlankLines is what lets that single blank line arrive here at all.
@@ -60,35 +60,35 @@ public class DeviceDiagnosticsOperationsTests
         host.EnqueueResponse("");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        var entries = await ops.GetSystemLogAsync();
+        var entries = await ops.DrainSystemLogAsync();
 
         Assert.Empty(entries);
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_NoLinesAtAll_ThrowsDistinctFromEmptyLog()
+    public async Task DrainSystemLogAsync_NoLinesAtAll_ThrowsDistinctFromEmptyLog()
     {
         // No lines at all -- not even the terminator -- means a silent/unresponsive device, which
         // must be distinguishable from a genuinely empty log (the previous test).
         var host = new FakeHost();
         var ops = new DeviceDiagnosticsOperations(host);
 
-        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.GetSystemLogAsync());
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.DrainSystemLogAsync());
         Assert.Contains("did not answer", ex.Message);
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_ErrorOnlyResponse_Throws()
+    public async Task DrainSystemLogAsync_ErrorOnlyResponse_Throws()
     {
         var host = new FakeHost();
         host.EnqueueResponse("**ERROR: -113,\"Undefined header\"");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.GetSystemLogAsync());
+        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => ops.DrainSystemLogAsync());
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_CorruptedByStreamData_KeepsRealEntriesAndDropsTheNoise()
+    public async Task DrainSystemLogAsync_CorruptedByStreamData_KeepsRealEntriesAndDropsTheNoise()
     {
         // Issue #682: mid-stream the firmware's protobuf frames split the reply into hundreds of
         // mangled lines. The log read is destructive, so unlike the numeric queries this must NOT
@@ -102,13 +102,13 @@ public class DeviceDiagnosticsOperationsTests
             "");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        var entries = await ops.GetSystemLogAsync();
+        var entries = await ops.DrainSystemLogAsync();
 
         Assert.Equal(new[] { "first entry", "second entry" }, GetMessages(entries));
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_EntirelyStreamNoise_ReturnsEmptyRatherThanThrowing()
+    public async Task DrainSystemLogAsync_EntirelyStreamNoise_ReturnsEmptyRatherThanThrowing()
     {
         // Documents the deliberate boundary of the #682 filter: an all-noise response is still a
         // response, and the numeric queries' DeviceDiagnosticsCorruptedResponseException is
@@ -118,16 +118,16 @@ public class DeviceDiagnosticsOperationsTests
         host.EnqueueResponse("\uFFFD\u0008\u0001", "\u0000\u0012\uFFFD", "");
         var ops = new DeviceDiagnosticsOperations(host);
 
-        Assert.Empty(await ops.GetSystemLogAsync());
+        Assert.Empty(await ops.DrainSystemLogAsync());
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_NotConnected_ThrowsAndSendsNothing()
+    public async Task DrainSystemLogAsync_NotConnected_ThrowsAndSendsNothing()
     {
         var host = new FakeHost { IsConnected = false };
         var ops = new DeviceDiagnosticsOperations(host);
 
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => ops.GetSystemLogAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => ops.DrainSystemLogAsync());
         Assert.Empty(host.Calls);
     }
 
@@ -451,7 +451,7 @@ public class DeviceDiagnosticsOperationsTests
         public bool IsConnected { get; set; } = true;
         public bool IsStreaming { get; set; }
         public bool SendStreamStop() => throw new NotSupportedException();
-        public int StreamingFrequency { get; set; } = 100;
+        public int SampleRateHz { get; set; } = 100;
         public long ChannelStateVersion { get; set; }
 
         public void EnqueueResponse(params string[] lines) => _responses.Enqueue(lines);

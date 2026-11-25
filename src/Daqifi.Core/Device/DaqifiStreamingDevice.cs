@@ -26,7 +26,7 @@ namespace Daqifi.Core.Device;
 /// Represents a DAQiFi device that supports data streaming functionality.
 /// Extends the base DaqifiDevice with streaming-specific operations.
 /// </summary>
-public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIdentification, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
+public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIdentification, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, IWifiChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
     /// Shortest time <see cref="StartStreamingAsync"/> gives the device to send its first stream
@@ -198,13 +198,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <summary>
     /// Gets or sets the streaming frequency in Hz (samples per second). The value is
     /// validated against the device's advertised maximum sampling rate
-    /// (<see cref="DeviceCapabilities.MaxSamplingRate"/>) so a silently-wrong rate never
+    /// (<see cref="DeviceCapabilities.MaximumSampleRateHz"/>) so a silently-wrong rate never
     /// reaches the hardware — consistent with the client-side guards Core already applies
     /// to PWM (#306) and channel bounds (#300).
     /// </summary>
     /// <remarks>
     /// A new device object starts at 100 Hz. On firmware v3.9.0 and newer
-    /// (<see cref="DeviceFeature.StoredStreamingRateQuery"/>), initialization replaces that with
+    /// (<see cref="DeviceFeature.StoredSampleRateQuery"/>), initialization replaces that with
     /// the rate the device has stored — the one another client, an SD log, or an earlier session
     /// last started it at — so this reports the device's rate rather than Core's guess (#960).
     /// That happens only while no rate has been chosen on this object: once it is set here or a
@@ -220,10 +220,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
     /// </exception>
-    public int StreamingFrequency
+    public int SampleRateHz
     {
-        get => _session.StreamingFrequency;
-        set => _session.StreamingFrequency = value;
+        get => _session.SampleRateHz;
+        set => _session.SampleRateHz = value;
     }
 
     /// <summary>
@@ -231,18 +231,18 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// channels it has enabled right now.
     /// </summary>
     /// <remarks>
-    /// Deliberately separate from the <see cref="StreamingFrequency"/> setter's own validation,
+    /// Deliberately separate from the <see cref="SampleRateHz"/> setter's own validation,
     /// which stays on the absolute board ceiling: this figure moves with the channel set, and a
     /// setter that rejected against it would fail a perfectly reasonable
     /// "set the rate, then enable the channels" ordering. Nothing needs to be called to have it
     /// applied — <see cref="StartStreaming"/> lowers the rate to this figure itself, so a rate
     /// above it can no longer reach the device.
     /// </remarks>
-    public int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+    public int CurrentMaximumSampleRateHz => SampleRateCap.ComputeForDevice(this);
 
     /// <summary>
     /// Adopts the rate the device reported it has stored, unless a rate has been chosen on this
-    /// device; see <see cref="StreamingFrequency"/>.
+    /// device; see <see cref="SampleRateHz"/>.
     /// </summary>
     internal override void OnStoredStreamingRateRead(int rateHz, bool? rateConfigured) =>
         _session.TryAdoptStoredFrequency(rateHz, rateConfigured);
@@ -326,7 +326,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         // which a field initializer cannot reference. Every constructor routes through this
         // method, so they are always in place before the device is handed to a caller.
         //
-        // The session controller is built first because IsStreaming and StreamingFrequency now
+        // The session controller is built first because IsStreaming and SampleRateHz now
         // read through it, and both the default-rate assignment at the bottom of this
         // method and anything a collaborator's constructor might read would otherwise find it
         // null.
@@ -339,7 +339,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         _networkOperations = new NetworkConfigurationOperations(this);
         _wifiLinkStatusOperations = new WifiLinkStatusOperations(this);
         _sdCardOperations = new SdCardOperations(this);
-        _lanChipInfoOperations = new LanChipInfoOperations(this);
+        _wifiChipInfoOperations = new WifiChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
 
         _session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
@@ -374,7 +374,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     /// <summary>
     /// Starts streaming data from the device at the configured frequency, lowered first to what
-    /// the enabled channel set can sustain (<see cref="MaximumStreamingFrequencyHz"/>).
+    /// the enabled channel set can sustain (<see cref="CurrentMaximumSampleRateHz"/>).
     /// </summary>
     /// <remarks>
     /// The cap is applied from the figures the device has already reported. Prefer
@@ -405,7 +405,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <remarks>
     /// <para>
     /// Three steps, and the first two are what keep the third from ever firing. The capability
-    /// document is re-read so <see cref="MaximumStreamingFrequencyHz"/> describes the channel
+    /// document is re-read so <see cref="CurrentMaximumSampleRateHz"/> describes the channel
     /// set about to stream rather than the one enabled at the last read;
     /// <see cref="StartStreaming"/> then lowers the rate to it. Only after that is the device
     /// asked anything, so a start the firmware refused for any other reason reaches the caller
@@ -469,7 +469,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
             if (notSent is not (ConsumerThreadNotExitedException or DeviceNotConnectedException))
             {
                 throw DeviceCommandFailedException.NotSent(
-                    ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim(), notSent);
+                    ScpiMessageProducer.StartStreaming(SampleRateHz).Data.Trim(), notSent);
             }
 
             ExceptionDispatchInfo.Capture(notSent).Throw();
@@ -487,7 +487,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The device computes <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> for the set
+    /// The device computes <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> for the set
     /// enabled at the moment of the read, so the figure goes stale the moment a caller enables
     /// or disables a channel — which is exactly what a caller does just before starting a
     /// stream. Without this the cap applied at the start could be the one from connect time.
@@ -640,7 +640,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
             return;
         }
 
-        var command = ScpiMessageProducer.StartStreaming(StreamingFrequency).Data.Trim();
+        var command = ScpiMessageProducer.StartStreaming(SampleRateHz).Data.Trim();
 
         if (startSent && await ReadStartRefusalAsync(cancellationToken).ConfigureAwait(false) is { } refusal)
         {
@@ -808,7 +808,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         CancellationToken cancellationToken)
     {
         var budgetMs = Math.Clamp(
-            4000.0 / Math.Max(1, StreamingFrequency),
+            4000.0 / Math.Max(1, SampleRateHz),
             MinStartConfirmationMs,
             MaxStartConfirmationMs);
 
@@ -1265,7 +1265,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// direction on some units. Firmware v3.9.0 and newer report the real value; use
     /// <see cref="PwmFrequencyFloorHz"/> for the floor that applies to the connected device.
     /// </remarks>
-    public const int MinPwmFrequencyHz = 6;
+    public const int MinimumPwmFrequencyHz = 6;
 
     /// <inheritdoc />
     public int PwmFrequencyFloorHz => _channelControl.PwmFrequencyFloorHz;
@@ -1274,7 +1274,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// The highest PWM frequency the device advertises (full duty resolution is retained
     /// well past this, so the advertised cap is the binding limit).
     /// </summary>
-    public const int MaxPwmFrequencyHz = 50_000;
+    public const int MaximumPwmFrequencyHz = 50_000;
 
     /// <summary>
     /// Default device-wide PWM frequency, in hertz, used until a frequency has been
@@ -1420,12 +1420,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         => _administration.LoadAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
+    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default)
+        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, slope, cancellationToken);
 
     /// <inheritdoc />
-    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
+    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default)
+        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, offset, cancellationToken);
 
     /// <inheritdoc />
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
@@ -1483,8 +1483,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <summary>SD card operations (<see cref="ISdCardOperations"/>) and the shared-SPI handover.</summary>
     private SdCardOperations _sdCardOperations = null!;
 
-    /// <summary>WiFi module chip info (<see cref="ILanChipInfoProvider"/>).</summary>
-    private LanChipInfoOperations _lanChipInfoOperations = null!;
+    /// <summary>WiFi module chip info (<see cref="IWifiChipInfoProvider"/>).</summary>
+    private WifiChipInfoOperations _wifiChipInfoOperations = null!;
 
     /// <summary>Device diagnostics (<see cref="IDeviceDiagnostics"/>).</summary>
     private DeviceDiagnosticsOperations _diagnosticsOperations = null!;
@@ -1615,7 +1615,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     public void PrepareSdInterface() => _sdCardOperations.PrepareSdInterface();
 
     /// <inheritdoc />
-    public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
+    public void PrepareWifiInterface() => _sdCardOperations.PrepareWifiInterface();
 
     /// <summary>
     /// Raises the <see cref="LowSdSpaceWarning"/> event.
@@ -1675,19 +1675,19 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     #endregion
 
-    #region ILanChipInfoProvider
+    #region IWifiChipInfoProvider
 
     /// <inheritdoc />
-    public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
-        => _lanChipInfoOperations.GetLanChipInfoAsync(cancellationToken);
+    public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
+        => _wifiChipInfoOperations.GetWifiChipInfoAsync(cancellationToken);
 
     #endregion
 
     #region IDeviceDiagnostics
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
-        => _diagnosticsOperations.GetSystemLogAsync(cancellationToken);
+    public Task<IReadOnlyList<SystemLogEntry>> DrainSystemLogAsync(CancellationToken cancellationToken = default)
+        => _diagnosticsOperations.DrainSystemLogAsync(cancellationToken);
 
     /// <inheritdoc />
     public Task ClearSystemLogAsync(CancellationToken cancellationToken = default)
@@ -1732,7 +1732,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool IDeviceOperationHost.SendStreamStop() => _session.SendStreamStop();
 
-    int IDeviceOperationHost.StreamingFrequency => StreamingFrequency;
+    int IDeviceOperationHost.SampleRateHz => SampleRateHz;
 
     void IDeviceOperationHost.StopStreaming() => StopStreaming();
 
@@ -1771,9 +1771,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
             keepBlankLines, cancellationToken);
 
     Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
-        int maxIterations,
+        int maximumIterations,
         CancellationToken cancellationToken)
-        => DrainErrorQueueAsync(maxIterations, cancellationToken);
+        => DrainErrorQueueAsync(maximumIterations, cancellationToken);
 
     Task IDeviceOperationHost.ExecuteRawCaptureAsync(
         Func<Stream, CancellationToken, Task> rawAction,
@@ -1822,9 +1822,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     void ISdCardOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
     Task<ErrorQueueDrainResult> ISdCardOperationHost.DrainErrorQueueUntilEmptyAsync(
-        int maxIterations,
+        int maximumIterations,
         CancellationToken cancellationToken)
-        => DrainErrorQueueUntilEmptyAsync(maxIterations, cancellationToken);
+        => DrainErrorQueueUntilEmptyAsync(maximumIterations, cancellationToken);
 
     void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
         => RaiseStreamFrameDiscarded(e);
@@ -1866,18 +1866,18 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool IStreamingSessionHost.SendsAreHeldBack => SendsAreHeldBack;
 
-    int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
+    int IStreamingSessionHost.MaximumSampleRateHz => Metadata.Capabilities.MaximumSampleRateHz;
 
     // A start that is held back goes out behind the enables that are.
-    int IStreamingSessionHost.MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this, _channelControl.IsEnabledAheadOfNextSend);
+    int IStreamingSessionHost.CurrentMaximumSampleRateHz => SampleRateCap.ComputeForDevice(this, _channelControl.IsEnabledAheadOfNextSend);
 
     bool IStreamingSessionHost.IsEnableRequested(IChannel channel) => _channelControl.IsEnableRequested(channel);
 
-    // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
+    // TimestampFrequencyHz is supplied here rather than exposed on the seam: it is the device's
     // own report of its tick rate, read at exactly the moment the old BeginStreamingSession
     // read it.
     void IStreamingSessionHost.BeginDecoderSession(int streamingFrequencyHz)
-        => _frameDecoder.BeginSession(TimestampFrequency, streamingFrequencyHz);
+        => _frameDecoder.BeginSession(TimestampFrequencyHz, streamingFrequencyHz);
 
     TimeProvider IStreamingSessionHost.Clock => Clock;
 

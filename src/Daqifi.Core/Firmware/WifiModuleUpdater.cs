@@ -1,7 +1,7 @@
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 using Microsoft.Extensions.Logging;
 using static Daqifi.Core.Internal.DiagnosticGuard;
 
@@ -144,7 +144,7 @@ internal sealed class WifiModuleUpdater
                     // let it settle first. This is the prep order daqifi-desktop hand-rolls today
                     // (EnableLanUpdateMode: POWer:STATe 1 → settle → LAN:FWUpdate); owning it here
                     // is what lets a consumer drop that workaround (part of #269).
-                    if (Options.PowerOnWifiModuleBeforeLanUpdateMode)
+                    if (Options.PowerOnWifiModuleBeforeUpdateMode)
                     {
                         device.Send(ScpiMessageProducer.TurnDeviceOn);
                         if (Options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
@@ -169,7 +169,7 @@ internal sealed class WifiModuleUpdater
                     // command it already received.
                     lanUpdateProgress = LanUpdateModeProgress.UpdateRequested;
 
-                    await Task.Delay(Options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
+                    await Task.Delay(Options.PostWifiFirmwareModeDelay, stateToken).ConfigureAwait(false);
 
                     // The command that actually enters the bridge. The firmware's WiFi manager
                     // reads the request flag on its next REINIT, and LAN:APPLY is what queues that
@@ -190,11 +190,11 @@ internal sealed class WifiModuleUpdater
                     lanUpdateProgress = LanUpdateModeProgress.BridgeEntryPending;
 
                     // Let the bridge come up before the port is handed to the flash tool. See
-                    // PostLanBridgeEntryDelay: on a board that cannot reach its access point the
+                    // PostWifiBridgeEntryDelay: on a board that cannot reach its access point the
                     // firmware defers this transition by up to its station retry backoff.
-                    if (Options.PostLanBridgeEntryDelay > TimeSpan.Zero)
+                    if (Options.PostWifiBridgeEntryDelay > TimeSpan.Zero)
                     {
-                        await Task.Delay(Options.PostLanBridgeEntryDelay, stateToken).ConfigureAwait(false);
+                        await Task.Delay(Options.PostWifiBridgeEntryDelay, stateToken).ConfigureAwait(false);
                     }
 
                     // The entry window has run out, so the device has had all the time this host
@@ -210,9 +210,9 @@ internal sealed class WifiModuleUpdater
                     // Wait so the external WINC flash tool can open the port; without this the tool
                     // fails to open it and exits in ~1s producing no programming output (caught by
                     // the output-based success verification below as a failure).
-                    if (Options.PostLanDisconnectPortReleaseDelay > TimeSpan.Zero)
+                    if (Options.PostWifiDisconnectPortReleaseDelay > TimeSpan.Zero)
                     {
-                        await Task.Delay(Options.PostLanDisconnectPortReleaseDelay, stateToken).ConfigureAwait(false);
+                        await Task.Delay(Options.PostWifiDisconnectPortReleaseDelay, stateToken).ConfigureAwait(false);
                     }
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -344,12 +344,12 @@ internal sealed class WifiModuleUpdater
         // including the ones that never get to read the device.
         var minimumSupported = Options.MinimumSupportedWifiFirmwareVersion;
 
-        if (device is not ILanChipInfoProvider lanChipInfoProvider)
+        if (device is not IWifiChipInfoProvider wifiChipInfoProvider)
         {
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
-                Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery,
+                Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportWifiQuery,
                 MinimumSupportedVersion = minimumSupported,
             };
         }
@@ -392,9 +392,9 @@ internal sealed class WifiModuleUpdater
         // still starting up, and flows on to a multi-minute reflash of already-current
         // firmware. The loop itself is public API (issue #269) so consumers share one
         // implementation of it rather than each hand-rolling their own; see
-        // GetLanChipInfoWithRetryAsync for what it does and why.
-        var probe = await lanChipInfoProvider
-            .GetLanChipInfoWithRetryAsync(BuildLanChipInfoRetryOptions(), Logger, cancellationToken)
+        // GetWifiChipInfoWithRetryAsync for what it does and why.
+        var probe = await wifiChipInfoProvider
+            .GetWifiChipInfoWithRetryAsync(BuildWifiChipInfoRetryOptions(), Logger, cancellationToken)
             .ConfigureAwait(false);
         var chipInfo = probe.ChipInfo;
         if (chipInfo == null)
@@ -402,8 +402,8 @@ internal sealed class WifiModuleUpdater
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
-                Reason = probe.WasLanNotInitialized
-                    ? WifiFirmwareStatusReason.LanNotInitialized
+                Reason = probe.WasWifiNotInitialized
+                    ? WifiFirmwareStatusReason.WifiNotInitialized
                     : WifiFirmwareStatusReason.ChipInfoUnavailable,
                 MinimumSupportedVersion = minimumSupported,
             };
@@ -411,7 +411,7 @@ internal sealed class WifiModuleUpdater
 
         // Parsed once here, before the release lookup, because the minimum-supported
         // answer must survive that lookup failing — that is the whole point of it.
-        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion);
+        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FirmwareVersion, out var deviceVersion);
         bool? meetsMinimum = deviceVersionParsed ? deviceVersion >= minimumSupported : null;
 
         FirmwareReleaseInfo? latestWifi;
@@ -493,19 +493,19 @@ internal sealed class WifiModuleUpdater
             case WifiFirmwareStatusReason.UpdateAvailable:
                 Logger.LogInformation(
                     "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
-                    status.CurrentChipInfo!.FwVersion,
+                    status.CurrentChipInfo!.FirmwareVersion,
                     status.LatestRelease!.TagName);
                 return false;
 
             case WifiFirmwareStatusReason.UpToDate:
-                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FwVersion}, latest: {status.LatestRelease!.TagName}).";
+                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FirmwareVersion}, latest: {status.LatestRelease!.TagName}).";
                 Logger.LogInformation(message);
                 _context.CompleteOperation(progress, message, 100, 100);
                 return true;
 
             default:
-                // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
-                // LanNotInitialized, LatestReleaseUnavailable,
+                // DeviceDoesNotSupportWifiQuery, ChipInfoUnavailable,
+                // WifiNotInitialized, LatestReleaseUnavailable,
                 // VersionUnparseable — no latest-release verdict is available.
                 //
                 // "Conservative" here used to mean "flash", but a WINC reflash is a
@@ -522,7 +522,7 @@ internal sealed class WifiModuleUpdater
                 if (status.MeetsMinimumSupportedVersion == true)
                 {
                     var minimumMessage =
-                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FwVersion}, "
+                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FirmwareVersion}, "
                         + $"minimum: {status.MinimumSupportedVersion}); latest-release lookup was unavailable ({status.Reason}), "
                         + "so skipping the flash rather than reflashing a supported module.";
                     Logger.LogInformation(minimumMessage);
@@ -542,12 +542,12 @@ internal sealed class WifiModuleUpdater
     /// stays mutable after the service is constructed, so a caller that adjusts the budget between
     /// calls gets the budget it asked for.
     /// </remarks>
-    private LanChipInfoRetryOptions BuildLanChipInfoRetryOptions() => new()
+    private WifiChipInfoRetryOptions BuildWifiChipInfoRetryOptions() => new()
     {
-        MaxAttempts = Options.LanChipInfoMaxAttempts,
-        RetryDelay = Options.LanChipInfoRetryDelay,
-        TotalTimeout = Options.LanChipInfoTotalTimeout,
-        KickLanApplyOnNotInitialized = Options.KickLanApplyOnNotInitialized,
+        MaximumAttempts = Options.WifiChipInfoMaximumAttempts,
+        RetryDelay = Options.WifiChipInfoRetryDelay,
+        TotalTimeout = Options.WifiChipInfoTotalTimeout,
+        KickWifiApplyOnNotInitialized = Options.KickWifiApplyOnNotInitialized,
     };
 
     private ExternalProcessRequest BuildWifiProcessRequest(
@@ -621,7 +621,7 @@ internal sealed class WifiModuleUpdater
     /// <summary>
     /// Builds the stdin responder for the WINC flash tool's interactive prompts. At the
     /// "Power cycle WINC" prompt it fires the optional bridge-activation callback, waits
-    /// <see cref="FirmwareUpdateServiceOptions.WincBootPromptResponseDelay"/> so the firmware can
+    /// <see cref="FirmwareUpdateServiceOptions.WifiBootPromptResponseDelay"/> so the firmware can
     /// finish bridge-mode init, then sends the empty continue line. The returned delegate carries
     /// one-shot state, so a fresh responder must be built for each flash attempt.
     /// </summary>
@@ -671,7 +671,7 @@ internal sealed class WifiModuleUpdater
                     Logger.LogInformation("WiFi flash tool requested WINC power-cycle; waiting before sending continue signal.");
                 }
 
-                if (Options.WincBootPromptResponseDelay > TimeSpan.Zero)
+                if (Options.WifiBootPromptResponseDelay > TimeSpan.Zero)
                 {
                     // The responder runs inline on the process output-pump thread and the tool
                     // blocks on stdin until we return, so the wait must be synchronous (a fire-and-
@@ -680,7 +680,7 @@ internal sealed class WifiModuleUpdater
                     // signal — the process is being torn down anyway.
                     try
                     {
-                        Task.Delay(Options.WincBootPromptResponseDelay, cancellationToken)
+                        Task.Delay(Options.WifiBootPromptResponseDelay, cancellationToken)
                             .GetAwaiter()
                             .GetResult();
                     }
@@ -839,7 +839,7 @@ internal sealed class WifiModuleUpdater
 
         // Resolution goes through the shared locator so there is a single answer to
         // "can this environment flash the WiFi module?" (part of #271).
-        var locator = new WincFlashToolLocator(Options.WifiFlashToolFileName);
+        var locator = new WifiFlashToolLocator(Options.WifiFlashToolFileName);
         if (locator.TryResolveToolPath(firmwarePath, out var toolPath))
         {
             return toolPath;
@@ -936,7 +936,7 @@ internal sealed class WifiModuleUpdater
     /// <item><description>
     /// <see cref="LanUpdateModeProgress.BridgeEntryPending"/> — the apply that enters the bridge
     /// is on the wire but the device has not had the whole
-    /// <see cref="FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay"/> window to act on it. The
+    /// <see cref="FirmwareUpdateServiceOptions.PostWifiBridgeEntryDelay"/> window to act on it. The
     /// apply only queues the transition, and the firmware guards that transition with an
     /// apply-in-progress gate it holds until the bridge is up, so an exit sent now is most likely
     /// rejected outright (-200) and silently does nothing. The queued transition cannot be called
@@ -950,7 +950,7 @@ internal sealed class WifiModuleUpdater
     /// <c>SYSTem:REboot</c>, which is the only way to clear the request that cannot itself go
     /// wrong: the flag is WiFi-manager RAM state, so the reboot drops it outright. Driving the
     /// device through the bridge to consume the request works only while the queued entry lands
-    /// inside <see cref="FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay"/> — the firmware's
+    /// inside <see cref="FirmwareUpdateServiceOptions.PostWifiBridgeEntryDelay"/> — the firmware's
     /// bridge init turns USB-transparent mode back on, so a late entry re-silences the console and
     /// swallows the trailing <c>LAN:APPLY</c>, trading a latent bridge entry for an immediate dead
     /// one. Nothing was flashed on this path, so the reboot costs only the re-enumeration.
@@ -960,7 +960,7 @@ internal sealed class WifiModuleUpdater
     /// (#879 covers confirming it): the caller's token is already cancelled on the path that needs
     /// this most, and aborting either wait would skip or waste the exit. The cost is bounded by the
     /// options — at worst one
-    /// <see cref="FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay"/> plus one
+    /// <see cref="FirmwareUpdateServiceOptions.PostWifiBridgeEntryDelay"/> plus one
     /// <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/> on top of the
     /// reconnect budget — so a host that lengthens the entry window to suit a slow board is
     /// lengthening this path by the same amount. The pause before <c>LAN:APPLY</c> is
@@ -1009,7 +1009,7 @@ internal sealed class WifiModuleUpdater
             //
             // So clear it the one way that cannot go wrong. Driving the device through the bridge
             // to consume the request also works, but only if the queued entry lands inside
-            // PostLanBridgeEntryDelay: the firmware's bridge init turns USB-transparent mode back
+            // PostWifiBridgeEntryDelay: the firmware's bridge init turns USB-transparent mode back
             // ON, so an entry that lands after the exit went out re-silences the console and the
             // trailing LAN:APPLY is swallowed by the bridge it was meant to leave. That trades a
             // latent bridge entry for an immediate dead console. The request flag lives in the
@@ -1049,14 +1049,14 @@ internal sealed class WifiModuleUpdater
             // make the device state certain — reading it back is #879, and this wait is the same
             // bounded stand-in the forward path above already accepts.
             if (progress == LanUpdateModeProgress.BridgeEntryPending
-                && Options.PostLanBridgeEntryDelay > TimeSpan.Zero)
+                && Options.PostWifiBridgeEntryDelay > TimeSpan.Zero)
             {
                 Logger.LogInformation(
                     "Waiting {Delay} for the queued WiFi bridge entry to land before sending the bridge exit, " +
                     "so the exit is not rejected while the firmware's apply gate is still held.",
-                    Options.PostLanBridgeEntryDelay);
+                    Options.PostWifiBridgeEntryDelay);
 
-                await Task.Delay(Options.PostLanBridgeEntryDelay).ConfigureAwait(false);
+                await Task.Delay(Options.PostWifiBridgeEntryDelay).ConfigureAwait(false);
             }
 
             // Past the reconnect the two-command exit runs to completion instead of re-observing

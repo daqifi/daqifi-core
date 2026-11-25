@@ -18,9 +18,9 @@ public sealed record WifiFirmwareStatus
 {
     /// <summary>
     /// The current WiFi chip info read from the device, or null if the device
-    /// did not expose <see cref="ILanChipInfoProvider"/> or the query failed.
+    /// did not expose <see cref="IWifiChipInfoProvider"/> or the query failed.
     /// </summary>
-    public LanChipInfo? CurrentChipInfo { get; init; }
+    public WifiChipInfo? CurrentChipInfo { get; init; }
 
     /// <summary>
     /// The latest WiFi firmware release on GitHub, or null if the lookup
@@ -86,8 +86,8 @@ public enum WifiFirmwareStatusReason
     /// <summary>Device version &lt; latest release version.</summary>
     UpdateAvailable,
 
-    /// <summary>The device does not implement <see cref="ILanChipInfoProvider"/>.</summary>
-    DeviceDoesNotSupportLanQuery,
+    /// <summary>The device does not implement <see cref="IWifiChipInfoProvider"/>.</summary>
+    DeviceDoesNotSupportWifiQuery,
 
     /// <summary>Querying the device for chip info failed.</summary>
     ChipInfoUnavailable,
@@ -95,14 +95,14 @@ public enum WifiFirmwareStatusReason
     /// <summary>
     /// The WiFi module's saved settings report enabled (<c>LAN:ENAbled? = 1</c>) but
     /// its state machine was still not initialized (SCPI <c>-200</c>) after exhausting
-    /// the retry budget. When <see cref="FirmwareUpdateServiceOptions.KickLanApplyOnNotInitialized"/>
+    /// the retry budget. When <see cref="FirmwareUpdateServiceOptions.KickWifiApplyOnNotInitialized"/>
     /// is enabled and the device was connected, Core also attempted a one-shot
     /// <c>LAN:APPLY</c> kick before giving up — but this reason is reported either way,
     /// so it does not by itself confirm a kick was sent. Distinct from
     /// <see cref="ChipInfoUnavailable"/> so callers can tell "known not-yet-ready
     /// state" apart from a genuinely unresponsive device.
     /// </summary>
-    LanNotInitialized,
+    WifiNotInitialized,
 
     /// <summary>Looking up the latest release on GitHub failed.</summary>
     LatestReleaseUnavailable,

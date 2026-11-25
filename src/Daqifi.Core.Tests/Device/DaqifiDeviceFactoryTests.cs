@@ -52,7 +52,7 @@ public class DaqifiDeviceFactoryTests
 
         // Assert
         Assert.NotNull(options.ConnectionRetry);
-        Assert.Equal(ConnectionRetryOptions.Fast.MaxAttempts, options.ConnectionRetry.MaxAttempts);
+        Assert.Equal(ConnectionRetryOptions.Fast.MaximumAttempts, options.ConnectionRetry.MaximumAttempts);
         Assert.Equal(ConnectionRetryOptions.Fast.InitialDelay, options.ConnectionRetry.InitialDelay);
         Assert.Equal(ConnectionRetryOptions.Fast.ConnectionTimeout, options.ConnectionRetry.ConnectionTimeout);
         Assert.True(options.InitializeDevice);
@@ -66,7 +66,7 @@ public class DaqifiDeviceFactoryTests
 
         // Assert
         Assert.NotNull(options.ConnectionRetry);
-        Assert.Equal(ConnectionRetryOptions.Resilient.MaxAttempts, options.ConnectionRetry.MaxAttempts);
+        Assert.Equal(ConnectionRetryOptions.Resilient.MaximumAttempts, options.ConnectionRetry.MaximumAttempts);
         Assert.Equal(ConnectionRetryOptions.Resilient.InitialDelay, options.ConnectionRetry.InitialDelay);
         Assert.Equal(ConnectionRetryOptions.Resilient.ConnectionTimeout, options.ConnectionRetry.ConnectionTimeout);
         Assert.True(options.InitializeDevice);
@@ -340,16 +340,16 @@ public class DaqifiDeviceFactoryTests
         // Arrange
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             Port = 9760,
-            IPAddress = null
+            IpAddress = null
         };
 
         // Act & Assert
         var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo));
 
-        Assert.Contains("IPAddress", exception.Message);
+        Assert.Contains("IpAddress", exception.Message);
     }
 
     [Fact]
@@ -358,8 +358,8 @@ public class DaqifiDeviceFactoryTests
         // Arrange
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
-            IPAddress = IPAddress.Parse("192.168.1.100"),
+            ConnectionType = ConnectionType.Wifi,
+            IpAddress = IPAddress.Parse("192.168.1.100"),
             Port = null
         };
 
@@ -379,8 +379,8 @@ public class DaqifiDeviceFactoryTests
 
         var deviceInfo = new TestDeviceInfo
         {
-            ConnectionType = ConnectionType.WiFi,
-            IPAddress = IPAddress.Parse("192.168.1.100"),
+            ConnectionType = ConnectionType.Wifi,
+            IpAddress = IPAddress.Parse("192.168.1.100"),
             Port = 9760
         };
 
@@ -405,8 +405,8 @@ public class DaqifiDeviceFactoryTests
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             var deviceInfo = new TestDeviceInfo
             {
-                ConnectionType = ConnectionType.WiFi,
-                IPAddress = IPAddress.Loopback,
+                ConnectionType = ConnectionType.Wifi,
+                IpAddress = IPAddress.Loopback,
                 Port = port,
                 LocalInterfaceAddress = IPAddress.Parse("192.0.2.1")
             };
@@ -510,8 +510,8 @@ public class DaqifiDeviceFactoryTests
         {
             var deviceInfo = new TestDeviceInfo
             {
-                ConnectionType = ConnectionType.WiFi,
-                IPAddress = IPAddress.Loopback,
+                ConnectionType = ConnectionType.Wifi,
+                IpAddress = IPAddress.Loopback,
                 Port = port
             };
 
@@ -601,7 +601,7 @@ public class DaqifiDeviceFactoryTests
         public string Name { get; set; } = "Test Device";
         public string SerialNumber { get; set; } = "SN123456";
         public string FirmwareVersion { get; set; } = "1.0.0";
-        public IPAddress? IPAddress { get; set; }
+        public IPAddress? IpAddress { get; set; }
         public string? MacAddress { get; set; }
         public int? Port { get; set; }
         public IPAddress? LocalInterfaceAddress { get; set; }

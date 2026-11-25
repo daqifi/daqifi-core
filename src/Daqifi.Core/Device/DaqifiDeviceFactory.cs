@@ -26,7 +26,7 @@ public static class DaqifiDeviceFactory
     /// Discovery normally reports each device's actual data port via the UDP-30303 broadcast
     /// (<c>IDeviceInfo.Port</c>), so prefer that when available. For a manually-entered IP address that
     /// never answered the broadcast, resolve the real port with
-    /// <see cref="Discovery.WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress, System.TimeSpan, System.Threading.CancellationToken)"/>
+    /// <see cref="Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(IPAddress, System.TimeSpan, System.Threading.CancellationToken)"/>
     /// and fall back to this constant only when the probe returns <c>null</c>. Use it instead of a
     /// hardcoded literal so a single place documents the default.
     /// </remarks>
@@ -164,7 +164,7 @@ public static class DaqifiDeviceFactory
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when deviceInfo is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IPAddress or Port for WiFi connections).</exception>
+    /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IpAddress or Port for WiFi connections).</exception>
     /// <exception cref="NotSupportedException">Thrown when the connection type is not supported (e.g., Serial, HID).</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public static async Task<DaqifiStreamingDevice> ConnectFromDeviceInfoAsync(
@@ -182,8 +182,8 @@ public static class DaqifiDeviceFactory
         // Handle connection type
         switch (deviceInfo.ConnectionType)
         {
-            case ConnectionType.WiFi:
-                return await ConnectWiFiDeviceAsync(deviceInfo, options, cancellationToken)
+            case ConnectionType.Wifi:
+                return await ConnectWifiDeviceAsync(deviceInfo, options, cancellationToken)
                     .ConfigureAwait(false);
 
             case ConnectionType.Serial:
@@ -289,15 +289,15 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Connects to a WiFi device using the provided device info.
     /// </summary>
-    private static async Task<DaqifiStreamingDevice> ConnectWiFiDeviceAsync(
+    private static async Task<DaqifiStreamingDevice> ConnectWifiDeviceAsync(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken)
     {
-        if (deviceInfo.IPAddress == null)
+        if (deviceInfo.IpAddress == null)
         {
             throw new ArgumentException(
-                "DeviceInfo must have an IPAddress for WiFi connections.",
+                "DeviceInfo must have an IpAddress for WiFi connections.",
                 nameof(deviceInfo));
         }
 
@@ -315,7 +315,7 @@ public static class DaqifiDeviceFactory
         // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
         // discovered the device, not whichever NIC the OS routing table prefers.
         var transport = new TcpStreamTransport(
-            deviceInfo.IPAddress,
+            deviceInfo.IpAddress,
             deviceInfo.Port.Value,
             deviceInfo.LocalInterfaceAddress);
 

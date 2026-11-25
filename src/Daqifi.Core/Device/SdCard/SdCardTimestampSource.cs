@@ -10,19 +10,19 @@ namespace Daqifi.Core.Device.SdCard;
 /// frequency that does not match the recording device rescales the entire session by a
 /// constant factor. That failure is invisible in the data itself — the samples still look
 /// evenly spaced, just at the wrong rate — which is why the source is reported alongside
-/// <see cref="SdCardLogSession.TimestampFrequency"/> rather than left implicit.
+/// <see cref="SdCardLogSession.TimestampFrequencyHz"/> rather than left implicit.
 /// </para>
 /// <para>
 /// <see cref="Fallback"/> is the value to watch for: it means nothing in the file and no
 /// connected device supplied a frequency, so
-/// <see cref="SdCardParseOptions.FallbackTimestampFrequency"/> was used as a guess.
+/// <see cref="SdCardParseOptions.FallbackTimestampFrequencyHz"/> was used as a guess.
 /// </para>
 /// </remarks>
 public enum SdCardTimestampSource
 {
     /// <summary>
     /// No frequency was available and the fallback was disabled
-    /// (<see cref="SdCardParseOptions.FallbackTimestampFrequency"/> set to zero), so tick
+    /// (<see cref="SdCardParseOptions.FallbackTimestampFrequencyHz"/> set to zero), so tick
     /// counts were not converted to elapsed time at all.
     /// </summary>
     None = 0,
@@ -44,7 +44,7 @@ public enum SdCardTimestampSource
 
     /// <summary>
     /// Neither the file nor a connected device supplied a frequency, so
-    /// <see cref="SdCardParseOptions.FallbackTimestampFrequency"/> was used. The reconstructed
+    /// <see cref="SdCardParseOptions.FallbackTimestampFrequencyHz"/> was used. The reconstructed
     /// timestamps are only as accurate as that guess — if it does not match the recording
     /// device's clock, every timestamp in the session is scaled by a constant factor.
     /// </summary>

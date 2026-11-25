@@ -52,7 +52,7 @@ public class PublicInterfaceReachabilityTests
         // discovery callers need is the key the location provider produces.
         Assert.False(typeof(IUsbLocationProvider).IsVisible);
         Assert.False(typeof(IHidDeviceEnumerator).IsVisible);
-        Assert.False(typeof(HidLibraryDeviceEnumerator).IsVisible);
+        Assert.False(typeof(HidDeviceEnumerator).IsVisible);
 
         var locationKey = typeof(IDeviceInfo).GetProperty(nameof(IDeviceInfo.LocationKey));
         Assert.NotNull(locationKey);

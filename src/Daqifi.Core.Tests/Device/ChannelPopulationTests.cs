@@ -205,10 +205,10 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .ToList();
 
-        Assert.Equal(1.5, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.1, analogChannels[0].CalibrationB, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.5, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.1, analogChannels[0].CalibrationOffset, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
         Assert.Equal(1.1, analogChannels[0].InternalScaleM, 3);
         Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
         Assert.Equal(10.0, analogChannels[0].PortRange, 3);
@@ -244,27 +244,27 @@ public class ChannelPopulationTests
             .ToList();
 
         // ch0 fell back to defaults across the board
-        Assert.Equal(1.0, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[0].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[0].CalibrationOffset, 3);
         Assert.Equal(1.0, analogChannels[0].InternalScaleM, 3);
         Assert.Equal(1.0, analogChannels[0].PortRange, 3);
 
         // ch1's valid values were preserved
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
         Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
         Assert.Equal(5.0, analogChannels[1].PortRange, 3);
     }
 
     [Theory]
     [InlineData(0u)]            // missing resolution
-    [InlineData(1u)]            // non-zero but below MinResolution
-    [InlineData(uint.MaxValue)] // above MaxResolution
+    [InlineData(1u)]            // non-zero but below MinimumFullScaleCount
+    [InlineData(uint.MaxValue)] // above MaximumFullScaleCount
     public void PopulateChannelsFromStatus_WithUnusableResolution_FallsBackWithoutThrowing(uint reportedResolution)
     {
         // A non-zero but out-of-range AnalogInRes must not reach the AnalogChannel constructor
         // (which now rejects it) and abort channel population — it should fall back to the assumed
-        // default and flag ResolutionIsAssumed, on both the new-channel and reuse paths.
+        // default and flag FullScaleCountIsAssumed, on both the new-channel and reuse paths.
         var device = new TransportlessDevice("TestDevice");
         var message = new DaqifiOutMessage
         {
@@ -285,8 +285,8 @@ public class ChannelPopulationTests
         Assert.Equal(2, analogChannels.Count);
         foreach (var ch in analogChannels)
         {
-            Assert.Equal(65535u, ch.Resolution);
-            Assert.True(ch.ResolutionIsAssumed);
+            Assert.Equal(65535u, ch.FullScaleCount);
+            Assert.True(ch.FullScaleCountIsAssumed);
         }
     }
 
@@ -310,11 +310,11 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .ToList();
 
-        Assert.All(analogChannels, c => Assert.Equal(4095u, c.Resolution));
+        Assert.All(analogChannels, c => Assert.Equal(4095u, c.FullScaleCount));
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
+    public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetFullScaleCountIsAssumed()
     {
         // Arrange
         var device = new TransportlessDevice("TestDevice");
@@ -333,18 +333,18 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .Single();
 
-        Assert.False(analogChannel.ResolutionIsAssumed);
+        Assert.False(analogChannel.FullScaleCountIsAssumed);
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_RepopulatingWithReportedResolution_ClearsResolutionIsAssumed()
+    public void PopulateChannelsFromStatus_RepopulatingWithReportedResolution_ClearsFullScaleCountIsAssumed()
     {
         // A channel first populated with an assumed resolution should stop being flagged once
         // a later status report supplies a real value (e.g. after a firmware update).
         var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
         var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
-        Assert.True(((IAnalogChannel)analog0).ResolutionIsAssumed);
+        Assert.True(((IAnalogChannel)analog0).FullScaleCountIsAssumed);
 
         // Act
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 4095 });
@@ -352,8 +352,8 @@ public class ChannelPopulationTests
         // Assert - same instance, reused, no longer flagged as assumed.
         var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
         Assert.Same(analog0, newAnalog0);
-        Assert.False(((IAnalogChannel)newAnalog0).ResolutionIsAssumed);
-        Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).Resolution);
+        Assert.False(((IAnalogChannel)newAnalog0).FullScaleCountIsAssumed);
+        Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).FullScaleCount);
     }
 
     [Fact]
@@ -643,16 +643,16 @@ public class ChannelPopulationTests
             .ToList();
 
         // First two have provided values
-        Assert.Equal(1.5, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(0.1, analogChannels[0].CalibrationB, 3);
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.5, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(0.1, analogChannels[0].CalibrationOffset, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
 
         // Last two use defaults (CalM=1.0, CalB=0.0)
-        Assert.Equal(1.0, analogChannels[2].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[2].CalibrationB, 3);
-        Assert.Equal(1.0, analogChannels[3].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[3].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[2].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[2].CalibrationOffset, 3);
+        Assert.Equal(1.0, analogChannels[3].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[3].CalibrationOffset, 3);
     }
 
     [Fact]
@@ -800,10 +800,10 @@ public class ChannelPopulationTests
 
         // Verify analog channels have correct calibration
         var firstAnalog = (IAnalogChannel)device.Channels[0];
-        Assert.Equal(1.0, firstAnalog.CalibrationM, 3);
-        Assert.Equal(0.0, firstAnalog.CalibrationB, 3);
+        Assert.Equal(1.0, firstAnalog.CalibrationSlope, 3);
+        Assert.Equal(0.0, firstAnalog.CalibrationOffset, 3);
         Assert.Equal(10.0, firstAnalog.PortRange, 3);
-        Assert.Equal(65535u, firstAnalog.Resolution);
+        Assert.Equal(65535u, firstAnalog.FullScaleCount);
     }
 
     [Fact]
@@ -965,16 +965,16 @@ public class ChannelPopulationTests
 
     #endregion
 
-    #region TimestampFrequency Tests
+    #region TimestampFrequencyHz Tests
 
     [Fact]
-    public void TimestampFrequency_DefaultsToZero()
+    public void TimestampFrequencyHz_DefaultsToZero()
     {
         // Arrange & Act
         var device = new TransportlessDevice("TestDevice");
 
         // Assert
-        Assert.Equal(0u, device.TimestampFrequency);
+        Assert.Equal(0u, device.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -988,7 +988,7 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(message);
 
         // Assert
-        Assert.Equal(48000000u, device.TimestampFrequency);
+        Assert.Equal(48000000u, device.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -1002,7 +1002,7 @@ public class ChannelPopulationTests
         device.PopulateChannelsFromStatus(new DaqifiOutMessage { TimestampFreq = 0 });
 
         // Assert
-        Assert.Equal(48000000u, device.TimestampFrequency);
+        Assert.Equal(48000000u, device.TimestampFrequencyHz);
     }
 
     #endregion

@@ -619,7 +619,7 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task Program_WalksTheProgressBandFrom20UpTo90()
     {
-        // Programming owns 20→90%; Verifying starts at 92 and JumpingToApp at 95. If this band
+        // Programming owns 20→90%; Verifying starts at 92 and JumpingToApplication at 95. If this band
         // drifts, a progress bar either stalls or jumps backwards at a phase change.
         var transport = ConnectedTransport();
         var records = new byte[][] { [0xA1, 0xA2], [0xB1, 0xB2], [0xC1, 0xC2, 0xC3, 0xC4] };
@@ -780,7 +780,7 @@ public class Pic32BootloaderSessionTests
         Assert.All(reports, r => Assert.Equal(FirmwareUpdateState.Verifying, r.State));
         Assert.Equal(93, reports[0].PercentComplete, 3);
 
-        // Stops below JumpingToApp's 95 so the next phase still moves forward.
+        // Stops below JumpingToApplication's 95 so the next phase still moves forward.
         Assert.Equal(94, reports[^1].PercentComplete, 3);
     }
 

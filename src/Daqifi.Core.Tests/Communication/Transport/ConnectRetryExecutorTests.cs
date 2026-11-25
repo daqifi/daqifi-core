@@ -14,9 +14,9 @@ public class ConnectRetryExecutorTests
     private static ConnectionRetryOptions FastRetry(int maxAttempts) => new()
     {
         Enabled = true,
-        MaxAttempts = maxAttempts,
+        MaximumAttempts = maxAttempts,
         InitialDelay = TimeSpan.Zero,
-        MaxDelay = TimeSpan.Zero,
+        MaximumDelay = TimeSpan.Zero,
         BackoffMultiplier = 1.0,
         ConnectionTimeout = TimeSpan.FromSeconds(1)
     };
@@ -148,7 +148,7 @@ public class ConnectRetryExecutorTests
         var options = new ConnectionRetryOptions
         {
             Enabled = false,
-            MaxAttempts = 5,
+            MaximumAttempts = 5,
             InitialDelay = TimeSpan.Zero
         };
 
@@ -168,9 +168,9 @@ public class ConnectRetryExecutorTests
         var options = new ConnectionRetryOptions
         {
             Enabled = true,
-            MaxAttempts = 2,
+            MaximumAttempts = 2,
             InitialDelay = TimeSpan.FromMilliseconds(150),
-            MaxDelay = TimeSpan.FromSeconds(1),
+            MaximumDelay = TimeSpan.FromSeconds(1),
             BackoffMultiplier = 2.0
         };
 
@@ -280,9 +280,9 @@ public class ConnectRetryExecutorTests
         var options = new ConnectionRetryOptions
         {
             Enabled = true,
-            MaxAttempts = 3,
+            MaximumAttempts = 3,
             InitialDelay = TimeSpan.FromSeconds(30),
-            MaxDelay = TimeSpan.FromSeconds(30),
+            MaximumDelay = TimeSpan.FromSeconds(30),
             BackoffMultiplier = 1.0
         };
 

@@ -429,5 +429,5 @@ public interface ISdCardOperations
     /// enable it explicitly rather than rely on this transport-aware helper.
     /// </remarks>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    void PrepareLanInterface();
+    void PrepareWifiInterface();
 }

@@ -37,13 +37,13 @@ public class NetworkConfiguration
     /// <remarks>
     /// A null value means "leave unchanged" — the device retains its current
     /// IP configuration (typically DHCP). Provide all three of
-    /// <see cref="StaticIP"/>, <see cref="SubnetMask"/>, and <see cref="Gateway"/>
+    /// <see cref="StaticIpAddress"/>, <see cref="SubnetMask"/>, and <see cref="Gateway"/>
     /// to fully define a static IP configuration.
     /// </remarks>
-    public IPAddress? StaticIP { get; set; }
+    public IPAddress? StaticIpAddress { get; set; }
 
     /// <summary>
-    /// Gets or sets the subnet mask to use with <see cref="StaticIP"/>.
+    /// Gets or sets the subnet mask to use with <see cref="StaticIpAddress"/>.
     /// </summary>
     /// <remarks>
     /// A null value means "leave unchanged" on the device.
@@ -51,7 +51,7 @@ public class NetworkConfiguration
     public IPAddress? SubnetMask { get; set; }
 
     /// <summary>
-    /// Gets or sets the default gateway to use with <see cref="StaticIP"/>.
+    /// Gets or sets the default gateway to use with <see cref="StaticIpAddress"/>.
     /// </summary>
     /// <remarks>
     /// A null value means "leave unchanged" on the device.
@@ -90,7 +90,7 @@ public class NetworkConfiguration
     /// <param name="securityType">The WiFi security type.</param>
     /// <param name="ssid">The network SSID.</param>
     /// <param name="password">The network password.</param>
-    /// <param name="staticIP">The static IP address, or null to leave unchanged.</param>
+    /// <param name="staticIpAddress">The static IP address, or null to leave unchanged.</param>
     /// <param name="subnetMask">The subnet mask, or null to leave unchanged.</param>
     /// <param name="gateway">The default gateway, or null to leave unchanged.</param>
     public NetworkConfiguration(
@@ -98,7 +98,7 @@ public class NetworkConfiguration
         WifiSecurityType securityType,
         string ssid,
         string password,
-        IPAddress? staticIP,
+        IPAddress? staticIpAddress,
         IPAddress? subnetMask,
         IPAddress? gateway)
     {
@@ -106,7 +106,7 @@ public class NetworkConfiguration
         SecurityType = securityType;
         Ssid = ssid;
         Password = password;
-        StaticIP = staticIP;
+        StaticIpAddress = staticIpAddress;
         SubnetMask = subnetMask;
         Gateway = gateway;
     }
@@ -122,7 +122,7 @@ public class NetworkConfiguration
             SecurityType,
             Ssid,
             Password,
-            StaticIP,
+            StaticIpAddress,
             SubnetMask,
             Gateway);
     }

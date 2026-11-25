@@ -17,7 +17,7 @@ internal enum SessionCommandEffectKind
 
     /// <summary>
     /// A session is starting, or a running one is changing rate, at
-    /// <see cref="SessionCommandEffect.StreamingFrequency"/>.
+    /// <see cref="SessionCommandEffect.SampleRateHz"/>.
     /// </summary>
     StartStreaming,
 
@@ -47,7 +47,7 @@ internal readonly struct SessionCommandEffect
         string? rejectedRate)
     {
         Kind = kind;
-        StreamingFrequency = streamingFrequency;
+        SampleRateHz = streamingFrequency;
         AdcEnableMask = adcEnableMask;
         RejectedRate = rejectedRate;
     }
@@ -59,7 +59,7 @@ internal readonly struct SessionCommandEffect
     /// Gets the validated rate, in Hz, when <see cref="Kind"/> is
     /// <see cref="SessionCommandEffectKind.StartStreaming"/>. Zero otherwise.
     /// </summary>
-    public int StreamingFrequency { get; }
+    public int SampleRateHz { get; }
 
     /// <summary>
     /// Gets the bitmask when <see cref="Kind"/> is
@@ -157,7 +157,7 @@ internal static class SessionCommandInterpreter
     /// </para>
     /// </remarks>
     /// <param name="command">The command text that was just sent; null or blank yields <see cref="SessionCommandEffect.None"/>.</param>
-    /// <param name="maxSamplingRate">
+    /// <param name="maximumSampleRateHz">
     /// The device's advertised maximum sampling rate. Passed in as a single read by the caller
     /// rather than read here twice: it is a mutable public property, so validating against one
     /// read and applying against another would let a concurrent capabilities update reject a
@@ -165,7 +165,7 @@ internal static class SessionCommandInterpreter
     /// uninitialized or invalid value (0 or negative) cannot produce an impossible range like
     /// "1..0" that rejects every rate.
     /// </param>
-    public static SessionCommandEffect Interpret(string? command, int maxSamplingRate)
+    public static SessionCommandEffect Interpret(string? command, int maximumSampleRateHz)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -181,7 +181,7 @@ internal static class SessionCommandInterpreter
 
         if (trimmed.StartsWith(ScpiMessageProducer.StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
         {
-            return InterpretStreamingStart(trimmed.AsSpan(ScpiMessageProducer.StartStreamingCommand.Length), maxSamplingRate);
+            return InterpretStreamingStart(trimmed.AsSpan(ScpiMessageProducer.StartStreamingCommand.Length), maximumSampleRateHz);
         }
 
         if (trimmed.StartsWith(ScpiMessageProducer.EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
@@ -192,10 +192,10 @@ internal static class SessionCommandInterpreter
         return SessionCommandEffect.None;
     }
 
-    private static SessionCommandEffect InterpretStreamingStart(ReadOnlySpan<char> argument, int maxSamplingRate)
+    private static SessionCommandEffect InterpretStreamingStart(ReadOnlySpan<char> argument, int maximumSampleRateHz)
     {
         var rate = argument.Trim();
-        var ceiling = Math.Max(1, maxSamplingRate);
+        var ceiling = Math.Max(1, maximumSampleRateHz);
 
         if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
             || frequency < 1

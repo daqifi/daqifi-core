@@ -129,7 +129,7 @@ directly (no cast required). It implements:
 - `IWifiLinkStatusProvider` — live WiFi link state and the mode the radio is actually running
   (firmware v3.9.0+, gated by `DeviceFeature.WifiLinkStatus`)
 - `ISdCardOperations` — list/download/delete/format SD card contents, start/stop on-device logging, opt in to CRC-protected SD writes, and hand the shared SPI bus between the SD card and the LAN
-- `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
+- `IWifiChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)
 
@@ -181,7 +181,7 @@ var options = new DeviceConnectionOptions
     DeviceName = "My DAQiFi",           // Device identifier
     ConnectionRetry = new ConnectionRetryOptions
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
     InitializeDevice = true,             // Run init sequence after connect
@@ -282,19 +282,19 @@ by serial number) to collapse them.
 The short mDNS + broadcast recipe is in the README. These are the notes that page does not
 keep:
 
-- **Why broadcast fails on a multi-AP home network.** `WiFiDeviceFinder` sends `DAQiFi?\r\n`
+- **Why broadcast fails on a multi-AP home network.** `WifiDeviceFinder` sends `DAQiFi?\r\n`
   to the subnet broadcast address on UDP 30303. On a single-SSID, two-AP network with the
   host on 5 GHz at one AP and the device on 2.4 GHz at the other, enough broadcast frames
   are dropped crossing the AP boundary that ARP itself fails to resolve; discovery then
   returns zero devices while the device is associated, healthy and holding a DHCP lease
   ([#183](https://github.com/daqifi/daqifi-core/issues/183)). Nothing the library does with
-  sockets can fix that — the frames never survive the radio. `MDnsDeviceFinder` browses
+  sockets can fix that — the frames never survive the radio. `MdnsDeviceFinder` browses
   `_daqifi._tcp.local.` on 224.0.0.251:5353 instead, which consumer routers already reflect
   across APs and which also survives WSL2 NAT (broadcast is dropped) and client-isolated
   guest networks.
 - **What the mDNS finder reads.** The device answers with PTR + SRV + TXT + A in one reply;
   the finder takes the port from SRV, the address from A, and `sn` / `pn` / `fw` /
-  `friendly` from TXT, and reports the result as `ConnectionType.WiFi`.
+  `friendly` from TXT, and reports the result as `ConnectionType.Wifi`.
 - **Same board, two entries.** The default per-transport identity prefers the MAC address,
   which the broadcast reply carries and the mDNS advertisement does not, so a unit answering
   on both paths stays as two connectable entries. Pass `identitySelector: d => d.SerialNumber`
@@ -328,7 +328,7 @@ keep:
 | cannot scan the transport at all | throws the transport's own exception |
 
 With no timeout, the serial and HID finders run to their natural end and the two that only listen
-(`WiFiDeviceFinder`, `MDnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
+(`WifiDeviceFinder`, `MdnsDeviceFinder`) listen for 5 seconds. `DiscoveryCompleted` is raised once per
 pass, whichever way it ended.
 
 For a UI that shows a live, self-updating
@@ -343,7 +343,7 @@ passes:
 using Daqifi.Core.Device.Discovery;
 
 var continuous = new ContinuousDeviceFinder(
-    new WiFiDeviceFinder(),
+    new WifiDeviceFinder(),
     new ContinuousDiscoveryOptions
     {
         PassTimeout = TimeSpan.FromSeconds(3), // listen window per pass
@@ -516,7 +516,7 @@ protection beyond both sides opting in to `PreserveActiveStream`.
 
 The stopped stream keeps its rate: the device stores the last rate it was started at, and a stop
 does not revert it. On firmware **3.9.0 and newer**, initialization reads that stored rate
-(`SYSTem:STReam:START?`) and `StreamingFrequency` reports it — so a device another client, an SD
+(`SYSTem:STReam:START?`) and `SampleRateHz` reports it — so a device another client, an SD
 log, or an earlier session left at 1000 Hz reads 1000 Hz, and a `StartStreaming()` without setting a
 rate keeps it there.
 
@@ -526,9 +526,9 @@ at is adopted — the capability document read in the same exchange says whether
 configured since power-up (`streaming.timing.actual_rate_millihz` is 0 until one has).
 
 This only replaces Core's own 100 Hz default. Once a rate is chosen on the device object — set
-through `StreamingFrequency`, or used to start a stream, typed or raw — it stands, and a reconnect
+through `SampleRateHz`, or used to start a stream, typed or raw — it stands, and a reconnect
 resumes at it whatever the device reports when it comes back. On firmware below 3.9.0 the device
-cannot be asked, so `StreamingFrequency` starts at 100 Hz until you set it.
+cannot be asked, so `SampleRateHz` starts at 100 Hz until you set it.
 
 A stored rate was accepted for the stream that set it, which is often a USB one, and an SD log can
 have a lower ceiling: on an NQ1, one channel with onboard diagnostics off logs protobuf to the card
@@ -551,7 +551,7 @@ using Daqifi.Core.Communication.Transport;
 // Create and connect transport manually. Every step takes a CancellationToken, so a user who
 // cancels stops the attempt where it stands instead of waiting out the retries.
 var transport = new TcpStreamTransport("192.168.1.100", 9760);
-await transport.ConnectAsync(new ConnectionRetryOptions { MaxAttempts = 3 }, cancellationToken);
+await transport.ConnectAsync(new ConnectionRetryOptions { MaximumAttempts = 3 }, cancellationToken);
 
 // Create device with transport
 await using var device = new DaqifiDevice("My Device", transport);
@@ -724,7 +724,7 @@ catch (DaqifiDeviceException ex)
 | `FeatureNotSupportedException` | A feature this firmware or board does not have |
 | `SdCardOperationException` and its subclasses | An SD card operation that failed or was refused |
 | `DeviceDiagnosticsException` and its subclass | A diagnostics query that failed or could not be read |
-| `LanNotInitializedException` | A WiFi chip that is not initialized yet |
+| `WifiNotInitializedException` | A WiFi chip that is not initialized yet |
 | `DeviceReconnectFailedException` | Automatic reconnect gave up (on `ErrorOccurred`, never thrown) |
 
 Connection failures keep the framework type they always had, and need their own `catch`:
@@ -934,9 +934,9 @@ for.
 device.ReconnectOptions = new ReconnectOptions
 {
     Enabled = true,
-    MaxAttempts = 10,
+    MaximumAttempts = 10,
     InitialDelay = TimeSpan.FromSeconds(2),
-    MaxDelay = TimeSpan.FromMinutes(1),
+    MaximumDelay = TimeSpan.FromMinutes(1),
     ResumeStreaming = true
 };
 ```
@@ -958,8 +958,8 @@ Console.WriteLine($"Firmware: {device.Metadata.FirmwareVersion}");
 
 // Check capabilities
 var caps = device.Metadata.Capabilities;
-Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannels}");
-Console.WriteLine($"Digital I/O: {caps.DigitalChannels}");
+Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannelCount}");
+Console.WriteLine($"Digital I/O: {caps.DigitalChannelCount}");
 ```
 
 `Metadata` is an immutable snapshot. The device replaces it whole when a status message arrives, so
@@ -1003,7 +1003,7 @@ ai0.SampleReceived += (sender, e) =>
 };
 
 device.EnableChannel(ai0);
-device.StreamingFrequency = 100; // Hz
+device.SampleRateHz = 100; // Hz
 device.StartStreaming();
 
 await Task.Delay(TimeSpan.FromSeconds(10));
@@ -1064,7 +1064,7 @@ the decoded `IDataSample` with the `IChannel` that produced it.
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 device.EnableChannels(device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Analog));
-device.StreamingFrequency = 100; // Hz
+device.SampleRateHz = 100; // Hz
 device.StartStreaming();
 
 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -1296,7 +1296,7 @@ using Daqifi.Core.Device.Diagnostics;
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // System log (reading the log also clears the device buffer).
-IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
+IReadOnlyList<SystemLogEntry> log = await device.DrainSystemLogAsync();
 foreach (var entry in log) Console.WriteLine(entry.Message);
 await device.ClearSystemLogAsync();
 
@@ -1393,7 +1393,7 @@ other threads' text queries wait. Keep bodies short, and do not start background
 a `Task.Run` launched from the body inherits the flow's ownership of the lock, so its commands would
 *not* be deferred and could still interleave.
 
-The deferred backlog is capped at `DaqifiDevice.DefaultMaxDeferredSends` (1024) messages and
+The deferred backlog is capped at `DaqifiDevice.DefaultMaximumDeferredSends` (1024) messages and
 overflows **drop-oldest**. This only matters for the genuinely long exclusive operations — an SD card
 download is allowed thirty minutes, a firmware update longer — where a UI or agent polling at even
 10 Hz would otherwise park tens of thousands of commands and then fire all of them at the device at

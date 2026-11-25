@@ -26,7 +26,7 @@ public interface IDeviceInfo
     /// <summary>
     /// Gets the IP address (for network devices).
     /// </summary>
-    IPAddress? IPAddress { get; }
+    IPAddress? IpAddress { get; }
 
     /// <summary>
     /// Gets the MAC address (for network devices).
@@ -95,7 +95,7 @@ public enum ConnectionType
     /// <summary>
     /// WiFi/TCP connection.
     /// </summary>
-    WiFi,
+    Wifi,
 
     /// <summary>
     /// Serial/USB connection.

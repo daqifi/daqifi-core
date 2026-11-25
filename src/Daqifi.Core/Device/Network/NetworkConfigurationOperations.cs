@@ -58,9 +58,9 @@ internal sealed class NetworkConfigurationOperations
         // Stage static IP fields (firmware writes these into the runtime
         // WiFi settings that ApplyNetworkLan consumes). Skip any field the
         // caller left null so DHCP-only callers see no behavior change.
-        if (configuration.StaticIP != null)
+        if (configuration.StaticIpAddress != null)
         {
-            _host.Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIP));
+            _host.Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIpAddress));
         }
         if (configuration.SubnetMask != null)
         {
@@ -75,7 +75,7 @@ internal sealed class NetworkConfigurationOperations
         // isEnabled into the same runtime settings struct the SET commands populate and does
         // not restart anything itself, so it belongs before the save (to be persisted) and
         // before the apply (the firmware only fires a module REINIT when isEnabled is set).
-        // This deliberately does NOT call PrepareLanInterface() — that is the transport-aware
+        // This deliberately does NOT call PrepareWifiInterface() — that is the transport-aware
         // SD-operation restore, which leaves the LAN alone over WiFi (where #598/#599 keep it
         // up). Here the LAN enable is unconditional: reconfiguration owns the LAN state.
         _host.Send(ScpiMessageProducer.DisableStorageSd);

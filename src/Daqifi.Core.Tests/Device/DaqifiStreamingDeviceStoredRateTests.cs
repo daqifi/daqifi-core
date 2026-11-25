@@ -13,7 +13,7 @@ using Xunit;
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
-/// Issue #960: on firmware v3.9.0 and newer, <see cref="DaqifiStreamingDevice.StreamingFrequency"/>
+/// Issue #960: on firmware v3.9.0 and newer, <see cref="DaqifiStreamingDevice.SampleRateHz"/>
 /// reports the rate the device has stored (<c>SYSTem:STReam:START?</c>) instead of Core's own
 /// 100 Hz default — until a rate is chosen on the device object, which then stands.
 /// </summary>
@@ -60,7 +60,7 @@ public class DaqifiStreamingDeviceStoredRateTests
     [Fact]
     public void ANewDevice_StartsAtCoresDefault()
     {
-        Assert.Equal(CoreDefaultHz, new StoredRateDevice().StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, new StoredRateDevice().SampleRateHz);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         var document = await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(1000, device.StreamingFrequency);
+        Assert.Equal(1000, device.SampleRateHz);
         Assert.NotNull(document);
     }
 
@@ -102,7 +102,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         var document = await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
         Assert.NotNull(document);
     }
 
@@ -116,7 +116,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(1, device.StreamingFrequency);
+        Assert.Equal(1, device.SampleRateHz);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         Assert.NotNull(document);
         Assert.DoesNotContain("\"timing\"", CapabilityDocumentSamples.Nyquist1Firmware372);
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         var document = await device.ReadCapabilityDocumentAsync();
 
         Assert.Null(document);
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -185,10 +185,10 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         Assert.Null(document);
         Assert.Null(device.Metadata.CapabilityDocument);
-        Assert.Equal(22000, device.Metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(22000, device.Metadata.Capabilities.MaximumSampleRateHz);
 
         // The rate itself is still read: its position after the document identifies it.
-        Assert.Equal(2, device.StreamingFrequency);
+        Assert.Equal(2, device.SampleRateHz);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         var document = await device.ReadCapabilityDocumentAsync();
 
         Assert.NotNull(document);
-        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Equal(500, device.SampleRateHz);
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         var document = await device.ReadCapabilityDocumentAsync();
 
         Assert.NotNull(document);
-        Assert.Equal(1, device.StreamingFrequency);
+        Assert.Equal(1, device.SampleRateHz);
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         device.Responses[StoredRateCommand] = ["1"];
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Equal(500, device.SampleRateHz);
     }
 
     [Theory]
@@ -250,7 +250,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         Assert.DoesNotContain(StoredRateCommand, device.SentCommands);
         Assert.Equal(new[] { ApiVersionCommand, DocumentCommand }, device.SentCommands);
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
         Assert.NotNull(document);
     }
 
@@ -271,7 +271,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         var document = await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
         Assert.NotNull(document);
         Assert.Same(document, device.Metadata.CapabilityDocument);
     }
@@ -287,18 +287,18 @@ public class DaqifiStreamingDeviceStoredRateTests
         var document = await device.ReadCapabilityDocumentAsync();
 
         Assert.Null(document);
-        Assert.Equal(750, device.StreamingFrequency);
+        Assert.Equal(750, device.SampleRateHz);
     }
 
     [Fact]
     public async Task ARateTheCallerSet_IsNotReplaced()
     {
         var device = CreateDevice(storedRateReply: "1000");
-        device.StreamingFrequency = 250;
+        device.SampleRateHz = 250;
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(250, device.StreamingFrequency);
+        Assert.Equal(250, device.SampleRateHz);
     }
 
     [Fact]
@@ -306,11 +306,11 @@ public class DaqifiStreamingDeviceStoredRateTests
     {
         // Chosen is about who set it, not about the number: a caller who asked for 100 Hz asked.
         var device = CreateDevice(storedRateReply: "1000");
-        device.StreamingFrequency = CoreDefaultHz;
+        device.SampleRateHz = CoreDefaultHz;
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
     }
 
     [Fact]
@@ -324,7 +324,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
         Assert.Contains(ScpiMessageProducer.StartStreaming(CoreDefaultHz).Data, device.SentCommands);
     }
 
@@ -333,12 +333,12 @@ public class DaqifiStreamingDeviceStoredRateTests
     {
         var device = CreateDevice(storedRateReply: "500");
         await device.ReadCapabilityDocumentAsync();
-        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Equal(500, device.SampleRateHz);
 
         device.Responses[StoredRateCommand] = ["750"];
         await device.ReadCapabilityDocumentAsync();
 
-        Assert.Equal(750, device.StreamingFrequency);
+        Assert.Equal(750, device.SampleRateHz);
     }
 
     [Fact]
@@ -374,14 +374,14 @@ public class DaqifiStreamingDeviceStoredRateTests
         var device = CreateDevice(storedRateReply: "10000");
         device.UsbConnection = true;
         await device.ReadCapabilityDocumentAsync();
-        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Equal(10000, device.SampleRateHz);
 
         device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
         device.SentCommands.Clear();
 
         await device.StartSdCardLoggingAsync("log.bin");
 
-        Assert.Equal(7900, device.StreamingFrequency);
+        Assert.Equal(7900, device.SampleRateHz);
         Assert.Contains(StartAt(7900), device.SentCommands);
         Assert.DoesNotContain(StartAt(10000), device.SentCommands);
 
@@ -404,7 +404,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.StartSdCardLoggingAsync("log.bin");
 
-        Assert.Equal(500, device.StreamingFrequency);
+        Assert.Equal(500, device.SampleRateHz);
         Assert.Contains(StartAt(500), device.SentCommands);
     }
 
@@ -436,7 +436,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         var device = CreateDevice(storedRateReply: "10000");
         device.UsbConnection = true;
         await device.ReadCapabilityDocumentAsync();
-        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Equal(10000, device.SampleRateHz);
 
         device.Responses[DocumentCommand] = UnusableCapReply(kind);
         device.SentCommands.Clear();
@@ -444,7 +444,7 @@ public class DaqifiStreamingDeviceStoredRateTests
         await device.StartSdCardLoggingAsync("log.bin");
 
         Assert.Contains(DocumentCommand, device.SentCommands);
-        Assert.Equal(CoreDefaultHz, device.StreamingFrequency);
+        Assert.Equal(CoreDefaultHz, device.SampleRateHz);
         Assert.Contains(StartAt(CoreDefaultHz), device.SentCommands);
         Assert.DoesNotContain(StartAt(10000), device.SentCommands);
     }
@@ -463,7 +463,7 @@ public class DaqifiStreamingDeviceStoredRateTests
 
         await device.StartSdCardLoggingAsync("log.bin");
 
-        Assert.Equal(50, device.StreamingFrequency);
+        Assert.Equal(50, device.SampleRateHz);
         Assert.Contains(StartAt(50), device.SentCommands);
     }
 
@@ -474,13 +474,13 @@ public class DaqifiStreamingDeviceStoredRateTests
         var device = CreateDevice(storedRateReply: "10000");
         device.UsbConnection = true;
         await device.ReadCapabilityDocumentAsync();
-        device.StreamingFrequency = 10000;
+        device.SampleRateHz = 10000;
         device.Responses[DocumentCommand] = [DocumentWithCurrentMaximum(7900)];
         device.SentCommands.Clear();
 
         await device.StartSdCardLoggingAsync("log.bin");
 
-        Assert.Equal(10000, device.StreamingFrequency);
+        Assert.Equal(10000, device.SampleRateHz);
         Assert.Contains(StartAt(10000), device.SentCommands);
         Assert.DoesNotContain(DocumentCommand, device.SentCommands);
     }

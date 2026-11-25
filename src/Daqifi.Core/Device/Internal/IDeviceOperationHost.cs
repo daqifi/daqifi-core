@@ -52,8 +52,8 @@ internal interface IDeviceOperationHost
     /// <returns><see cref="IsStreaming"/> as it stood immediately before the stop.</returns>
     bool SendStreamStop();
 
-    /// <inheritdoc cref="DaqifiStreamingDevice.StreamingFrequency"/>
-    int StreamingFrequency { get; }
+    /// <inheritdoc cref="DaqifiStreamingDevice.SampleRateHz"/>
+    int SampleRateHz { get; }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StopStreaming"/>
     void StopStreaming();
@@ -134,7 +134,7 @@ internal interface IDeviceOperationHost
     /// the entry they pop afterwards is their own command's and not an older one's.
     /// </remarks>
     Task<IReadOnlyList<string>> DrainErrorQueueAsync(
-        int maxIterations = 256,
+        int maximumIterations = 256,
         CancellationToken cancellationToken = default);
 
     /// <inheritdoc cref="DaqifiDevice.RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>

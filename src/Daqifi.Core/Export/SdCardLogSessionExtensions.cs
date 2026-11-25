@@ -120,7 +120,7 @@ public static class SdCardLogSessionExtensions
         // parse used — rather than off the fallback, which is what keeps the label and the values
         // from disagreeing: a configuration handed to this call arrives too late to convert
         // anything.
-        var valueUnit = config?.Resolution is > 0
+        var valueUnit = config?.FullScaleCount is > 0
             ? SampleValueUnits.Volts
             : SampleValueUnits.Unscaled;
 

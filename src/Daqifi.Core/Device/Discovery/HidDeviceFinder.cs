@@ -14,7 +14,7 @@ public sealed class HidDeviceFinder : DeviceFinderBase
     /// Initializes a new finder that filters to DAQiFi bootloader VID/PID by default.
     /// </summary>
     public HidDeviceFinder()
-        : this(new HidLibraryDeviceEnumerator())
+        : this(new HidDeviceEnumerator())
     {
     }
 

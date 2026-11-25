@@ -16,7 +16,7 @@ namespace Daqifi.Core.Device;
 /// <para>
 /// The tick period defaults to 20ns (50MHz) but should be set per device from the
 /// device-reported timestamp frequency (the <c>timestamp_freq</c> field of the protobuf
-/// system info message, surfaced as <see cref="DaqifiDevice.TimestampFrequency"/>) via
+/// system info message, surfaced as <see cref="DaqifiDevice.TimestampFrequencyHz"/>) via
 /// <see cref="SetTimestampFrequency"/>. Devices without a configured frequency fall back
 /// to the processor-wide <see cref="TickPeriod"/>; that fallback is reported by
 /// <see cref="TimestampResult.UsedFallbackTickPeriod"/> and can be checked up front with
@@ -57,7 +57,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
     /// <see cref="DefaultTickPeriod"/>. See that field for why it should not be relied on in
     /// place of the device-reported frequency.
     /// </summary>
-    public const uint DefaultTimestampFrequency = 50_000_000;
+    public const uint DefaultTimestampFrequencyHz = 50_000_000;
 
     /// <summary>
     /// Maximum time in seconds between messages before a rollover is considered invalid.

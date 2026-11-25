@@ -12,7 +12,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// their per-sample tick delta in <see cref="SdCardTickDelta"/>.
 /// </remarks>
 /// <param name="tickPeriod">
-/// The duration of one device clock tick, in seconds (<c>1 / TimestampFrequency</c>), or
+/// The duration of one device clock tick, in seconds (<c>1 / TimestampFrequencyHz</c>), or
 /// <c>0</c> when the frequency is unknown.
 /// </param>
 internal sealed class SdCardTimestampReconstructor(double tickPeriod)

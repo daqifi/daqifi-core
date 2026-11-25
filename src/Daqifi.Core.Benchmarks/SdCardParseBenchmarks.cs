@@ -39,7 +39,7 @@ public class SdCardParseBenchmarks
 
     private const int AnalogChannelCount = 8;
 
-    private const uint TimestampFrequency = 50_000_000;
+    private const uint TimestampFrequencyHz = 50_000_000;
 
     private const uint TicksPerRow = 50_000;
 
@@ -76,7 +76,7 @@ public class SdCardParseBenchmarks
     private static async Task<int> DrainAllAsync(byte[] log, string fileName)
     {
         using var stream = new MemoryStream(log, writable: false);
-        var session = await SdCardFileParserFactory.ParseAsync(stream, fileName);
+        var session = await SdCardLogFile.ParseAsync(stream, fileName);
 
         var count = 0;
         await foreach (var _ in session.Samples)
@@ -90,7 +90,7 @@ public class SdCardParseBenchmarks
     private static async Task<bool> FirstSampleAsync(byte[] log, string fileName)
     {
         using var stream = new MemoryStream(log, writable: false);
-        var session = await SdCardFileParserFactory.ParseAsync(stream, fileName);
+        var session = await SdCardLogFile.ParseAsync(stream, fileName);
 
         await foreach (var _ in session.Samples)
         {
@@ -109,7 +109,7 @@ public class SdCardParseBenchmarks
             AnalogInPortNum = AnalogChannelCount,
             DigitalPortNum = 0,
             AnalogInRes = 65535,
-            TimestampFreq = TimestampFrequency,
+            TimestampFreq = TimestampFrequencyHz,
             DevicePn = "Nyquist1",
             DeviceFwRev = "3.7.2",
             DeviceSn = 9090539562006014104,
@@ -145,7 +145,7 @@ public class SdCardParseBenchmarks
         var text = new StringBuilder();
         text.Append("# Device: Nyquist 1\n");
         text.Append("# Serial Number: AABBCCDDEEFF0011\n");
-        text.Append(CultureInfo.InvariantCulture, $"# Timestamp Tick Rate: {TimestampFrequency} Hz\n");
+        text.Append(CultureInfo.InvariantCulture, $"# Timestamp Tick Rate: {TimestampFrequencyHz} Hz\n");
 
         for (var channel = 0; channel < AnalogChannelCount; channel++)
         {

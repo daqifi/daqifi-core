@@ -13,7 +13,7 @@ namespace Daqifi.Core.Device.Internal;
 /// <remarks>
 /// <para>
 /// Deliberately its own seam rather than a facet of <see cref="IDeviceOperationHost"/>. That
-/// interface already carries <c>IsStreaming</c>, <c>StreamingFrequency</c>,
+/// interface already carries <c>IsStreaming</c>, <c>SampleRateHz</c>,
 /// <c>StartStreaming</c> and <c>StopStreaming</c> — the very members the controller now
 /// implements — so routing the controller through it would fold the session state back onto
 /// itself. The two seams point in opposite directions: the operation collaborators reach the
@@ -64,7 +64,7 @@ internal interface IStreamingSessionHost
 
     /// <summary>
     /// The device's advertised maximum sampling rate
-    /// (<see cref="DeviceCapabilities.MaxSamplingRate"/>), read fresh on each
+    /// (<see cref="DeviceCapabilities.MaximumSampleRateHz"/>), read fresh on each
     /// access.
     /// </summary>
     /// <remarks>
@@ -73,21 +73,21 @@ internal interface IStreamingSessionHost
     /// <see cref="StreamingSessionController.SendTracked"/> for why reading it twice
     /// around one operation is a defect rather than a style choice.
     /// </remarks>
-    int MaxSamplingRate { get; }
+    int MaximumSampleRateHz { get; }
 
     /// <summary>
     /// The highest rate the channel set that will be enabled when the next command goes out can
     /// sustain, read fresh on each access. The same as
-    /// <see cref="DaqifiStreamingDevice.MaximumStreamingFrequencyHz"/>, except while an enable is
+    /// <see cref="DaqifiStreamingDevice.CurrentMaximumSampleRateHz"/>, except while an enable is
     /// held back.
     /// </summary>
     /// <remarks>
     /// This is the bound a start request is actually judged by, and it moves with the enabled
-    /// set — unlike <see cref="MaxSamplingRate"/>, which is the board's absolute ceiling. The
+    /// set — unlike <see cref="MaximumSampleRateHz"/>, which is the board's absolute ceiling. The
     /// device answers a start above it with SCPI <c>-222</c> and streams nothing, so
     /// <see cref="StreamingSessionController.StartStreaming"/> reads it on the way in.
     /// </remarks>
-    int MaximumStreamingFrequencyHz { get; }
+    int CurrentMaximumSampleRateHz { get; }
 
     /// <summary>
     /// Resets everything the frame decoder scopes to one streaming session — the timestamp
@@ -96,7 +96,7 @@ internal interface IStreamingSessionHost
     /// <paramref name="streamingFrequencyHz"/>.
     /// </summary>
     /// <remarks>
-    /// The device supplies the tick frequency itself (<see cref="DaqifiDevice.TimestampFrequency"/>),
+    /// The device supplies the tick frequency itself (<see cref="DaqifiDevice.TimestampFrequencyHz"/>),
     /// because that is the device's own report of its clock and not something a session decides.
     /// </remarks>
     void BeginDecoderSession(int streamingFrequencyHz);

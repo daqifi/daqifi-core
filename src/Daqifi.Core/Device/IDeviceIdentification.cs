@@ -33,7 +33,7 @@ public interface IDeviceIdentification
     /// the async signature exists for cancellation and device-surface consistency.</para>
     /// </remarks>
     /// <param name="name">
-    /// 1-<see cref="ScpiMessageProducer.MaxFriendlyNameLength"/> printable ASCII characters
+    /// 1-<see cref="ScpiMessageProducer.MaximumFriendlyNameLength"/> printable ASCII characters
     /// (0x20-0x7E), excluding <c>"</c> and <c>\</c> — see <see cref="ScpiMessageProducer.IsFriendlyNameValid"/>.
     /// </param>
     /// <param name="cancellationToken">A cancellation token observed before the commands are sent.</param>

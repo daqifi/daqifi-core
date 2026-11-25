@@ -34,13 +34,13 @@ public class CapabilityDocumentMergeTests
         var merged = BenchDocument().OverlayOnto(boardDerived);
 
         Assert.Equal(boardDerived.HasSdCard, merged.HasSdCard);
-        Assert.Equal(boardDerived.HasWiFi, merged.HasWiFi);
+        Assert.Equal(boardDerived.HasWifi, merged.HasWifi);
         Assert.Equal(boardDerived.HasUsb, merged.HasUsb);
         Assert.Equal(boardDerived.SupportsStreaming, merged.SupportsStreaming);
-        Assert.Equal(boardDerived.AnalogInputChannels, merged.AnalogInputChannels);
-        Assert.Equal(boardDerived.AnalogOutputChannels, merged.AnalogOutputChannels);
-        Assert.Equal(boardDerived.DigitalChannels, merged.DigitalChannels);
-        Assert.Equal(boardDerived.MaxSamplingRate, merged.MaxSamplingRate);
+        Assert.Equal(boardDerived.AnalogInputChannelCount, merged.AnalogInputChannelCount);
+        Assert.Equal(boardDerived.AnalogOutputChannelCount, merged.AnalogOutputChannelCount);
+        Assert.Equal(boardDerived.DigitalChannelCount, merged.DigitalChannelCount);
+        Assert.Equal(boardDerived.MaximumSampleRateHz, merged.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -48,10 +48,10 @@ public class CapabilityDocumentMergeTests
     {
         var capabilities = BenchDocument().OverlayOnto(new DeviceCapabilities());
 
-        Assert.Equal(16, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(16, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(16, capabilities.DigitalChannelCount);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -70,21 +70,21 @@ public class CapabilityDocumentMergeTests
     {
         var board = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist3) with
         {
-            AnalogInputChannels = 8,
-            AnalogOutputChannels = 2,
-            DigitalChannels = 16
+            AnalogInputChannelCount = 8,
+            AnalogOutputChannelCount = 2,
+            DigitalChannelCount = 16
         };
 
         var capabilities = Parse("{\"schema_version\":2}").OverlayOnto(board);
 
         Assert.True(capabilities.HasSdCard);
-        Assert.True(capabilities.HasWiFi);
+        Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasUsb);
         Assert.True(capabilities.HasWincWifiModule);
-        Assert.Equal(8, capabilities.AnalogInputChannels);
-        Assert.Equal(2, capabilities.AnalogOutputChannels);
-        Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(16000, capabilities.MaxSamplingRate);
+        Assert.Equal(8, capabilities.AnalogInputChannelCount);
+        Assert.Equal(2, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(16, capabilities.DigitalChannelCount);
+        Assert.Equal(16000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -92,17 +92,17 @@ public class CapabilityDocumentMergeTests
     {
         var board = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with
         {
-            AnalogInputChannels = 16
+            AnalogInputChannelCount = 16
         };
 
         // States storage only. Everything else — transports, channels, streaming — must fall back.
         var capabilities = Parse("{\"schema_version\":2,\"storage\":{\"sd_supported\":false}}").OverlayOnto(board);
 
         Assert.False(capabilities.HasSdCard);
-        Assert.True(capabilities.HasWiFi);
+        Assert.True(capabilities.HasWifi);
         Assert.True(capabilities.HasUsb);
-        Assert.Equal(16, capabilities.AnalogInputChannels);
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(16, capabilities.AnalogInputChannelCount);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -112,17 +112,17 @@ public class CapabilityDocumentMergeTests
         // for a kind is a real answer rather than a gap to fall back on.
         var board = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1) with
         {
-            AnalogInputChannels = 99,
-            AnalogOutputChannels = 99,
-            DigitalChannels = 99
+            AnalogInputChannelCount = 99,
+            AnalogOutputChannelCount = 99,
+            DigitalChannelCount = 99
         };
 
         var capabilities = Parse("{\"schema_version\":2,\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}")
             .OverlayOnto(board);
 
-        Assert.Equal(1, capabilities.AnalogInputChannels);
-        Assert.Equal(0, capabilities.AnalogOutputChannels);
-        Assert.Equal(0, capabilities.DigitalChannels);
+        Assert.Equal(1, capabilities.AnalogInputChannelCount);
+        Assert.Equal(0, capabilities.AnalogOutputChannelCount);
+        Assert.Equal(0, capabilities.DigitalChannelCount);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class CapabilityDocumentMergeTests
         var capabilities = Parse("{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":0}}}")
             .OverlayOnto(board);
 
-        Assert.Equal(22000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaximumSampleRateHz);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class CapabilityDocumentMergeTests
 
         Assert.True(capabilities.HasUsb);
         Assert.False(capabilities.HasSdCard);
-        Assert.False(capabilities.HasWiFi);
+        Assert.False(capabilities.HasWifi);
     }
 
     [Fact]

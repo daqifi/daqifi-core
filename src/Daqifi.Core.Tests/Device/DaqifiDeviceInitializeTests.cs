@@ -541,7 +541,7 @@ public class DaqifiDeviceInitializeTests
         // And it says the device knows what it is, which is what makes this a device to reboot
         // rather than a connection to check. A device that just sent a status is responding.
         Assert.True(ex.IsDeviceResponding);
-        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.IdentificationReply);
         Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.Message);
 
         Assert.Equal(DeviceState.InitializationFailed, device.State);
@@ -755,7 +755,7 @@ public class DaqifiDeviceInitializeTests
 
         // As data, so an application can act on it rather than parse English.
         Assert.True(ex.IsDeviceResponding);
-        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.IdentificationReply);
         Assert.Equal(1, ex.StreamInterface);
         Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.RawDeviceResponse);
     }
@@ -775,7 +775,7 @@ public class DaqifiDeviceInitializeTests
         Assert.Contains("The device may be unresponsive or still initializing.", ex.Message);
         Assert.DoesNotContain("is responding", ex.Message);
         Assert.False(ex.IsDeviceResponding);
-        Assert.Null(ex.DeviceIdentity);
+        Assert.Null(ex.IdentificationReply);
         Assert.Null(ex.StreamInterface);
         Assert.Equal(0, ex.UnreadableResponseLines);
         // Asked once. A device that returns nothing has already said what it had to say.
@@ -798,7 +798,7 @@ public class DaqifiDeviceInitializeTests
         var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
 
-        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.IdentificationReply);
         Assert.Equal(0, ex.StreamInterface);
     }
 
@@ -820,7 +820,7 @@ public class DaqifiDeviceInitializeTests
         var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
 
-        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.IdentificationReply);
         Assert.Equal(1, ex.StreamInterface);
     }
 
@@ -866,7 +866,7 @@ public class DaqifiDeviceInitializeTests
         var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
 
-        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.IdentificationReply);
         Assert.True(ex.RawDeviceResponse.Count <= 20, $"kept {ex.RawDeviceResponse.Count} lines");
         Assert.All(ex.RawDeviceResponse, l => Assert.All(l, c => Assert.InRange(c, ' ', '~')));
     }

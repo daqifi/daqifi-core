@@ -424,9 +424,9 @@ public class ChannelCommandDroppedTests
         using var device = await HeldDevice.CreateAsync();
         device.UpdateMetadata(metadata => metadata with
         {
-            Capabilities = metadata.Capabilities with { MaxSamplingRate = 22_000 }
+            Capabilities = metadata.Capabilities with { MaximumSampleRateHz = 22_000 }
         });
-        device.StreamingFrequency = 15_000;
+        device.SampleRateHz = 15_000;
 
         await device.WhileHeldAsync(() =>
         {
@@ -434,8 +434,8 @@ public class ChannelCommandDroppedTests
             device.StartStreaming();
         });
 
-        Assert.Equal(13_750, device.StreamingFrequency);
-        Assert.Equal(device.MaximumStreamingFrequencyHz, device.StreamingFrequency);
+        Assert.Equal(13_750, device.SampleRateHz);
+        Assert.Equal(device.CurrentMaximumSampleRateHz, device.SampleRateHz);
     }
 
     [Fact]

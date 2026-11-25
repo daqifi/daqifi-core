@@ -8,7 +8,7 @@ namespace Daqifi.Core.Device;
 /// because its firmware predates the feature's minimum version, per ADR 0001
 /// (docs/adr/0001-firmware-feature-gating.md). The firmware's <c>**ERROR: -113, "Undefined
 /// header"</c> reply (libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c>) is the authoritative signal
-/// on the command path; an up-front check against <see cref="DaqifiDevice.MinSupportedFirmware"/>
+/// on the command path; an up-front check against <see cref="DaqifiDevice.MinimumSupportedFirmware"/>
 /// or <see cref="DaqifiDevice.IsFirmwareVersionSupported"/> can pre-empt the round-trip for UI.
 /// </summary>
 public sealed class FeatureNotSupportedException : DaqifiDeviceException

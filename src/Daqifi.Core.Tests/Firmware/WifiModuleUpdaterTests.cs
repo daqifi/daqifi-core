@@ -725,10 +725,10 @@ public class WifiModuleUpdaterTests : IDisposable
     public async Task CheckStatus_RereadsTheRetryBudgetOnEveryProbe()
     {
         var options = CreateFastOptions();
-        options.LanChipInfoMaxAttempts = 1;
+        options.WifiChipInfoMaximumAttempts = 1;
 
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner());
-        var device = new FakeLanChipInfoDevice("COM7");
+        var device = new FakeWifiChipInfoDevice("COM7");
 
         var first = await updater.CheckStatusAsync(device, CancellationToken.None);
         Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, first.Reason);
@@ -736,7 +736,7 @@ public class WifiModuleUpdaterTests : IDisposable
 
         // A host that widens the budget between calls gets the budget it asked for; a cached
         // projection would keep spending the old one.
-        options.LanChipInfoMaxAttempts = 3;
+        options.WifiChipInfoMaximumAttempts = 3;
 
         var second = await updater.CheckStatusAsync(device, CancellationToken.None);
         Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, second.Reason);
@@ -755,7 +755,7 @@ public class WifiModuleUpdaterTests : IDisposable
         var download = new FakeFirmwareDownloadService { LatestWifiRelease = Release("19.7.7") };
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner(), download);
 
-        var device = new FakeLanChipInfoDevice("COM7")
+        var device = new FakeWifiChipInfoDevice("COM7")
         {
             DefaultChipInfoResponse = () => ChipInfo("19.7.7"),
             OnCommandSent = command =>
@@ -785,7 +785,7 @@ public class WifiModuleUpdaterTests : IDisposable
         options.PowerOnWifiModuleBeforeProbe = true;
 
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner());
-        var device = new FakeLanChipInfoDevice("COM7");
+        var device = new FakeWifiChipInfoDevice("COM7");
 
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
@@ -805,10 +805,10 @@ public class WifiModuleUpdaterTests : IDisposable
 
         var (updater, _) = CreateUpdater(options, new FakeExternalProcessRunner());
 
-        // A plain streaming device is not an ILanChipInfoProvider, so the probe never runs.
+        // A plain streaming device is not an IWifiChipInfoProvider, so the probe never runs.
         var status = await updater.CheckStatusAsync(new FakeStreamingDevice("COM7"), CancellationToken.None);
 
-        Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery, status.Reason);
+        Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportWifiQuery, status.Reason);
         Assert.False(status.IsUpToDate);
 
         // Reported even here: a caller must always be able to say what bar it was judging
@@ -933,7 +933,7 @@ public class WifiModuleUpdaterTests : IDisposable
         // Positive so the pace between the request and the apply is a real await point. The token
         // is already cancelled when that wait starts, so the case holds by construction and not
         // by a race between a timer and a cancel.
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(10);
+        options.PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(10);
 
         var (updater, _) = CreateUpdater(options, SucceedingRunner());
 
@@ -988,9 +988,9 @@ public class WifiModuleUpdaterTests : IDisposable
         // The entry window is zero, so it closes between two statements with no await in between:
         // the updater is at "bridged" by construction by the time the cancel can be observed, and
         // the case does not depend on a timer beating a token.
-        options.PostLanBridgeEntryDelay = TimeSpan.Zero;
+        options.PostWifiBridgeEntryDelay = TimeSpan.Zero;
         // The await point that observes the already-requested cancel, one step past the window.
-        options.PostLanDisconnectPortReleaseDelay = TimeSpan.FromMilliseconds(10);
+        options.PostWifiDisconnectPortReleaseDelay = TimeSpan.FromMilliseconds(10);
 
         var (updater, _) = CreateUpdater(options, SucceedingRunner());
 
@@ -1054,7 +1054,7 @@ public class WifiModuleUpdaterTests : IDisposable
         var options = CreateFastOptions();
         // Positive, so the wait after the bridge-entering apply is a real await point that the
         // already-requested cancel is observed at — leaving the updater in the pending state.
-        options.PostLanBridgeEntryDelay = entryWindow;
+        options.PostWifiBridgeEntryDelay = entryWindow;
 
         var (updater, _) = CreateUpdater(options, SucceedingRunner());
 
@@ -1172,10 +1172,10 @@ public class WifiModuleUpdaterTests : IDisposable
             stderr ?? []);
     }
 
-    private static LanChipInfo ChipInfo(string version) => new()
+    private static WifiChipInfo ChipInfo(string version) => new()
     {
         ChipId = 0x1503,
-        FwVersion = version,
+        FirmwareVersion = version,
         BuildDate = "2026-01-01"
     };
 
@@ -1201,17 +1201,17 @@ public class WifiModuleUpdaterTests : IDisposable
         // Every lifecycle wait below models something the fakes do not have: a device settling,
         // an OS releasing a COM handle, a WINC finishing bridge init. Collapsed to nothing so
         // these tests measure behavior rather than sleep.
-        PostLanFirmwareModeDelay = TimeSpan.Zero,
-        PostLanBridgeEntryDelay = TimeSpan.Zero,
-        PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
+        PostWifiFirmwareModeDelay = TimeSpan.Zero,
+        PostWifiBridgeEntryDelay = TimeSpan.Zero,
+        PostWifiDisconnectPortReleaseDelay = TimeSpan.Zero,
         PostWifiReconnectDelay = TimeSpan.Zero,
         PostUsbTransparentModeExitDelay = TimeSpan.Zero,
         PostReconnectStaleHandleDelay = TimeSpan.Zero,
-        WincBootPromptResponseDelay = TimeSpan.Zero,
+        WifiBootPromptResponseDelay = TimeSpan.Zero,
         PowerOnWifiModuleSettleDelay = TimeSpan.Zero,
         WifiFlashRetryDelay = TimeSpan.FromMilliseconds(1),
-        LanChipInfoRetryDelay = TimeSpan.Zero,
-        LanChipInfoTotalTimeout = TimeSpan.FromSeconds(10)
+        WifiChipInfoRetryDelay = TimeSpan.Zero,
+        WifiChipInfoTotalTimeout = TimeSpan.FromSeconds(10)
     };
 
     /// <summary>

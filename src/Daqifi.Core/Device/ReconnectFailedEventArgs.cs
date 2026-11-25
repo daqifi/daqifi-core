@@ -39,7 +39,7 @@ public sealed class ReconnectFailedEventArgs : EventArgs
     /// <summary>
     /// Gets a value indicating whether reconnection stopped because it was cancelled — by
     /// <see cref="DaqifiDevice.CancelReconnect"/>, <see cref="DaqifiDevice.Disconnect"/>, or
-    /// disposal — rather than by exhausting <see cref="ReconnectOptions.MaxAttempts"/>.
+    /// disposal — rather than by exhausting <see cref="ReconnectOptions.MaximumAttempts"/>.
     /// </summary>
     public bool WasCanceled { get; }
 

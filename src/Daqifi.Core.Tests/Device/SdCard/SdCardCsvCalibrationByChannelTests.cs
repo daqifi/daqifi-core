@@ -31,11 +31,11 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// </remarks>
 public sealed class SdCardCsvCalibrationByChannelTests
 {
-    private const uint Resolution = 1000u;
+    private const uint FullScaleCount = 1000u;
     private const uint TickRate = 1000u;
 
     // Eight channels, no two alike in any list.
-    private static readonly (double Slope, double Intercept)[] Calibration =
+    private static readonly (double Slope, double Offset)[] Calibration =
     [
         (1.5, 0.01), (2.0, 0.02), (2.5, 0.03), (3.0, 0.04),
         (3.5, 0.05), (4.0, 0.06), (4.5, 0.07), (5.0, 0.08)
@@ -49,12 +49,12 @@ public sealed class SdCardCsvCalibrationByChannelTests
     {
         AnalogPortCount = 8,
         DigitalPortCount = 1,
-        TimestampFrequency = TickRate,
+        TimestampFrequencyHz = TickRate,
         DeviceSerialNumber = "SN849",
         DevicePartNumber = "Nyquist 1",
         FirmwareVersion = "3.8.0",
         CalibrationValues = Calibration,
-        Resolution = Resolution,
+        FullScaleCount = FullScaleCount,
         PortRange = PortRange,
         InternalScaleM = InternalScale
     };
@@ -64,15 +64,15 @@ public sealed class SdCardCsvCalibrationByChannelTests
     /// <c>raw / resolution * portRange * calM * internalScaleM + calB</c>.
     /// </summary>
     private static double VoltsFor(int channel, double raw) =>
-        raw / Resolution * PortRange[channel] * Calibration[channel].Slope * InternalScale[channel]
-        + Calibration[channel].Intercept;
+        raw / FullScaleCount * PortRange[channel] * Calibration[channel].Slope * InternalScale[channel]
+        + Calibration[channel].Offset;
 
     /// <summary>
     /// The volts an unconfigured channel gives: unity gain, no offset, a one-volt range, and a
     /// unity internal scale — the documented fallback for a channel the configuration does not
     /// describe, shared with the protobuf and JSON paths.
     /// </summary>
-    private static double UnconfiguredVoltsFor(double raw) => raw / Resolution;
+    private static double UnconfiguredVoltsFor(double raw) => raw / FullScaleCount;
 
     // ---------------------------------------------------------------------
     // Which channel's coefficients a column gets
@@ -170,13 +170,13 @@ public sealed class SdCardCsvCalibrationByChannelTests
         {
             AnalogPortCount = 8,
             DigitalPortCount = 0,
-            TimestampFrequency = 1000u,
+            TimestampFrequencyHz = 1000u,
             DeviceSerialNumber = null,
             DevicePartNumber = "Nyquist 1",
             FirmwareVersion = null,
             CalibrationValues = [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0),
                                 (1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
-            Resolution = 4095u,
+            FullScaleCount = 4095u,
             PortRange = [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
             InternalScaleM = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
         };

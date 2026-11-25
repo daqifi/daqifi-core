@@ -706,9 +706,9 @@ public class DeviceStateEventOrderTests
     private static ReconnectOptions FastReconnect(int maxAttempts) => new()
     {
         Enabled = true,
-        MaxAttempts = maxAttempts,
+        MaximumAttempts = maxAttempts,
         InitialDelay = TimeSpan.FromMilliseconds(5),
-        MaxDelay = TimeSpan.FromMilliseconds(20)
+        MaximumDelay = TimeSpan.FromMilliseconds(20)
     };
 
     /// <summary>Stops a connect between releasing the lifecycle gate and raising its outcome.</summary>

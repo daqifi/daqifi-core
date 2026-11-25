@@ -49,13 +49,13 @@ internal sealed class FirmwareUpdateContext
             {
                 FirmwareUpdateState.Verifying,
                 FirmwareUpdateState.ReconnectingAfterFlash,
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.CleaningUp,
                 FirmwareUpdateState.Failed
             },
             [FirmwareUpdateState.Verifying] = new HashSet<FirmwareUpdateState>
             {
-                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.JumpingToApplication,
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.CleaningUp,
                 FirmwareUpdateState.Failed
@@ -68,7 +68,7 @@ internal sealed class FirmwareUpdateContext
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.Failed
             },
-            [FirmwareUpdateState.JumpingToApp] = new HashSet<FirmwareUpdateState>
+            [FirmwareUpdateState.JumpingToApplication] = new HashSet<FirmwareUpdateState>
             {
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.Failed
@@ -339,31 +339,31 @@ internal sealed class FirmwareUpdateContext
     }
 
     /// <summary>
-    /// Runs <paramref name="action"/>, retrying up to <paramref name="maxAttempts"/> times while
+    /// Runs <paramref name="action"/>, retrying up to <paramref name="maximumAttempts"/> times while
     /// <paramref name="isTransient"/> classifies the failure as retryable.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="maxAttempts"/> is less than 1. Rejected rather than clamped: a caller asking
+    /// <paramref name="maximumAttempts"/> is less than 1. Rejected rather than clamped: a caller asking
     /// for zero attempts has a bug, and silently returning success would skip a flash-critical step
     /// (erase, program, verify) with no failure signal at all.
     /// </exception>
     internal async Task ExecuteWithRetryAsync(
         string operation,
-        int maxAttempts,
+        int maximumAttempts,
         TimeSpan retryDelay,
         Func<CancellationToken, Task> action,
         Func<Exception, bool> isTransient,
         CancellationToken cancellationToken)
     {
-        if (maxAttempts < 1)
+        if (maximumAttempts < 1)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(maxAttempts),
-                maxAttempts,
+                nameof(maximumAttempts),
+                maximumAttempts,
                 $"Operation '{operation}' requires at least one attempt.");
         }
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -372,14 +372,14 @@ internal sealed class FirmwareUpdateContext
                 await action(cancellationToken).ConfigureAwait(false);
                 return;
             }
-            catch (Exception ex) when (attempt < maxAttempts && isTransient(ex))
+            catch (Exception ex) when (attempt < maximumAttempts && isTransient(ex))
             {
                 Logger.LogWarning(
                     ex,
                     "Operation '{Operation}' failed on attempt {Attempt}/{MaxAttempts}; retrying in {DelayMs} ms.",
                     operation,
                     attempt,
-                    maxAttempts,
+                    maximumAttempts,
                     retryDelay.TotalMilliseconds);
 
                 await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
@@ -525,7 +525,7 @@ internal sealed class FirmwareUpdateContext
                 "The firmware was flashed and verified successfully; only reconnecting to the device " +
                 "afterwards timed out. Unplug and replug USB, then reconnect — the update itself does " +
                 "not need to be re-run.",
-            FirmwareUpdateState.JumpingToApp =>
+            FirmwareUpdateState.JumpingToApplication =>
                 "The device did not return to application mode. Power-cycle the device and reconnect.",
             _ =>
                 "Retry the update. If repeated failures occur, reconnect the device and attempt manual bootloader recovery."

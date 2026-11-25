@@ -35,7 +35,7 @@ public class FirmwareUpdateExceptionFactoryTests
         FirmwareUpdateState.ErasingFlash,
         FirmwareUpdateState.Programming,
         FirmwareUpdateState.Verifying,
-        FirmwareUpdateState.JumpingToApp,
+        FirmwareUpdateState.JumpingToApplication,
         FirmwareUpdateState.ReconnectingAfterFlash
     ];
 

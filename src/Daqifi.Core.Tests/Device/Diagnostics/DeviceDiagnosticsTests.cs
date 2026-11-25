@@ -12,7 +12,7 @@ namespace Daqifi.Core.Tests.Device.Diagnostics;
 public class DeviceDiagnosticsTests
 {
     [Fact]
-    public async Task GetSystemLogAsync_SendsCommandAndParsesEntries()
+    public async Task DrainSystemLogAsync_SendsCommandAndParsesEntries()
     {
         var device = new TestableDiagnosticsDevice("TestDevice")
         {
@@ -20,7 +20,7 @@ public class DeviceDiagnosticsTests
         };
         device.Connect();
 
-        var entries = await device.GetSystemLogAsync();
+        var entries = await device.DrainSystemLogAsync();
 
         Assert.Contains("SYSTem:LOG?", device.SentCommands);
         Assert.Equal(2, entries.Count);
@@ -28,7 +28,7 @@ public class DeviceDiagnosticsTests
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_WhenBufferEmpty_ReturnsEmpty()
+    public async Task DrainSystemLogAsync_WhenBufferEmpty_ReturnsEmpty()
     {
         // An empty log is a BLANK LINE, not silence. The firmware terminates every
         // SYSTem:LOG? dump with one whether or not it had anything to say -- measured
@@ -42,11 +42,11 @@ public class DeviceDiagnosticsTests
         var device = new TestableDiagnosticsDevice("TestDevice") { CannedTextResponse = { "" } };
         device.Connect();
 
-        Assert.Empty(await device.GetSystemLogAsync());
+        Assert.Empty(await device.DrainSystemLogAsync());
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_WhenDeviceAnswersNothingAtAll_Throws()
+    public async Task DrainSystemLogAsync_WhenDeviceAnswersNothingAtAll_Throws()
     {
         // Zero lines -- not even the terminator -- is a silent or unresponsive device.
         // Returning an empty list here is the failure #543 exists to remove: it reports
@@ -56,12 +56,12 @@ public class DeviceDiagnosticsTests
         device.Connect();
 
         var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(
-            () => device.GetSystemLogAsync());
+            () => device.DrainSystemLogAsync());
         Assert.Contains("did not answer", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_WhenErrorOnlyResponse_Throws()
+    public async Task DrainSystemLogAsync_WhenErrorOnlyResponse_Throws()
     {
         // An error-only response must not masquerade as an empty log.
         var device = new TestableDiagnosticsDevice("TestDevice")
@@ -70,7 +70,7 @@ public class DeviceDiagnosticsTests
         };
         device.Connect();
 
-        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.GetSystemLogAsync());
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.DrainSystemLogAsync());
         Assert.NotEmpty(ex.RawDeviceResponse);
     }
 
@@ -378,7 +378,7 @@ public class DeviceDiagnosticsTests
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_WhenALineIsCorrupted_StillReturnsTheSurvivingEntries()
+    public async Task DrainSystemLogAsync_WhenALineIsCorrupted_StillReturnsTheSurvivingEntries()
     {
         // The whole response is deliberately NOT rejected: the log read clears the buffer on the
         // device, so the entries that did arrive are all anyone will ever get, and throwing them
@@ -390,7 +390,7 @@ public class DeviceDiagnosticsTests
         };
         device.Connect();
 
-        var entries = await device.GetSystemLogAsync();
+        var entries = await device.DrainSystemLogAsync();
 
         Assert.Equal("Test info message", Assert.Single(entries).Message);
     }

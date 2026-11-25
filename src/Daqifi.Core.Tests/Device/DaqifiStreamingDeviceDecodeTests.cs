@@ -870,7 +870,7 @@ public class DaqifiStreamingDeviceDecodeTests
         ai0.SetEnabled(true);
         ai1.SetEnabled(true);
 
-        device.StreamingFrequency = 100; // 500_000 ticks per sample at the 50 MHz default
+        device.SampleRateHz = 100; // 500_000 ticks per sample at the 50 MHz default
 
         // Session 1: warmup + a full frame.
         device.StartStreaming();
@@ -965,7 +965,7 @@ public class DaqifiStreamingDeviceDecodeTests
         var ai1 = AnalogChannel(device, 1);
         ai0.SetEnabled(true);
         ai1.SetEnabled(true);
-        device.StreamingFrequency = 100; // 500_000 ticks per sample
+        device.SampleRateHz = 100; // 500_000 ticks per sample
 
         // Session 1 ends with a frame at tick 10_000_000.
         device.StartStreaming();
@@ -1019,7 +1019,7 @@ public class DaqifiStreamingDeviceDecodeTests
         var ai0 = AnalogChannel(device, 0);
         ai0.SetEnabled(true);
         AnalogChannel(device, 1).SetEnabled(true);
-        device.StreamingFrequency = 100;
+        device.SampleRateHz = 100;
 
         device.StartStreaming();
         var last = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };
@@ -1072,7 +1072,7 @@ public class DaqifiStreamingDeviceDecodeTests
         var device = CreateStreamingDevice(analogCount: 1);
         var ai0 = AnalogChannel(device, 0);
         ai0.SetEnabled(true);
-        device.StreamingFrequency = 100;
+        device.SampleRateHz = 100;
 
         var trailing = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };
         trailing.AnalogInDataFloat.Add(1f);

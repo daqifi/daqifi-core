@@ -266,7 +266,7 @@ public class ChannelCommandInterleavingTests
             // One more than is left once the oldest has gone, which is where the filler goes.
             device.Cap = Backlog.Count - oldest;
             device.Send(new ScpiMessage("FILLER"));
-            device.Cap = DaqifiDevice.DefaultMaxDeferredSends;
+            device.Cap = DaqifiDevice.DefaultMaximumDeferredSends;
             Backlog.RemoveRange(0, oldest + 1);
             Backlog.Add(false);
         }
@@ -324,7 +324,7 @@ public class ChannelCommandInterleavingTests
 
         internal override int MaxDeferredSends => Cap;
 
-        public int Cap { get; set; } = DefaultMaxDeferredSends;
+        public int Cap { get; set; } = DefaultMaximumDeferredSends;
 
         public bool FailNextSend { get; set; }
 

@@ -164,7 +164,7 @@ internal sealed class SdCardFileParser
             // only answer, and that takes one entry carrying values — which a status message
             // never does. Stopping before that entry is what left an export with no analog
             // columns and no analog readings in it (issue #902).
-            if (statusConfig is { TimestampFrequency: not 0 } settled
+            if (statusConfig is { TimestampFrequencyHz: not 0 } settled
                 && (settled.AnalogPortCount != 0 || scanner.HasAnalogWidth))
             {
                 break;
@@ -188,7 +188,7 @@ internal sealed class SdCardFileParser
         // use the config fields scanned out of the leading messages. Device firmware often embeds
         // config fields (TimestampFreq, DeviceSn, etc.) in streaming data messages rather than
         // writing a separate status header.
-        if (config == null || config.TimestampFrequency == 0)
+        if (config == null || config.TimestampFrequencyHz == 0)
         {
             var scannedConfig = scanner.ToConfiguration();
             if (scannedConfig != null)
@@ -199,7 +199,7 @@ internal sealed class SdCardFileParser
 
         // Whatever the file itself stated, captured before the override is merged in so the
         // two sources stay distinguishable when reporting which one was used.
-        var fileTimestampFrequency = config?.TimestampFrequency ?? 0u;
+        var fileTimestampFrequency = config?.TimestampFrequencyHz ?? 0u;
 
         // Apply ConfigurationOverride as a fallback for any fields not found in the file.
         // This is useful when the device is connected during download — the device's live
@@ -212,8 +212,8 @@ internal sealed class SdCardFileParser
 
         var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
             fileTimestampFrequency,
-            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
-            options.FallbackTimestampFrequency);
+            options.ConfigurationOverride?.TimestampFrequencyHz ?? 0u,
+            options.FallbackTimestampFrequencyHz);
 
         var samples = ProduceSamples(
             token => openMessages(options.Progress, token),
@@ -227,7 +227,7 @@ internal sealed class SdCardFileParser
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
-            TimestampFrequency = timestampFrequency,
+            TimestampFrequencyHz = timestampFrequency,
             TimestampFrequencySource = timestampSource,
             ObservedAnalogValueCount = scanner.MaxAnalogValueCount
         };
@@ -583,7 +583,7 @@ internal sealed class SdCardFileParser
         private ulong _deviceSn;
         private string? _devicePn;
         private string? _fwRev;
-        private IReadOnlyList<(double Slope, double Intercept)>? _calibration;
+        private IReadOnlyList<(double Slope, double Offset)>? _calibration;
         private uint _resolution;
         private IReadOnlyList<double>? _portRange;
         private IReadOnlyList<double>? _internalScaleM;
@@ -704,12 +704,12 @@ internal sealed class SdCardFileParser
             {
                 AnalogPortCount = (int)_analogPortNum,
                 DigitalPortCount = (int)_digitalPortNum,
-                TimestampFrequency = _timestampFreq,
+                TimestampFrequencyHz = _timestampFreq,
                 DeviceSerialNumber = _deviceSn != 0 ? _deviceSn.ToString() : null,
                 DevicePartNumber = _devicePn,
                 FirmwareVersion = _fwRev,
                 CalibrationValues = _calibration,
-                Resolution = _resolution,
+                FullScaleCount = _resolution,
                 PortRange = _portRange,
                 InternalScaleM = _internalScaleM
             };
@@ -733,7 +733,7 @@ internal sealed class SdCardFileParser
         {
             AnalogPortCount = primary.AnalogPortCount != 0 ? primary.AnalogPortCount : scanned.AnalogPortCount,
             DigitalPortCount = primary.DigitalPortCount != 0 ? primary.DigitalPortCount : scanned.DigitalPortCount,
-            TimestampFrequency = primary.TimestampFrequency != 0 ? primary.TimestampFrequency : scanned.TimestampFrequency,
+            TimestampFrequencyHz = primary.TimestampFrequencyHz != 0 ? primary.TimestampFrequencyHz : scanned.TimestampFrequencyHz,
             DeviceSerialNumber = primary.DeviceSerialNumber ?? scanned.DeviceSerialNumber,
             DevicePartNumber = !string.IsNullOrEmpty(primary.DevicePartNumber)
                 ? primary.DevicePartNumber
@@ -742,7 +742,7 @@ internal sealed class SdCardFileParser
                 ? primary.FirmwareVersion
                 : scanned.FirmwareVersion,
             CalibrationValues = primary.CalibrationValues ?? scanned.CalibrationValues,
-            Resolution = primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
+            FullScaleCount = primary.FullScaleCount != 0 ? primary.FullScaleCount : scanned.FullScaleCount,
             PortRange = primary.PortRange ?? scanned.PortRange,
             InternalScaleM = primary.InternalScaleM ?? scanned.InternalScaleM
         };
@@ -754,7 +754,7 @@ internal sealed class SdCardFileParser
     private static SdCardDeviceConfiguration ExtractDeviceConfiguration(DaqifiOutMessage statusMessage)
     {
         // Extract calibration values if present
-        IReadOnlyList<(double Slope, double Intercept)>? calibration = null;
+        IReadOnlyList<(double Slope, double Offset)>? calibration = null;
         if (statusMessage.AnalogInCalM.Count > 0 && statusMessage.AnalogInCalB.Count > 0)
         {
             var count = Math.Min(statusMessage.AnalogInCalM.Count, statusMessage.AnalogInCalB.Count);
@@ -779,12 +779,12 @@ internal sealed class SdCardFileParser
         {
             AnalogPortCount = (int)statusMessage.AnalogInPortNum,
             DigitalPortCount = (int)statusMessage.DigitalPortNum,
-            TimestampFrequency = statusMessage.TimestampFreq,
+            TimestampFrequencyHz = statusMessage.TimestampFreq,
             DeviceSerialNumber = statusMessage.DeviceSn != 0 ? statusMessage.DeviceSn.ToString() : null,
             DevicePartNumber = statusMessage.DevicePn,
             FirmwareVersion = statusMessage.DeviceFwRev,
             CalibrationValues = calibration,
-            Resolution = statusMessage.AnalogInRes,
+            FullScaleCount = statusMessage.AnalogInRes,
             PortRange = portRange,
             InternalScaleM = internalScaleM
         };

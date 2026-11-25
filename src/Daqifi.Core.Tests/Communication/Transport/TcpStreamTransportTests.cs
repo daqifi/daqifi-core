@@ -351,7 +351,7 @@ public class TcpStreamTransportTests
             var options = new ConnectionRetryOptions
             {
                 Enabled = false,
-                MaxAttempts = 1,
+                MaximumAttempts = 1,
                 ConnectionTimeout = TimeSpan.FromSeconds(10)
             };
 
@@ -392,7 +392,7 @@ public class TcpStreamTransportTests
         var options = new ConnectionRetryOptions
         {
             Enabled = false,
-            MaxAttempts = 1,
+            MaximumAttempts = 1,
             ConnectionTimeout = TimeSpan.FromMilliseconds(250)
         };
 

@@ -13,11 +13,11 @@ public class ContinuousDeviceFinderTests
     private static DeviceInfo Wifi(string mac, string sn = "SN", string name = "wifi", IPAddress? ip = null, int port = 9760)
         => new()
         {
-            ConnectionType = ConnectionType.WiFi,
+            ConnectionType = ConnectionType.Wifi,
             MacAddress = mac,
             SerialNumber = sn,
             Name = name,
-            IPAddress = ip,
+            IpAddress = ip,
             Port = port
         };
 
@@ -492,7 +492,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         var first = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
         var renumbered = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20"));
@@ -508,7 +508,7 @@ public class ContinuousDeviceFinderTests
         Assert.Same(renumbered, update.DeviceInfo);
         Assert.Single(finder.Devices);
         Assert.Same(renumbered, finder.Devices[0]);
-        Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IpAddress);
     }
 
     [Fact]
@@ -526,7 +526,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Reconcile(new[] { device });
         discovered.Clear();
@@ -670,7 +670,7 @@ public class ContinuousDeviceFinderTests
 
         finder.Reconcile(new IDeviceInfo[] { Serial("BAD", port: "COM1"), Serial("GOOD", port: "COM2") });
 
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
         finder.DeviceUpdated += (_, e) =>
         {
             if (e.DeviceInfo.SerialNumber == "BAD")
@@ -697,7 +697,7 @@ public class ContinuousDeviceFinderTests
     public void Reconcile_OnlyTheLocalInterfaceChanged_RaisesNothing()
     {
         // LocalInterfaceAddress says which of the host's NICs heard the device, not anything
-        // about the device. WiFiDeviceFinder broadcasts on every interface at once and keeps
+        // about the device. WifiDeviceFinder broadcasts on every interface at once and keeps
         // whichever reply arrives first, so on a multi-homed host it flips between passes while
         // the device sits still. Comparing it would fire DeviceUpdated on every pass and make
         // the event worthless as a redraw trigger, which is the opposite of what #725 wants.
@@ -739,8 +739,8 @@ public class ContinuousDeviceFinderTests
         finder.Reconcile(new IDeviceInfo[] { after });
 
         var update = Assert.Single(updated);
-        Assert.Equal(IPAddress.Parse("192.168.1.50"), update.PreviousDeviceInfo.IPAddress);
-        Assert.Equal(IPAddress.Parse("192.168.1.51"), update.DeviceInfo.IPAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.50"), update.PreviousDeviceInfo.IpAddress);
+        Assert.Equal(IPAddress.Parse("192.168.1.51"), update.DeviceInfo.IpAddress);
     }
 
     #endregion
@@ -934,7 +934,7 @@ public class ContinuousDeviceFinderTests
     {
         // MAC wins over everything; serial-only device keys on serial; name is the last resort.
         var wifi = Wifi("AA:BB:CC:DD:EE:01", sn: "SN1");
-        Assert.StartsWith("WiFi|mac:", ContinuousDeviceFinder.DefaultIdentity(wifi));
+        Assert.StartsWith("Wifi|mac:", ContinuousDeviceFinder.DefaultIdentity(wifi));
 
         var hid = new DeviceInfo { ConnectionType = ConnectionType.Hid, DevicePath = "path-1", SerialNumber = "SN2" };
         Assert.Equal("Hid|path:path-1", ContinuousDeviceFinder.DefaultIdentity(hid));
@@ -954,7 +954,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(new StubDeviceFinder());
         var errors = new List<Exception>();
         var discovered = new List<IDeviceInfo>();
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
         finder.DeviceDiscovered += (_, e) =>
         {
             if (e.DeviceInfo.SerialNumber == "BAD")
@@ -1127,7 +1127,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner);
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
 
         finder.Start();
         var error = await AwaitSignal(errorSignal);
@@ -1145,7 +1145,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner, identitySelector: _ => throw new InvalidOperationException("selector boom"));
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
 
         finder.Start();
         var error = await AwaitSignal(errorSignal);
@@ -1168,7 +1168,7 @@ public class ContinuousDeviceFinderTests
         using var finder = NewFinder(inner);
 
         var errorSignal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Exception);
+        finder.ScanError += (_, e) => errorSignal.TrySetResult(e.Error);
         finder.DeviceUpdated += (_, _) => throw new InvalidOperationException("redraw boom");
 
         finder.Start();
@@ -1211,7 +1211,7 @@ public class ContinuousDeviceFinderTests
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1729,7 +1729,7 @@ public class ContinuousDeviceFinderTests
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1758,9 +1758,9 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public async Task Start_WhenTheFinderAlwaysRunsToTheDeadline_StillLosesADeviceThatWentAway()
     {
-        // The regression guard for inferring partialness from the pass deadline. WiFiDeviceFinder
+        // The regression guard for inferring partialness from the pass deadline. WifiDeviceFinder
         // passes Timeout.InfiniteTimeSpan to its own discovery, so its receive loops run until the
-        // caller's token fires and then return a COMPLETE list; MDnsDeviceFinder documents the
+        // caller's token fires and then return a COMPLETE list; MdnsDeviceFinder documents the
         // same ("no natural end"). Under ContinuousDeviceFinder that token IS the pass timeout, so
         // the deadline elapses on every healthy pass.
         //
@@ -1778,7 +1778,7 @@ public class ContinuousDeviceFinderTests
         var lost = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1805,7 +1805,7 @@ public class ContinuousDeviceFinderTests
     public async Task Start_WhenTheFinderCannotReportPartialResults_StillLosesADeviceThatWentAway()
     {
         // The same shape through a finder that does not implement IPartialResultReporter at all —
-        // a plain IDeviceFinder, which is what a consumer writes and what WiFiDeviceFinder was
+        // a plain IDeviceFinder, which is what a consumer writes and what WifiDeviceFinder was
         // before this seam existed. It also runs to the deadline, so the absence of the seam must
         // read as "complete": treating "the finder cannot tell me" as "assume partial" would
         // disable DeviceLost for every such finder.
@@ -1855,7 +1855,7 @@ public class ContinuousDeviceFinderTests
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceUpdated += (_, e) => updated.Add(e);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1942,7 +1942,7 @@ public class ContinuousDeviceFinderTests
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
         finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -1975,7 +1975,7 @@ public class ContinuousDeviceFinderTests
         var discovered = new List<IDeviceInfo>();
         var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
-        finder.ScanError += (_, e) => errors.Add(e.Exception);
+        finder.ScanError += (_, e) => errors.Add(e.Error);
 
         finder.Start();
         await WaitUntil.ThatAsync(
@@ -2254,7 +2254,7 @@ public class ContinuousDeviceFinderTests
         /// <summary>
         /// A pass that listens until the pass token fires and then answers with everything it
         /// heard — a COMPLETE answer that always uses the whole pass budget. That is what
-        /// <c>WiFiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
+        /// <c>WifiDeviceFinder</c> and <c>MdnsDeviceFinder</c> do: their
         /// <c>DiscoverAsync</c> has no natural end, so the pass deadline is
         /// what ends it, and the list it returns is still a census. A pass of this shape must be
         /// reported <see cref="DiscoveryPassOutcome.Completed"/> and must still age devices out,
@@ -2318,7 +2318,7 @@ public class ContinuousDeviceFinderTests
     /// <summary>
     /// A plain <see cref="IDeviceFinder"/> — no <c>IPartialResultReporter</c> — whose pass listens
     /// until the pass token fires and then answers with the COMPLETE set for that pass. This is
-    /// <c>WiFiDeviceFinder</c>'s and <c>MDnsDeviceFinder</c>'s shape: discovery with no natural
+    /// <c>WifiDeviceFinder</c>'s and <c>MdnsDeviceFinder</c>'s shape: discovery with no natural
     /// end, ended by the caller's token, returning a census rather than a fragment. Every pass
     /// therefore ends with the pass deadline elapsed while still being complete.
     /// </summary>

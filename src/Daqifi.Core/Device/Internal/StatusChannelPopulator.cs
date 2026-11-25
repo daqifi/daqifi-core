@@ -125,11 +125,11 @@ internal sealed class StatusChannelPopulator
 
         // Treat both a missing (0) and a physically-implausible out-of-range resolution as
         // "assumed": the AnalogChannel constructor/setters now reject anything outside
-        // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
+        // [MinimumFullScaleCount, MaximumFullScaleCount], so passing a corrupt non-zero value straight through
         // would throw and abort channel population mid-stream. Fall back to a safe default and
         // log instead, so a corrupted status frame can neither crash population nor silently
         // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
-        var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
+        var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinimumFullScaleCount or > AnalogChannel.MaximumFullScaleCount;
         var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
 
         if (resolutionIsAssumed && count > 0)
@@ -139,8 +139,8 @@ internal sealed class StatusChannelPopulator
 
         for (var i = 0; i < count; i++)
         {
-            var calibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
-            var calibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
+            var calibrationOffset = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
+            var calibrationSlope = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
             var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
             var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
 
@@ -149,14 +149,14 @@ internal sealed class StatusChannelPopulator
             // validating setters (killing channel population mid-stream) or silently propagate
             // garbage into every scaled sample. Fall back to safe defaults and log instead —
             // mirroring the analog_in_res=0 handling above.
-            calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
-            calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
-            internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
+            calibrationOffset = (float)SanitizeScalingValue(calibrationOffset, 0.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationOffset));
+            calibrationSlope = (float)SanitizeScalingValue(calibrationSlope, 1.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationSlope));
+            internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaximumCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
             portRange = (float)SanitizePortRange(portRange, i);
 
             if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
             {
-                existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
+                existingAnalog.UpdateScalingFromStatus(resolution, calibrationOffset, calibrationSlope, internalScaleM, portRange, resolutionIsAssumed);
                 if (enabledIsReported)
                 {
                     existingAnalog.IsEnabled = IsChannelBitSet(analogInPortEnabled, i);
@@ -169,8 +169,8 @@ internal sealed class StatusChannelPopulator
             {
                 Name = $"AI{i}",
                 IsEnabled = enabledIsReported && IsChannelBitSet(analogInPortEnabled, i),
-                CalibrationB = calibrationB,
-                CalibrationM = calibrationM,
+                CalibrationOffset = calibrationOffset,
+                CalibrationSlope = calibrationSlope,
                 InternalScaleM = internalScaleM,
                 PortRange = portRange
             };
@@ -204,11 +204,11 @@ internal sealed class StatusChannelPopulator
     /// <summary>
     /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
     /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
-    /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
+    /// or beyond <see cref="AnalogChannel.MaximumPortRangeVolts"/>.
     /// </summary>
     private double SanitizePortRange(double value, int channelIndex)
     {
-        if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
+        if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaximumPortRangeVolts)
         {
             SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid portRange={Value} for analog channel {ChannelIndex}; substituting 1.0. Scaled samples on this channel may be affected.", _deviceName(), value, channelIndex));
             return 1.0;

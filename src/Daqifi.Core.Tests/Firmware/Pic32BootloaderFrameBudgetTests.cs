@@ -464,12 +464,12 @@ public class Pic32BootloaderFrameBudgetTests
         JumpingToApplicationTimeout = TimeSpan.FromSeconds(5),
         BootloaderResponseTimeout = TimeSpan.FromMilliseconds(250),
         PostForceBootDelay = TimeSpan.FromMilliseconds(5),
-        PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5),
+        PostWifiFirmwareModeDelay = TimeSpan.FromMilliseconds(5),
         PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5),
         HidConnectRetryDelay = TimeSpan.FromMilliseconds(5),
         FlashWriteRetryDelay = TimeSpan.FromMilliseconds(5),
-        PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
-        WincBootPromptResponseDelay = TimeSpan.Zero,
+        PostWifiDisconnectPortReleaseDelay = TimeSpan.Zero,
+        WifiBootPromptResponseDelay = TimeSpan.Zero,
         WifiFlashRetryDelay = TimeSpan.FromMilliseconds(5),
         PostReconnectStaleHandleDelay = TimeSpan.Zero
     };

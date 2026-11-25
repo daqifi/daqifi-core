@@ -58,7 +58,7 @@ public sealed record StreamStats
     /// Gets the number of streaming timer ISR entries this session, or <see langword="null"/> if absent.
     /// In a healthy session this equals <see cref="TotalSamplesStreamed"/> + <see cref="QueueDroppedSamples"/>.
     /// </summary>
-    public ulong? TimerISRCalls => GetValue("TimerISRCalls");
+    public ulong? TimerIsrCalls => GetValue("TimerISRCalls");
 
     /// <summary>
     /// Gets the number of ticks after the startup grace period where the shared ADC scan had not

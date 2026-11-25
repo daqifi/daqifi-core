@@ -157,7 +157,7 @@ public sealed record DeviceMetadata
         // yet known", not "a different board": before the first status message there is no
         // previous board at all, and an unrecognized part number says nothing about the device
         // having been swapped. In both directions the document was still read from this device,
-        // and discarding it would regress capabilities — notably MaxSamplingRate back to the stale
+        // and discarding it would regress capabilities — notably MaximumSampleRateHz back to the stale
         // board-table ceiling — for no gain.
         var boardWasSwapped =
             board != DeviceType && board != DeviceType.Unknown && DeviceType != DeviceType.Unknown;
@@ -165,15 +165,15 @@ public sealed record DeviceMetadata
 
         capabilities = capabilities with
         {
-            AnalogInputChannels = message.AnalogInPortNum > 0
+            AnalogInputChannelCount = message.AnalogInPortNum > 0
                 ? (int)message.AnalogInPortNum
-                : capabilities.AnalogInputChannels,
-            AnalogOutputChannels = message.AnalogOutPortNum > 0
+                : capabilities.AnalogInputChannelCount,
+            AnalogOutputChannelCount = message.AnalogOutPortNum > 0
                 ? (int)message.AnalogOutPortNum
-                : capabilities.AnalogOutputChannels,
-            DigitalChannels = message.DigitalPortNum > 0
+                : capabilities.AnalogOutputChannelCount,
+            DigitalChannelCount = message.DigitalPortNum > 0
                 ? (int)message.DigitalPortNum
-                : capabilities.DigitalChannels
+                : capabilities.DigitalChannelCount
         };
 
         // Re-apply the device's own capability document last, so it stays the authority over both

@@ -394,9 +394,9 @@ public class DaqifiDeviceLifecycleStateTests
     private static ReconnectOptions FastReconnect(int maxAttempts) => new()
     {
         Enabled = true,
-        MaxAttempts = maxAttempts,
+        MaximumAttempts = maxAttempts,
         InitialDelay = TimeSpan.FromMilliseconds(10),
-        MaxDelay = TimeSpan.FromMilliseconds(60),
+        MaximumDelay = TimeSpan.FromMilliseconds(60),
         BackoffMultiplier = 2.0
     };
 

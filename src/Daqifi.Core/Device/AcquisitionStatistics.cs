@@ -192,11 +192,11 @@ public sealed class AcquisitionStatistics : IDisposable
                     LatestSampleTimestamp = state.LatestTimestamp,
                     FirstReceivedAt = state.FirstReceivedAt,
                     LastReceivedAt = state.LastReceivedAt,
-                    MinSampleInterval = new TimeSpan(state.MinIntervalTicks),
-                    MaxSampleInterval = new TimeSpan(state.MaxIntervalTicks),
+                    MinimumSampleInterval = new TimeSpan(state.MinIntervalTicks),
+                    MaximumSampleInterval = new TimeSpan(state.MaxIntervalTicks),
                     OutOfOrderSampleCount = state.OutOfOrderCount,
-                    MinValue = state.MinValue,
-                    MaxValue = state.MaxValue,
+                    MinimumValue = state.MinValue,
+                    MaximumValue = state.MaxValue,
 
                     // An entry exists only because a sample created it, and every sample
                     // increments ValueSampleCount, so it is never zero here.
@@ -224,8 +224,8 @@ public sealed class AcquisitionStatistics : IDisposable
                 TotalSampleCount = _totalSampleCount,
                 FirstReceivedAt = hasSamples ? _firstReceivedAt : DateTime.MinValue,
                 LastReceivedAt = hasSamples ? _lastReceivedAt : DateTime.MinValue,
-                MinLatency = hasSamples ? new TimeSpan(_minLatencyTicks) : TimeSpan.Zero,
-                MaxLatency = hasSamples ? new TimeSpan(_maxLatencyTicks) : TimeSpan.Zero,
+                MinimumLatency = hasSamples ? new TimeSpan(_minLatencyTicks) : TimeSpan.Zero,
+                MaximumLatency = hasSamples ? new TimeSpan(_maxLatencyTicks) : TimeSpan.Zero,
                 MeanLatency = hasSamples ? new TimeSpan((long)(_latencyTicksSum / _totalSampleCount)) : TimeSpan.Zero,
                 Channels = channels
             };

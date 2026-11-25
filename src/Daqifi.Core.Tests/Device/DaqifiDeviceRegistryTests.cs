@@ -44,10 +44,10 @@ public class DaqifiDeviceRegistryTests
     private static DeviceInfo WifiInfo(string serialNumber = "", string? macAddress = null) => new()
     {
         Name = "wifi-device",
-        ConnectionType = ConnectionType.WiFi,
+        ConnectionType = ConnectionType.Wifi,
         SerialNumber = serialNumber,
         MacAddress = macAddress,
-        IPAddress = System.Net.IPAddress.Parse("192.168.1.50"),
+        IpAddress = System.Net.IPAddress.Parse("192.168.1.50"),
         Port = 9760
     };
 
@@ -146,7 +146,7 @@ public class DaqifiDeviceRegistryTests
         var check = Assert.Single(checks);
         Assert.Equal(DuplicateCheckPhase.BeforeConnect, check.Phase);
         Assert.Equal(ConnectionType.Serial, check.ExistingConnectionType);
-        Assert.Equal(ConnectionType.WiFi, check.NewConnectionType);
+        Assert.Equal(ConnectionType.Wifi, check.NewConnectionType);
         Assert.Null(check.NewDevice);
         Assert.Equal(serialNumber, check.NewIdentity.SerialNumber);
         Assert.Equal(1, registry.Count);

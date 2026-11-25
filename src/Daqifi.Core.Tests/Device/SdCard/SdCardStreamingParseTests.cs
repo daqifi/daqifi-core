@@ -116,7 +116,7 @@ public class SdCardStreamingParseTests
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(2, samples.Count);
-        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequency);
+        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequencyHz);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class SdCardStreamingParseTests
             "should have stopped at the leading status message.");
 
         // ...and stopping early cost nothing: the configuration is the one the file states.
-        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequency);
+        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequencyHz);
         Assert.Equal(8, session.DeviceConfig.AnalogPortCount);
         Assert.Equal("12345", session.DeviceConfig.DeviceSerialNumber);
     }
@@ -222,7 +222,7 @@ public class SdCardStreamingParseTests
         using var stream = builder.Build();
         var session = await new SdCardFileParser().ParseAsync(stream, "late_clock.bin");
 
-        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequency);
+        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequencyHz);
         Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
         Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
     }
@@ -335,7 +335,7 @@ public class SdCardStreamingParseTests
         await using var counting = new CountingStream(inner);
 
         var session = await new SdCardJsonFileParser().ParseAsync(
-            counting, "big.json", new SdCardParseOptions { FallbackTimestampFrequency = 1000 });
+            counting, "big.json", new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
 
         var enumerator = session.Samples.GetAsyncEnumerator();
         await using (enumerator.ConfigureAwait(false))
@@ -356,7 +356,7 @@ public class SdCardStreamingParseTests
             (100u, new[] { 2.0 }, ""));
 
         var session = await new SdCardJsonFileParser().ParseAsync(
-            stream, "twice.json", new SdCardParseOptions { FallbackTimestampFrequency = 1000 });
+            stream, "twice.json", new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
 
         var first = await ToListAsync(session.Samples);
         var second = await ToListAsync(session.Samples);
@@ -376,7 +376,7 @@ public class SdCardStreamingParseTests
         await using var forwardOnly = new ForwardOnlyStream(inner);
 
         var session = await new SdCardJsonFileParser().ParseAsync(
-            forwardOnly, "forward.json", new SdCardParseOptions { FallbackTimestampFrequency = 1000 });
+            forwardOnly, "forward.json", new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(2, samples.Count);
@@ -393,7 +393,7 @@ public class SdCardStreamingParseTests
         await File.WriteAllBytesAsync(temp.Path, built.ToArray());
 
         var session = await new SdCardJsonFileParser().ParseFileAsync(
-            temp.Path, new SdCardParseOptions { FallbackTimestampFrequency = 1000 });
+            temp.Path, new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(2, samples.Count);
@@ -470,11 +470,11 @@ public class SdCardStreamingParseTests
         SdCardParseProgress? last = null;
         var options = new SdCardParseOptions
         {
-            FallbackTimestampFrequency = 1000,
+            FallbackTimestampFrequencyHz = 1000,
             Progress = new SynchronousProgress<SdCardParseProgress>(p => last = p)
         };
 
-        var session = await SdCardFileParserFactory.ParseAsync(stream, $"log_20240101_120000{extension}", options);
+        var session = await SdCardLogFile.ParseAsync(stream, $"log_20240101_120000{extension}", options);
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(500, samples.Count);
@@ -515,8 +515,8 @@ public class SdCardStreamingParseTests
         using var temp = new TempFile(extension);
         await File.WriteAllBytesAsync(temp.Path, BuildTwoSampleFile(extension));
 
-        var session = await SdCardFileParserFactory.ParseFileAsync(
-            temp.Path, new SdCardParseOptions { FallbackTimestampFrequency = 1000 });
+        var session = await SdCardLogFile.ParseFileAsync(
+            temp.Path, new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(2, samples.Count);

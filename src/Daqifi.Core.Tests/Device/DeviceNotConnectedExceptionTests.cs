@@ -81,7 +81,7 @@ public class DeviceNotConnectedExceptionTests
         yield return Site("SetAnalogOutput", d => d.SetAnalogOutput(new Daqifi.Core.Channel.AnalogOutputChannel(0), 1.0));
         yield return Site("SetPwmFrequency", d => d.SetPwmFrequency(1000));
         yield return Site("PrepareSdInterface", d => d.PrepareSdInterface());
-        yield return Site("PrepareLanInterface", d => d.PrepareLanInterface());
+        yield return Site("PrepareWifiInterface", d => d.PrepareWifiInterface());
         yield return Site("Send", d => d.Send(new ScpiMessage("*IDN?")));
 
         static object[] Site(string name, Action<DaqifiStreamingDevice> call) => [name, call];
@@ -119,8 +119,8 @@ public class DeviceNotConnectedExceptionTests
             new NetworkConfiguration(WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "ssid", "pw")));
         yield return Site("LoadNetworkConfigurationAsync", d => d.LoadNetworkConfigurationAsync());
         yield return Site("FactoryResetNetworkAsync", d => d.FactoryResetNetworkAsync());
-        yield return Site("GetLanChipInfoAsync", d => d.GetLanChipInfoAsync());
-        yield return Site("GetSystemLogAsync", d => d.GetSystemLogAsync());
+        yield return Site("GetWifiChipInfoAsync", d => d.GetWifiChipInfoAsync());
+        yield return Site("DrainSystemLogAsync", d => d.DrainSystemLogAsync());
         yield return Site("ClearSystemLogAsync", d => d.ClearSystemLogAsync());
         yield return Site("SetLogLevelAsync", d => d.SetLogLevelAsync("STREAM", DeviceLogLevel.Info));
         yield return Site("GetCommandHistoryAsync", d => d.GetCommandHistoryAsync());

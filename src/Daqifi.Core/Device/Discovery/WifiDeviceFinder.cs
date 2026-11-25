@@ -1,0 +1,583 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device.Network;
+
+namespace Daqifi.Core.Device.Discovery;
+
+/// <summary>
+/// Discovers DAQiFi devices on the network using UDP broadcast on port 30303.
+/// </summary>
+public class WifiDeviceFinder : DeviceFinderBase
+{
+    #region Constants
+
+    private const string DaqifiFinderQuery = "DAQiFi?\r\n";
+    private const string NativeFinderQuery = "Discovery: Who is out there?\r\n";
+    private const string PowerEvent = "Power event occurred";
+    private const int DefaultDiscoveryPort = 30303;
+
+    #endregion
+
+    #region Private Types
+
+    /// <summary>
+    /// Represents network interface information for discovery broadcasts.
+    /// </summary>
+    internal readonly struct NetworkInterfaceInfo
+    {
+        /// <summary>
+        /// The broadcast endpoint to send discovery queries to.
+        /// </summary>
+        public IPEndPoint BroadcastEndpoint { get; init; }
+
+        /// <summary>
+        /// The local interface address.
+        /// </summary>
+        public IPAddress LocalAddress { get; init; }
+    }
+
+    #endregion
+
+    #region Private Fields
+
+    private readonly int _discoveryPort;
+    private readonly byte[] _queryCommandBytes;
+
+    /// <summary>
+    /// Test seam: when set, supplies the interfaces to browse on in place of the host's own.
+    /// </summary>
+    internal Func<IReadOnlyList<NetworkInterfaceInfo>>? InterfaceProvider { get; init; }
+
+    #endregion
+
+    #region Constructor
+
+    /// <summary>
+    /// Initializes a new instance of the WifiDeviceFinder class with default port 30303.
+    /// </summary>
+    public WifiDeviceFinder() : this(DefaultDiscoveryPort)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the WifiDeviceFinder class.
+    /// </summary>
+    /// <param name="discoveryPort">The UDP port to use for discovery.</param>
+    public WifiDeviceFinder(int discoveryPort)
+    {
+        _discoveryPort = discoveryPort;
+        _queryCommandBytes = Encoding.ASCII.GetBytes(DaqifiFinderQuery);
+    }
+
+    #endregion
+
+    #region Public Methods
+
+    /// <summary>
+    /// Resolves a single host's TCP data port by unicasting the discovery query directly to it and
+    /// reading the <c>DevicePort</c> from its reply. Use this for a manually-entered IP address that
+    /// never answered the broadcast sweep, so its data port need not be assumed.
+    /// </summary>
+    /// <param name="host">The device IP address to probe.</param>
+    /// <param name="timeout">How long to wait for the host to answer before giving up.</param>
+    /// <param name="cancellationToken">A cancellation token to abort the probe.</param>
+    /// <returns>
+    /// The device's advertised TCP data port, or <c>null</c> if the host did not answer within
+    /// <paramref name="timeout"/> (or answered without a usable port). On <c>null</c>, callers can fall
+    /// back to <see cref="DaqifiDeviceFactory.DefaultTcpDataPort"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="host"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="timeout"/> is not positive.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
+#pragma warning disable RS0026 // Both overloads shipped in 1.x; the second parameter's type tells them apart.
+    public static Task<int?> ProbeTcpDataPortAsync(
+        IPAddress host,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+#pragma warning restore RS0026
+    {
+        return ProbeTcpDataPortAsync(host, DefaultDiscoveryPort, timeout, cancellationToken);
+    }
+
+    /// <inheritdoc cref="ProbeTcpDataPortAsync(IPAddress, TimeSpan, CancellationToken)"/>
+    /// <param name="host">The device IP address to probe.</param>
+    /// <param name="discoveryPort">The UDP discovery port to query (defaults to 30303 in the other overload).</param>
+    /// <param name="timeout">How long to wait for the host to answer before giving up.</param>
+    /// <param name="cancellationToken">A cancellation token to abort the probe.</param>
+#pragma warning disable RS0026 // Both overloads shipped in 1.x; the second parameter's type tells them apart.
+    public static async Task<int?> ProbeTcpDataPortAsync(
+        IPAddress host,
+        int discoveryPort,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+#pragma warning restore RS0026
+    {
+        if (host is null)
+        {
+            throw new ArgumentNullException(nameof(host));
+        }
+
+        if (discoveryPort is < IPEndPoint.MinPort or > IPEndPoint.MaxPort)
+        {
+            throw new ArgumentOutOfRangeException(nameof(discoveryPort), discoveryPort, "Discovery port is out of range.");
+        }
+
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Timeout must be positive.");
+        }
+
+        var query = Encoding.ASCII.GetBytes(DaqifiFinderQuery);
+        var target = new IPEndPoint(host, discoveryPort);
+
+        using var udp = new UdpClient(host.AddressFamily);
+
+        // Bind the local socket to the discovery port (not an ephemeral one) so replies reach us even
+        // when the firmware answers to the well-known port rather than our source port — the same
+        // reason the broadcast sweep binds to it. ReuseAddress lets this coexist with a concurrent
+        // broadcast discovery already holding the port; if the bind still fails, fall back to an
+        // ephemeral port (devices that do reply to the source port are then still handled).
+        var bindAddress = host.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+        udp.ExclusiveAddressUse = false;
+        udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        try
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, discoveryPort));
+        }
+        catch (SocketException)
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, 0));
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(timeout);
+
+        try
+        {
+            await udp.SendAsync(query, query.Length, target).ConfigureAwait(false);
+
+            // The reply may be broadcast, and other DAQiFi devices on the segment could answer the
+            // same query, so keep reading until we hear from the exact host we probed (or time out).
+            while (true)
+            {
+                var result = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
+
+                if (!result.RemoteEndPoint.Address.Equals(host))
+                {
+                    continue; // a different device answered; ignore it
+                }
+
+                var receivedText = Encoding.ASCII.GetString(result.Buffer);
+                if (!IsValidDiscoveryMessage(receivedText))
+                {
+                    continue; // our own query echoed back or a non-device frame
+                }
+
+                var info = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, null);
+                if (info?.Port is int port and > 0 and <= IPEndPoint.MaxPort)
+                {
+                    return port;
+                }
+                // Parsed but no usable port (missing, or out of the valid 1..65535 TCP range);
+                // keep waiting within the timeout window so callers can fall back to the default.
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Our own timeout elapsed (not a caller cancellation) — the host did not answer.
+            return null;
+        }
+        catch (SocketException)
+        {
+            // Host unreachable / no route — treat as "did not answer" so callers can fall back.
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region Private Methods
+
+    /// <inheritdoc />
+    private protected override TimeSpan DefaultTimeout => DefaultListenWindow;
+
+    /// <summary>
+    /// Broadcasts the discovery query on every eligible interface and collects replies until the
+    /// pass ends. Listening has no natural end, so every pass ends with its token.
+    /// </summary>
+    /// <inheritdoc />
+    protected override async Task<IReadOnlyList<IDeviceInfo>> RunPassAsync(CancellationToken passToken)
+    {
+        var discoveredDevices = new List<IDeviceInfo>();
+        var networkInterfaces = InterfaceProvider?.Invoke() ?? GetAllNetworkInterfaces(_discoveryPort);
+
+        if (networkInterfaces.Count == 0)
+        {
+            return discoveredDevices;
+        }
+
+        // Bind a separate UdpClient per NIC so the OS routes each broadcast out the intended adapter
+        // and replies arrive on the socket whose bound IP is the actual local interface — avoiding
+        // misrouting on hosts where virtual NICs (WSL2 mirrored, Hyper-V) share a subnet with the real one.
+        var perNicClients = new List<(UdpClient Client, IPAddress LocalAddress)>();
+        Exception? setupFailure = null;
+        try
+        {
+            foreach (var interfaceInfo in networkInterfaces)
+            {
+                UdpClient? udp = null;
+                var added = false;
+                try
+                {
+                    // Bind to the discovery port (with ReuseAddress) rather than an ephemeral
+                    // port so devices that target the well-known port for replies still reach
+                    // us. Per-NIC sockets coexist on the same port via distinct (LocalAddress,
+                    // port) tuples + SO_REUSEADDR.
+                    udp = new UdpClient
+                    {
+                        EnableBroadcast = true,
+                        ExclusiveAddressUse = false
+                    };
+                    udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    try
+                    {
+                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
+                    }
+                    catch (SocketException)
+                    {
+                        // Fall back to an ephemeral port if the well-known discovery port
+                        // can't be acquired on this platform/NIC (e.g. another process holds
+                        // it). Devices that reply to source-port still reach us either way.
+                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, 0));
+                    }
+                    await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint).ConfigureAwait(false);
+                    perNicClients.Add((udp, interfaceInfo.LocalAddress));
+                    added = true;
+                }
+                catch (Exception ex)
+                {
+                    // Skip this NIC; continue with others. Any setup or send failure is
+                    // recoverable at the discovery level, as long as one NIC carries the query.
+                    setupFailure ??= ex;
+                }
+                finally
+                {
+                    if (!added)
+                    {
+                        udp?.Dispose();
+                    }
+                }
+            }
+
+            if (perNicClients.Count == 0)
+            {
+                // Every NIC failed, so nothing was asked and an empty answer would mean nothing.
+                EndFailedPass(setupFailure!, devicesFound: 0);
+            }
+
+            var receiveTasks = perNicClients
+                .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, passToken))
+                .ToArray();
+
+            var receiveFailures = await Task.WhenAll(receiveTasks).ConfigureAwait(false);
+            if (Array.TrueForAll(receiveFailures, failure => failure != null))
+            {
+                // No NIC was still listening when the pass ended.
+                EndFailedPass(receiveFailures[0]!, discoveredDevices.Count);
+            }
+        }
+        finally
+        {
+            foreach (var (client, _) in perNicClients)
+            {
+                try { client.Dispose(); } catch { /* ignore */ }
+            }
+        }
+
+        return discoveredDevices;
+    }
+
+    /// <summary>
+    /// Receives discovery responses on a single NIC-bound socket until cancellation.
+    /// The socket's bound IP is the authoritative LocalInterfaceAddress for any reply it receives.
+    /// </summary>
+    /// <returns>What stopped the socket receiving before the pass ended, or null when the pass ended.</returns>
+    private async Task<Exception?> ReceiveLoopAsync(UdpClient udp, IPAddress localAddress, List<IDeviceInfo> discoveredDevices, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            UdpReceiveResult result;
+            try
+            {
+                result = await udp.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // Returned rather than thrown: one NIC dying must not end the pass for the others.
+                return cancellationToken.IsCancellationRequested ? null : ex;
+            }
+
+            // Defense-in-depth: any unexpected exception in payload processing or subscriber
+            // dispatch must not fault this receive task. With parallel per-NIC loops awaited
+            // via Task.WhenAll under an infinite timeout, a single faulted task would
+            // hang DiscoverAsync indefinitely.
+            try
+            {
+                var receivedText = Encoding.ASCII.GetString(result.Buffer);
+                if (!IsValidDiscoveryMessage(receivedText))
+                {
+                    continue;
+                }
+
+                var deviceInfo = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, localAddress);
+                if (deviceInfo == null)
+                {
+                    continue;
+                }
+
+                lock (discoveredDevices)
+                {
+                    if (discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                    {
+                        continue;
+                    }
+                    discoveredDevices.Add(deviceInfo);
+
+                    // Invoke under the lock so DeviceDiscovered fires sequentially across the
+                    // parallel per-NIC receive loops, matching the original (single-socket)
+                    // sequential-callback contract that subscribers may depend on.
+                    OnDeviceDiscovered(deviceInfo);
+                }
+            }
+            catch
+            {
+                // Swallow malformed payloads and subscriber exceptions; keep receiving.
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Determines if a received message is a valid discovery response.
+    /// </summary>
+    private static bool IsValidDiscoveryMessage(string receivedText)
+    {
+        return !receivedText.Contains(NativeFinderQuery) &&
+               !receivedText.Contains(DaqifiFinderQuery) &&
+               !receivedText.Contains(PowerEvent);
+    }
+
+    /// <summary>
+    /// Parses device information from protobuf message.
+    /// </summary>
+    /// <param name="data">The raw protobuf data.</param>
+    /// <param name="remoteEndPoint">The remote endpoint that sent the response.</param>
+    /// <param name="localInterfaceAddress">The local interface address that discovered this device.</param>
+    private static IDeviceInfo? ParseDeviceInfo(byte[] data, IPEndPoint remoteEndPoint, IPAddress? localInterfaceAddress)
+    {
+        try
+        {
+            using var stream = new MemoryStream(data);
+            var message = DaqifiOutMessage.Parser.ParseDelimitedFrom(stream);
+
+            var deviceInfo = new DeviceInfo
+            {
+                Name = message.HostName ?? "Unknown",
+                SerialNumber = message.DeviceSn.ToString(CultureInfo.InvariantCulture),
+                FirmwareVersion = message.DeviceFwRev ?? string.Empty,
+                IpAddress = remoteEndPoint.Address,
+                MacAddress = NetworkAddressHelper.GetMacAddressString(message),
+                Port = (int)message.DevicePort,
+                LocalInterfaceAddress = localInterfaceAddress,
+                Type = DeviceTypeDetector.DetectFromPartNumber(message.DevicePn),
+                IsPowerOn = message.PwrStatus == 1,
+                ConnectionType = ConnectionType.Wifi
+            };
+
+            return deviceInfo;
+        }
+        catch (Exception)
+        {
+            // Invalid protobuf message, return null
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Checks if two device info objects represent the same device.
+    /// </summary>
+    private static bool IsDuplicateDevice(IDeviceInfo existing, IDeviceInfo newDevice)
+    {
+        // Compare by MAC address if available, otherwise by serial number
+        if (!string.IsNullOrEmpty(existing.MacAddress) && !string.IsNullOrEmpty(newDevice.MacAddress))
+        {
+            return existing.MacAddress.Equals(newDevice.MacAddress, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return existing.SerialNumber.Equals(newDevice.SerialNumber, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Gets all network interface information for active interfaces.
+    /// </summary>
+    private static List<NetworkInterfaceInfo> GetAllNetworkInterfaces(int port)
+    {
+        var interfaces = new List<NetworkInterfaceInfo>();
+
+        foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (!ShouldIncludeInterface(
+                    networkInterface.Name,
+                    networkInterface.Description,
+                    networkInterface.OperationalStatus,
+                    networkInterface.NetworkInterfaceType,
+                    networkInterface.Supports(NetworkInterfaceComponent.IPv4)))
+            {
+                continue;
+            }
+
+            IPInterfaceProperties ipProperties;
+            try
+            {
+                ipProperties = networkInterface.GetIPProperties();
+            }
+            catch (NetworkInformationException)
+            {
+                // This adapter went away while it was being read; the others still work.
+                continue;
+            }
+
+            foreach (var unicastIpAddressInformation in ipProperties.UnicastAddresses)
+            {
+                if (unicastIpAddressInformation.Address.AddressFamily != AddressFamily.InterNetwork ||
+                    unicastIpAddressInformation.IPv4Mask == null ||
+                    unicastIpAddressInformation.IPv4Mask.Equals(IPAddress.Any))
+                {
+                    continue;
+                }
+
+                var ipAddress = unicastIpAddressInformation.Address;
+                var subnetMask = unicastIpAddressInformation.IPv4Mask;
+
+                var ipBytes = ipAddress.GetAddressBytes();
+                var maskBytes = subnetMask.GetAddressBytes();
+                if (ipBytes.Length != 4 || maskBytes.Length != 4) continue;
+
+                var broadcastBytes = new byte[4];
+                for (var i = 0; i < 4; i++)
+                {
+                    broadcastBytes[i] = (byte)(ipBytes[i] | (maskBytes[i] ^ 255));
+                }
+
+                var broadcastAddress = new IPAddress(broadcastBytes);
+                var endpoint = new IPEndPoint(broadcastAddress, port);
+
+                interfaces.Add(new NetworkInterfaceInfo
+                {
+                    BroadcastEndpoint = endpoint,
+                    LocalAddress = ipAddress
+                });
+            }
+        }
+
+        return interfaces;
+    }
+
+    /// <summary>
+    /// Returns true if a NIC matching the given metadata should be included in discovery.
+    /// Centralizes the filter — Up + IPv4-capable + not loopback or tunnel + non-virtual —
+    /// so a mixed-NIC list can be exercised in unit tests without instantiating real
+    /// <see cref="NetworkInterface"/> objects. Internal for testing.
+    /// </summary>
+    /// <remarks>
+    /// The filter asks what an adapter can do, not what the platform calls it. It used to require
+    /// <see cref="NetworkInterfaceType.Ethernet"/> or <see cref="NetworkInterfaceType.Wireless80211"/>
+    /// as a proxy for "a real physical NIC". That proxy does not hold on Linux-derived platforms,
+    /// where the type is inferred from the hardware type: .NET for Android reports the phone's own
+    /// WiFi adapter <c>wlan0</c> as <see cref="NetworkInterfaceType.Unknown"/>, so every interface on
+    /// the phone was dropped and WiFi discovery found nothing (issue #846).
+    /// <para>
+    /// Loopback and tunnel adapters are named by type because no IPv4 broadcast belongs on them.
+    /// <see cref="IsVirtualOrTunnelInterface"/> still carries the exclusion that issue #179 needed:
+    /// it matches the Windows virtual adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware,
+    /// TAP) by name and description, and those adapters report themselves as
+    /// <see cref="NetworkInterfaceType.Ethernet"/>, so the type filter never caught them.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldIncludeInterface(
+        string? name,
+        string? description,
+        OperationalStatus operationalStatus,
+        NetworkInterfaceType interfaceType,
+        bool supportsIPv4)
+    {
+        if (operationalStatus != OperationalStatus.Up)
+        {
+            return false;
+        }
+
+        if (!supportsIPv4)
+        {
+            return false;
+        }
+
+        // Loopback carries no broadcast to a device, and a tunnel's far end is not a local segment.
+        if (interfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
+        {
+            return false;
+        }
+
+        // Skip virtual/tunnel adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP)
+        // that frequently share a subnet with the real adapter and cause Windows routing to pick
+        // the wrong egress NIC for broadcasts. See issue #179.
+        if (IsVirtualOrTunnelInterface(name, description))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Returns true if the adapter looks like a virtual/tunnel interface that should be skipped
+    /// (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP). Internal for testing.
+    /// </summary>
+    internal static bool IsVirtualOrTunnelInterface(string? name, string? description)
+    {
+        var n = (name ?? string.Empty).Trim();
+        var d = (description ?? string.Empty).Trim();
+
+        static bool Contains(string haystack, string needle) =>
+            haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        // Match keywords against BOTH name and description — virtualization markers can show
+        // up in either field depending on platform/locale. Use specific TAP prefixes to avoid
+        // false positives on legitimate physical NICs whose description happens to contain
+        // those three letters.
+        return Contains(n, "vEthernet") || Contains(d, "vEthernet") ||
+               Contains(n, "Hyper-V") || Contains(d, "Hyper-V") ||
+               Contains(n, "WSL") || Contains(d, "WSL") ||
+               Contains(n, "VirtualBox") || Contains(d, "VirtualBox") ||
+               Contains(n, "VMware") || Contains(d, "VMware") ||
+               Contains(n, "TAP-Windows") || Contains(d, "TAP-Windows") ||
+               Contains(n, "TAP-") || Contains(d, "TAP-") ||
+               Contains(n, "TAP ") || Contains(d, "TAP ");
+    }
+
+    #endregion
+}

@@ -256,7 +256,7 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// <summary>
     /// Stored but never acted on, so a caller that round-trips the value sees what it set.
     /// </summary>
-    public int StreamingFrequency { get; set; } = 1;
+    public int SampleRateHz { get; set; } = 1;
 
     /// <summary>
     /// Always <c>false</c>. See the remarks on the type: the update flow calls
@@ -358,8 +358,8 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// </summary>
     public int PwmFrequencyHz => DaqifiStreamingDevice.DefaultPwmFrequencyHz;
 
-    /// <summary>Always <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>.</summary>
-    public int PwmFrequencyFloorHz => DaqifiStreamingDevice.MinPwmFrequencyHz;
+    /// <summary>Always <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>.</summary>
+    public int PwmFrequencyFloorHz => DaqifiStreamingDevice.MinimumPwmFrequencyHz;
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channel">Ignored.</param>
@@ -424,18 +424,18 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calM">Ignored.</param>
+    /// <param name="slope">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
-    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calB">Ignored.</param>
+    /// <param name="offset">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
-    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
     /// <summary>No-op: see the remarks on this type.</summary>

@@ -58,7 +58,7 @@ internal static class ConnectRetryExecutor
         Func<Exception, Exception>? createTornDownException = null)
     {
         var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
-        var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
+        var maxAttempts = options.Enabled ? options.MaximumAttempts : 1;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -68,7 +68,7 @@ internal static class ConnectRetryExecutor
         // No loop condition on purpose: an iteration returns on success, throws on cancellation
         // or on the final failure, and continues only while attempt < maxAttempts, so the body
         // runs at most maxAttempts times and control never falls out of the loop. maxAttempts is
-        // always at least 1 (NoRetry pins it to 1 and the MaxAttempts setter rejects anything
+        // always at least 1 (NoRetry pins it to 1 and the MaximumAttempts setter rejects anything
         // lower), so the first attempt always runs.
         for (var attempt = 1; ; attempt++)
         {

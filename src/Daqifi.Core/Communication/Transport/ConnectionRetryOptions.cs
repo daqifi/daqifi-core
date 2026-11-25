@@ -26,13 +26,13 @@ public sealed class ConnectionRetryOptions
     /// Gets or sets the maximum number of retry attempts. Default is 3.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is less than 1.</exception>
-    public int MaxAttempts
+    public int MaximumAttempts
     {
         get => _maxAttempts;
         set
         {
             RetryPolicyGuard.RequireAtLeastOneAttempt(
-                value, nameof(MaxAttempts), "At least one connection attempt must be allowed.");
+                value, nameof(MaximumAttempts), "At least one connection attempt must be allowed.");
             _maxAttempts = value;
         }
     }
@@ -56,12 +56,12 @@ public sealed class ConnectionRetryOptions
     /// Gets or sets the maximum delay between retry attempts. Default is 30 seconds.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the value is negative.</exception>
-    public TimeSpan MaxDelay
+    public TimeSpan MaximumDelay
     {
         get => _maxDelay;
         set
         {
-            RetryPolicyGuard.RequireNonNegativeDelay(value, nameof(MaxDelay));
+            RetryPolicyGuard.RequireNonNegativeDelay(value, nameof(MaximumDelay));
             _maxDelay = value;
         }
     }
@@ -126,16 +126,16 @@ public sealed class ConnectionRetryOptions
     /// <summary>
     /// Creates a default configuration with retry disabled.
     /// </summary>
-    public static ConnectionRetryOptions NoRetry => new() { Enabled = false, MaxAttempts = 1 };
+    public static ConnectionRetryOptions NoRetry => new() { Enabled = false, MaximumAttempts = 1 };
 
     /// <summary>
     /// Creates a configuration optimized for fast reconnection (short delays, fewer attempts).
     /// </summary>
     public static ConnectionRetryOptions Fast => new()
     {
-        MaxAttempts = 3,
+        MaximumAttempts = 3,
         InitialDelay = TimeSpan.FromMilliseconds(500),
-        MaxDelay = TimeSpan.FromSeconds(5),
+        MaximumDelay = TimeSpan.FromSeconds(5),
         BackoffMultiplier = 1.5,
         ConnectionTimeout = TimeSpan.FromSeconds(3)
     };
@@ -145,9 +145,9 @@ public sealed class ConnectionRetryOptions
     /// </summary>
     public static ConnectionRetryOptions Resilient => new()
     {
-        MaxAttempts = 5,
+        MaximumAttempts = 5,
         InitialDelay = TimeSpan.FromSeconds(2),
-        MaxDelay = TimeSpan.FromSeconds(60),
+        MaximumDelay = TimeSpan.FromSeconds(60),
         BackoffMultiplier = 2.5,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     };
@@ -165,15 +165,15 @@ public sealed class ConnectionRetryOptions
         // Zero in, zero out. A caller who asked for immediate retries must get them at every
         // attempt number: multiplying zero by the growing backoff factor is still zero, right up
         // until that factor overflows Math.Pow to infinity, where 0 × ∞ is NaN and the arithmetic
-        // below would hand back MaxDelay — the exact opposite of the configured policy.
+        // below would hand back MaximumDelay — the exact opposite of the configured policy.
         if (InitialDelay == TimeSpan.Zero)
             return TimeSpan.Zero;
 
         // Math.Pow overflows to +Infinity for a large enough attempt count. With a positive
-        // InitialDelay the product is then +Infinity too, and Math.Min yields MaxDelay — the
+        // InitialDelay the product is then +Infinity too, and Math.Min yields MaximumDelay — the
         // intended cap. NaN is unreachable now that a zero InitialDelay returns above and
         // BackoffMultiplier rejects NaN, so there is nothing further to guard here.
         var delay = InitialDelay.TotalMilliseconds * Math.Pow(BackoffMultiplier, attemptNumber - 2);
-        return TimeSpan.FromMilliseconds(Math.Min(delay, MaxDelay.TotalMilliseconds));
+        return TimeSpan.FromMilliseconds(Math.Min(delay, MaximumDelay.TotalMilliseconds));
     }
 }

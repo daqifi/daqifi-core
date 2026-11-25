@@ -81,8 +81,8 @@ public class DaqifiStreamingDevicePwmFrequencyTests
     }
 
     [Theory]
-    [InlineData(5)]      // below MinPwmFrequencyHz (6)
-    [InlineData(50_001)] // above MaxPwmFrequencyHz (50000)
+    [InlineData(5)]      // below MinimumPwmFrequencyHz (6)
+    [InlineData(50_001)] // above MaximumPwmFrequencyHz (50000)
     public void SetPwmFrequency_OutOfRange_ThrowsBeforeConnectedCheck(int hz)
     {
         var device = new CapturingStreamingDevice();
@@ -138,9 +138,9 @@ public class DaqifiStreamingDevicePwmFrequencyTests
         // v3.8.0 prints min_freq_hz 1 on every PWM pin, a frequency the hardware cannot produce.
         var device = ConnectedDeviceOn("3.8.0", 1);
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, device.PwmFrequencyFloorHz);
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => device.SetPwmFrequency(DaqifiStreamingDevice.MinPwmFrequencyHz - 1));
+            () => device.SetPwmFrequency(DaqifiStreamingDevice.MinimumPwmFrequencyHz - 1));
         Assert.Empty(device.PwmFrequencySends);
     }
 
@@ -150,7 +150,7 @@ public class DaqifiStreamingDevicePwmFrequencyTests
         var device = new CapturingStreamingDevice();
         device.UpdateMetadata(metadata => metadata with { FirmwareVersion = "3.9.0" });
 
-        Assert.Equal(DaqifiStreamingDevice.MinPwmFrequencyHz, device.PwmFrequencyFloorHz);
+        Assert.Equal(DaqifiStreamingDevice.MinimumPwmFrequencyHz, device.PwmFrequencyFloorHz);
     }
 
     [Fact]

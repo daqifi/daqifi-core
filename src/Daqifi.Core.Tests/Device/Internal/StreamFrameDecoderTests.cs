@@ -1220,7 +1220,7 @@ public class StreamFrameDecoderTests
 
         // Not part of the decode path.
         public bool IsConnected => throw new NotSupportedException();
-        public int StreamingFrequency => throw new NotSupportedException();
+        public int SampleRateHz => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();

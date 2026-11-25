@@ -14,9 +14,9 @@ public class DeviceInfoTests
         {
             Name = "NYQUIST",
             SerialNumber = "12345",
-            IPAddress = IPAddress.Parse("192.168.1.100"),
+            IpAddress = IPAddress.Parse("192.168.1.100"),
             Port = 9760,
-            ConnectionType = ConnectionType.WiFi
+            ConnectionType = ConnectionType.Wifi
         };
 
         // Act

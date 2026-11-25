@@ -25,7 +25,7 @@ public enum WireConnectionType
 
     /// <summary>WiFi.</summary>
     [JsonStringEnumMemberName("wifi")]
-    WiFi,
+    Wifi,
 
     /// <summary>USB HID: a device sitting in its bootloader.</summary>
     [JsonStringEnumMemberName("hid")]
@@ -170,7 +170,7 @@ internal static class WireEnums
     {
         ConnectionType.Unknown => WireConnectionType.Unknown,
         ConnectionType.Serial => WireConnectionType.Serial,
-        ConnectionType.WiFi => WireConnectionType.WiFi,
+        ConnectionType.Wifi => WireConnectionType.Wifi,
         ConnectionType.Hid => WireConnectionType.Hid,
         _ => throw Unmapped(value),
     };

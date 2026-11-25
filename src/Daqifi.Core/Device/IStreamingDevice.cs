@@ -56,7 +56,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Best-effort: a device that does not support the document
     /// (<see cref="DeviceFeature.CapabilityDocument"/>), does not answer, or answers with one that
     /// cannot be trusted keeps the capabilities it already had. Read it again when a fresh
-    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed: the device computes that
+    /// <see cref="CapabilityStreaming.CurrentMaximumSampleRateHz"/> is needed: the device computes that
     /// from the channels enabled at the moment of the read. This runs a text-mode exchange, so do
     /// not call it while streaming.
     /// </remarks>
@@ -98,12 +98,12 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <summary>
     /// Gets or sets the streaming frequency in Hz.
     /// </summary>
-    int StreamingFrequency { get; set; }
+    int SampleRateHz { get; set; }
 
     /// <summary>
     /// Gets the highest streaming frequency in Hz this device can actually sustain with the
     /// channels it has enabled right now — which is lower, usually far lower, than the absolute
-    /// ceiling <see cref="StreamingFrequency"/> validates against.
+    /// ceiling <see cref="SampleRateHz"/> validates against.
     /// </summary>
     /// <remarks>
     /// Zero is a real answer: it means no analog input is enabled, so there is no sampling
@@ -114,7 +114,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// whatever is enabled; see <see cref="SampleRateCap"/> for that case, for where the figure
     /// comes from, and for how fresh it is.
     /// </remarks>
-    int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+    int CurrentMaximumSampleRateHz => SampleRateCap.ComputeForDevice(this);
 
     /// <summary>
     /// Gets a value indicating whether the device is currently streaming data.
@@ -123,13 +123,13 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
 
     /// <summary>
     /// Starts streaming data from the device, at no more than
-    /// <see cref="MaximumStreamingFrequencyHz"/>.
+    /// <see cref="CurrentMaximumSampleRateHz"/>.
     /// </summary>
     /// <remarks>
     /// A rate above what the enabled channels sustain is lowered to the cap rather than sent.
     /// The device would otherwise answer the start with SCPI <c>-222</c> and stream nothing,
     /// which a caller cannot tell apart from a quiet signal (issue #899). Read
-    /// <see cref="StreamingFrequency"/> afterwards for the rate the stream is running at.
+    /// <see cref="SampleRateHz"/> afterwards for the rate the stream is running at.
     /// </remarks>
     void StartStreaming();
 
@@ -305,7 +305,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// Sets the PWM frequency, in hertz, for the whole device.
     /// </summary>
     /// <param name="frequencyHz">The frequency in hertz, from the device's floor up to 50000. The floor is
-    /// 6 Hz (<see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
+    /// 6 Hz (<see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>), or on firmware v3.9.0 and newer the
     /// floor the device advertises (<see cref="PwmFrequencyFloorHz"/>). Values below it
     /// are rejected because the firmware's 16-bit period register silently wraps for them, producing a
     /// kilohertz-range output.</param>
@@ -333,7 +333,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// capability document read, this is the floor the device advertises
     /// (<see cref="Capabilities.CapabilityChannel.PwmMinimumFrequencyHz"/>), which the firmware
     /// computes from its actual peripheral clock and enforces itself. Otherwise it is
-    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
+    /// <see cref="DaqifiStreamingDevice.MinimumPwmFrequencyHz"/>: older firmware advertises a fixed 1 Hz it cannot produce.
     /// Read it when bounding a frequency input rather than hard-coding the constant.
     /// </remarks>
     int PwmFrequencyFloorHz { get; }

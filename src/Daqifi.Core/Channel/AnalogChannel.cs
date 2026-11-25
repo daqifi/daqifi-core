@@ -11,31 +11,31 @@ namespace Daqifi.Core.Channel;
 public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementNotifier
 {
     /// <summary>
-    /// Smallest <see cref="Resolution"/> (maximum raw count) accepted as a physically plausible ADC
-    /// resolution — 255, i.e. 2^8 - 1 for an 8-bit converter. <see cref="Resolution"/> is stored as
+    /// Smallest <see cref="FullScaleCount"/> (maximum raw count) accepted as a physically plausible ADC
+    /// resolution — 255, i.e. 2^8 - 1 for an 8-bit converter. <see cref="FullScaleCount"/> is stored as
     /// the maximum raw count (2^bits - 1), not the bit depth, so this is the max-count for 8 bits.
     /// </summary>
-    public const uint MinResolution = 255;
+    public const uint MinimumFullScaleCount = 255;
 
     /// <summary>
-    /// Largest <see cref="Resolution"/> (maximum raw count) accepted as a physically plausible ADC
+    /// Largest <see cref="FullScaleCount"/> (maximum raw count) accepted as a physically plausible ADC
     /// resolution — 16,777,216, covering 24-bit converters whether reported as 2^24 or 2^24 - 1.
     /// </summary>
-    public const uint MaxResolution = 16_777_216;
+    public const uint MaximumFullScaleCount = 16_777_216;
 
     /// <summary>
     /// Largest absolute <see cref="PortRange"/>, in volts, accepted as physically reasonable. DAQiFi
     /// hardware tops out at ±10V differential ranges; 50 leaves generous headroom while still
     /// rejecting nonsensical values.
     /// </summary>
-    public const double MaxPortRangeVolts = 50.0;
+    public const double MaximumPortRangeVolts = 50.0;
 
     /// <summary>
     /// Largest absolute magnitude accepted for the multiplicative/offset calibration coefficients
-    /// (<see cref="CalibrationM"/>, <see cref="CalibrationB"/>, <see cref="InternalScaleM"/>). Values
+    /// (<see cref="CalibrationSlope"/>, <see cref="CalibrationOffset"/>, <see cref="InternalScaleM"/>). Values
     /// beyond this indicate a corrupted coefficient rather than a real calibration.
     /// </summary>
-    public const double MaxCalibrationMagnitude = 1_000_000.0;
+    public const double MaximumCalibrationMagnitude = 1_000_000.0;
 
     private readonly Lock _lock = new();
     private IDataSample? _activeSample;
@@ -44,12 +44,12 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     private Action? _enablementChanged;
     private double _minValue;
     private double _maxValue;
-    private double _calibrationM;
-    private double _calibrationB;
+    private double _calibrationSlope;
+    private double _calibrationOffset;
     private double _internalScaleM;
     private double _portRange;
-    private uint _resolution;
-    private bool _resolutionIsAssumed;
+    private uint _fullScaleCount;
+    private bool _fullScaleCountIsAssumed;
     private ChannelScaling? _scaling;
 
     /// <summary>
@@ -134,12 +134,12 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the minimum value for the channel range.
     /// </summary>
-    public double MinValue
+    public double MinimumValue
     {
         get { lock (_lock) { return _minValue; } }
         set
         {
-            RequireFinite(value, nameof(MinValue));
+            RequireFinite(value, nameof(MinimumValue));
             lock (_lock) { _minValue = value; }
         }
     }
@@ -147,20 +147,20 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the maximum value for the channel range.
     /// </summary>
-    public double MaxValue
+    public double MaximumValue
     {
         get { lock (_lock) { return _maxValue; } }
         set
         {
-            RequireFinite(value, nameof(MaxValue));
+            RequireFinite(value, nameof(MaximumValue));
             lock (_lock) { _maxValue = value; }
         }
     }
 
     /// <summary>
-    /// Gets whether the configured display range (<see cref="MinValue"/>..<see cref="MaxValue"/>) is
+    /// Gets whether the configured display range (<see cref="MinimumValue"/>..<see cref="MaximumValue"/>) is
     /// bipolar — i.e. spans negative voltages, as the ±1V/±5V/±10V differential ranges do — rather
-    /// than unipolar (0V-and-up). Derived purely from <see cref="MinValue"/>, which a consumer sets
+    /// than unipolar (0V-and-up). Derived purely from <see cref="MinimumValue"/>, which a consumer sets
     /// when selecting a range; lets range-selection UI branch on polarity without hardcoding
     /// per-device assumptions.
     /// </summary>
@@ -185,43 +185,43 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// place on a status re-population without recreating the channel instance, keeping
     /// <see cref="IChannel"/> references stable for consumers.
     /// </remarks>
-    public uint Resolution
+    public uint FullScaleCount
     {
-        get { lock (_lock) { return _resolution; } }
+        get { lock (_lock) { return _fullScaleCount; } }
     }
 
     /// <summary>
-    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// Gets whether <see cref="FullScaleCount"/> is a fallback guess rather than a value the device
     /// actually reported.
     /// </summary>
-    public bool ResolutionIsAssumed
+    public bool FullScaleCountIsAssumed
     {
-        get { lock (_lock) { return _resolutionIsAssumed; } }
+        get { lock (_lock) { return _fullScaleCountIsAssumed; } }
     }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
     /// </summary>
-    public double CalibrationM
+    public double CalibrationSlope
     {
-        get { lock (_lock) { return _calibrationM; } }
+        get { lock (_lock) { return _calibrationSlope; } }
         set
         {
-            ValidateScaleFactor(value, nameof(CalibrationM));
-            lock (_lock) { _calibrationM = value; }
+            ValidateScaleFactor(value, nameof(CalibrationSlope));
+            lock (_lock) { _calibrationSlope = value; }
         }
     }
 
     /// <summary>
     /// Gets or sets the calibration offset (B in the scaling formula).
     /// </summary>
-    public double CalibrationB
+    public double CalibrationOffset
     {
-        get { lock (_lock) { return _calibrationB; } }
+        get { lock (_lock) { return _calibrationOffset; } }
         set
         {
-            ValidateOffset(value, nameof(CalibrationB));
-            lock (_lock) { _calibrationB = value; }
+            ValidateOffset(value, nameof(CalibrationOffset));
+            lock (_lock) { _calibrationOffset = value; }
         }
     }
 
@@ -260,11 +260,11 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// Initializes a new instance of the <see cref="AnalogChannel"/> class.
     /// </summary>
     /// <param name="channelNumber">The channel number/index.</param>
-    /// <param name="resolution">The ADC resolution (e.g., 65535 for 16-bit).</param>
-    /// <param name="resolutionIsAssumed">
-    /// Whether <paramref name="resolution"/> is a fallback guess rather than a device-reported value.
+    /// <param name="fullScaleCount">The ADC resolution (e.g., 65535 for 16-bit).</param>
+    /// <param name="fullScaleCountIsAssumed">
+    /// Whether <paramref name="fullScaleCount"/> is a fallback guess rather than a device-reported value.
     /// </param>
-    public AnalogChannel(int channelNumber, uint resolution = 65535, bool resolutionIsAssumed = false)
+    public AnalogChannel(int channelNumber, uint fullScaleCount = 65535, bool fullScaleCountIsAssumed = false)
     {
         if (channelNumber < 0)
         {
@@ -272,17 +272,17 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
                 nameof(channelNumber), channelNumber, "Channel number must be non-negative.");
         }
 
-        ValidateResolution(resolution, nameof(resolution));
+        ValidateFullScaleCount(fullScaleCount, nameof(fullScaleCount));
 
         ChannelNumber = channelNumber;
-        _resolution = resolution;
-        _resolutionIsAssumed = resolutionIsAssumed;
+        _fullScaleCount = fullScaleCount;
+        _fullScaleCountIsAssumed = fullScaleCountIsAssumed;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
         _minValue = -10.0;
         _maxValue = 10.0;
-        _calibrationM = 1.0;
-        _calibrationB = 0.0;
+        _calibrationSlope = 1.0;
+        _calibrationOffset = 0.0;
         _internalScaleM = 1.0;
         _portRange = 1.0;
     }
@@ -296,14 +296,14 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <see cref="Device.DaqifiDevice.GetChannelsSnapshot"/> on another thread) can never observe
     /// a torn mix of old and new scaling values from <see cref="GetScaledValue"/>.
     /// </remarks>
-    internal void UpdateScalingFromStatus(uint resolution, double calibrationB, double calibrationM, double internalScaleM, double portRange, bool resolutionIsAssumed = false)
+    internal void UpdateScalingFromStatus(uint fullScaleCount, double calibrationOffset, double calibrationSlope, double internalScaleM, double portRange, bool fullScaleCountIsAssumed = false)
     {
         lock (_lock)
         {
-            _resolution = resolution;
-            _resolutionIsAssumed = resolutionIsAssumed;
-            _calibrationB = calibrationB;
-            _calibrationM = calibrationM;
+            _fullScaleCount = fullScaleCount;
+            _fullScaleCountIsAssumed = fullScaleCountIsAssumed;
+            _calibrationOffset = calibrationOffset;
+            _calibrationSlope = calibrationSlope;
             _internalScaleM = internalScaleM;
             _portRange = portRange;
         }
@@ -311,10 +311,10 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationM * InternalScaleM + CalibrationB
+    /// Formula: ScaledValue = RawValue / FullScaleCount * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
-    /// <see cref="CalibrationB"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
+    /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
     /// is applied — it is not scaled by it. This matches the firmware's own on-device conversion, so a
     /// value scaled here agrees with what the device reports for <c>MEASure:VOLTage:DC?</c>.
     /// </remarks>
@@ -324,7 +324,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     {
         lock (_lock)
         {
-            return AnalogScaling.Scale(rawValue, _resolution, _portRange, _calibrationM, _internalScaleM, _calibrationB);
+            return AnalogScaling.Scale(rawValue, _fullScaleCount, _portRange, _calibrationSlope, _internalScaleM, _calibrationOffset);
         }
     }
 
@@ -350,63 +350,63 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     }
 
     /// <summary>
-    /// Validates that <paramref name="resolution"/> is a physically plausible ADC max-count, in
-    /// <see cref="MinResolution"/>..<see cref="MaxResolution"/>.
+    /// Validates that <paramref name="fullScaleCount"/> is a physically plausible ADC max-count, in
+    /// <see cref="MinimumFullScaleCount"/>..<see cref="MaximumFullScaleCount"/>.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="resolution"/> is outside the valid range.</exception>
-    internal static void ValidateResolution(uint resolution, string paramName)
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="fullScaleCount"/> is outside the valid range.</exception>
+    internal static void ValidateFullScaleCount(uint fullScaleCount, string paramName)
     {
-        if (resolution is < MinResolution or > MaxResolution)
+        if (fullScaleCount is < MinimumFullScaleCount or > MaximumFullScaleCount)
         {
             throw new ArgumentOutOfRangeException(
-                paramName, resolution,
-                $"Resolution must be a plausible ADC max-count between {MinResolution} and {MaxResolution}.");
+                paramName, fullScaleCount,
+                $"Resolution must be a plausible ADC max-count between {MinimumFullScaleCount} and {MaximumFullScaleCount}.");
         }
     }
 
     /// <summary>
     /// Validates that <paramref name="value"/> is a physically reasonable port (voltage) range:
-    /// finite, positive, and no larger than <see cref="MaxPortRangeVolts"/>.
+    /// finite, positive, and no larger than <see cref="MaximumPortRangeVolts"/>.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid range.</exception>
     internal static void ValidatePortRange(double value, string paramName)
     {
-        if (!double.IsFinite(value) || value <= 0.0 || value > MaxPortRangeVolts)
+        if (!double.IsFinite(value) || value <= 0.0 || value > MaximumPortRangeVolts)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Port range must be a finite value in (0, {MaxPortRangeVolts}] volts.");
+                $"Port range must be a finite value in (0, {MaximumPortRangeVolts}] volts.");
         }
     }
 
     /// <summary>
-    /// Validates a multiplicative scale factor (<see cref="CalibrationM"/>/<see cref="InternalScaleM"/>):
-    /// finite, non-zero, and within ±<see cref="MaxCalibrationMagnitude"/>. Negative factors are allowed
+    /// Validates a multiplicative scale factor (<see cref="CalibrationSlope"/>/<see cref="InternalScaleM"/>):
+    /// finite, non-zero, and within ±<see cref="MaximumCalibrationMagnitude"/>. Negative factors are allowed
     /// (they invert the signal); zero is not (it discards the measurement entirely).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid scale factor.</exception>
     internal static void ValidateScaleFactor(double value, string paramName)
     {
-        if (!double.IsFinite(value) || value == 0.0 || Math.Abs(value) > MaxCalibrationMagnitude)
+        if (!double.IsFinite(value) || value == 0.0 || Math.Abs(value) > MaximumCalibrationMagnitude)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Scale factor must be a finite, non-zero value within ±{MaxCalibrationMagnitude}.");
+                $"Scale factor must be a finite, non-zero value within ±{MaximumCalibrationMagnitude}.");
         }
     }
 
     /// <summary>
-    /// Validates a calibration offset (<see cref="CalibrationB"/>): finite and within
-    /// ±<see cref="MaxCalibrationMagnitude"/>. Zero is a valid offset.
+    /// Validates a calibration offset (<see cref="CalibrationOffset"/>): finite and within
+    /// ±<see cref="MaximumCalibrationMagnitude"/>. Zero is a valid offset.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid offset.</exception>
     internal static void ValidateOffset(double value, string paramName)
     {
-        if (!double.IsFinite(value) || Math.Abs(value) > MaxCalibrationMagnitude)
+        if (!double.IsFinite(value) || Math.Abs(value) > MaximumCalibrationMagnitude)
         {
             throw new ArgumentOutOfRangeException(
                 paramName, value,
-                $"Calibration offset must be a finite value within ±{MaxCalibrationMagnitude}.");
+                $"Calibration offset must be a finite value within ±{MaximumCalibrationMagnitude}.");
         }
     }
 

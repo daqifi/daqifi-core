@@ -129,7 +129,7 @@ internal sealed class StreamFrameGate
     /// </summary>
     /// <param name="timestampFrequency">
     /// The device's tick frequency in Hz; zero falls back to
-    /// <see cref="TimestampProcessor.DefaultTimestampFrequency"/>.
+    /// <see cref="TimestampProcessor.DefaultTimestampFrequencyHz"/>.
     /// </param>
     /// <param name="streamingFrequencyHz">
     /// The rate the session is starting at; zero or negative falls back to
@@ -149,7 +149,7 @@ internal sealed class StreamFrameGate
     {
         var ticksPerSecond = timestampFrequency != 0
             ? timestampFrequency
-            : TimestampProcessor.DefaultTimestampFrequency;
+            : TimestampProcessor.DefaultTimestampFrequencyHz;
         var rate = streamingFrequencyHz > 0 ? streamingFrequencyHz : FallbackStreamingFrequencyHz;
         _leftoverWindowTicks = LeftoverWindowSamplePeriods * (ticksPerSecond / (double)rate);
 

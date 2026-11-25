@@ -250,7 +250,7 @@ public class NetworkConfigurableTests
     {
         // Regression: network reconfiguration must bring the LAN back up after ApplyNetworkLan
         // even over a non-USB (WiFi/TCP) control transport — it owns the LAN state and must NOT
-        // rely on the transport-aware PrepareLanInterface (which leaves LAN alone over WiFi).
+        // rely on the transport-aware PrepareWifiInterface (which leaves LAN alone over WiFi).
         var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
         // Skip the 2-second module-restart wait; this test asserts commands, not timing.
         using var cts = new CancellationTokenSource();
@@ -426,14 +426,14 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public void PrepareLanInterface_WhenConnected_SendsCorrectCommands()
+    public void PrepareWifiInterface_WhenConnected_SendsCorrectCommands()
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
 
         // Act
-        device.PrepareLanInterface();
+        device.PrepareWifiInterface();
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -460,14 +460,14 @@ public class NetworkConfigurableTests
     }
 
     [Fact]
-    public void PrepareLanInterface_OverWifi_LeavesLanUntouched()
+    public void PrepareWifiInterface_OverWifi_LeavesLanUntouched()
     {
         // Over WiFi the LAN was never disabled, so it must not be re-enabled (that would
         // re-initialize the WiFi module and drop the connection). SD is still returned to idle.
         var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
         device.Connect();
 
-        device.PrepareLanInterface();
+        device.PrepareWifiInterface();
 
         var sent = device.SentMessages.Select(m => m.Data).ToList();
         Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // no EnableNetworkLan

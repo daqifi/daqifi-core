@@ -52,7 +52,7 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     public DeviceMetadata Metadata { get; } = new();
     public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
     public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
-    public int StreamingFrequency { get; set; }
+    public int SampleRateHz { get; set; }
     public bool IsStreaming { get; private set; }
 
     public int ConnectAttempts { get; private set; }
@@ -185,8 +185,8 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
 
     public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -257,22 +257,22 @@ internal sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
 
 /// <summary>
 /// A <see cref="FakeStreamingDevice"/> that also answers the WiFi chip-info query, for the paths
-/// that go through <c>GetLanChipInfoWithRetryAsync</c>. Derived rather than written from scratch so
-/// the plain fake stays the "device that does NOT implement <see cref="ILanChipInfoProvider"/>"
-/// case that <c>DeviceDoesNotSupportLanQuery</c> depends on.
+/// that go through <c>GetWifiChipInfoWithRetryAsync</c>. Derived rather than written from scratch so
+/// the plain fake stays the "device that does NOT implement <see cref="IWifiChipInfoProvider"/>"
+/// case that <c>DeviceDoesNotSupportWifiQuery</c> depends on.
 /// </summary>
-internal sealed class FakeLanChipInfoDevice(string name) : FakeStreamingDevice(name), ILanChipInfoProvider
+internal sealed class FakeWifiChipInfoDevice(string name) : FakeStreamingDevice(name), IWifiChipInfoProvider
 {
     /// <summary>
     /// Outcome of every chip-info query. Returning null models an unparseable response;
     /// throwing models a device-reported failure. Tests that assert
     /// <see cref="ChipInfoQueryCount"/> still notice unexpected extra attempts.
     /// </summary>
-    public Func<LanChipInfo?> DefaultChipInfoResponse { get; set; } = () => null;
+    public Func<WifiChipInfo?> DefaultChipInfoResponse { get; set; } = () => null;
 
     public int ChipInfoQueryCount { get; private set; }
 
-    public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+    public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ChipInfoQueryCount++;
@@ -285,7 +285,7 @@ internal sealed class FakeLanChipInfoDevice(string name) : FakeStreamingDevice(n
         }
         catch (Exception ex)
         {
-            return Task.FromException<LanChipInfo?>(ex);
+            return Task.FromException<WifiChipInfo?>(ex);
         }
     }
 }
