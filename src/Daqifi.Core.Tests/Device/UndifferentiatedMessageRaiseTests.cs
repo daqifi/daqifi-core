@@ -1,7 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using System.Collections.Generic;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -88,7 +87,7 @@ public class UndifferentiatedMessageRaiseTests
     /// </summary>
     private sealed class RaiseProbeDevice : DaqifiStreamingDevice
     {
-        public RaiseProbeDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public RaiseProbeDevice(string name) : base(name)
         {
         }
 

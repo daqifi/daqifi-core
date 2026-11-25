@@ -2,6 +2,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Export;
+using Daqifi.Core.Tests.Device;
 using Daqifi.Core.Tests.Device.SdCard;
 
 namespace Daqifi.Core.Tests.Export;
@@ -137,7 +138,7 @@ public class SdCardExportValueUnitTests
     [Fact]
     public void ForDevice_CarriesTheDevicesCalibration()
     {
-        using var device = new DaqifiDevice("TestDevice");
+        using var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 2,
@@ -157,7 +158,7 @@ public class SdCardExportValueUnitTests
     [Fact]
     public async Task ForDevice_IsEnoughToMakeTheExportVolts()
     {
-        using var device = new DaqifiDevice("TestDevice");
+        using var device = new TransportlessDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
             AnalogInPortNum = 2,

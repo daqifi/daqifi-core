@@ -58,7 +58,7 @@ public sealed class DeviceRegistrationResult
     /// Gets the device the caller should now use, or <c>null</c> when the attempt was canceled.
     /// Shorthand for <see cref="DeviceRegistration.Device"/> on <see cref="Registration"/>.
     /// </summary>
-    public DaqifiDevice? Device => Registration?.Device;
+    public DaqifiStreamingDevice? Device => Registration?.Device;
 
     /// <summary>
     /// Gets the key <see cref="Registration"/> is filed under, or <c>null</c> when the attempt was

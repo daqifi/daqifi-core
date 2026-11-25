@@ -5,7 +5,6 @@ using Daqifi.Core.Device.Capabilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 
 namespace Daqifi.Core.Tests.Device.Capabilities;
 
@@ -397,7 +396,7 @@ public class SampleRateCapTests
     /// </summary>
     private sealed class TestableStreamingDevice : DaqifiStreamingDevice
     {
-        public TestableStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public TestableStreamingDevice(string name) : base(name)
         {
         }
 

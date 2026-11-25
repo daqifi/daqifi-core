@@ -5,7 +5,6 @@ using Daqifi.Core.Device.Capabilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -1066,10 +1065,9 @@ public class DaqifiDeviceInitializeTests
 
         public TestableDaqifiDevice(
             string name,
-            IPAddress? ipAddress = null,
             IReadOnlyList<string>? textCommandResponse = null,
             bool populateChannelsOnDeviceInfo = true)
-            : base(name, ipAddress)
+            : base(name)
         {
             _textCommandResponse = textCommandResponse ?? Array.Empty<string>();
             PopulateChannelsOnDeviceInfo = populateChannelsOnDeviceInfo;
@@ -1313,7 +1311,7 @@ public class DaqifiDeviceInitializeTests
         public override bool IsUsbConnection => true;
 
         public CancelDuringCapabilityReadDevice(string name, CancellationTokenSource cts)
-            : base(name, (IPAddress?)null)
+            : base(name)
         {
             _cts = cts;
         }
@@ -1442,7 +1440,7 @@ public class DaqifiDeviceInitializeTests
 
         public override bool IsUsbConnection => true;
 
-        public OverlappingInitDevice(string name) : base(name, (IPAddress?)null) { }
+        public OverlappingInitDevice(string name) : base(name) { }
 
         public void ReleaseFirstExchange() => _release.TrySetResult();
 
@@ -1563,7 +1561,7 @@ public class DaqifiDeviceInitializeTests
         public override bool IsUsbConnection => true;
 
         public TestableStreamingDevice(string name)
-            : base(name, (IPAddress?)null)
+            : base(name)
         {
         }
 

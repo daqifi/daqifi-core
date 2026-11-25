@@ -5,7 +5,6 @@ using Google.Protobuf;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -1153,7 +1152,7 @@ public class DaqifiStreamingDeviceDecodeTests
     /// </summary>
     private sealed class DecodableStreamingDevice : DaqifiStreamingDevice
     {
-        public DecodableStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public DecodableStreamingDevice(string name) : base(name)
         {
         }
 

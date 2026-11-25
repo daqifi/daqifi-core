@@ -8,7 +8,7 @@ namespace Daqifi.Core.Device;
 /// </summary>
 public sealed class DeviceRegistration
 {
-    internal DeviceRegistration(string key, DaqifiDevice device, DeviceIdentity identity, IDeviceInfo? discoveryInfo)
+    internal DeviceRegistration(string key, DaqifiStreamingDevice device, DeviceIdentity identity, IDeviceInfo? discoveryInfo)
     {
         Key = key;
         Device = device;
@@ -27,7 +27,7 @@ public sealed class DeviceRegistration
     /// Gets the connected device. The registry owns it: it is disconnected and disposed when the
     /// registration is removed.
     /// </summary>
-    public DaqifiDevice Device { get; }
+    public DaqifiStreamingDevice Device { get; }
 
     /// <summary>
     /// Gets the identity used to recognize this physical unit across transports.

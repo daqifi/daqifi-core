@@ -33,7 +33,7 @@ public class StreamingSessionGuardTests
     [InlineData(1001)]
     public void StreamingFrequency_OutOfRange_NamesTheParameterAndCarriesTheRejectedValue(int frequency)
     {
-        var device = new DaqifiStreamingDevice("TestDevice");
+        var device = new TransportlessStreamingDevice("TestDevice");
 
         var exception = Assert.Throws<ArgumentOutOfRangeException>(
             () => device.StreamingFrequency = frequency);

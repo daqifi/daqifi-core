@@ -59,7 +59,7 @@ public class DaqifiDeviceSerialPortNameTests
     public void StreamOnlyDevice_ReportsNoSerialPort()
     {
         using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("DAQiFi Device", stream);
+        using var device = new StreamBackedDevice("DAQiFi Device", stream);
 
         Assert.Null(((ISerialPortNamed)device).SerialPortName);
     }

@@ -16,7 +16,7 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
     [Fact]
     public async Task IDevice_ConnectAsync_DisconnectAsync_AreCallableThroughTheInterface()
     {
-        IDevice device = new DaqifiStreamingDevice("TestDevice");
+        IDevice device = new TransportlessStreamingDevice("TestDevice");
 
         await device.ConnectAsync();
         Assert.True(device.IsConnected);
@@ -32,7 +32,7 @@ public class DaqifiStreamingDeviceAsyncSurfaceTests
     [Fact]
     public async Task IDevice_IsAsyncDisposable_AndDisposeAsyncDisconnects()
     {
-        IDevice device = new DaqifiStreamingDevice("TestDevice");
+        IDevice device = new TransportlessStreamingDevice("TestDevice");
         await device.ConnectAsync();
 
         await device.DisposeAsync();

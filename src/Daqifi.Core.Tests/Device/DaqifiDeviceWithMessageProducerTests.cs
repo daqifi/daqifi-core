@@ -3,7 +3,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
-using System.Net;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Device;
@@ -73,7 +72,7 @@ public class DaqifiDeviceWithMessageProducerTests
     {
         // Arrange
         using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
+        using var device = new StreamBackedDevice("Test Device", stream);
         device.Connect();
         
         // Act
@@ -89,7 +88,7 @@ public class DaqifiDeviceWithMessageProducerTests
     {
         // Arrange
         using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
+        using var device = new StreamBackedDevice("Test Device", stream);
         device.Connect();
         var payload = new byte[] { 0x01, 0x02, 0x03 };
 
@@ -104,7 +103,7 @@ public class DaqifiDeviceWithMessageProducerTests
     public void DaqifiDevice_ProducerlessConstructor_SendAnyMessage_ThrowsInvalidOperationException()
     {
         // Arrange - the (name, ipAddress) constructor has no transport or stream to send on.
-        using var device = new DaqifiDevice("Test Device", IPAddress.Loopback);
+        using var device = new TransportlessDevice("Test Device");
         device.Connect();
 
         // Act & Assert
@@ -120,7 +119,7 @@ public class DaqifiDeviceWithMessageProducerTests
         // visible even though Send() itself never throws.
         using var stream = new ThrowOnWriteStream();
         var logger = new CaptureLogger();
-        using var device = new DaqifiDevice("Test Device", stream, logger: logger);
+        using var device = new StreamBackedDevice("Test Device", stream, logger: logger);
         device.Connect();
 
         // Act
@@ -141,7 +140,7 @@ public class DaqifiDeviceWithMessageProducerTests
         // Arrange - DaqifiDevice.SendFailed is the only way a caller can react to a dropped
         // command, since Send() itself never throws for a failed write (issue #408).
         using var stream = new ThrowOnWriteStream();
-        using var device = new DaqifiDevice("Test Device", stream);
+        using var device = new StreamBackedDevice("Test Device", stream);
         device.Connect();
         MessageSendFailedEventArgs<string>? captured = null;
         device.SendFailed += (_, e) => captured = e;

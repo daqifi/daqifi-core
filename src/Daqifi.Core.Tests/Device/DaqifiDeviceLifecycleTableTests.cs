@@ -149,7 +149,7 @@ public class DaqifiDeviceLifecycleTableTests
     [Fact]
     public void ADisposedDevice_RefusesToConnect()
     {
-        var device = new DaqifiDevice("Device");
+        var device = new TransportlessDevice("Device");
         device.Dispose();
         Assert.Equal(DeviceState.Disposed, device.State);
 
@@ -167,7 +167,7 @@ public class DaqifiDeviceLifecycleTableTests
     /// <summary>A real device, walked to <paramref name="target"/> over the table's own edges.</summary>
     private static DaqifiDevice DeviceOn(DeviceState target)
     {
-        var device = new DaqifiDevice("Device");
+        var device = new TransportlessDevice("Device");
         foreach (var step in PathTo(target)!)
         {
             Assert.True(device.TryTransition(step));

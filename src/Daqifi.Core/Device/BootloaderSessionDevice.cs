@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
@@ -101,6 +102,13 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     public DeviceState State => _state;
 
     /// <summary>
+    /// Always <c>false</c>: no operation reaches a device in bootloader mode.
+    /// </summary>
+    /// <param name="feature">Ignored.</param>
+    /// <returns><c>false</c>.</returns>
+    public bool Supports(DeviceFeature feature) => false;
+
+    /// <summary>
     /// Raised by <see cref="Connect"/> and <see cref="Disconnect"/>. This is the one event this type
     /// actually raises — the device itself produces nothing to report. A subscriber that throws fails
     /// neither the <see cref="Connect"/> or <see cref="Disconnect"/> it was notified of nor the
@@ -170,6 +178,13 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
         return Task.CompletedTask;
     }
 
+    /// <summary>No-op: a device in bootloader mode cannot be initialized. <see cref="State"/> does not change.</summary>
+    /// <param name="channelPopulationTimeout">Ignored.</param>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default)
+        => Completed(cancellationToken);
+
     /// <summary>
     /// Silently discards <paramref name="message"/>. See the remarks on the type: the PIC32 update
     /// flow sends the force-bootloader command unconditionally, and a device already in the
@@ -201,6 +216,19 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// capabilities; the instance is non-null so callers can read it without a guard.
     /// </summary>
     public DeviceMetadata Metadata { get; } = new();
+
+    /// <summary>No-op: a bootloader session reports no status, so <see cref="Metadata"/> does not change.</summary>
+    /// <param name="timeout">Ignored.</param>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+        => Completed(cancellationToken);
+
+    /// <summary>Always <c>null</c>: a bootloader session has no capability document.</summary>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns><c>null</c>, or a cancelled task if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default)
+        => Completed<CapabilityDocument?>(null, cancellationToken);
 
     /// <summary>
     /// Always empty: channels are populated from device status messages, which a bootloader session
@@ -330,12 +358,34 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
     /// </summary>
     public int PwmFrequencyHz => DaqifiStreamingDevice.DefaultPwmFrequencyHz;
 
+    /// <summary>Always <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/>.</summary>
+    public int PwmFrequencyFloorHz => DaqifiStreamingDevice.MinPwmFrequencyHz;
+
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
     /// <param name="voltage">Ignored.</param>
     public void SetAnalogOutput(int channelNumber, double voltage)
     {
     }
+
+    /// <summary>No-op: see the remarks on this type.</summary>
+    /// <param name="channelNumber">Ignored.</param>
+    /// <param name="voltage">Ignored.</param>
+    public void StageAnalogOutput(int channelNumber, double voltage)
+    {
+    }
+
+    /// <summary>No-op: see the remarks on this type.</summary>
+    public void LatchAnalogOutputs()
+    {
+    }
+
+    /// <summary>Always <see cref="double.NaN"/>: there is no output to report a voltage for.</summary>
+    /// <param name="channelNumber">Ignored.</param>
+    /// <param name="cancellationToken">Observed before completing.</param>
+    /// <returns><see cref="double.NaN"/>, or a cancelled task if <paramref name="cancellationToken"/> was already signalled.</returns>
+    public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
+        => Completed(double.NaN, cancellationToken);
 
     /// <summary>
     /// No-op: the device is already in its bootloader, which is where a reboot would be trying to
@@ -425,6 +475,11 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
         => cancellationToken.IsCancellationRequested
             ? Task.FromCanceled(cancellationToken)
             : Task.CompletedTask;
+
+    private static Task<T> Completed<T>(T result, CancellationToken cancellationToken)
+        => cancellationToken.IsCancellationRequested
+            ? Task.FromCanceled<T>(cancellationToken)
+            : Task.FromResult(result);
 
     private void SetState(DeviceState state)
     {
