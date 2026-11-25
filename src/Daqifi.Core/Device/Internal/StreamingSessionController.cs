@@ -1006,7 +1006,8 @@ internal sealed class StreamingSessionController
                 break;
 
             case SessionCommandEffectKind.SetAdcEnableMask:
-                SendAdcEnableMask(effect.AdcEnableMask, send);
+                send(null);
+                ApplyAdcEnableMask(effect.AdcEnableMask);
                 break;
 
             default:
@@ -1156,105 +1157,6 @@ internal sealed class StreamingSessionController
                 controller.BeginStreamingSession(rate.Hz);
             }
         }
-    }
-
-    /// <summary>
-    /// Makes each ADC mask one step: the command, and the channels it enables. Guards the two fields
-    /// below. Taken before the channels lock, and never with <see cref="_transitions"/> to follow.
-    /// </summary>
-    private readonly Lock _adcMaskLock = new();
-
-    /// <summary>The ADC mask that was sent last, while it is held back.</summary>
-    private AdcMaskCommand? _heldBackAdcMask;
-
-    /// <summary>What the device streams while one is held back.</summary>
-    private uint _adcMaskOnDevice;
-
-    /// <summary>
-    /// Sends an ADC enable mask and applies it to the channels. One that is held back is applied as
-    /// it is sent, like everything a caller sets on a channel, and taken back if it never goes out.
-    /// </summary>
-    private void SendAdcEnableMask(uint mask, Func<ITrackedSend?, bool> send)
-    {
-        lock (_adcMaskLock)
-        {
-            var command = new AdcMaskCommand(this, mask);
-            if (send(command))
-            {
-                // Read after the send, which may have dropped an older one from the backlog and
-                // taken it back.
-                if (_heldBackAdcMask == null)
-                {
-                    _adcMaskOnDevice = EnabledAdcMask();
-                }
-
-                _heldBackAdcMask = command;
-            }
-
-            ApplyAdcEnableMask(mask);
-            command.Enabled = EnabledAdcMask();
-        }
-    }
-
-    private sealed class AdcMaskCommand(StreamingSessionController controller, uint mask) : ITrackedSend
-    {
-        /// <summary>The channels it enabled: those of the mask that the device has.</summary>
-        internal uint Enabled { get; set; }
-
-        public void GoOut(Action send)
-        {
-            send();
-            controller._adcMaskOnDevice = mask;
-        }
-
-        public void Replay(Action send)
-        {
-            lock (controller._adcMaskLock)
-            {
-                send();
-                controller._adcMaskOnDevice = mask;
-                if (ReferenceEquals(controller._heldBackAdcMask, this))
-                {
-                    controller._heldBackAdcMask = null;
-                    controller.ApplyAdcEnableMask(mask);
-                }
-            }
-        }
-
-        public void NotSent(Exception? reason)
-        {
-            lock (controller._adcMaskLock)
-            {
-                if (!ReferenceEquals(controller._heldBackAdcMask, this))
-                {
-                    return;
-                }
-
-                controller._heldBackAdcMask = null;
-
-                // Unless something has changed the channels since.
-                if (controller.EnabledAdcMask() == Enabled)
-                {
-                    controller.ApplyAdcEnableMask(controller._adcMaskOnDevice);
-                }
-            }
-        }
-    }
-
-    private uint EnabledAdcMask()
-    {
-        var mask = 0u;
-        foreach (var channel in _host.SnapshotChannels())
-        {
-            if (channel.Type == ChannelType.Analog
-                && channel.ChannelNumber <= ChannelControlOperations.MaxAdcBitmaskChannel
-                && channel.IsEnabled)
-            {
-                mask |= 1u << channel.ChannelNumber;
-            }
-        }
-
-        return mask;
     }
 
     /// <summary>

@@ -543,65 +543,6 @@ public class DaqifiDeviceConsumerRestartTests
             device => Assert.Equal(3, AdmittedFrames(device)));
     }
 
-    [Theory]
-    [InlineData(2, false)]
-    [InlineData(1, true)]
-    public async Task AnAdcMaskEvictedFromTheBacklog_LeavesTheChannelsTheDeviceStreams(int fillers, bool isOut)
-    {
-        await ParkBehindAnOperationAsync(
-            device =>
-            {
-                device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
-                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
-            },
-            device =>
-            {
-                device.BacklogCap = 2;
-                // Bits without a channel make no difference.
-                device.Send(ScpiMessageProducer.EnableAdcChannels(6));
-                SendFillers(device, fillers);
-            },
-            _ => { },
-            device => Assert.Equal([!isOut, isOut], device.Channels.Select(channel => channel.IsEnabled)));
-    }
-
-    [Fact]
-    public async Task AdcMasksEvictedFromTheBacklogByOneAnother_LeaveTheChannelsTheDeviceStreams()
-    {
-        await ParkBehindAnOperationAsync(
-            device =>
-            {
-                device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
-                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
-            },
-            device =>
-            {
-                device.BacklogCap = 1;
-                device.Send(ScpiMessageProducer.EnableAdcChannels(2));
-                device.Send(ScpiMessageProducer.EnableAdcChannels(3));
-                SendFillers(device, 1);
-            },
-            _ => { },
-            device => Assert.Equal([true, false], device.Channels.Select(channel => channel.IsEnabled)));
-    }
-
-    [Fact]
-    public async Task AChannelChosenWhileAnAdcMaskIsHeldBack_IsKeptWhenThatMaskIsEvicted()
-    {
-        await ParkBehindAnOperationAsync(
-            device => device.PopulateChannelsFromStatus(
-                new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 }),
-            device =>
-            {
-                device.BacklogCap = 2;
-                device.Send(ScpiMessageProducer.EnableAdcChannels(1));
-                device.Channels[1].IsEnabled = true;
-                SendFillers(device, 2);
-            },
-            _ => { },
-            device => Assert.All(device.Channels, channel => Assert.True(channel.IsEnabled)));
-    }
-
     private static long AdmittedFrames(DaqifiDevice device) =>
         ((StreamFrameDecoder)typeof(DaqifiStreamingDevice)
             .GetField("_frameDecoder", BindingFlags.Instance | BindingFlags.NonPublic)!
