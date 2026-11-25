@@ -10,7 +10,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// Factory for creating SD card log file parsers based on file format.
 /// Supports auto-detection via file extension (.bin, .json, .csv).
 /// </summary>
-public static class SdCardFileParserFactory
+public static class SdCardLogFile
 {
     private static readonly string[] _supportedExtensions = { ".bin", ".json", ".csv" };
 

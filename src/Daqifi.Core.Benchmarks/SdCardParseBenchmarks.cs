@@ -76,7 +76,7 @@ public class SdCardParseBenchmarks
     private static async Task<int> DrainAllAsync(byte[] log, string fileName)
     {
         using var stream = new MemoryStream(log, writable: false);
-        var session = await SdCardFileParserFactory.ParseAsync(stream, fileName);
+        var session = await SdCardLogFile.ParseAsync(stream, fileName);
 
         var count = 0;
         await foreach (var _ in session.Samples)
@@ -90,7 +90,7 @@ public class SdCardParseBenchmarks
     private static async Task<bool> FirstSampleAsync(byte[] log, string fileName)
     {
         using var stream = new MemoryStream(log, writable: false);
-        var session = await SdCardFileParserFactory.ParseAsync(stream, fileName);
+        var session = await SdCardLogFile.ParseAsync(stream, fileName);
 
         await foreach (var _ in session.Samples)
         {

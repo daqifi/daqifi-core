@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;
 
-public sealed class SdCardFileParserFactoryTests
+public sealed class SdCardLogFileTests
 {
     [Theory]
     [InlineData("log.bin", global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf)]
@@ -18,7 +18,7 @@ public sealed class SdCardFileParserFactoryTests
     public void DetectFormat_ValidExtensions_ReturnsCorrectFormat(string fileName, global::Daqifi.Core.Device.SdCard.SdCardLogFormat expectedFormat)
     {
         // Act
-        var format = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat(fileName);
+        var format = global::Daqifi.Core.Device.SdCard.SdCardLogFile.DetectFormat(fileName);
 
         // Assert
         Assert.Equal(expectedFormat, format);
@@ -33,7 +33,7 @@ public sealed class SdCardFileParserFactoryTests
     {
         // Act & Assert
         var exception = Assert.Throws<ArgumentException>(() =>
-            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat(fileName));
+            global::Daqifi.Core.Device.SdCard.SdCardLogFile.DetectFormat(fileName));
 
         Assert.Contains("Unsupported file extension", exception.Message);
     }
@@ -43,7 +43,7 @@ public sealed class SdCardFileParserFactoryTests
     {
         // Act & Assert
         var exception = Assert.Throws<ArgumentException>(() =>
-            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat("log.TXT"));
+            global::Daqifi.Core.Device.SdCard.SdCardLogFile.DetectFormat("log.TXT"));
 
         Assert.Contains(".txt", exception.Message);
     }
@@ -53,7 +53,7 @@ public sealed class SdCardFileParserFactoryTests
     {
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() =>
-            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat(null!));
+            global::Daqifi.Core.Device.SdCard.SdCardLogFile.DetectFormat(null!));
     }
 
     [Theory]
@@ -64,7 +64,7 @@ public sealed class SdCardFileParserFactoryTests
     public void TryDetectFormat_ValidExtensions_ReturnsTrueAndCorrectFormat(string fileName, global::Daqifi.Core.Device.SdCard.SdCardLogFormat expectedFormat)
     {
         // Act
-        var result = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(fileName, out var format);
+        var result = global::Daqifi.Core.Device.SdCard.SdCardLogFile.TryDetectFormat(fileName, out var format);
 
         // Assert
         Assert.True(result);
@@ -79,7 +79,7 @@ public sealed class SdCardFileParserFactoryTests
     public void TryDetectFormat_UnsupportedExtension_ReturnsFalse(string fileName)
     {
         // Act
-        var result = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(fileName, out var format);
+        var result = global::Daqifi.Core.Device.SdCard.SdCardLogFile.TryDetectFormat(fileName, out var format);
 
         // Assert
         Assert.False(result);
@@ -91,14 +91,14 @@ public sealed class SdCardFileParserFactoryTests
     {
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() =>
-            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(null!, out _));
+            global::Daqifi.Core.Device.SdCard.SdCardLogFile.TryDetectFormat(null!, out _));
     }
 
     [Fact]
     public void SupportedExtensions_ContainsExpectedExtensions()
     {
         // Act
-        var extensions = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.SupportedExtensions;
+        var extensions = global::Daqifi.Core.Device.SdCard.SdCardLogFile.SupportedExtensions;
 
         // Assert
         Assert.Equal(new[] { ".bin", ".json", ".csv" }, extensions);
@@ -108,7 +108,7 @@ public sealed class SdCardFileParserFactoryTests
     public void SupportedExtensions_IsNotMutableViaDowncast()
     {
         // Act
-        var extensions = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.SupportedExtensions;
+        var extensions = global::Daqifi.Core.Device.SdCard.SdCardLogFile.SupportedExtensions;
 
         // Assert
         Assert.False(extensions is string[], "SupportedExtensions should not be backed by a directly mutable array.");
@@ -129,7 +129,7 @@ public sealed class SdCardFileParserFactoryTests
         };
 
         // Act
-        var session = await global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(
+        var session = await global::Daqifi.Core.Device.SdCard.SdCardLogFile.ParseAsync(
             stream, "test.json", options);
         var samples = await ToListAsync(session.Samples);
 
@@ -153,7 +153,7 @@ public sealed class SdCardFileParserFactoryTests
         };
 
         // Act
-        var session = await global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(
+        var session = await global::Daqifi.Core.Device.SdCard.SdCardLogFile.ParseAsync(
             stream, "test.csv", options);
         var samples = await ToListAsync(session.Samples);
 
@@ -176,7 +176,7 @@ public sealed class SdCardFileParserFactoryTests
         };
 
         // Act
-        var session = await global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(
+        var session = await global::Daqifi.Core.Device.SdCard.SdCardLogFile.ParseWithFormatAsync(
             stream,
             "anyname.dat",  // Extension doesn't matter when format is explicit
             global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Json,
@@ -204,7 +204,7 @@ public sealed class SdCardFileParserFactoryTests
         };
 
         // Act
-        var session = await global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(
+        var session = await global::Daqifi.Core.Device.SdCard.SdCardLogFile.ParseWithFormatAsync(
             stream,
             "anyname.dat",  // Extension doesn't matter when format is explicit
             global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Csv,
@@ -228,7 +228,7 @@ public sealed class SdCardFileParserFactoryTests
 
         // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(
+            await global::Daqifi.Core.Device.SdCard.SdCardLogFile.ParseWithFormatAsync(
                 stream,
                 "test.json",
                 (global::Daqifi.Core.Device.SdCard.SdCardLogFormat)999,

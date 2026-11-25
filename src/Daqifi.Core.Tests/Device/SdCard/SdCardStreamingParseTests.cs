@@ -474,7 +474,7 @@ public class SdCardStreamingParseTests
             Progress = new SynchronousProgress<SdCardParseProgress>(p => last = p)
         };
 
-        var session = await SdCardFileParserFactory.ParseAsync(stream, $"log_20240101_120000{extension}", options);
+        var session = await SdCardLogFile.ParseAsync(stream, $"log_20240101_120000{extension}", options);
         var samples = await ToListAsync(session.Samples);
 
         Assert.Equal(500, samples.Count);
@@ -515,7 +515,7 @@ public class SdCardStreamingParseTests
         using var temp = new TempFile(extension);
         await File.WriteAllBytesAsync(temp.Path, BuildTwoSampleFile(extension));
 
-        var session = await SdCardFileParserFactory.ParseFileAsync(
+        var session = await SdCardLogFile.ParseFileAsync(
             temp.Path, new SdCardParseOptions { FallbackTimestampFrequencyHz = 1000 });
         var samples = await ToListAsync(session.Samples);
 

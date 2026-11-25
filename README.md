@@ -274,7 +274,7 @@ record:
 
 ```csharp
 await using var log = File.OpenRead(path);
-var session = await SdCardFileParserFactory.ParseAsync(log, "run.csv", SdCardParseOptions.ForDevice(device));
+var session = await SdCardLogFile.ParseAsync(log, "run.csv", SdCardParseOptions.ForDevice(device));
 var source = session.AsSampleSource(SdCardDeviceConfiguration.FromDevice(device), device.Name);
 await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions());
 ```

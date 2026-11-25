@@ -1163,7 +1163,7 @@ public sealed class DaqifiAgent
         // Format comes from the DEVICE-side name, not the local one: the local file is a temp file
         // Core minted, and deriving the format from it would make the parse depend on a name the
         // caller never chose.
-        var format = SdCardFileParserFactory.DetectFormat(deviceFileName);
+        var format = SdCardLogFile.DetectFormat(deviceFileName);
 
         var parseOptions = new SdCardParseOptions { ConfigurationOverride = liveConfig };
 
@@ -1173,7 +1173,7 @@ public sealed class DaqifiAgent
 
         await using (stream.ConfigureAwait(false))
         {
-            var session = await SdCardFileParserFactory
+            var session = await SdCardLogFile
                 .ParseWithFormatAsync(stream, Path.GetFileName(deviceFileName), format, parseOptions, cancellationToken)
                 .ConfigureAwait(false);
 

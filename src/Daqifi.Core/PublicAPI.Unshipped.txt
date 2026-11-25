@@ -560,6 +560,7 @@
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileParser.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileParser.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileParser.SdCardFileParser() -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardFileParserFactory
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileReceiver
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileReceiver.ReceiveAsync(System.IO.Stream! destinationStream, string! fileName, System.IProgress<Daqifi.Core.Device.SdCard.SdCardTransferProgress!>? progress = null, System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), long? listedFileSizeBytes = null) -> System.Threading.Tasks.Task<long>!
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardFileReceiver.SdCardFileReceiver(System.IO.Stream! sourceStream, bool zeroLengthReadMeansClosed, System.TimeSpan? idleTimeout = null, int bufferSize = 16384) -> void
@@ -1057,9 +1058,12 @@
 *REMOVED*static Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.DetectMessageType(DaqifiOutMessage! message) -> Daqifi.Core.Device.Protocol.ProtobufMessageType
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileListParser.GetListingStatus(System.Collections.Generic.IEnumerable<string!>! lines) -> Daqifi.Core.Device.SdCard.SdCardListingStatus
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileListParser.ParseFileList(System.Collections.Generic.IEnumerable<string!>! lines) -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.SdCard.SdCardFileInfo!>!
+*REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat(string! fileName) -> Daqifi.Core.Device.SdCard.SdCardLogFormat
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+*REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.SupportedExtensions.get -> System.Collections.Generic.IReadOnlyList<string!>!
+*REMOVED*static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(string! fileName, out Daqifi.Core.Device.SdCard.SdCardLogFormat format) -> bool
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardSpaceParser.TryParse(string? line, out Daqifi.Core.Device.SdCard.SdCardStorageInfo? result) -> bool
 *REMOVED*static Daqifi.Core.Device.SdCard.SdCardSpaceParser.TryParseLines(System.Collections.Generic.IEnumerable<string!>! lines, out Daqifi.Core.Device.SdCard.SdCardStorageInfo? result) -> bool
 *REMOVED*static Daqifi.Core.Firmware.LanChipInfo.operator !=(Daqifi.Core.Firmware.LanChipInfo? left, Daqifi.Core.Firmware.LanChipInfo? right) -> bool
@@ -1592,6 +1596,7 @@ Daqifi.Core.Device.SdCard.SdCardDownloadResult.SdCardDownloadResult() -> void
 Daqifi.Core.Device.SdCard.SdCardDownloadResult.SizeInBytes.get -> long
 Daqifi.Core.Device.SdCard.SdCardDownloadResult.SizeInBytes.init -> void
 Daqifi.Core.Device.SdCard.SdCardLogEntry.SdCardLogEntry() -> void
+Daqifi.Core.Device.SdCard.SdCardLogFile
 Daqifi.Core.Device.SdCard.SdCardLogSession.CreatedDate.get -> System.DateTime?
 Daqifi.Core.Device.SdCard.SdCardLogSession.SdCardLogSession(string! fileName, System.DateTime? createdDate, Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration? deviceConfig, System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Device.SdCard.SdCardLogEntry!>! samples) -> void
 Daqifi.Core.Device.SdCard.SdCardLogSession.TimestampFrequencyHz.get -> uint
@@ -1984,9 +1989,12 @@ static Daqifi.Core.Device.Discovery.DeviceInfo.operator !=(Daqifi.Core.Device.Di
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator ==(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
 static Daqifi.Core.Device.Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
 static Daqifi.Core.Device.Discovery.WifiDeviceFinder.ProbeTcpDataPortAsync(System.Net.IPAddress! host, int discoveryPort, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int?>!
-static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
-static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
-static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+static Daqifi.Core.Device.SdCard.SdCardLogFile.DetectFormat(string! fileName) -> Daqifi.Core.Device.SdCard.SdCardLogFormat
+static Daqifi.Core.Device.SdCard.SdCardLogFile.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+static Daqifi.Core.Device.SdCard.SdCardLogFile.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+static Daqifi.Core.Device.SdCard.SdCardLogFile.ParseWithFormatAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardLogFormat format, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
+static Daqifi.Core.Device.SdCard.SdCardLogFile.SupportedExtensions.get -> System.Collections.Generic.IReadOnlyList<string!>!
+static Daqifi.Core.Device.SdCard.SdCardLogFile.TryDetectFormat(string! fileName, out Daqifi.Core.Device.SdCard.SdCardLogFormat format) -> bool
 static Daqifi.Core.Device.SdCard.SdCardParseOptions.operator !=(Daqifi.Core.Device.SdCard.SdCardParseOptions? left, Daqifi.Core.Device.SdCard.SdCardParseOptions? right) -> bool
 static Daqifi.Core.Device.SdCard.SdCardParseOptions.operator ==(Daqifi.Core.Device.SdCard.SdCardParseOptions? left, Daqifi.Core.Device.SdCard.SdCardParseOptions? right) -> bool
 static Daqifi.Core.Export.ChannelDescriptor.operator !=(Daqifi.Core.Export.ChannelDescriptor? left, Daqifi.Core.Export.ChannelDescriptor? right) -> bool

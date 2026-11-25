@@ -17,7 +17,7 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 /// <remarks>
 /// <para>
 /// All three parsers are reachable through one front door,
-/// <see cref="Sd.SdCardFileParserFactory"/>, which picks a parser from the file extension. They
+/// <see cref="Sd.SdCardLogFile"/>, which picks a parser from the file extension. They
 /// used to disagree about this option. <c>SdCardFileParser</c> (<c>.bin</c>) guarded it; the CSV
 /// and JSON parsers passed it straight to <c>FileStream</c>, which has a different contract —
 /// it rejects a negative buffer size naming <c>bufferSize</c>, an internal parameter the caller
@@ -177,7 +177,7 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
 
         // Act & Assert
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => Sd.SdCardFileParserFactory.ParseFileAsync(missing, options));
+            () => Sd.SdCardLogFile.ParseFileAsync(missing, options));
     }
 
     /// <summary>
@@ -190,7 +190,7 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
     [InlineData("log.json")]
     public async Task ParseFileAsync_WithDefaultOptions_StillParses(string fileName)
     {
-        var session = await Sd.SdCardFileParserFactory.ParseFileAsync(PathTo(fileName));
+        var session = await Sd.SdCardLogFile.ParseFileAsync(PathTo(fileName));
 
         Assert.NotNull(session);
         Assert.Equal(fileName, session.FileName);
@@ -245,7 +245,7 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
     /// formats missed a check nobody had enumerated.
     /// </summary>
     /// <remarks>
-    /// <see cref="Sd.SdCardFileParserFactory"/> falls outside this by being static, not by being
+    /// <see cref="Sd.SdCardLogFile"/> falls outside this by being static, not by being
     /// named: every one of its methods forwards to one of these, so covering it would assert the
     /// same guard twice.
     /// </remarks>
