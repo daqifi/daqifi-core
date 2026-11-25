@@ -16,7 +16,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// The <see cref="ISdCardOperations"/> implementation, extracted from
 /// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it. That includes
 /// the shared-SPI-bus handover (<see cref="PrepareSdInterface"/> /
-/// <see cref="PrepareLanInterface"/>), which every operation here depends on.
+/// <see cref="PrepareWifiInterface"/>), which every operation here depends on.
 /// </summary>
 /// <remarks>
 /// Holds the SD-scoped device state — whether a logging session is running, the most recent
@@ -214,7 +214,7 @@ internal sealed class SdCardOperations
     /// </summary>
     /// <remarks>
     /// Written only by the transition methods: <see cref="PrepareSdInterface"/>,
-    /// <see cref="PrepareLanInterface"/>, <see cref="ClaimBusForLogStart"/>,
+    /// <see cref="PrepareWifiInterface"/>, <see cref="ClaimBusForLogStart"/>,
     /// <see cref="StartSdCardLoggingAsync"/>, <see cref="TryEndLoggingSessionFrom"/>,
     /// <see cref="FormatSdCardAsync"/> and <see cref="IsBusHeldByLog"/>.
     /// <para>
@@ -360,7 +360,7 @@ internal sealed class SdCardOperations
     /// left alone — re-enabling it would re-initialize the WiFi module and drop the connection.
     /// </summary>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    internal void PrepareLanInterface()
+    internal void PrepareWifiInterface()
     {
         _host.EnsureConnected();
 
@@ -655,7 +655,7 @@ internal sealed class SdCardOperations
     {
         if (_host.IsConnected)
         {
-            PrepareLanInterface();
+            PrepareWifiInterface();
         }
 
         return Task.CompletedTask;
@@ -1846,7 +1846,7 @@ internal sealed class SdCardOperations
             // Re-enable LAN interface. StartSdCardLoggingAsync disables LAN because
             // the SD card and WiFi/LAN share the SPI bus on the hardware.
             //
-            // Only over USB, and for the same reason PrepareLanInterface() is transport-aware:
+            // Only over USB, and for the same reason PrepareWifiInterface() is transport-aware:
             // over WiFi/TCP the LAN was never disabled (nothing can disable it from the other
             // end of the connection it carries), and LAN:ENAbled 1 re-initializes the WiFi
             // module — which would drop the very link this command arrived on. A session that
@@ -2447,7 +2447,7 @@ internal sealed class SdCardOperations
             {
                 try
                 {
-                    PrepareLanInterface();
+                    PrepareWifiInterface();
                 }
                 catch
                 {

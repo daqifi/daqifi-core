@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// Wire-format constants and framing for the WINC serial bridge — the UART protocol the DAQiFi

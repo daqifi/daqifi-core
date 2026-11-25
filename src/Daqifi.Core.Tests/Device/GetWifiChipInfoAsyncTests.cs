@@ -9,18 +9,18 @@ using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Device;
 
-public class GetLanChipInfoAsyncTests
+public class GetWifiChipInfoAsyncTests
 {
     [Fact]
-    public async Task GetLanChipInfoAsync_WhenValidJson_ReturnsParsedInfo()
+    public async Task GetWifiChipInfoAsync_WhenValidJson_ReturnsParsedInfo()
     {
-        var device = new TestableLanChipInfoDevice("TestDevice")
+        var device = new TestableWifiChipInfoDevice("TestDevice")
         {
             CannedTextResponse = { "{\"ChipId\":1377184,\"FwVersion\":\"19.7.7\",\"BuildDate\":\"Mar 30 2022\"}" },
         };
         device.Connect();
 
-        var info = await device.GetLanChipInfoAsync();
+        var info = await device.GetWifiChipInfoAsync();
 
         Assert.NotNull(info);
         Assert.Equal("19.7.7", info!.FwVersion);
@@ -28,47 +28,47 @@ public class GetLanChipInfoAsyncTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoAsync_WhenScpiErrorNegative200_ThrowsLanNotInitialized()
+    public async Task GetWifiChipInfoAsync_WhenScpiErrorNegative200_ThrowsWifiNotInitialized()
     {
         // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
         // machine hasn't reached INITIALIZED yet makes GETChipInfo? return
         // this specific SCPI error instead of JSON.
-        var device = new TestableLanChipInfoDevice("TestDevice")
+        var device = new TestableWifiChipInfoDevice("TestDevice")
         {
             CannedTextResponse = { "**ERROR: -200, \"Execution error\"" },
         };
         device.Connect();
 
-        await Assert.ThrowsAsync<LanNotInitializedException>(() => device.GetLanChipInfoAsync());
+        await Assert.ThrowsAsync<WifiNotInitializedException>(() => device.GetWifiChipInfoAsync());
     }
 
     [Fact]
-    public async Task GetLanChipInfoAsync_WhenUnrelatedScpiError_ReturnsNull()
+    public async Task GetWifiChipInfoAsync_WhenUnrelatedScpiError_ReturnsNull()
     {
-        // Only -200 gets the specific LanNotInitialized treatment; any other
+        // Only -200 gets the specific WifiNotInitialized treatment; any other
         // SCPI error still falls back to the generic "unavailable" null.
-        var device = new TestableLanChipInfoDevice("TestDevice")
+        var device = new TestableWifiChipInfoDevice("TestDevice")
         {
             CannedTextResponse = { "**ERROR: -113, \"Undefined header\"" },
         };
         device.Connect();
 
-        var info = await device.GetLanChipInfoAsync();
+        var info = await device.GetWifiChipInfoAsync();
 
         Assert.Null(info);
     }
 
     /// <summary>
     /// A streaming device whose text-command exchange returns a canned response, so
-    /// <see cref="DaqifiStreamingDevice.GetLanChipInfoAsync"/> can be tested without a real
+    /// <see cref="DaqifiStreamingDevice.GetWifiChipInfoAsync"/> can be tested without a real
     /// transport (mirrors <c>TestableDiagnosticsDevice</c>).
     /// </summary>
-    private sealed class TestableLanChipInfoDevice : DaqifiStreamingDevice
+    private sealed class TestableWifiChipInfoDevice : DaqifiStreamingDevice
     {
         public List<string> SentCommands { get; } = new();
         public List<string> CannedTextResponse { get; } = new();
 
-        public TestableLanChipInfoDevice(string name)
+        public TestableWifiChipInfoDevice(string name)
             : base(name)
         {
         }

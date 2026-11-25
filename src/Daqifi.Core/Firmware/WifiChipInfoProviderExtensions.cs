@@ -6,15 +6,15 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Daqifi.Core.Firmware;
 
 /// <summary>
-/// How <see cref="LanChipInfoProviderExtensions.GetLanChipInfoWithRetryAsync"/> spends its
+/// How <see cref="WifiChipInfoProviderExtensions.GetWifiChipInfoWithRetryAsync"/> spends its
 /// retry budget.
 /// </summary>
 /// <remarks>
 /// The defaults are the ones Core's own WiFi firmware-status check uses
-/// (<see cref="FirmwareUpdateServiceOptions.LanChipInfoMaxAttempts"/> and friends), so a consumer
+/// (<see cref="FirmwareUpdateServiceOptions.WifiChipInfoMaxAttempts"/> and friends), so a consumer
 /// that just wants "what Core does" can pass nothing at all.
 /// </remarks>
-public sealed record LanChipInfoRetryOptions
+public sealed record WifiChipInfoRetryOptions
 {
     /// <summary>
     /// Gets the maximum number of chip-info queries to make. Values below 1 are treated as 1 —
@@ -59,10 +59,10 @@ public sealed record LanChipInfoRetryOptions
     /// for no additional benefit. Only possible when the provider is also the connected
     /// <see cref="IStreamingDevice"/> — there is nothing to send the command through otherwise.
     /// </remarks>
-    public bool KickLanApplyOnNotInitialized { get; init; } = true;
+    public bool KickWifiApplyOnNotInitialized { get; init; } = true;
 
     /// <summary>
-    /// Gets an optional sink that receives one <see cref="LanChipInfoProbeProgress"/> for every
+    /// Gets an optional sink that receives one <see cref="WifiChipInfoProbeProgress"/> for every
     /// attempt that does not produce chip info, so a caller can show that the probe is retrying
     /// rather than stalled. <see langword="null"/> — the default — reports nothing.
     /// </summary>
@@ -76,7 +76,7 @@ public sealed record LanChipInfoRetryOptions
     /// </para>
     /// <para>
     /// The sink lives here rather than as a parameter on
-    /// <see cref="LanChipInfoProviderExtensions.GetLanChipInfoWithRetryAsync"/> because the
+    /// <see cref="WifiChipInfoProviderExtensions.GetWifiChipInfoWithRetryAsync"/> because the
     /// method's signature shipped in v1.8.0 and ADR 0002 promises source compatibility: a new
     /// parameter before <c>cancellationToken</c> breaks every caller that passes the token
     /// positionally, which is how Core's own WiFi status check calls it. This mirrors
@@ -88,14 +88,14 @@ public sealed record LanChipInfoRetryOptions
     /// result.
     /// </para>
     /// </remarks>
-    public IProgress<LanChipInfoProbeProgress>? Progress { get; init; }
+    public IProgress<WifiChipInfoProbeProgress>? Progress { get; init; }
 }
 
 /// <summary>
 /// One attempt of a bounded chip-info probe that did not produce chip info, reported to
-/// <see cref="LanChipInfoRetryOptions.Progress"/> so a caller can render "retrying".
+/// <see cref="WifiChipInfoRetryOptions.Progress"/> so a caller can render "retrying".
 /// </summary>
-public readonly record struct LanChipInfoProbeProgress
+public readonly record struct WifiChipInfoProbeProgress
 {
     /// <summary>
     /// Gets the 1-based number of the attempt that just failed.
@@ -104,22 +104,22 @@ public readonly record struct LanChipInfoProbeProgress
 
     /// <summary>
     /// Gets the total number of attempts the probe is allowed, after the normalization
-    /// <see cref="LanChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
+    /// <see cref="WifiChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
     /// <see cref="Attempt"/> on the last one.
     /// </summary>
     public required int MaxAttempts { get; init; }
 
     /// <summary>
-    /// Whether <i>this</i> attempt failed with <see cref="LanNotInitializedException"/> — the device
+    /// Whether <i>this</i> attempt failed with <see cref="WifiNotInitializedException"/> — the device
     /// reporting its WINC state machine has not reached INITIALIZED (SCPI <c>-200</c>). False for a
     /// null answer or any other failure, so it describes the attempt being reported rather than the
     /// worst one seen so far.
     /// </summary>
-    public required bool WasLanNotInitialized { get; init; }
+    public required bool WasWifiNotInitialized { get; init; }
 
     /// <summary>
     /// Gets the pause that follows before the next attempt, after the normalization
-    /// <see cref="LanChipInfoRetryOptions.RetryDelay"/> documents.
+    /// <see cref="WifiChipInfoRetryOptions.RetryDelay"/> documents.
     /// <see cref="TimeSpan.Zero"/> on the last attempt, because no retry follows it — which is also
     /// how a caller tells "retrying" from "that was the last try".
     /// </summary>
@@ -130,28 +130,28 @@ public readonly record struct LanChipInfoProbeProgress
 /// The outcome of a bounded chip-info probe: what was read, and — when nothing was — whether the
 /// device was specifically reporting an uninitialized WINC state machine.
 /// </summary>
-public readonly record struct LanChipInfoProbeResult
+public readonly record struct WifiChipInfoProbeResult
 {
     /// <summary>
     /// Gets the chip info that was read, or <see langword="null"/> if the probe never got one.
     /// </summary>
-    public required LanChipInfo? ChipInfo { get; init; }
+    public required WifiChipInfo? ChipInfo { get; init; }
 
     /// <summary>
-    /// Whether the <i>final</i> failure was a <see cref="LanNotInitializedException"/>. Reset by any
+    /// Whether the <i>final</i> failure was a <see cref="WifiNotInitializedException"/>. Reset by any
     /// other kind of failure, so it describes the terminal condition rather than an earlier attempt.
     /// Meaningless when <see cref="ChipInfo"/> is non-null.
     /// </summary>
-    public required bool WasLanNotInitialized { get; init; }
+    public required bool WasWifiNotInitialized { get; init; }
 
     /// <summary>Gets a value indicating whether the probe read the chip info.</summary>
     public bool Succeeded => ChipInfo is not null;
 }
 
 /// <summary>
-/// Retry helpers for <see cref="ILanChipInfoProvider"/>.
+/// Retry helpers for <see cref="IWifiChipInfoProvider"/>.
 /// </summary>
-public static class LanChipInfoProviderExtensions
+public static class WifiChipInfoProviderExtensions
 {
     /// <summary>
     /// Queries the device's WiFi chip info with a bounded retry, so a transiently-unready WINC
@@ -159,7 +159,7 @@ public static class LanChipInfoProviderExtensions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A single <see cref="ILanChipInfoProvider.GetLanChipInfoAsync"/> is not a reliable answer to
+    /// A single <see cref="IWifiChipInfoProvider.GetWifiChipInfoAsync"/> is not a reliable answer to
     /// "what WiFi firmware is on this device". Right after a PIC32 firmware update the application
     /// is up while WiFi is still finishing startup (#144), and a module whose state machine has not
     /// reached INITIALIZED answers SCPI <c>-200</c> instead of JSON (#203). Both clear on their own
@@ -174,14 +174,14 @@ public static class LanChipInfoProviderExtensions
     /// </para>
     /// <para>
     /// Failures are absorbed: an exhausted budget comes back as a result with a null
-    /// <see cref="LanChipInfoProbeResult.ChipInfo"/>, not an exception — the caller decides what an
+    /// <see cref="WifiChipInfoProbeResult.ChipInfo"/>, not an exception — the caller decides what an
     /// unreadable module means. The one exception that does propagate is the caller's own
     /// cancellation. That extends to a misconfigured budget: out-of-range option values are
-    /// normalized to their documented meaning (see <see cref="LanChipInfoRetryOptions"/>) rather
+    /// normalized to their documented meaning (see <see cref="WifiChipInfoRetryOptions"/>) rather
     /// than thrown back at the caller from partway through the loop.
     /// </para>
     /// <para>
-    /// Because the probe can occupy roughly ten seconds, <see cref="LanChipInfoRetryOptions.Progress"/>
+    /// Because the probe can occupy roughly ten seconds, <see cref="WifiChipInfoRetryOptions.Progress"/>
     /// reports each attempt that does not produce chip info, so a caller can show that it is
     /// retrying rather than stalled (#745). A probe that reads the module on its first attempt
     /// reports nothing. An attempt the wall-clock budget cuts short is not reported either: it ends
@@ -189,20 +189,20 @@ public static class LanChipInfoProviderExtensions
     /// </para>
     /// </remarks>
     /// <param name="provider">The device to query. When it is also an <see cref="IStreamingDevice"/>, it is what the <c>LAN:APPLY</c> kick is sent through.</param>
-    /// <param name="options">The retry budget and the optional per-attempt progress sink; <see langword="null"/> uses <see cref="LanChipInfoRetryOptions"/>'s defaults, which report nothing.</param>
+    /// <param name="options">The retry budget and the optional per-attempt progress sink; <see langword="null"/> uses <see cref="WifiChipInfoRetryOptions"/>'s defaults, which report nothing.</param>
     /// <param name="logger">Optional logger for per-attempt diagnostics.</param>
     /// <param name="cancellationToken">Cancels the probe. Unlike the internal budget, this surfaces as <see cref="OperationCanceledException"/>.</param>
     /// <returns>What was read, and how the probe ended if nothing was.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="provider"/> is null.</exception>
-    public static async Task<LanChipInfoProbeResult> GetLanChipInfoWithRetryAsync(
-        this ILanChipInfoProvider provider,
-        LanChipInfoRetryOptions? options = null,
+    public static async Task<WifiChipInfoProbeResult> GetWifiChipInfoWithRetryAsync(
+        this IWifiChipInfoProvider provider,
+        WifiChipInfoRetryOptions? options = null,
         ILogger? logger = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effectiveOptions = options ?? new LanChipInfoRetryOptions();
+        var effectiveOptions = options ?? new WifiChipInfoRetryOptions();
         var log = logger ?? NullLogger.Instance;
 
         // The APPLY kick needs a way to reach the device. In practice the provider is the device
@@ -217,10 +217,10 @@ public static class LanChipInfoProviderExtensions
         var retryDelay = NormalizeRetryDelay(effectiveOptions.RetryDelay);
         var totalTimeout = NormalizeTotalTimeout(effectiveOptions.TotalTimeout);
 
-        // Tracks the most recent failure's classification (reset on any non-LanNotInitialized
+        // Tracks the most recent failure's classification (reset on any non-WifiNotInitialized
         // outcome) so the caller can report the specific not-initialized condition only when that
         // was genuinely the terminal one, not stale from an earlier attempt.
-        var lastFailureWasLanNotInitialized = false;
+        var lastFailureWasWifiNotInitialized = false;
         var hasSentLanApply = false;
 
         // Linking the caller's token preserves cancellation semantics; the timeout CTS just adds a
@@ -244,12 +244,12 @@ public static class LanChipInfoProviderExtensions
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
+                return new WifiChipInfoProbeResult { ChipInfo = null, WasWifiNotInitialized = lastFailureWasWifiNotInitialized };
             }
 
             try
             {
-                var chipInfo = await provider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
+                var chipInfo = await provider.GetWifiChipInfoAsync(linkedToken).ConfigureAwait(false);
                 if (chipInfo != null)
                 {
                     if (attempt > 1)
@@ -259,9 +259,9 @@ public static class LanChipInfoProviderExtensions
                             attempt,
                             maxAttempts);
                     }
-                    return new LanChipInfoProbeResult { ChipInfo = chipInfo, WasLanNotInitialized = false };
+                    return new WifiChipInfoProbeResult { ChipInfo = chipInfo, WasWifiNotInitialized = false };
                 }
-                lastFailureWasLanNotInitialized = false;
+                lastFailureWasWifiNotInitialized = false;
                 log.LogDebug(
                     "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
                     attempt,
@@ -274,18 +274,18 @@ public static class LanChipInfoProviderExtensions
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
+                return new WifiChipInfoProbeResult { ChipInfo = null, WasWifiNotInitialized = lastFailureWasWifiNotInitialized };
             }
-            catch (LanNotInitializedException ex)
+            catch (WifiNotInitializedException ex)
             {
-                lastFailureWasLanNotInitialized = true;
+                lastFailureWasWifiNotInitialized = true;
                 log.LogDebug(
                     ex,
                     "LAN chip-info query on attempt {Attempt}/{Max} reported the WINC state machine is not initialized.",
                     attempt,
                     maxAttempts);
 
-                if (effectiveOptions.KickLanApplyOnNotInitialized && !hasSentLanApply && device is { IsConnected: true })
+                if (effectiveOptions.KickWifiApplyOnNotInitialized && !hasSentLanApply && device is { IsConnected: true })
                 {
                     // Observe cancellation before this state-changing Send: a cancelled probe must
                     // not still kick APPLY on the device. Uses the caller's token (not the linked
@@ -309,7 +309,7 @@ public static class LanChipInfoProviderExtensions
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                lastFailureWasLanNotInitialized = false;
+                lastFailureWasWifiNotInitialized = false;
                 log.LogDebug(
                     ex,
                     "LAN chip-info query failed on attempt {Attempt}/{Max}.",
@@ -325,11 +325,11 @@ public static class LanChipInfoProviderExtensions
             ReportAttemptFailed(
                 effectiveOptions.Progress,
                 log,
-                new LanChipInfoProbeProgress
+                new WifiChipInfoProbeProgress
                 {
                     Attempt = attempt,
                     MaxAttempts = maxAttempts,
-                    WasLanNotInitialized = lastFailureWasLanNotInitialized,
+                    WasWifiNotInitialized = lastFailureWasWifiNotInitialized,
                     RetryDelay = attempt < maxAttempts ? retryDelay : TimeSpan.Zero
                 });
 
@@ -346,7 +346,7 @@ public static class LanChipInfoProviderExtensions
                         totalTimeout,
                         attempt,
                         maxAttempts);
-                    return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
+                    return new WifiChipInfoProbeResult { ChipInfo = null, WasWifiNotInitialized = lastFailureWasWifiNotInitialized };
                 }
             }
         }
@@ -354,8 +354,8 @@ public static class LanChipInfoProviderExtensions
         log.LogDebug(
             "LAN chip-info query exhausted {Max} attempts; reporting the module as unreadable (not-initialized: {NotInitialized}).",
             maxAttempts,
-            lastFailureWasLanNotInitialized);
-        return new LanChipInfoProbeResult { ChipInfo = null, WasLanNotInitialized = lastFailureWasLanNotInitialized };
+            lastFailureWasWifiNotInitialized);
+        return new WifiChipInfoProbeResult { ChipInfo = null, WasWifiNotInitialized = lastFailureWasWifiNotInitialized };
     }
 
     /// <summary>
@@ -364,16 +364,16 @@ public static class LanChipInfoProviderExtensions
     /// </summary>
     /// <remarks>
     /// Every exception is swallowed, <see cref="OperationCanceledException"/> included. A consumer
-    /// of <see cref="LanChipInfoRetryOptions.Progress"/> is drawing a status line; it must not be
+    /// of <see cref="WifiChipInfoRetryOptions.Progress"/> is drawing a status line; it must not be
     /// able to fail an operation whose documented contract is that failures come back as an
     /// unavailable result, and it must not discard a chip-info read the remaining attempts may
     /// still make. The caller's own <see cref="CancellationToken"/> remains the only thing that
     /// stops the loop, and the next iteration observes it.
     /// </remarks>
     private static void ReportAttemptFailed(
-        IProgress<LanChipInfoProbeProgress>? progress,
+        IProgress<WifiChipInfoProbeProgress>? progress,
         ILogger log,
-        LanChipInfoProbeProgress report)
+        WifiChipInfoProbeProgress report)
     {
         if (progress is null)
         {
@@ -403,7 +403,7 @@ public static class LanChipInfoProviderExtensions
     /// included. Other negatives would throw <see cref="ArgumentOutOfRangeException"/> partway
     /// through a probe documented to absorb failures, and the infinite sentinel would stall the
     /// caller between attempts until something else cancelled — forever, when
-    /// <see cref="LanChipInfoRetryOptions.TotalTimeout"/> is unbounded too. Both are
+    /// <see cref="WifiChipInfoRetryOptions.TotalTimeout"/> is unbounded too. Both are
     /// misconfigurations, and retrying immediately is the bounded reading of them.
     /// </remarks>
     private static TimeSpan NormalizeRetryDelay(TimeSpan retryDelay) =>

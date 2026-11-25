@@ -1,6 +1,6 @@
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 
-namespace Daqifi.Core.Tests.Firmware.Winc;
+namespace Daqifi.Core.Tests.Firmware.Wifi;
 
 /// <summary>
 /// A fake serial port that emulates the DAQiFi firmware's WINC bridge state machine, so the client

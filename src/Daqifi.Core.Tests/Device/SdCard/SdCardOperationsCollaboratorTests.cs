@@ -129,25 +129,25 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public void PrepareLanInterface_OverUsb_ReleasesTheBusAndBringsLanBack()
+    public void PrepareWifiInterface_OverUsb_ReleasesTheBusAndBringsLanBack()
     {
         var host = new FakeHost { IsUsbConnection = true };
         var ops = new SdCardOperations(host);
 
-        ops.PrepareLanInterface();
+        ops.PrepareWifiInterface();
 
         Assert.Equal(new[] { "send:" + DisableSd, "send:" + EnableLan }, host.Calls);
     }
 
     [Fact]
-    public void PrepareLanInterface_OverWifi_DoesNotReEnableLan()
+    public void PrepareWifiInterface_OverWifi_DoesNotReEnableLan()
     {
         // LAN was never disabled over WiFi, and LAN:ENAbled 1 re-initializes the WiFi module —
         // which would drop the link this command arrived on.
         var host = new FakeHost { IsUsbConnection = false };
         var ops = new SdCardOperations(host);
 
-        ops.PrepareLanInterface();
+        ops.PrepareWifiInterface();
 
         Assert.Equal(new[] { "send:" + DisableSd }, host.Calls);
     }
@@ -163,12 +163,12 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
-    public void PrepareLanInterface_WhenDisconnected_ThrowsWithoutSending()
+    public void PrepareWifiInterface_WhenDisconnected_ThrowsWithoutSending()
     {
         var host = new FakeHost { IsConnected = false };
         var ops = new SdCardOperations(host);
 
-        Assert.Throws<DeviceNotConnectedException>(() => ops.PrepareLanInterface());
+        Assert.Throws<DeviceNotConnectedException>(() => ops.PrepareWifiInterface());
         Assert.Empty(host.Calls);
     }
 

@@ -7,7 +7,7 @@ namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
 /// Direct tests for <see cref="LineParsing"/>, the shared "first parseable line wins" helper behind
-/// six response parsers (<c>SdCardSpaceParser</c>, <c>LogLevelParser</c>, <c>LanChipInfoParser</c>,
+/// six response parsers (<c>SdCardSpaceParser</c>, <c>LogLevelParser</c>, <c>WifiChipInfoParser</c>,
 /// the capability API-version query, the system error-count query, and the analog-output readback).
 /// Those callers only ever exercise the happy path with well-formed inputs, so the helper's own
 /// contract — argument guards, ordering, the failed-parse output value, the non-null result check,

@@ -205,7 +205,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         ThrowIfDisposed();
 
         // Serialize device I/O with UpdateFirmwareAsync / UpdateWifiModuleAsync.
-        // GetLanChipInfoAsync runs a SCPI text exchange on the same transport
+        // GetWifiChipInfoAsync runs a SCPI text exchange on the same transport
         // those updates use; a concurrent caller would interleave on the wire
         // and either corrupt the exchange's reply or get partial replies.
         // Acquired without the RunExclusiveAsync state check — a status probe

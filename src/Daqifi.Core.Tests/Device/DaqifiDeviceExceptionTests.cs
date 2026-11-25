@@ -55,7 +55,7 @@ public class DaqifiDeviceExceptionTests
     [InlineData(typeof(DeviceReconnectFailedException))]
     [InlineData(typeof(DeviceDiagnosticsException))]
     [InlineData(typeof(SdCardOperationException))]
-    [InlineData(typeof(LanNotInitializedException))]
+    [InlineData(typeof(WifiNotInitializedException))]
     public void DeviceFailure_DerivesDirectlyFromTheBase(Type exceptionType)
         => Assert.Equal(typeof(DaqifiDeviceException), exceptionType.BaseType);
 
@@ -82,7 +82,7 @@ public class DaqifiDeviceExceptionTests
         new DeviceDiagnosticsCorruptedResponseException("failed", ["reply"]),
         new SdCardOperationException("failed", ["reply"]),
         new SdCardNotPresentException(["reply"]),
-        new LanNotInitializedException("reply"),
+        new WifiNotInitializedException("reply"),
     };
 
     [Theory]
@@ -101,7 +101,7 @@ public class DaqifiDeviceExceptionTests
         new SdCardOperationException("failed", null!),
         new SdCardEmptyTransferException("log.bin"),
         new SdCardRequiresUsbException("USB only"),
-        new LanNotInitializedException(null!),
+        new WifiNotInitializedException(null!),
     };
 
     [Theory]

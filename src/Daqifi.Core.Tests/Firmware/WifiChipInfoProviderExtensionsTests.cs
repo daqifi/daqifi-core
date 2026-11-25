@@ -8,13 +8,13 @@ using Daqifi.Core.Firmware;
 namespace Daqifi.Core.Tests.Firmware;
 
 /// <summary>
-/// The bounded chip-info probe that <see cref="LanChipInfoProviderExtensions.GetLanChipInfoWithRetryAsync"/>
+/// The bounded chip-info probe that <see cref="WifiChipInfoProviderExtensions.GetWifiChipInfoWithRetryAsync"/>
 /// exposes for consumers (issue #269). Core's own WiFi status check runs the same code, so the
 /// end-to-end expectations live in <c>FirmwareUpdateServiceTests</c>; these pin the probe itself.
 /// </summary>
-public class LanChipInfoProviderExtensionsTests
+public class WifiChipInfoProviderExtensionsTests
 {
-    private static LanChipInfo SampleChipInfo => new()
+    private static WifiChipInfo SampleChipInfo => new()
     {
         ChipId = 1377184,
         FwVersion = "19.7.7",
@@ -23,193 +23,193 @@ public class LanChipInfoProviderExtensionsTests
 
     private static readonly TimeSpan FastRetryDelay = TimeSpan.FromMilliseconds(5);
 
-    private static LanChipInfoRetryOptions FastOptions(
+    private static WifiChipInfoRetryOptions FastOptions(
         int maxAttempts = 3,
-        bool kickLanApply = true,
-        IProgress<LanChipInfoProbeProgress>? progress = null) => new()
+        bool kickWifiApply = true,
+        IProgress<WifiChipInfoProbeProgress>? progress = null) => new()
         {
             MaxAttempts = maxAttempts,
             RetryDelay = FastRetryDelay,
             TotalTimeout = TimeSpan.FromSeconds(30),
-            KickLanApplyOnNotInitialized = kickLanApply,
+            KickWifiApplyOnNotInitialized = kickWifiApply,
             Progress = progress,
         };
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenFirstAttemptSucceeds_QueriesOnce()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenFirstAttemptSucceeds_QueriesOnce()
     {
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
         Assert.Equal("19.7.7", result.ChipInfo!.FwVersion);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(1, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(1, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTransientFailuresPrecedeSuccess_RetriesUntilItReads()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTransientFailuresPrecedeSuccess_RetriesUntilItReads()
     {
         // #144: right after a PIC32 update the application is up while WiFi is still starting, so
         // the first queries fail. Taking the first failure as the answer is what sends a caller
         // into a needless multi-minute reflash of already-current firmware.
-        var device = new ScriptedLanChipInfoDevice(
+        var device = new ScriptedWifiChipInfoDevice(
             new InvalidOperationException("transient"),
             new InvalidOperationException("transient"),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenEveryAttemptFails_ReturnsUnavailableWithoutThrowing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenEveryAttemptFails_ReturnsUnavailableWithoutThrowing()
     {
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("still broken"));
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("still broken"));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.False(result.Succeeded);
         Assert.Null(result.ChipInfo);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenProviderReturnsNull_RetriesAndReportsUnavailable()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenProviderReturnsNull_RetriesAndReportsUnavailable()
     {
         // An unrecognizable response is a null, not an exception — it must be retried too.
-        var device = new ScriptedLanChipInfoDevice((object?)null);
+        var device = new ScriptedWifiChipInfoDevice((object?)null);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.False(result.Succeeded);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenLanNotInitialized_SendsLanApplyExactlyOnceAndRecovers()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenWifiNotInitialized_SendsLanApplyExactlyOnceAndRecovers()
     {
         // #203: LAN:ENAbled=1 but the WINC state machine hasn't reached INITIALIZED, so the query
         // answers SCPI -200. One LAN:APPLY resolves it; kicking on every attempt would tear the
         // module down and re-init it repeatedly, risking an already-associated link.
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(1, device.LanApplySentCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenLanNotInitializedExhaustsBudget_ReportsThatSpecifically()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenWifiNotInitializedExhaustsBudget_ReportsThatSpecifically()
     {
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.False(result.Succeeded);
-        Assert.True(result.WasLanNotInitialized);
+        Assert.True(result.WasWifiNotInitialized);
         Assert.Equal(1, device.LanApplySentCount);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenALaterFailureIsNotLanNotInitialized_ReportsTheTerminalCondition()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenALaterFailureIsNotWifiNotInitialized_ReportsTheTerminalCondition()
     {
         // The flag describes how the probe actually ended, not whether -200 was ever seen. A stale
         // "not initialized" would send a caller off kicking APPLY at a module that failed for some
         // entirely different reason on the attempt that mattered.
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
             new InvalidOperationException("transport went away"),
             new InvalidOperationException("transport went away"));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.False(result.Succeeded);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenKickDisabled_DoesNotSendLanApply()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenKickDisabled_DoesNotSendLanApply()
     {
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(kickLanApply: false));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(kickWifiApply: false));
 
-        Assert.True(result.WasLanNotInitialized);
+        Assert.True(result.WasWifiNotInitialized);
         Assert.Equal(0, device.LanApplySentCount);
         Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenDeviceDisconnected_DoesNotSendLanApply()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenDeviceDisconnected_DoesNotSendLanApply()
     {
         // There is nothing to send through: the kick would throw or, worse, silently queue.
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""))
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""))
         {
             IsConnected = false
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
-        Assert.True(result.WasLanNotInitialized);
+        Assert.True(result.WasWifiNotInitialized);
         Assert.Equal(0, device.LanApplySentCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenLanApplySendThrows_KeepsRetrying()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenLanApplySendThrows_KeepsRetrying()
     {
         // Best effort: a failed kick must not abort the probe — the module may still settle on its
         // own within the remaining attempts.
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
             SampleChipInfo)
         {
             ThrowOnSend = true
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, device.GetLanChipInfoCallCount);
+        Assert.Equal(2, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenProviderIsNotAStreamingDevice_StillProbesWithoutKicking()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenProviderIsNotAStreamingDevice_StillProbesWithoutKicking()
     {
         // The kick needs a device to send through. A bare provider simply doesn't get one, and that
         // must not be an error.
-        var provider = new ScriptedLanChipInfoProvider(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+        var provider = new ScriptedWifiChipInfoProvider(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
             SampleChipInfo);
 
-        var result = await provider.GetLanChipInfoWithRetryAsync(FastOptions());
+        var result = await provider.GetWifiChipInfoWithRetryAsync(FastOptions());
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, provider.GetLanChipInfoCallCount);
+        Assert.Equal(2, provider.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTotalTimeoutExpires_StopsEarlyWithoutThrowing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTotalTimeoutExpires_StopsEarlyWithoutThrowing()
     {
         // The wall-clock ceiling is the point: attempts × the device's own response timeout plus
         // the delays can far outrun what the caller meant to spend, and this runs under a lock.
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("slow and broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("slow and broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 50,
             RetryDelay = TimeSpan.FromMilliseconds(20),
@@ -217,70 +217,70 @@ public class LanChipInfoProviderExtensionsTests
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
         stopwatch.Stop();
 
         Assert.False(result.Succeeded);
         Assert.True(
-            device.GetLanChipInfoCallCount < 50,
-            $"Expected the total-timeout budget to cut the probe short, but all 50 attempts ran ({device.GetLanChipInfoCallCount}).");
+            device.GetWifiChipInfoCallCount < 50,
+            $"Expected the total-timeout budget to cut the probe short, but all 50 attempts ran ({device.GetWifiChipInfoCallCount}).");
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenCallerCancels_Throws()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenCallerCancels_Throws()
     {
         // The caller's own cancellation is the one thing that is not absorbed into a result.
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
 
         var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => device.GetLanChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
+            () => device.GetWifiChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
 
         // The token the probe surfaces is the linked one, so identity is not the assertion —
         // what matters is that it reports cancellation, and that nothing was queried.
         Assert.True(ex.CancellationToken.IsCancellationRequested);
-        Assert.Equal(0, device.GetLanChipInfoCallCount);
+        Assert.Equal(0, device.GetWifiChipInfoCallCount);
         Assert.Equal(0, device.LanApplySentCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenCancelledRacingNotInitialized_DoesNotSendLanApply()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenCancelledRacingNotInitialized_DoesNotSendLanApply()
     {
         // A cancellation that lands between the -200 detection and the kick must not still leave a
         // state-changing command on the device.
         using var cts = new CancellationTokenSource();
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
-        device.OnGetLanChipInfo = cts.Cancel;
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
+        device.OnGetWifiChipInfo = cts.Cancel;
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => device.GetLanChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
+            () => device.GetWifiChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
 
         Assert.Equal(0, device.LanApplySentCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenMaxAttemptsBelowOne_StillMakesOneAttempt()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenMaxAttemptsBelowOne_StillMakesOneAttempt()
     {
         // The options object is a plain settable record a consumer can get wrong; a probe that
         // queries nothing at all and reports "unavailable" would be indistinguishable from a dead
         // module.
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(maxAttempts: 0));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(maxAttempts: 0));
 
         Assert.True(result.Succeeded);
-        Assert.Equal(1, device.GetLanChipInfoCallCount);
+        Assert.Equal(1, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenSingleAttemptFails_DoesNotWaitTheRetryDelay()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenSingleAttemptFails_DoesNotWaitTheRetryDelay()
     {
         // No delay after the final attempt — otherwise every exhausted probe pays for a retry it
         // never makes.
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 1,
             RetryDelay = TimeSpan.FromSeconds(10),
@@ -288,7 +288,7 @@ public class LanChipInfoProviderExtensionsTests
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
         stopwatch.Stop();
 
         Assert.False(result.Succeeded);
@@ -298,78 +298,78 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTotalTimeoutIsNegative_MakesNoAttemptWithoutThrowing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTotalTimeoutIsNegative_MakesNoAttemptWithoutThrowing()
     {
         // A budget of "less than nothing" is the same as no budget, which the option documents as
         // "no attempt is made". Handing it straight to CancellationTokenSource would instead throw
         // ArgumentOutOfRangeException out of a probe whose whole contract is that failures come back
         // as an unavailable result.
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 3,
             RetryDelay = TimeSpan.FromMilliseconds(5),
             TotalTimeout = TimeSpan.FromSeconds(-5),
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.False(result.Succeeded);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(0, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(0, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTotalTimeoutIsInfinite_SpendsEveryAttempt()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTotalTimeoutIsInfinite_SpendsEveryAttempt()
     {
         // Timeout.InfiniteTimeSpan is negative, but it is how .NET spells "no ceiling" and must keep
         // meaning that — collapsing it into the no-budget case would silently turn an unbounded
         // probe into one that never queries at all.
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 3,
             RetryDelay = TimeSpan.FromMilliseconds(5),
             TotalTimeout = Timeout.InfiniteTimeSpan,
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.False(result.Succeeded);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenRetryDelayIsNegative_KeepsRetryingWithoutThrowing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenRetryDelayIsNegative_KeepsRetryingWithoutThrowing()
     {
         // Same reasoning as the budget: a negative pause is a misconfiguration, not a reason to
         // throw ArgumentOutOfRangeException out of Task.Delay midway through the loop.
-        var device = new ScriptedLanChipInfoDevice(
+        var device = new ScriptedWifiChipInfoDevice(
             new InvalidOperationException("transient"),
             new InvalidOperationException("transient"),
             SampleChipInfo);
-        var options = new LanChipInfoRetryOptions
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 3,
             RetryDelay = TimeSpan.FromSeconds(-1),
             TotalTimeout = TimeSpan.FromSeconds(30),
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.True(result.Succeeded);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenRetryDelayIsInfinite_DoesNotHangBetweenAttempts()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenRetryDelayIsInfinite_DoesNotHangBetweenAttempts()
     {
         // An infinite *pause* inside a bounded retry has no meaning, and with an equally unbounded
         // budget nothing would ever release it — the probe would hang on the caller's thread
         // forever. The guard token bounds a regression here to 10s instead of wedging the suite.
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 2,
             RetryDelay = Timeout.InfiniteTimeSpan,
@@ -377,101 +377,101 @@ public class LanChipInfoProviderExtensionsTests
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var result = await device.GetLanChipInfoWithRetryAsync(options, cancellationToken: guard.Token);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options, cancellationToken: guard.Token);
         stopwatch.Stop();
 
         Assert.False(result.Succeeded);
-        Assert.Equal(2, device.GetLanChipInfoCallCount);
+        Assert.Equal(2, device.GetWifiChipInfoCallCount);
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(5),
             $"An infinite retry delay stalled the probe for {stopwatch.Elapsed}.");
     }
 
     [Fact]
-    public void LanChipInfoRetryOptions_RecordDefaults_MatchTheCoreWifiProbe()
+    public void WifiChipInfoRetryOptions_RecordDefaults_MatchTheCoreWifiProbe()
     {
         // The record's own defaults, not a probe that happens to construct one. A failing first
         // read would sleep RetryDelay (2s) before the next attempt; this fact never calls the probe.
-        var defaults = new LanChipInfoRetryOptions();
+        var defaults = new WifiChipInfoRetryOptions();
 
         Assert.Equal(3, defaults.MaxAttempts);
         Assert.Equal(TimeSpan.FromSeconds(2), defaults.RetryDelay);
         Assert.Equal(TimeSpan.FromSeconds(8), defaults.TotalTimeout);
-        Assert.True(defaults.KickLanApplyOnNotInitialized);
+        Assert.True(defaults.KickWifiApplyOnNotInitialized);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WithoutOptions_ReturnsScriptedChipInfoOnTheFirstAttempt()
+    public async Task GetWifiChipInfoWithRetryAsync_WithoutOptions_ReturnsScriptedChipInfoOnTheFirstAttempt()
     {
         // A successful first read returns immediately. The default 2s RetryDelay is only the pause
         // between attempts, so this must not sleep it.
         var chipInfo = SampleChipInfo;
-        var device = new ScriptedLanChipInfoDevice(chipInfo);
+        var device = new ScriptedWifiChipInfoDevice(chipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync();
+        var result = await device.GetWifiChipInfoWithRetryAsync();
 
         Assert.Same(chipInfo, result.ChipInfo);
         Assert.True(result.Succeeded);
-        Assert.Equal(1, device.GetLanChipInfoCallCount);
+        Assert.Equal(1, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenProviderIsNull_Throws()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenProviderIsNull_Throws()
     {
-        ILanChipInfoProvider? provider = null;
+        IWifiChipInfoProvider? provider = null;
 
         var ex = await Assert.ThrowsAsync<ArgumentNullException>(
-            () => provider!.GetLanChipInfoWithRetryAsync());
+            () => provider!.GetWifiChipInfoWithRetryAsync());
 
         Assert.Equal("provider", ex.ParamName);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WithTheRecordDefaultAttemptCount_QueriesExactlyThatManyTimes()
+    public async Task GetWifiChipInfoWithRetryAsync_WithTheRecordDefaultAttemptCount_QueriesExactlyThatManyTimes()
     {
         // Pins the retry budget's attempt count to the record's own default rather than to a
         // literal, so a change to the shipped default cannot slip past this file. The delay and
         // the ceiling are overridden to keep the test fast; the attempt count is not.
-        var defaultAttempts = new LanChipInfoRetryOptions().MaxAttempts;
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
-        var options = new LanChipInfoRetryOptions
+        var defaultAttempts = new WifiChipInfoRetryOptions().MaxAttempts;
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             RetryDelay = TimeSpan.FromMilliseconds(5),
             TotalTimeout = TimeSpan.FromSeconds(30),
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.False(result.Succeeded);
         Assert.Equal(3, defaultAttempts);
-        Assert.Equal(defaultAttempts, device.GetLanChipInfoCallCount);
+        Assert.Equal(defaultAttempts, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheFirstAttemptSucceeds_ReportsNothing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheFirstAttemptSucceeds_ReportsNothing()
     {
         // A probe that reads the module straight away never showed the user a wait, so there is
         // nothing to say about it. A single "attempt 1 of 3" here would make every healthy device
         // flash a "retrying" status line.
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
         Assert.Empty(progress.Reports);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenItSucceedsOnALaterAttempt_ReportsEachFailedAttemptInOrder()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenItSucceedsOnALaterAttempt_ReportsEachFailedAttemptInOrder()
     {
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(
+        var device = new ScriptedWifiChipInfoDevice(
             new InvalidOperationException("transient"),
             new InvalidOperationException("transient"),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
         Assert.Equal(
@@ -483,19 +483,19 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenEveryAttemptFails_ReportsEveryOneAndStillReturnsUnavailable()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenEveryAttemptFails_ReportsEveryOneAndStillReturnsUnavailable()
     {
         // The last report carries TimeSpan.Zero: no retry follows it. That is how a caller tells
         // "retrying" from "that was the last try" without counting attempts itself.
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("still broken"));
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("still broken"));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.False(result.Succeeded);
         Assert.Null(result.ChipInfo);
-        Assert.False(result.WasLanNotInitialized);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(result.WasWifiNotInitialized);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(
             [
                 AttemptFailed(1, 3, false, FastRetryDelay),
@@ -506,18 +506,18 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenOnlyOneAttemptSawTheNotInitializedState_ReportsItOnThatAttemptAlone()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenOnlyOneAttemptSawTheNotInitializedState_ReportsItOnThatAttemptAlone()
     {
         // The flag on a report describes the attempt being reported, not the worst thing seen so
         // far — a status line that said "WiFi still starting up" would otherwise keep saying it
         // after the module started failing for an unrelated reason.
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""),
             new InvalidOperationException("transport went away"),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
         Assert.Equal(
@@ -529,12 +529,12 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenAnAttemptAnswersNull_ReportsItLikeAnyOtherFailure()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenAnAttemptAnswersNull_ReportsItLikeAnyOtherFailure()
     {
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice((object?)null, SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice((object?)null, SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
         Assert.Equal(
@@ -543,87 +543,87 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WithNoProgressSink_StillSpendsTheSameBudget()
+    public async Task GetWifiChipInfoWithRetryAsync_WithNoProgressSink_StillSpendsTheSameBudget()
     {
         // The seam is additive: the sink defaults to null, and a caller that sets nothing gets the
         // behaviour that shipped. Every other fact in this file calls the probe without one.
-        Assert.Null(new LanChipInfoRetryOptions().Progress);
+        Assert.Null(new WifiChipInfoRetryOptions().Progress);
 
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("still broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("still broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             RetryDelay = FastRetryDelay,
             TotalTimeout = TimeSpan.FromSeconds(30),
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.False(result.Succeeded);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrows_StillReadsTheModule()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheProgressHandlerThrows_StillReadsTheModule()
     {
         // A consumer's status handler must not be able to discard a chip-info read the probe was
         // one attempt away from making. Reporting is best effort.
         var progress = new RecordingProgress(_ => throw new InvalidOperationException("handler blew up"));
-        var device = new ScriptedLanChipInfoDevice(
+        var device = new ScriptedWifiChipInfoDevice(
             new InvalidOperationException("transient"),
             new InvalidOperationException("transient"),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
         Assert.Equal("19.7.7", result.ChipInfo!.FwVersion);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(2, progress.Reports.Count);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsAndEveryAttemptFails_ReportsUnavailableAsBefore()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsAndEveryAttemptFails_ReportsUnavailableAsBefore()
     {
         // The other half: a throwing handler must not turn an absorbed failure into an exception
         // out of a method documented to return "unavailable" instead.
         var progress = new RecordingProgress(_ => throw new InvalidOperationException("handler blew up"));
-        var device = new ScriptedLanChipInfoDevice(
-            new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+        var device = new ScriptedWifiChipInfoDevice(
+            new WifiNotInitializedException("**ERROR: -200, \"Execution error\""));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.False(result.Succeeded);
-        Assert.True(result.WasLanNotInitialized);
-        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.True(result.WasWifiNotInitialized);
+        Assert.Equal(3, device.GetWifiChipInfoCallCount);
         Assert.Equal(3, progress.Reports.Count);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsOperationCanceled_DoesNotEndTheProbe()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsOperationCanceled_DoesNotEndTheProbe()
     {
         // Cancellation belongs to the caller's token. A handler that throws this particular
         // exception — e.g. by checking a token of its own — must not look like one.
         var progress = new RecordingProgress(_ => throw new OperationCanceledException("not the caller"));
-        var device = new ScriptedLanChipInfoDevice(
+        var device = new ScriptedWifiChipInfoDevice(
             new InvalidOperationException("transient"),
             SampleChipInfo);
 
-        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+        var result = await device.GetWifiChipInfoWithRetryAsync(FastOptions(progress: progress));
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, device.GetLanChipInfoCallCount);
+        Assert.Equal(2, device.GetWifiChipInfoCallCount);
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenCallerCancelsBeforeTheFirstAttempt_ReportsNothing()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenCallerCancelsBeforeTheFirstAttempt_ReportsNothing()
     {
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var device = new ScriptedWifiChipInfoDevice(SampleChipInfo);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => device.GetLanChipInfoWithRetryAsync(
+            () => device.GetWifiChipInfoWithRetryAsync(
                 FastOptions(progress: progress),
                 cancellationToken: cts.Token));
 
@@ -631,15 +631,15 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheTotalTimeoutCutsTheProbeShort_ReportsStayOrderedAndBounded()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheTotalTimeoutCutsTheProbeShort_ReportsStayOrderedAndBounded()
     {
         // The wall-clock branches end the probe rather than falling through to a report, so how
         // many arrive depends on where the budget expired. What must hold regardless: the attempt
         // numbers are 1, 2, 3, ... with no gaps and no duplicates, and never more of them than
         // attempts were made.
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("slow and broken"));
-        var options = new LanChipInfoRetryOptions
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("slow and broken"));
+        var options = new WifiChipInfoRetryOptions
         {
             MaxAttempts = 50,
             RetryDelay = TimeSpan.FromMilliseconds(20),
@@ -647,12 +647,12 @@ public class LanChipInfoProviderExtensionsTests
             Progress = progress,
         };
 
-        var result = await device.GetLanChipInfoWithRetryAsync(options);
+        var result = await device.GetWifiChipInfoWithRetryAsync(options);
 
         Assert.False(result.Succeeded);
         Assert.True(
-            progress.Reports.Count <= device.GetLanChipInfoCallCount,
-            $"Got {progress.Reports.Count} reports for {device.GetLanChipInfoCallCount} attempts.");
+            progress.Reports.Count <= device.GetWifiChipInfoCallCount,
+            $"Got {progress.Reports.Count} reports for {device.GetWifiChipInfoCallCount} attempts.");
         Assert.Equal(
             Enumerable.Range(1, progress.Reports.Count),
             progress.Reports.Select(report => report.Attempt));
@@ -660,12 +660,12 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WhenTheBudgetIsASingleAttempt_ReportsItWithNoRetryDelay()
+    public async Task GetWifiChipInfoWithRetryAsync_WhenTheBudgetIsASingleAttempt_ReportsItWithNoRetryDelay()
     {
         var progress = new RecordingProgress();
-        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+        var device = new ScriptedWifiChipInfoDevice(new InvalidOperationException("broken"));
 
-        var result = await device.GetLanChipInfoWithRetryAsync(
+        var result = await device.GetWifiChipInfoWithRetryAsync(
             FastOptions(maxAttempts: 1, progress: progress));
 
         Assert.False(result.Succeeded);
@@ -684,23 +684,23 @@ public class LanChipInfoProviderExtensionsTests
     /// throwing handler behind its own marshalling. This one reports on the probe's own thread,
     /// which is the strict case.
     /// </remarks>
-    private static LanChipInfoProbeProgress AttemptFailed(
-        int attempt, int maxAttempts, bool wasLanNotInitialized, TimeSpan retryDelay) => new()
+    private static WifiChipInfoProbeProgress AttemptFailed(
+        int attempt, int maxAttempts, bool wasWifiNotInitialized, TimeSpan retryDelay) => new()
         {
             Attempt = attempt,
             MaxAttempts = maxAttempts,
-            WasLanNotInitialized = wasLanNotInitialized,
+            WasWifiNotInitialized = wasWifiNotInitialized,
             RetryDelay = retryDelay
         };
 
-    private sealed class RecordingProgress(Action<LanChipInfoProbeProgress>? onReport = null)
-        : IProgress<LanChipInfoProbeProgress>
+    private sealed class RecordingProgress(Action<WifiChipInfoProbeProgress>? onReport = null)
+        : IProgress<WifiChipInfoProbeProgress>
     {
-        private readonly List<LanChipInfoProbeProgress> _reports = [];
+        private readonly List<WifiChipInfoProbeProgress> _reports = [];
 
-        public IReadOnlyList<LanChipInfoProbeProgress> Reports => _reports;
+        public IReadOnlyList<WifiChipInfoProbeProgress> Reports => _reports;
 
-        public void Report(LanChipInfoProbeProgress value)
+        public void Report(WifiChipInfoProbeProgress value)
         {
             // Recorded before the handler runs, so a throwing handler still shows what it saw.
             _reports.Add(value);
@@ -709,29 +709,29 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     /// <summary>
-    /// A provider whose successive answers are scripted: each outcome is a <see cref="LanChipInfo"/>
+    /// A provider whose successive answers are scripted: each outcome is a <see cref="WifiChipInfo"/>
     /// to return, an <see cref="Exception"/> to fault with, or null for an unparseable response. The
     /// last outcome repeats, so "always fails" is a one-element script.
     /// </summary>
-    private class ScriptedLanChipInfoProvider : ILanChipInfoProvider
+    private class ScriptedWifiChipInfoProvider : IWifiChipInfoProvider
     {
         private readonly IReadOnlyList<object?> _outcomes;
         private int _next;
 
-        public ScriptedLanChipInfoProvider(params object?[] outcomes)
+        public ScriptedWifiChipInfoProvider(params object?[] outcomes)
         {
             _outcomes = outcomes.Length > 0 ? outcomes : [null];
         }
 
-        public int GetLanChipInfoCallCount { get; private set; }
+        public int GetWifiChipInfoCallCount { get; private set; }
 
         /// <summary>Runs as the query lands, for tests that need to race it.</summary>
-        public Action? OnGetLanChipInfo { get; set; }
+        public Action? OnGetWifiChipInfo { get; set; }
 
-        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
         {
-            GetLanChipInfoCallCount++;
-            OnGetLanChipInfo?.Invoke();
+            GetWifiChipInfoCallCount++;
+            OnGetWifiChipInfo?.Invoke();
 
             var outcome = _outcomes[Math.Min(_next, _outcomes.Count - 1)];
             _next++;
@@ -740,9 +740,9 @@ public class LanChipInfoProviderExtensionsTests
             // surfaces a failure, and it is the path the probe's catch clauses actually see.
             return outcome switch
             {
-                Exception ex => Task.FromException<LanChipInfo?>(ex),
-                LanChipInfo info => Task.FromResult<LanChipInfo?>(info),
-                _ => Task.FromResult<LanChipInfo?>(null),
+                Exception ex => Task.FromException<WifiChipInfo?>(ex),
+                WifiChipInfo info => Task.FromResult<WifiChipInfo?>(info),
+                _ => Task.FromResult<WifiChipInfo?>(null),
             };
         }
     }
@@ -751,9 +751,9 @@ public class LanChipInfoProviderExtensionsTests
     /// The scripted provider as a full device, so the probe can find something to send the
     /// <c>LAN:APPLY</c> kick through.
     /// </summary>
-    private sealed class ScriptedLanChipInfoDevice : ScriptedLanChipInfoProvider, IStreamingDevice
+    private sealed class ScriptedWifiChipInfoDevice : ScriptedWifiChipInfoProvider, IStreamingDevice
     {
-        public ScriptedLanChipInfoDevice(params object?[] outcomes)
+        public ScriptedWifiChipInfoDevice(params object?[] outcomes)
             : base(outcomes)
         {
         }

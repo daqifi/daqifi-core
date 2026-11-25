@@ -1,10 +1,10 @@
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// A non-destructive summary of the WINC module: what the bridge and the module reported without
-/// changing anything. Produced by <see cref="WincModuleInspector.ReadIdentityAsync"/>.
+/// changing anything. Produced by <see cref="WifiModuleInspector.ReadIdentityAsync"/>.
 /// </summary>
-public sealed class WincModuleIdentity
+public sealed class WifiModuleIdentity
 {
     /// <summary>
     /// Chip identity register (0x1000). A live WINC1500 reads 0x0015xxxx with firmware running, or

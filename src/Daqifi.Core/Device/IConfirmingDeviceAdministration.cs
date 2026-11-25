@@ -21,7 +21,7 @@ namespace Daqifi.Core.Device;
 /// (rather than folding the members straight into <see cref="IStreamingDevice"/>) because it
 /// follows the same shape as the other capability slices this device exposes
 /// (<see cref="Network.INetworkConfigurable"/>, <see cref="SdCard.ISdCardOperations"/>,
-/// <see cref="Firmware.ILanChipInfoProvider"/>, <see cref="Diagnostics.IDeviceDiagnostics"/>), some
+/// <see cref="Firmware.IWifiChipInfoProvider"/>, <see cref="Diagnostics.IDeviceDiagnostics"/>), some
 /// of which are implemented independently of <see cref="IStreamingDevice"/>. A caller holding only
 /// a bare <see cref="IDevice"/> still needs the type test before use:
 /// </para>

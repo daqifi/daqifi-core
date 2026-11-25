@@ -685,7 +685,7 @@ internal sealed class Pic32FirmwareUpdater
         // queries) until SYSTem:POWer:STATe 1 is sent. InitializeAsync
         // handles that plus the rest of the standard init sequence
         // (echo off, stream format, etc.). Without this, callers writing
-        // a "natural" probe like GetLanChipInfoAsync would silently fail
+        // a "natural" probe like GetWifiChipInfoAsync would silently fail
         // for tens of seconds because the device is still dormant.
         Logger.LogInformation("Waking post-reset device via InitializeAsync.");
         try

@@ -3,7 +3,7 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// WiFi LAN chip information returned by the <c>SYSTem:COMMunicate:LAN:GETChipInfo?</c> SCPI query.
 /// </summary>
-public sealed record LanChipInfo
+public sealed record WifiChipInfo
 {
     /// <summary>
     /// Gets the chip hardware identifier.

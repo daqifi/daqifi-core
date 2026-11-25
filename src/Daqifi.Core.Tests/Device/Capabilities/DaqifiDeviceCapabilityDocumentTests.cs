@@ -269,7 +269,7 @@ public class DaqifiDeviceCapabilityDocumentTests
 
     /// <summary>
     /// A device whose text-command exchange answers from a per-command script, so the
-    /// capability read can be driven without a transport (mirrors <c>TestableLanChipInfoDevice</c>).
+    /// capability read can be driven without a transport (mirrors <c>TestableWifiChipInfoDevice</c>).
     /// </summary>
     private sealed class TestableCapabilityDevice : DaqifiDevice
     {

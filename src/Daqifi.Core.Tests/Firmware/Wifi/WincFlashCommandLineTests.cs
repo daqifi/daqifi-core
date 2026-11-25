@@ -1,6 +1,6 @@
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 
-namespace Daqifi.Core.Tests.Firmware.Winc;
+namespace Daqifi.Core.Tests.Firmware.Wifi;
 
 /// <summary>
 /// The exact command line that launches the WINC flash tool (issue #844).

@@ -465,7 +465,7 @@ public class WifiLinkStatusTests
     /// <summary>
     /// A streaming device whose text exchange returns a canned reply, so the queries run through
     /// the real facade, collaborator and feature gate without a transport (mirrors
-    /// <c>TestableLanChipInfoDevice</c>).
+    /// <c>TestableWifiChipInfoDevice</c>).
     /// </summary>
     private sealed class TestableWifiDevice : DaqifiStreamingDevice
     {

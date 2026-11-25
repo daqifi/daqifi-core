@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// The program name and the command line that launch Microchip's WINC flash tool.

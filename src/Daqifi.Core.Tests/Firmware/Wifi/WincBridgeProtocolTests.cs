@@ -1,6 +1,6 @@
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 
-namespace Daqifi.Core.Tests.Firmware.Winc;
+namespace Daqifi.Core.Tests.Firmware.Wifi;
 
 /// <summary>
 /// Framing tests for the WINC serial bridge wire format.

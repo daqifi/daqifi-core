@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// Finds Microchip's external WINC flash tool under a firmware path, so a caller can answer
@@ -13,7 +13,7 @@ namespace Daqifi.Core.Firmware.Winc;
 /// misconfigured. It locates the tool; it does not run it — the WiFi update flow owns that,
 /// including the interactive prompt handshake and output-based success verification.
 /// </remarks>
-public sealed class WincFlashToolLocator
+public sealed class WifiFlashToolLocator
 {
     private readonly string _toolFileName;
 
@@ -21,7 +21,7 @@ public sealed class WincFlashToolLocator
     /// Creates a locator that searches for <paramref name="toolFileName"/> (e.g.
     /// <c>winc_flash_tool.cmd</c>).
     /// </summary>
-    public WincFlashToolLocator(string toolFileName)
+    public WifiFlashToolLocator(string toolFileName)
     {
         if (string.IsNullOrWhiteSpace(toolFileName))
         {

@@ -1,4 +1,4 @@
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// Read-only access to the WINC1500's SPI flash and identity registers, driven through the serial

@@ -1,9 +1,9 @@
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
 using System.Runtime.Versioning;
 
-namespace Daqifi.Core.Tests.Firmware.Winc;
+namespace Daqifi.Core.Tests.Firmware.Wifi;
 
 /// <summary>
 /// Covers the flash-level read sequences and the two <see cref="IWincFlasher"/> implementations.
@@ -226,7 +226,7 @@ public class WincFlasherTests
             () => CreateReader(port).ReadFlash(0, 5000, cts.Token));
     }
 
-    // ---- WincModuleInspector -------------------------------------------------
+    // ---- WifiModuleInspector -------------------------------------------------
 
     [Fact]
     public async Task Inspector_ReadIdentityAsync_HandshakesNegotiatesBaudThenReadsIdentity()
@@ -235,15 +235,15 @@ public class WincFlasherTests
         port.Registers[WincFlashReader.ChipIdRegister] = 0x001003A0;
         port.Registers[DummyRegister] = 0x00C22018;
 
-        var flasher = new WincModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
+        var flasher = new WifiModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
 
         var identity = await flasher.ReadIdentityAsync("COM1");
 
         Assert.Equal(0x001003A0u, identity.ChipId);
         Assert.Equal(0x00C22018u, identity.FlashJedecId);
         Assert.True(identity.IsRecognizedWinc);
-        Assert.Equal(WincModuleInspector.FastBaudRate, identity.NegotiatedBaudRate);
-        Assert.Contains(WincModuleInspector.FastBaudRate, port.BaudRateHistory);
+        Assert.Equal(WifiModuleInspector.FastBaudRate, identity.NegotiatedBaudRate);
+        Assert.Contains(WifiModuleInspector.FastBaudRate, port.BaudRateHistory);
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public class WincFlasherTests
         var port = CreateReadyPort();
         port.Registers[WincFlashReader.ChipIdRegister] = 0xFFFFFFFF;
 
-        var flasher = new WincModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
+        var flasher = new WifiModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
 
         var identity = await flasher.ReadIdentityAsync("COM1");
 
@@ -264,7 +264,7 @@ public class WincFlasherTests
     public async Task Inspector_ReadIdentityAsync_ExplainsWhenNoBridgeIsListening()
     {
         var port = new FakeWincSerialPort { SuppressIdentityResponse = true };
-        var flasher = new WincModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
+        var flasher = new WifiModuleInspector((_, _) => port, baudSettleDelay: TimeSpan.Zero);
 
         var ex = await Assert.ThrowsAsync<IOException>(() => flasher.ReadIdentityAsync("COM1"));
 
@@ -278,7 +278,7 @@ public class WincFlasherTests
         // SerialPort.Open takes no cancellation token and can block indefinitely on a wedged or
         // half-enumerated USB CDC device. The only way to stay responsive is a hard deadline.
         var port = new HangingOpenPort();
-        var inspector = new WincModuleInspector(
+        var inspector = new WifiModuleInspector(
             (_, _) => port,
             baudSettleDelay: TimeSpan.Zero,
             openTimeout: TimeSpan.FromMilliseconds(150));
@@ -312,7 +312,7 @@ public class WincFlasherTests
         // using a seam that exists for production reasons rather than a test-only hook.
         var logger = new CapturingLogger();
         var port = new FaultingOnReleasePort();
-        var inspector = new WincModuleInspector(
+        var inspector = new WifiModuleInspector(
             (_, _) => port,
             logger,
             baudSettleDelay: TimeSpan.Zero,
@@ -340,7 +340,7 @@ public class WincFlasherTests
         // throwing logger could skip past the disposal, the abandoned port would leak and break
         // every later open until the process exits — strictly worse than the fault being reported.
         var port = new FaultingOnReleasePort();
-        var inspector = new WincModuleInspector(
+        var inspector = new WifiModuleInspector(
             (_, _) => port,
             new ThrowingLogger(),
             baudSettleDelay: TimeSpan.Zero,
@@ -360,7 +360,7 @@ public class WincFlasherTests
     public async Task Inspector_ObservesCancellationDuringAHangingOpen()
     {
         var port = new HangingOpenPort();
-        var inspector = new WincModuleInspector(
+        var inspector = new WifiModuleInspector(
             (_, _) => port,
             baudSettleDelay: TimeSpan.Zero,
             openTimeout: TimeSpan.FromMinutes(5));
@@ -376,12 +376,12 @@ public class WincFlasherTests
     [Fact]
     public async Task Inspector_ReadIdentityAsync_RejectsAnEmptyPortName()
     {
-        var flasher = new WincModuleInspector((_, _) => CreateReadyPort());
+        var flasher = new WifiModuleInspector((_, _) => CreateReadyPort());
 
         await Assert.ThrowsAsync<ArgumentException>(() => flasher.ReadIdentityAsync("  "));
     }
 
-    // ---- WincFlashToolLocator -------------------------------------------
+    // ---- WifiFlashToolLocator -------------------------------------------
 
     [Fact]
     public void Locator_IsAvailable_WhenTheFirmwarePathIsTheToolItself()
@@ -391,7 +391,7 @@ public class WincFlasherTests
 
         try
         {
-            var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+            var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
             Assert.True(locator.IsAvailable(toolPath));
         }
@@ -412,7 +412,7 @@ public class WincFlasherTests
 
         try
         {
-            var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+            var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
             Assert.True(locator.IsAvailable(root));
             Assert.True(locator.TryResolveToolPath(root, out var resolved));
@@ -434,7 +434,7 @@ public class WincFlasherTests
 
         try
         {
-            var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+            var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
             Assert.False(locator.IsAvailable(root));
             Assert.False(locator.TryResolveToolPath(root, out _));
@@ -462,7 +462,7 @@ public class WincFlasherTests
         {
             File.SetUnixFileMode(locked, UnixFileMode.None);
 
-            var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+            var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
             // An unreadable tree is a permissions failure, not "tool not found".
             Assert.Throws<UnauthorizedAccessException>(() => locator.TryResolveToolPath(root, out _));
@@ -480,7 +480,7 @@ public class WincFlasherTests
     [Fact]
     public void Locator_IsNotAvailable_ForAPathThatDoesNotExist()
     {
-        var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+        var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
         Assert.False(locator.IsAvailable(Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}")));
     }
@@ -534,7 +534,7 @@ public class WincFlasherTests
         // IsAvailable is documented as never throwing. A narrow IO-only catch would let an
         // ArgumentException from a malformed path escape a probe whose entire purpose is to be
         // safe to call with anything.
-        var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+        var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
 
         var ex = Record.Exception(() => locator.IsAvailable(path));
 
@@ -545,7 +545,7 @@ public class WincFlasherTests
     [Fact]
     public void Locator_IsAvailable_IsTotal_ForAnAbsurdlyLongPath()
     {
-        var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+        var locator = new WifiFlashToolLocator("winc_flash_tool.cmd");
         var longPath = "/" + new string('x', 40_000);
 
         Assert.Null(Record.Exception(() => locator.IsAvailable(longPath)));
@@ -654,7 +654,7 @@ public class WincFlasherTests
     [Fact]
     public void Locator_RejectsAnEmptyToolName()
     {
-        Assert.Throws<ArgumentException>(() => new WincFlashToolLocator("  "));
+        Assert.Throws<ArgumentException>(() => new WifiFlashToolLocator("  "));
     }
 
 

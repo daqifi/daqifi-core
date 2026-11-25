@@ -548,7 +548,7 @@ public class DaqifiStreamingDeviceAnalogOutputTests
     /// <summary>
     /// A streaming device that records what it would have sent and answers text exchanges from
     /// a canned response, so the analog-output paths can be exercised without hardware
-    /// (mirrors <c>TestableLanChipInfoDevice</c>).
+    /// (mirrors <c>TestableWifiChipInfoDevice</c>).
     /// </summary>
     private sealed class CapturingAnalogOutputDevice : DaqifiStreamingDevice
     {

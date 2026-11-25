@@ -1,6 +1,6 @@
 using System.IO.Ports;
 
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// <see cref="IWincSerialPort"/> over <see cref="SerialPort"/>. Cross-platform: this is what makes a

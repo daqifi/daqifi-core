@@ -9,20 +9,20 @@ using Daqifi.Core.Firmware;
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// The <see cref="ILanChipInfoProvider"/> implementation, extracted from
+/// The <see cref="IWifiChipInfoProvider"/> implementation, extracted from
 /// <see cref="DaqifiStreamingDevice"/> so the device delegates rather than hosts it.
 /// </summary>
-internal sealed class LanChipInfoOperations : ILanChipInfoProvider
+internal sealed class WifiChipInfoOperations : IWifiChipInfoProvider
 {
     private readonly IDeviceOperationHost _host;
 
-    internal LanChipInfoOperations(IDeviceOperationHost host)
+    internal WifiChipInfoOperations(IDeviceOperationHost host)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
     }
 
     /// <inheritdoc />
-    public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+    public async Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
     {
         _host.EnsureConnected();
 
@@ -31,7 +31,7 @@ internal sealed class LanChipInfoOperations : ILanChipInfoProvider
             responseTimeout: TimeSpan.FromSeconds(2),
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        if (LanChipInfoParser.TryParseLines(lines, out var info))
+        if (WifiChipInfoParser.TryParseLines(lines, out var info))
         {
             return info;
         }
@@ -45,7 +45,7 @@ internal sealed class LanChipInfoOperations : ILanChipInfoProvider
         var errorLine = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
         if (errorLine != null && ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var errorCode) && errorCode == -200)
         {
-            throw new LanNotInitializedException(errorLine);
+            throw new WifiNotInitializedException(errorLine);
         }
 
         return null;

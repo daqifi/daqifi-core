@@ -2,14 +2,14 @@ using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Firmware;
 
-public class LanChipInfoParserTests
+public class WifiChipInfoParserTests
 {
     [Fact]
     public void TryParse_ValidJson_ReturnsChipInfo()
     {
         const string json = """{"ChipId":5596,"FwVersion":"19.5.4","BuildDate":"Jan  8 2019 Time 12:38:49"}""";
 
-        Assert.True(LanChipInfoParser.TryParse(json, out var result));
+        Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
         Assert.Equal(5596, result.ChipId);
         Assert.Equal("19.5.4", result.FwVersion);
@@ -21,7 +21,7 @@ public class LanChipInfoParserTests
     {
         const string json = """{"ChipId":1234,"FwVersion":"19.5.4"}""";
 
-        Assert.True(LanChipInfoParser.TryParse(json, out var result));
+        Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
         Assert.Equal("19.5.4", result.FwVersion);
         Assert.Equal(string.Empty, result.BuildDate);
@@ -32,7 +32,7 @@ public class LanChipInfoParserTests
     {
         const string json = """{"FwVersion":"19.5.4","BuildDate":"Jan  8 2019"}""";
 
-        Assert.True(LanChipInfoParser.TryParse(json, out var result));
+        Assert.True(WifiChipInfoParser.TryParse(json, out var result));
         Assert.NotNull(result);
         Assert.Equal(0, result.ChipId);
         Assert.Equal("19.5.4", result.FwVersion);
@@ -43,7 +43,7 @@ public class LanChipInfoParserTests
     {
         const string json = """{"ChipId":1234,"BuildDate":"Jan  8 2019"}""";
 
-        Assert.False(LanChipInfoParser.TryParse(json, out var result));
+        Assert.False(WifiChipInfoParser.TryParse(json, out var result));
         Assert.Null(result);
     }
 
@@ -52,7 +52,7 @@ public class LanChipInfoParserTests
     {
         const string json = """{"ChipId":1234,"FwVersion":"","BuildDate":"Jan  8 2019"}""";
 
-        Assert.False(LanChipInfoParser.TryParse(json, out var result));
+        Assert.False(WifiChipInfoParser.TryParse(json, out var result));
         Assert.Null(result);
     }
 
@@ -62,21 +62,21 @@ public class LanChipInfoParserTests
     [InlineData("   ")]
     public void TryParse_NullOrWhitespace_ReturnsFalse(string? input)
     {
-        Assert.False(LanChipInfoParser.TryParse(input, out var result));
+        Assert.False(WifiChipInfoParser.TryParse(input, out var result));
         Assert.Null(result);
     }
 
     [Fact]
     public void TryParse_MalformedJson_ReturnsFalse()
     {
-        Assert.False(LanChipInfoParser.TryParse("{not valid json", out var result));
+        Assert.False(WifiChipInfoParser.TryParse("{not valid json", out var result));
         Assert.Null(result);
     }
 
     [Fact]
     public void TryParse_NonJsonString_ReturnsFalse()
     {
-        Assert.False(LanChipInfoParser.TryParse("plain text response", out var result));
+        Assert.False(WifiChipInfoParser.TryParse("plain text response", out var result));
         Assert.Null(result);
     }
 
@@ -91,7 +91,7 @@ public class LanChipInfoParserTests
             "trailing text"
         };
 
-        Assert.True(LanChipInfoParser.TryParseLines(lines, out var result));
+        Assert.True(WifiChipInfoParser.TryParseLines(lines, out var result));
         Assert.NotNull(result);
         Assert.Equal("19.5.4", result.FwVersion);
     }
@@ -101,14 +101,14 @@ public class LanChipInfoParserTests
     {
         var lines = new[] { "", "not json", "also not json" };
 
-        Assert.False(LanChipInfoParser.TryParseLines(lines, out var result));
+        Assert.False(WifiChipInfoParser.TryParseLines(lines, out var result));
         Assert.Null(result);
     }
 
     [Fact]
     public void TryParseLines_EmptySequence_ReturnsFalse()
     {
-        Assert.False(LanChipInfoParser.TryParseLines([], out var result));
+        Assert.False(WifiChipInfoParser.TryParseLines([], out var result));
         Assert.Null(result);
     }
 }

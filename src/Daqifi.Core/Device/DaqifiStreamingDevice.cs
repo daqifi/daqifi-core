@@ -26,7 +26,7 @@ namespace Daqifi.Core.Device;
 /// Represents a DAQiFi device that supports data streaming functionality.
 /// Extends the base DaqifiDevice with streaming-specific operations.
 /// </summary>
-public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIdentification, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
+public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIdentification, ILiveSampleSource, INetworkConfigurable, IWifiLinkStatusProvider, ISdCardOperations, IWifiChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
     /// Shortest time <see cref="StartStreamingAsync"/> gives the device to send its first stream
@@ -339,7 +339,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         _networkOperations = new NetworkConfigurationOperations(this);
         _wifiLinkStatusOperations = new WifiLinkStatusOperations(this);
         _sdCardOperations = new SdCardOperations(this);
-        _lanChipInfoOperations = new LanChipInfoOperations(this);
+        _wifiChipInfoOperations = new WifiChipInfoOperations(this);
         _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
 
         _session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
@@ -1483,8 +1483,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <summary>SD card operations (<see cref="ISdCardOperations"/>) and the shared-SPI handover.</summary>
     private SdCardOperations _sdCardOperations = null!;
 
-    /// <summary>WiFi module chip info (<see cref="ILanChipInfoProvider"/>).</summary>
-    private LanChipInfoOperations _lanChipInfoOperations = null!;
+    /// <summary>WiFi module chip info (<see cref="IWifiChipInfoProvider"/>).</summary>
+    private WifiChipInfoOperations _wifiChipInfoOperations = null!;
 
     /// <summary>Device diagnostics (<see cref="IDeviceDiagnostics"/>).</summary>
     private DeviceDiagnosticsOperations _diagnosticsOperations = null!;
@@ -1615,7 +1615,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     public void PrepareSdInterface() => _sdCardOperations.PrepareSdInterface();
 
     /// <inheritdoc />
-    public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
+    public void PrepareWifiInterface() => _sdCardOperations.PrepareWifiInterface();
 
     /// <summary>
     /// Raises the <see cref="LowSdSpaceWarning"/> event.
@@ -1675,11 +1675,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     #endregion
 
-    #region ILanChipInfoProvider
+    #region IWifiChipInfoProvider
 
     /// <inheritdoc />
-    public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
-        => _lanChipInfoOperations.GetLanChipInfoAsync(cancellationToken);
+    public Task<WifiChipInfo?> GetWifiChipInfoAsync(CancellationToken cancellationToken = default)
+        => _wifiChipInfoOperations.GetWifiChipInfoAsync(cancellationToken);
 
     #endregion
 

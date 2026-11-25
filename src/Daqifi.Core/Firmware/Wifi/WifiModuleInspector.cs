@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// Managed, cross-platform access to the WINC module over its UART serial bridge — no external
@@ -24,7 +24,7 @@ namespace Daqifi.Core.Firmware.Winc;
 /// known-good base.
 /// </para>
 /// </remarks>
-public sealed class WincModuleInspector
+public sealed class WifiModuleInspector
 {
     /// <summary>Rate the bridge starts at before renegotiation.</summary>
     public const int InitialBaudRate = 115200;
@@ -49,7 +49,7 @@ public sealed class WincModuleInspector
     /// <summary>
     /// Creates an inspector that opens real serial ports.
     /// </summary>
-    public WincModuleInspector(ILogger<WincModuleInspector>? logger = null)
+    public WifiModuleInspector(ILogger<WifiModuleInspector>? logger = null)
         : this((port, baud) => new SystemWincSerialPort(port, baud), logger)
     {
     }
@@ -57,7 +57,7 @@ public sealed class WincModuleInspector
     /// <summary>
     /// Test seam: supply the serial port implementation.
     /// </summary>
-    internal WincModuleInspector(
+    internal WifiModuleInspector(
         Func<string, int, IWincSerialPort> portFactory,
         ILogger? logger = null,
         TimeSpan? baudSettleDelay = null,
@@ -75,7 +75,7 @@ public sealed class WincModuleInspector
     /// Opens the bridge, handshakes, moves to <see cref="FastBaudRate"/>, and reports the module's
     /// chip and flash identity. Changes nothing on the device.
     /// </summary>
-    public Task<WincModuleIdentity> ReadIdentityAsync(
+    public Task<WifiModuleIdentity> ReadIdentityAsync(
         string portName,
         CancellationToken cancellationToken = default)
         => Task.Run(() => ReadIdentity(portName, cancellationToken), cancellationToken);
@@ -90,7 +90,7 @@ public sealed class WincModuleInspector
         CancellationToken cancellationToken = default)
         => Task.Run(() => ReadFlash(portName, offset, length, cancellationToken), cancellationToken);
 
-    private WincModuleIdentity ReadIdentity(string portName, CancellationToken cancellationToken)
+    private WifiModuleIdentity ReadIdentity(string portName, CancellationToken cancellationToken)
     {
         using var session = OpenSession(portName, cancellationToken);
 
@@ -108,7 +108,7 @@ public sealed class WincModuleInspector
             flashId,
             session.Port.BaudRate);
 
-        return new WincModuleIdentity
+        return new WifiModuleIdentity
         {
             ChipId = chipId,
             FlashJedecId = flashId,

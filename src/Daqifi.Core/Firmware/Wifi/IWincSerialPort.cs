@@ -1,4 +1,4 @@
-namespace Daqifi.Core.Firmware.Winc;
+namespace Daqifi.Core.Firmware.Wifi;
 
 /// <summary>
 /// The narrow serial surface the WINC bridge protocol needs: raw byte I/O plus a baud rate that can

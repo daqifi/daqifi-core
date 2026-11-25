@@ -1,6 +1,6 @@
-using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Firmware.Wifi;
 
-namespace Daqifi.Core.Tests.Firmware.Winc;
+namespace Daqifi.Core.Tests.Firmware.Wifi;
 
 /// <summary>
 /// Exercises the bridge client against a fake that re-implements the firmware's parser, so a

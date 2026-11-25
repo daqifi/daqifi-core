@@ -129,7 +129,7 @@ directly (no cast required). It implements:
 - `IWifiLinkStatusProvider` — live WiFi link state and the mode the radio is actually running
   (firmware v3.9.0+, gated by `DeviceFeature.WifiLinkStatus`)
 - `ISdCardOperations` — list/download/delete/format SD card contents, start/stop on-device logging, opt in to CRC-protected SD writes, and hand the shared SPI bus between the SD card and the LAN
-- `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
+- `IWifiChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)
 
@@ -724,7 +724,7 @@ catch (DaqifiDeviceException ex)
 | `FeatureNotSupportedException` | A feature this firmware or board does not have |
 | `SdCardOperationException` and its subclasses | An SD card operation that failed or was refused |
 | `DeviceDiagnosticsException` and its subclass | A diagnostics query that failed or could not be read |
-| `LanNotInitializedException` | A WiFi chip that is not initialized yet |
+| `WifiNotInitializedException` | A WiFi chip that is not initialized yet |
 | `DeviceReconnectFailedException` | Automatic reconnect gave up (on `ErrorOccurred`, never thrown) |
 
 Connection failures keep the framework type they always had, and need their own `catch`:
