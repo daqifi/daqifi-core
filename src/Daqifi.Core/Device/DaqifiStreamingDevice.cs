@@ -891,7 +891,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     /// <see cref="SampleRateCap"/>.
     /// </remarks>
     private int EnabledAnalogInputCount() => GetChannelsSnapshot().Count(channel =>
-        channel.Type == ChannelType.Analog && IsEnabledAheadOfNextSend(channel));
+        channel.Type == ChannelType.Analog && _channelControl.IsEnabledAheadOfNextSend(channel));
 
     /// <inheritdoc />
     /// <remarks>
@@ -1742,6 +1742,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool IDeviceOperationHost.HasDeferredSends => HasDeferredSends;
 
+    bool IDeviceOperationHost.SendsAreNeverHeldBack => SendsAreNeverHeldBack;
+
     DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
 
     void IDeviceOperationHost.UpdateMetadata(Func<DeviceMetadata, DeviceMetadata> change) =>
@@ -1867,13 +1869,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 
     // A start that is held back goes out behind the enables that are.
-    int IStreamingSessionHost.MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this, IsEnabledAheadOfNextSend);
+    int IStreamingSessionHost.MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this, _channelControl.IsEnabledAheadOfNextSend);
 
     bool IStreamingSessionHost.IsEnableRequested(IChannel channel) => _channelControl.IsEnableRequested(channel);
-
-    /// <summary>Whether a channel will be enabled when what this flow sends next goes out.</summary>
-    private bool IsEnabledAheadOfNextSend(IChannel channel)
-        => SendsAreNeverHeldBack ? channel.IsEnabled : _channelControl.IsEnableRequested(channel);
 
     // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
     // own report of its tick rate, read at exactly the moment the old BeginStreamingSession

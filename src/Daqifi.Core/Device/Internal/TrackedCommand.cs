@@ -91,7 +91,8 @@ internal sealed class TrackedMessage(IOutboundMessage<string> message, TrackedCo
 /// <remarks>
 /// The two differ only meanwhile. What is recorded is what the device has, which is what the decoder
 /// and every reader go by; what is requested is what the next command is worked out from, such as an
-/// ADC mask from every enabled channel. A command that is dropped changes neither.
+/// ADC mask from every enabled channel, unless it goes out ahead of what is held back. A command that
+/// is dropped changes neither.
 /// </remarks>
 /// <param name="get">Reads the recorded state.</param>
 /// <param name="record">Records the state.</param>
@@ -105,7 +106,13 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
     /// </summary>
     private readonly List<(TrackedCommand Command, T State)> _outstanding = new();
 
-    /// <summary>What the last command asked for, or the recorded state when none is outstanding.</summary>
+    /// <summary>The recorded state.</summary>
+    internal T Recorded => get();
+
+    /// <summary>
+    /// What the last command asked for, or the recorded state when none is outstanding: the state
+    /// there will be when a command that is held back too goes out.
+    /// </summary>
     internal T Requested
     {
         get

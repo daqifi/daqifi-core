@@ -272,6 +272,77 @@ public class ChannelCommandDroppedTests
         Assert.True(device.Digital(4).IsPwmEnabled);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheOperationThatHasTheDevice_GoesByThePwmModeThePinIsIn(bool pwmOn)
+    {
+        // Its own write goes out ahead of what it holds back.
+        using var device = await HeldDevice.CreateAsync();
+        var pin = device.Digital(pwmOn ? 4 : 3);
+
+        await device.WhileHeldAsync(
+            () => device.SetPwmEnabled(pin, !pwmOn),
+            inOperation: () =>
+            {
+                if (pwmOn)
+                {
+                    Assert.Throws<InvalidOperationException>(() => device.SetDioValue(pin, true));
+                    Assert.Throws<InvalidOperationException>(() => device.SetDioDirection(pin, ChannelDirection.Output));
+                }
+                else
+                {
+                    device.SetDioValue(pin, true);
+                    device.SetDioDirection(pin, ChannelDirection.Output);
+                    Assert.Equal(ChannelDirection.Output, pin.Direction);
+                }
+            });
+    }
+
+    [Fact]
+    public async Task TheOperationThatHasTheDevice_EnablesOnlyWhatItAsksFor()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(
+            () => device.EnableChannel(device.Analog(1)),
+            inOperation: () =>
+            {
+                device.EnableChannel(device.Analog(2));
+                Assert.Equal("AI0 AI2", device.Enabled);
+            });
+    }
+
+    [Fact]
+    public async Task AnEnableBehindARawAdcMask_KeepsAChannelThatBecomesKnownMeanwhile()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b1_0000));
+            device.EnableChannel(device.Analog(1));
+            device.PopulateChannelsFromStatus(HeldDevice.Status(analogEnabled: 0b001, analogCount: 5));
+        });
+
+        Assert.Equal("AI1 AI4", device.Enabled);
+    }
+
+    [Fact]
+    public async Task DisableAllChannels_BehindARawAdcMask_DisablesAChannelThatBecomesKnownMeanwhile()
+    {
+        using var device = await HeldDevice.CreateAsync();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b1_0000));
+            device.DisableAllChannels();
+            device.PopulateChannelsFromStatus(HeldDevice.Status(analogEnabled: 0b001, analogCount: 5));
+        });
+
+        Assert.Equal("", device.Enabled);
+    }
+
     [Fact]
     public async Task ADroppedRawAdcMask_LeavesTheChannelsTheDeviceStreams()
     {
@@ -416,8 +487,11 @@ public class ChannelCommandDroppedTests
             return device;
         }
 
-        /// <summary>Runs <paramref name="action"/> while an operation on another flow has the device.</summary>
-        public async Task WhileHeldAsync(Action action)
+        /// <summary>
+        /// Runs <paramref name="action"/> while an operation on another flow has the device, and then
+        /// <paramref name="inOperation"/> in that operation.
+        /// </summary>
+        public async Task WhileHeldAsync(Action action, Action? inOperation = null)
         {
             var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -425,6 +499,7 @@ public class ChannelCommandDroppedTests
             {
                 held.SetResult();
                 await release.Task;
+                inOperation?.Invoke();
             }));
 
             await held.Task;

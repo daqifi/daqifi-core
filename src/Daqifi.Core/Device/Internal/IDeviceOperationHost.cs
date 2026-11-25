@@ -82,6 +82,9 @@ internal interface IDeviceOperationHost
     /// </remarks>
     bool HasDeferredSends => false;
 
+    /// <inheritdoc cref="DaqifiDevice.SendsAreNeverHeldBack"/>
+    bool SendsAreNeverHeldBack => false;
+
     /// <inheritdoc cref="DaqifiDevice.Metadata"/>
     DeviceMetadata Metadata { get; }
 

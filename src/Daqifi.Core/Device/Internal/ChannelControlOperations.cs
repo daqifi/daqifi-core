@@ -160,7 +160,20 @@ internal sealed class ChannelControlOperations
         => (channel as IChannelEnablementNotifier)?.SetEnabled(enabled);
 
     /// <summary>
-    /// Whether a channel is enabled, or has been asked to be by a command that is held back.
+    /// The state there will be when what this flow sends next goes out: what has been requested, or
+    /// what the device has for the flow whose operation the requests are held back behind, because
+    /// its own commands go out ahead of them.
+    /// </summary>
+    private T AheadOfNextSend<T>(CommandedState<T> state)
+        => _host.SendsAreNeverHeldBack ? state.Recorded : state.Requested;
+
+    /// <summary>Whether a channel will be enabled when what this flow sends next goes out.</summary>
+    internal bool IsEnabledAheadOfNextSend(IChannel channel)
+        => _host.SendsAreNeverHeldBack ? channel.IsEnabled : IsEnableRequested(channel);
+
+    /// <summary>
+    /// Whether a channel is enabled, or has been asked to be by a command that is held back: what its
+    /// caller wants, whether or not that goes out.
     /// </summary>
     internal bool IsEnableRequested(IChannel channel) => channel.Type switch
     {
@@ -334,12 +347,12 @@ internal sealed class ChannelControlOperations
     /// pin is doing something it is not (#449). Symmetric with the capability guard in
     /// <see cref="SetPwmEnabled"/>; the only way past this is <c>SetPwmEnabled(channel, false)</c>.
     /// The check is the channel's <see cref="IDigitalChannel.Mode"/>, the same one the MCP
-    /// server makes before it calls in (#945).
+    /// server makes before it calls in (#945), or the mode it will be in if the write is held back
+    /// behind a PWM command.
     /// </summary>
     private void EnsurePwmNotEnabled(DigitalChannel channel)
     {
-        // What has been requested, because the command this guards goes out behind that.
-        if (Pin(channel).Pwm.Requested)
+        if (AheadOfNextSend(Pin(channel).Pwm))
         {
             throw new InvalidOperationException(
                 $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Disable PWM on this channel first (SetPwmEnabled(channel, false); the MCP server exposes this as the disable_pwm tool).");
@@ -709,18 +722,18 @@ internal sealed class ChannelControlOperations
             return null;
         }
 
-        // Only those the device has now: a status message can have taken some away since a request.
-        var present = _host.SnapshotChannels()
-            .Where(channel => channel.Type == type)
-            .Select(channel => channel.ChannelNumber)
-            .ToHashSet();
-        if (present.Count == 0)
+        if (!_host.SnapshotChannels().Any(channel => channel.Type == type))
         {
             return null;
         }
 
-        var requested = state.Requested.ToHashSet();
-        requested.IntersectWith(present);
+        if (allTypes && !enabled)
+        {
+            return [];
+        }
+
+        // Including any a raw mask names that the device has not described yet.
+        var requested = AheadOfNextSend(state).ToHashSet();
         if (enabled)
         {
             requested.UnionWith(numbers);
