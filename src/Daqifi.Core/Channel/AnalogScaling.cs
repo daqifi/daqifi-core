@@ -16,36 +16,36 @@ internal static class AnalogScaling
     /// behind <c>MEASure:VOLTage:DC?</c>):
     /// </para>
     /// <code>
-    /// Volts = (raw / Resolution) * PortRange * CalibrationM * InternalScaleM + CalibrationB
+    /// Volts = (raw / Resolution) * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </code>
     /// <para>
-    /// <paramref name="calibrationB"/> is an offset in volts and is added <em>after</em>
+    /// <paramref name="calibrationOffset"/> is an offset in volts and is added <em>after</em>
     /// <paramref name="internalScaleM"/> is applied — it is deliberately not scaled by it. Scaling
     /// the offset makes host-side values diverge from the device's own <c>MEAS:VOLT:DC?</c> reading
     /// whenever the internal scale factor is non-unity and the offset is non-zero.
     /// </para>
     /// <para>
     /// Parameters follow the formula left to right (offset last), so the easily transposed
-    /// <paramref name="internalScaleM"/> and <paramref name="calibrationB"/> read in formula order
+    /// <paramref name="internalScaleM"/> and <paramref name="calibrationOffset"/> read in formula order
     /// at every call site.
     /// </para>
     /// </remarks>
     /// <param name="rawValue">The raw ADC count.</param>
     /// <param name="resolution">The ADC's maximum raw count (2^bits - 1). Must be non-zero.</param>
     /// <param name="portRange">The channel's full-scale range, in volts.</param>
-    /// <param name="calibrationM">The calibration slope (gain).</param>
+    /// <param name="calibrationSlope">The calibration slope (gain).</param>
     /// <param name="internalScaleM">The board's internal (front-end) scale factor.</param>
-    /// <param name="calibrationB">The calibration offset, in volts.</param>
+    /// <param name="calibrationOffset">The calibration offset, in volts.</param>
     /// <returns>The scaled value, in volts.</returns>
     internal static double Scale(
         double rawValue,
         double resolution,
         double portRange,
-        double calibrationM,
+        double calibrationSlope,
         double internalScaleM,
-        double calibrationB)
+        double calibrationOffset)
     {
         var normalized = rawValue / resolution;
-        return normalized * portRange * calibrationM * internalScaleM + calibrationB;
+        return normalized * portRange * calibrationSlope * internalScaleM + calibrationOffset;
     }
 }

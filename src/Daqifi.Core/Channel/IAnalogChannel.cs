@@ -39,12 +39,12 @@ public interface IAnalogChannel : IChannel
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
     /// </summary>
-    double CalibrationM { get; set; }
+    double CalibrationSlope { get; set; }
 
     /// <summary>
     /// Gets or sets the calibration offset (B in the scaling formula).
     /// </summary>
-    double CalibrationB { get; set; }
+    double CalibrationOffset { get; set; }
 
     /// <summary>
     /// Gets or sets the internal scale factor.
@@ -58,10 +58,10 @@ public interface IAnalogChannel : IChannel
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationM * InternalScaleM + CalibrationB
+    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
-    /// <see cref="CalibrationB"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
+    /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
     /// is applied — it is not scaled by it. This matches the firmware's own on-device conversion, so a
     /// value scaled here agrees with what the device reports for <c>MEASure:VOLTage:DC?</c>.
     /// </remarks>

@@ -1420,12 +1420,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
         => _administration.LoadAdcCalibrationAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
+    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default)
+        => _administration.SetAdcCalibrationSlopeAsync(channelNumber, slope, cancellationToken);
 
     /// <inheritdoc />
-    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
-        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
+    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default)
+        => _administration.SetAdcCalibrationOffsetAsync(channelNumber, offset, cancellationToken);
 
     /// <inheritdoc />
     public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)

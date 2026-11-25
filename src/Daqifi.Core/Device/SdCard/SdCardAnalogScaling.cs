@@ -102,7 +102,7 @@ internal static class SdCardAnalogScaling
 
         var hasCal = cal != null && channel >= 0 && channel < cal.Count;
         var calM = hasCal ? cal![channel].Slope : 1.0;
-        var calB = hasCal ? cal![channel].Intercept : 0.0;
+        var calB = hasCal ? cal![channel].Offset : 0.0;
         var range = portRange != null && channel >= 0 && channel < portRange.Count ? portRange[channel] : 1.0;
         var scaleM = intScale != null && channel >= 0 && channel < intScale.Count ? intScale[channel] : 1.0;
 

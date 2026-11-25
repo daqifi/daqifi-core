@@ -390,7 +390,7 @@ public class ScpiMessageProducerTests
 
         // The finite check is shared with the other double-valued setters, so pin the
         // parameter name and wording this call site is responsible for supplying.
-        Assert.Equal("calM", ex.ParamName);
+        Assert.Equal("slope", ex.ParamName);
         Assert.Contains("Calibration slope must be a finite number.", ex.Message);
     }
 
@@ -420,7 +420,7 @@ public class ScpiMessageProducerTests
 
         // The finite check is shared with the other double-valued setters, so pin the
         // parameter name and wording this call site is responsible for supplying.
-        Assert.Equal("calB", ex.ParamName);
+        Assert.Equal("offset", ex.ParamName);
         Assert.Contains("Calibration offset must be a finite number.", ex.Message);
     }
 

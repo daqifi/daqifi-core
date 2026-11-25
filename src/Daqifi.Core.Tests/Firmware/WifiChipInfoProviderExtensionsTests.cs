@@ -867,8 +867,8 @@ public class WifiChipInfoProviderExtensionsTests
 
         public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task UseAdcCalibrationAsync(AdcCalibrationBank bank, CancellationToken cancellationToken = default) => Task.CompletedTask;

@@ -751,7 +751,7 @@ public class SdCardFileParserTests
         Assert.NotNull(session.DeviceConfig.CalibrationValues);
         Assert.Equal(3, session.DeviceConfig.CalibrationValues!.Count);
         Assert.Equal(1.0, session.DeviceConfig.CalibrationValues![0].Slope, 2);
-        Assert.Equal(0.01, session.DeviceConfig.CalibrationValues![1].Intercept, 4);
+        Assert.Equal(0.01, session.DeviceConfig.CalibrationValues![1].Offset, 4);
     }
 
     #endregion

@@ -41,9 +41,9 @@ public sealed record SdCardDeviceConfiguration
     public required string? FirmwareVersion { get; init; }
 
     /// <summary>
-    /// Per-channel calibration slope/intercept pairs, if present.
+    /// Per-channel calibration slope/offset pairs, if present.
     /// </summary>
-    public required IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues { get; init; }
+    public required IReadOnlyList<(double Slope, double Offset)>? CalibrationValues { get; init; }
 
     /// <summary>
     /// ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.
@@ -105,7 +105,7 @@ public sealed record SdCardDeviceConfiguration
             DevicePartNumber = device.Metadata.PartNumber,
             FirmwareVersion = device.Metadata.FirmwareVersion,
             CalibrationValues = analogChannels
-                .Select(ch => (ch.CalibrationM, ch.CalibrationB))
+                .Select(ch => (ch.CalibrationSlope, ch.CalibrationOffset))
                 .ToArray(),
             Resolution = firstAnalog.Resolution,
             PortRange = analogChannels.Select(ch => ch.PortRange).ToArray(),

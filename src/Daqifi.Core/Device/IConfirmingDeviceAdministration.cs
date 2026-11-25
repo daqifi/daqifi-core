@@ -85,14 +85,14 @@ public interface IConfirmingDeviceAdministration
     /// </summary>
     /// <inheritdoc cref="LoadAdcCalibrationAsync" path="/remarks" />
     /// <param name="channelNumber">The analog input channel number.</param>
-    /// <param name="calM">The calibration slope (gain) coefficient.</param>
+    /// <param name="slope">The calibration slope (gain) coefficient.</param>
     /// <param name="cancellationToken">A cancellation token to observe while the exchange runs.</param>
     /// <returns>A task that completes once the device has confirmed the command.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelNumber"/> is negative.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="DeviceCommandFailedException">Thrown when the device refused the command, or did not confirm it.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default);
+    Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets a single channel's ADC calibration offset (CalB) in device RAM, and confirms the device accepted
@@ -100,14 +100,14 @@ public interface IConfirmingDeviceAdministration
     /// </summary>
     /// <inheritdoc cref="LoadAdcCalibrationAsync" path="/remarks" />
     /// <param name="channelNumber">The analog input channel number.</param>
-    /// <param name="calB">The calibration offset coefficient.</param>
+    /// <param name="offset">The calibration offset coefficient.</param>
     /// <param name="cancellationToken">A cancellation token to observe while the exchange runs.</param>
     /// <returns>A task that completes once the device has confirmed the command.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelNumber"/> is negative.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="DeviceCommandFailedException">Thrown when the device refused the command, or did not confirm it.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default);
+    Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persists the device's current ADC calibration coefficients to the <b>factory</b> NVM bank, and confirms

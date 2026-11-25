@@ -583,7 +583,7 @@ internal sealed class SdCardFileParser
         private ulong _deviceSn;
         private string? _devicePn;
         private string? _fwRev;
-        private IReadOnlyList<(double Slope, double Intercept)>? _calibration;
+        private IReadOnlyList<(double Slope, double Offset)>? _calibration;
         private uint _resolution;
         private IReadOnlyList<double>? _portRange;
         private IReadOnlyList<double>? _internalScaleM;
@@ -754,7 +754,7 @@ internal sealed class SdCardFileParser
     private static SdCardDeviceConfiguration ExtractDeviceConfiguration(DaqifiOutMessage statusMessage)
     {
         // Extract calibration values if present
-        IReadOnlyList<(double Slope, double Intercept)>? calibration = null;
+        IReadOnlyList<(double Slope, double Offset)>? calibration = null;
         if (statusMessage.AnalogInCalM.Count > 0 && statusMessage.AnalogInCalB.Count > 0)
         {
             var count = Math.Min(statusMessage.AnalogInCalM.Count, statusMessage.AnalogInCalB.Count);

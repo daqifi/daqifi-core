@@ -424,18 +424,18 @@ public sealed class BootloaderSessionDevice : IStreamingDevice
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calM">Ignored.</param>
+    /// <param name="slope">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
-    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+    public Task SetAdcCalibrationSlopeAsync(int channelNumber, double slope, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
     /// <summary>No-op: see the remarks on this type.</summary>
     /// <param name="channelNumber">Ignored.</param>
-    /// <param name="calB">Ignored.</param>
+    /// <param name="offset">Ignored.</param>
     /// <param name="cancellationToken">Observed before completing.</param>
     /// <returns>A completed task, or a cancelled one if <paramref name="cancellationToken"/> was already signalled.</returns>
-    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+    public Task SetAdcCalibrationOffsetAsync(int channelNumber, double offset, CancellationToken cancellationToken = default)
         => Completed(cancellationToken);
 
     /// <summary>No-op: see the remarks on this type.</summary>

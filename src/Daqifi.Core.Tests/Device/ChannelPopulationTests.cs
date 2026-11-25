@@ -205,10 +205,10 @@ public class ChannelPopulationTests
             .Cast<IAnalogChannel>()
             .ToList();
 
-        Assert.Equal(1.5, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.1, analogChannels[0].CalibrationB, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.5, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.1, analogChannels[0].CalibrationOffset, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
         Assert.Equal(1.1, analogChannels[0].InternalScaleM, 3);
         Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
         Assert.Equal(10.0, analogChannels[0].PortRange, 3);
@@ -244,14 +244,14 @@ public class ChannelPopulationTests
             .ToList();
 
         // ch0 fell back to defaults across the board
-        Assert.Equal(1.0, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[0].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[0].CalibrationOffset, 3);
         Assert.Equal(1.0, analogChannels[0].InternalScaleM, 3);
         Assert.Equal(1.0, analogChannels[0].PortRange, 3);
 
         // ch1's valid values were preserved
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
         Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
         Assert.Equal(5.0, analogChannels[1].PortRange, 3);
     }
@@ -643,16 +643,16 @@ public class ChannelPopulationTests
             .ToList();
 
         // First two have provided values
-        Assert.Equal(1.5, analogChannels[0].CalibrationM, 3);
-        Assert.Equal(0.1, analogChannels[0].CalibrationB, 3);
-        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
-        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.5, analogChannels[0].CalibrationSlope, 3);
+        Assert.Equal(0.1, analogChannels[0].CalibrationOffset, 3);
+        Assert.Equal(2.0, analogChannels[1].CalibrationSlope, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationOffset, 3);
 
         // Last two use defaults (CalM=1.0, CalB=0.0)
-        Assert.Equal(1.0, analogChannels[2].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[2].CalibrationB, 3);
-        Assert.Equal(1.0, analogChannels[3].CalibrationM, 3);
-        Assert.Equal(0.0, analogChannels[3].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[2].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[2].CalibrationOffset, 3);
+        Assert.Equal(1.0, analogChannels[3].CalibrationSlope, 3);
+        Assert.Equal(0.0, analogChannels[3].CalibrationOffset, 3);
     }
 
     [Fact]
@@ -800,8 +800,8 @@ public class ChannelPopulationTests
 
         // Verify analog channels have correct calibration
         var firstAnalog = (IAnalogChannel)device.Channels[0];
-        Assert.Equal(1.0, firstAnalog.CalibrationM, 3);
-        Assert.Equal(0.0, firstAnalog.CalibrationB, 3);
+        Assert.Equal(1.0, firstAnalog.CalibrationSlope, 3);
+        Assert.Equal(0.0, firstAnalog.CalibrationOffset, 3);
         Assert.Equal(10.0, firstAnalog.PortRange, 3);
         Assert.Equal(65535u, firstAnalog.Resolution);
     }

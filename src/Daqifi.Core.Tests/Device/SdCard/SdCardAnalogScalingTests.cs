@@ -39,7 +39,7 @@ public class SdCardAnalogScalingTests
     /// so a result can only come out right if each channel was read from its own index.
     /// </summary>
     private static SdCardDeviceConfiguration PerChannelConfig(
-        IReadOnlyList<(double Slope, double Intercept)>? calibration = null,
+        IReadOnlyList<(double Slope, double Offset)>? calibration = null,
         IReadOnlyList<double>? portRange = null,
         IReadOnlyList<double>? internalScale = null) => new()
         {
@@ -108,7 +108,7 @@ public class SdCardAnalogScalingTests
         // Act
         var result = SdCardAnalogScaling.ScaleRawAnalogValues(RawCounts, config);
 
-        // Assert — raw/Resolution * PortRange * Slope * InternalScaleM + Intercept, per channel.
+        // Assert — raw/Resolution * PortRange * Slope * InternalScaleM + Offset, per channel.
         Assert.Equal(3, result.Count);
         Assert.Equal(150.0 / 1000.0 * 10.0 * 2.0 * 1.0 + 0.5, result[0], 10);
         Assert.Equal(200.0 / 1000.0 * 20.0 * 3.0 * 2.0 - 0.25, result[1], 10);

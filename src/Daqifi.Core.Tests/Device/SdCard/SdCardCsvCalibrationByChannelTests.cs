@@ -35,7 +35,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
     private const uint TickRate = 1000u;
 
     // Eight channels, no two alike in any list.
-    private static readonly (double Slope, double Intercept)[] Calibration =
+    private static readonly (double Slope, double Offset)[] Calibration =
     [
         (1.5, 0.01), (2.0, 0.02), (2.5, 0.03), (3.0, 0.04),
         (3.5, 0.05), (4.0, 0.06), (4.5, 0.07), (5.0, 0.08)
@@ -65,7 +65,7 @@ public sealed class SdCardCsvCalibrationByChannelTests
     /// </summary>
     private static double VoltsFor(int channel, double raw) =>
         raw / Resolution * PortRange[channel] * Calibration[channel].Slope * InternalScale[channel]
-        + Calibration[channel].Intercept;
+        + Calibration[channel].Offset;
 
     /// <summary>
     /// The volts an unconfigured channel gives: unity gain, no offset, a one-volt range, and a

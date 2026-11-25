@@ -32,7 +32,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
 
     /// <summary>
     /// Largest absolute magnitude accepted for the multiplicative/offset calibration coefficients
-    /// (<see cref="CalibrationM"/>, <see cref="CalibrationB"/>, <see cref="InternalScaleM"/>). Values
+    /// (<see cref="CalibrationSlope"/>, <see cref="CalibrationOffset"/>, <see cref="InternalScaleM"/>). Values
     /// beyond this indicate a corrupted coefficient rather than a real calibration.
     /// </summary>
     public const double MaximumCalibrationMagnitude = 1_000_000.0;
@@ -44,8 +44,8 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     private Action? _enablementChanged;
     private double _minValue;
     private double _maxValue;
-    private double _calibrationM;
-    private double _calibrationB;
+    private double _calibrationSlope;
+    private double _calibrationOffset;
     private double _internalScaleM;
     private double _portRange;
     private uint _resolution;
@@ -202,26 +202,26 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
     /// </summary>
-    public double CalibrationM
+    public double CalibrationSlope
     {
-        get { lock (_lock) { return _calibrationM; } }
+        get { lock (_lock) { return _calibrationSlope; } }
         set
         {
-            ValidateScaleFactor(value, nameof(CalibrationM));
-            lock (_lock) { _calibrationM = value; }
+            ValidateScaleFactor(value, nameof(CalibrationSlope));
+            lock (_lock) { _calibrationSlope = value; }
         }
     }
 
     /// <summary>
     /// Gets or sets the calibration offset (B in the scaling formula).
     /// </summary>
-    public double CalibrationB
+    public double CalibrationOffset
     {
-        get { lock (_lock) { return _calibrationB; } }
+        get { lock (_lock) { return _calibrationOffset; } }
         set
         {
-            ValidateOffset(value, nameof(CalibrationB));
-            lock (_lock) { _calibrationB = value; }
+            ValidateOffset(value, nameof(CalibrationOffset));
+            lock (_lock) { _calibrationOffset = value; }
         }
     }
 
@@ -281,8 +281,8 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
         _isEnabled = false;
         _minValue = -10.0;
         _maxValue = 10.0;
-        _calibrationM = 1.0;
-        _calibrationB = 0.0;
+        _calibrationSlope = 1.0;
+        _calibrationOffset = 0.0;
         _internalScaleM = 1.0;
         _portRange = 1.0;
     }
@@ -296,14 +296,14 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <see cref="Device.DaqifiDevice.GetChannelsSnapshot"/> on another thread) can never observe
     /// a torn mix of old and new scaling values from <see cref="GetScaledValue"/>.
     /// </remarks>
-    internal void UpdateScalingFromStatus(uint resolution, double calibrationB, double calibrationM, double internalScaleM, double portRange, bool resolutionIsAssumed = false)
+    internal void UpdateScalingFromStatus(uint resolution, double calibrationOffset, double calibrationSlope, double internalScaleM, double portRange, bool resolutionIsAssumed = false)
     {
         lock (_lock)
         {
             _resolution = resolution;
             _resolutionIsAssumed = resolutionIsAssumed;
-            _calibrationB = calibrationB;
-            _calibrationM = calibrationM;
+            _calibrationOffset = calibrationOffset;
+            _calibrationSlope = calibrationSlope;
             _internalScaleM = internalScaleM;
             _portRange = portRange;
         }
@@ -311,10 +311,10 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationM * InternalScaleM + CalibrationB
+    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationSlope * InternalScaleM + CalibrationOffset
     /// </summary>
     /// <remarks>
-    /// <see cref="CalibrationB"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
+    /// <see cref="CalibrationOffset"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
     /// is applied — it is not scaled by it. This matches the firmware's own on-device conversion, so a
     /// value scaled here agrees with what the device reports for <c>MEASure:VOLTage:DC?</c>.
     /// </remarks>
@@ -324,7 +324,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     {
         lock (_lock)
         {
-            return AnalogScaling.Scale(rawValue, _resolution, _portRange, _calibrationM, _internalScaleM, _calibrationB);
+            return AnalogScaling.Scale(rawValue, _resolution, _portRange, _calibrationSlope, _internalScaleM, _calibrationOffset);
         }
     }
 
@@ -380,7 +380,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     }
 
     /// <summary>
-    /// Validates a multiplicative scale factor (<see cref="CalibrationM"/>/<see cref="InternalScaleM"/>):
+    /// Validates a multiplicative scale factor (<see cref="CalibrationSlope"/>/<see cref="InternalScaleM"/>):
     /// finite, non-zero, and within ±<see cref="MaximumCalibrationMagnitude"/>. Negative factors are allowed
     /// (they invert the signal); zero is not (it discards the measurement entirely).
     /// </summary>
@@ -396,7 +396,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     }
 
     /// <summary>
-    /// Validates a calibration offset (<see cref="CalibrationB"/>): finite and within
+    /// Validates a calibration offset (<see cref="CalibrationOffset"/>): finite and within
     /// ±<see cref="MaximumCalibrationMagnitude"/>. Zero is a valid offset.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="value"/> is not a valid offset.</exception>

@@ -187,13 +187,13 @@ public class ChannelGuardCensusTests
                 () => new AnalogChannel(0).MaximumValue = double.PositiveInfinity),
 
             new GuardSite(
-                "AnalogChannel.CalibrationM",
+                "AnalogChannel.CalibrationSlope",
                 "AnalogChannel.cs",
-                Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationM)),
-                nameof(AnalogChannel.CalibrationM),
+                Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationSlope)),
+                nameof(AnalogChannel.CalibrationSlope),
                 0.0,
                 scaleFactor,
-                () => new AnalogChannel(0).CalibrationM = 0.0),
+                () => new AnalogChannel(0).CalibrationSlope = 0.0),
 
             new GuardSite(
                 "AnalogChannel.InternalScaleM",
@@ -205,13 +205,13 @@ public class ChannelGuardCensusTests
                 () => new AnalogChannel(0).InternalScaleM = 0.0),
 
             new GuardSite(
-                "AnalogChannel.CalibrationB",
+                "AnalogChannel.CalibrationOffset",
                 "AnalogChannel.cs",
-                Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationB)),
-                nameof(AnalogChannel.CalibrationB),
+                Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationOffset)),
+                nameof(AnalogChannel.CalibrationOffset),
                 TooBig,
                 calibrationOffset,
-                () => new AnalogChannel(0).CalibrationB = TooBig),
+                () => new AnalogChannel(0).CalibrationOffset = TooBig),
 
             new GuardSite(
                 "AnalogChannel.PortRange",

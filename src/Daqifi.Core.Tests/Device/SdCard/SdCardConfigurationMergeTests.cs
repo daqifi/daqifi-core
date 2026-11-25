@@ -116,7 +116,7 @@ public class SdCardConfigurationMergeTests
     {
         // Arrange — deliberately distinct values per slot so a transposed argument in the merge
         // (serial into part number, port range into internal scale) cannot pass unnoticed.
-        var calibration = new[] { (Slope: 1.5, Intercept: 0.25) };
+        var calibration = new[] { (Slope: 1.5, Offset: 0.25) };
         var portRange = new[] { 10.0 };
         var internalScale = new[] { 2.0 };
         var overrideConfig = Empty() with
@@ -145,7 +145,7 @@ public class SdCardConfigurationMergeTests
     public void Merge_WhenFileStatesReferenceFields_OverrideDoesNotReplaceThem()
     {
         // Arrange — both sides supply every reference field, with different values.
-        var fileCalibration = new[] { (Slope: 1.0, Intercept: 0.0) };
+        var fileCalibration = new[] { (Slope: 1.0, Offset: 0.0) };
         var filePortRange = new[] { 5.0 };
         var fileInternalScale = new[] { 1.0 };
         var parsed = Empty() with
@@ -162,7 +162,7 @@ public class SdCardConfigurationMergeTests
             DeviceSerialNumber = "SN-DEVICE",
             DevicePartNumber = "PN-DEVICE",
             FirmwareVersion = "1.2.3",
-            CalibrationValues = new[] { (Slope: 9.0, Intercept: 9.0) },
+            CalibrationValues = new[] { (Slope: 9.0, Offset: 9.0) },
             PortRange = new[] { 99.0 },
             InternalScaleM = new[] { 99.0 }
         };
@@ -185,7 +185,7 @@ public class SdCardConfigurationMergeTests
     {
         // Arrange — the CSV parser's real shape: the header names the device and its channel
         // layout, the connected device supplies the calibration and clock the file never wrote.
-        var calibration = new[] { (Slope: 1.5, Intercept: 0.25) };
+        var calibration = new[] { (Slope: 1.5, Offset: 0.25) };
         var parsed = Empty() with
         {
             AnalogPortCount = 4,

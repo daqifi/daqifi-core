@@ -1,4 +1,8 @@
 #nullable enable
+*REMOVED*Daqifi.Core.Channel.AnalogChannel.CalibrationB.get -> double
+*REMOVED*Daqifi.Core.Channel.AnalogChannel.CalibrationB.set -> void
+*REMOVED*Daqifi.Core.Channel.AnalogChannel.CalibrationM.get -> double
+*REMOVED*Daqifi.Core.Channel.AnalogChannel.CalibrationM.set -> void
 *REMOVED*Daqifi.Core.Channel.AnalogChannel.Direction.set -> void
 *REMOVED*Daqifi.Core.Channel.AnalogChannel.IsEnabled.set -> void
 *REMOVED*Daqifi.Core.Channel.AnalogChannel.MaxValue.get -> double
@@ -21,6 +25,10 @@
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.PwmDutyCyclePercent.set -> void
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.SetActiveSample(Daqifi.Core.Channel.IDataSample! sample) -> void
 *REMOVED*Daqifi.Core.Channel.DigitalChannel.SetActiveSample(double value, System.DateTime timestamp) -> void
+*REMOVED*Daqifi.Core.Channel.IAnalogChannel.CalibrationB.get -> double
+*REMOVED*Daqifi.Core.Channel.IAnalogChannel.CalibrationB.set -> void
+*REMOVED*Daqifi.Core.Channel.IAnalogChannel.CalibrationM.get -> double
+*REMOVED*Daqifi.Core.Channel.IAnalogChannel.CalibrationM.set -> void
 *REMOVED*Daqifi.Core.Channel.IAnalogChannel.MaxValue.get -> double
 *REMOVED*Daqifi.Core.Channel.IAnalogChannel.MaxValue.set -> void
 *REMOVED*Daqifi.Core.Channel.IAnalogChannel.MinValue.get -> double
@@ -222,7 +230,9 @@
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SaveFactoryAdcCalibration() -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SaveVoltagePrecision() -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationOffset(int channelNumber, double calB) -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationOffsetAsync(int channelNumber, double calB, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationSlope(int channelNumber, double calM) -> void
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationSlopeAsync(int channelNumber, double calM, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetAnalogOutput(int channelNumber, double voltage) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetDioDirection(Daqifi.Core.Channel.IChannel! channel, Daqifi.Core.Channel.ChannelDirection direction) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.SetDioValue(Daqifi.Core.Channel.IChannel! channel, bool value) -> void
@@ -289,7 +299,9 @@
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SaveFactoryAdcCalibration() -> void
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SaveVoltagePrecision() -> void
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationOffset(int channelNumber, double calB) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync(int channelNumber, double calB, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationSlope(int channelNumber, double calM) -> void
+*REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync(int channelNumber, double calM, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAnalogOutput(int channelNumber, double voltage) -> void
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetAnalogOutputAsync(int channelNumber, double voltage, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.SetDioDirection(Daqifi.Core.Channel.IChannel! channel, Daqifi.Core.Channel.ChannelDirection direction) -> void
@@ -432,6 +444,8 @@
 *REMOVED*Daqifi.Core.Device.Discovery.WiFiDeviceFinder.WiFiDeviceFinder() -> void
 *REMOVED*Daqifi.Core.Device.Discovery.WiFiDeviceFinder.WiFiDeviceFinder(int discoveryPort) -> void
 *REMOVED*Daqifi.Core.Device.DuplicateDeviceCheck.NewDevice.get -> Daqifi.Core.Device.DaqifiDevice?
+*REMOVED*Daqifi.Core.Device.IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync(int channelNumber, double calB, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Device.IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync(int channelNumber, double calM, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(int bank, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.IDevice.ErrorOccurred -> System.EventHandler<Daqifi.Core.Device.DeviceErrorEventArgs!>!
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
@@ -512,6 +526,7 @@
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardCsvFileParser.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardCsvFileParser.ParseFileAsync(string! filePath, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardCsvFileParser.SdCardCsvFileParser() -> void
+*REMOVED*Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.CalibrationValues.get -> System.Collections.Generic.IReadOnlyList<(double Slope, double Intercept)>?
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.Deconstruct(out int AnalogPortCount, out int DigitalPortCount, out uint TimestampFrequency, out string? DeviceSerialNumber, out string? DevicePartNumber, out string? FirmwareRevision, out System.Collections.Generic.IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues, out uint Resolution, out System.Collections.Generic.IReadOnlyList<double>? PortRange, out System.Collections.Generic.IReadOnlyList<double>? InternalScaleM) -> void
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.FirmwareRevision.get -> string?
 *REMOVED*Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.FirmwareRevision.init -> void
@@ -978,6 +993,8 @@
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts() -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetSdMaxFileSize.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetStoredStreamingRate.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetAdcCalibrationOffset(int channel, double calB) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+*REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetAdcCalibrationSlope(int channel, double calM) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, int direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, double value) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 *REMOVED*static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetLogLevel(string! module, int level) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
@@ -1175,11 +1192,19 @@
 *REMOVED*~static DaqifiOutMessage.Descriptor.get -> Google.Protobuf.Reflection.MessageDescriptor
 *REMOVED*~static DaqifiOutMessage.Parser.get -> Google.Protobuf.MessageParser<DaqifiOutMessage>
 *REMOVED*~static DaqifiOutMessageReflection.Descriptor.get -> Google.Protobuf.Reflection.FileDescriptor
+Daqifi.Core.Channel.AnalogChannel.CalibrationOffset.get -> double
+Daqifi.Core.Channel.AnalogChannel.CalibrationOffset.set -> void
+Daqifi.Core.Channel.AnalogChannel.CalibrationSlope.get -> double
+Daqifi.Core.Channel.AnalogChannel.CalibrationSlope.set -> void
 Daqifi.Core.Channel.AnalogChannel.MaximumValue.get -> double
 Daqifi.Core.Channel.AnalogChannel.MaximumValue.set -> void
 Daqifi.Core.Channel.AnalogChannel.MinimumValue.get -> double
 Daqifi.Core.Channel.AnalogChannel.MinimumValue.set -> void
 Daqifi.Core.Channel.DataSample.Value.init -> void
+Daqifi.Core.Channel.IAnalogChannel.CalibrationOffset.get -> double
+Daqifi.Core.Channel.IAnalogChannel.CalibrationOffset.set -> void
+Daqifi.Core.Channel.IAnalogChannel.CalibrationSlope.get -> double
+Daqifi.Core.Channel.IAnalogChannel.CalibrationSlope.set -> void
 Daqifi.Core.Channel.IAnalogChannel.MaximumValue.get -> double
 Daqifi.Core.Channel.IAnalogChannel.MaximumValue.set -> void
 Daqifi.Core.Channel.IAnalogChannel.MinimumValue.get -> double
@@ -1297,6 +1322,8 @@ Daqifi.Core.Device.BootloaderSessionDevice.RebootAsync(System.Threading.Cancella
 Daqifi.Core.Device.BootloaderSessionDevice.RefreshDeviceStatusAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.BootloaderSessionDevice.SampleRateHz.get -> int
 Daqifi.Core.Device.BootloaderSessionDevice.SampleRateHz.set -> void
+Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationOffsetAsync(int channelNumber, double offset, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.BootloaderSessionDevice.SetAdcCalibrationSlopeAsync(int channelNumber, double slope, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.BootloaderSessionDevice.SetAnalogOutput(Daqifi.Core.Channel.IAnalogOutputChannel! channel, double voltage) -> void
 Daqifi.Core.Device.BootloaderSessionDevice.SetDioDirection(Daqifi.Core.Channel.IDigitalChannel! channel, Daqifi.Core.Channel.ChannelDirection direction) -> void
 Daqifi.Core.Device.BootloaderSessionDevice.SetDioValue(Daqifi.Core.Channel.IDigitalChannel! channel, bool value) -> void
@@ -1343,6 +1370,8 @@ Daqifi.Core.Device.DaqifiStreamingDevice.GetWifiChipInfoAsync(System.Threading.C
 Daqifi.Core.Device.DaqifiStreamingDevice.PrepareWifiInterface() -> void
 Daqifi.Core.Device.DaqifiStreamingDevice.SampleRateHz.get -> int
 Daqifi.Core.Device.DaqifiStreamingDevice.SampleRateHz.set -> void
+Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationOffsetAsync(int channelNumber, double offset, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.DaqifiStreamingDevice.SetAdcCalibrationSlopeAsync(int channelNumber, double slope, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.DaqifiStreamingDevice.SetAnalogOutput(Daqifi.Core.Channel.IAnalogOutputChannel! channel, double voltage) -> void
 Daqifi.Core.Device.DaqifiStreamingDevice.SetDioDirection(Daqifi.Core.Channel.IDigitalChannel! channel, Daqifi.Core.Channel.ChannelDirection direction) -> void
 Daqifi.Core.Device.DaqifiStreamingDevice.SetDioValue(Daqifi.Core.Channel.IDigitalChannel! channel, bool value) -> void
@@ -1460,6 +1489,8 @@ Daqifi.Core.Device.Discovery.WifiDeviceFinder
 Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.WifiDeviceFinder.WifiDeviceFinder(int discoveryPort) -> void
 Daqifi.Core.Device.DuplicateDeviceCheck.NewDevice.get -> Daqifi.Core.Device.DaqifiStreamingDevice?
+Daqifi.Core.Device.IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync(int channelNumber, double offset, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Device.IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync(int channelNumber, double slope, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.IConfirmingDeviceAdministration.UseAdcCalibrationAsync(Daqifi.Core.Device.AdcCalibrationBank bank, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.IDevice.ErrorOccurred -> System.EventHandler<Daqifi.Core.Device.DeviceErrorEventArgs!>?
 Daqifi.Core.Device.IDevice.InitializeAsync(System.TimeSpan? channelPopulationTimeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -1512,6 +1543,7 @@ Daqifi.Core.Device.SdCard.SdCardCaptureEstimate.SampleRateHz.get -> int
 Daqifi.Core.Device.SdCard.SdCardCaptureEstimate.SdCardCaptureEstimate(int sampleRateHz, int channelCount, System.TimeSpan duration, int bytesPerSamplePerChannel = 2) -> void
 Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Applied = 1 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
 Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult.Pending = 0 -> Daqifi.Core.Device.SdCard.SdCardCrcProtectionResult
+Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.CalibrationValues.get -> System.Collections.Generic.IReadOnlyList<(double Slope, double Offset)>?
 Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.FirmwareVersion.get -> string?
 Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.FirmwareVersion.init -> void
 Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.SdCardDeviceConfiguration() -> void
@@ -1887,6 +1919,8 @@ static Daqifi.Core.Communication.Producers.ScpiMessageProducer.EnableDioPorts.ge
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetSdMaximumFileSize.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetSdMinimumFreeSpace.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetStoredSampleRate.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetAdcCalibrationOffset(int channel, double offset) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetAdcCalibrationSlope(int channel, double slope) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortDirection(int channel, Daqifi.Core.Channel.ChannelDirection direction) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(int channel, bool high) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetLogLevel(string! module, Daqifi.Core.Device.Diagnostics.DeviceLogLevel level) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!

@@ -822,7 +822,7 @@ public static class ScpiMessageProducer
     /// Creates a command message to set a single channel's ADC calibration slope (CalM) in device RAM.
     /// </summary>
     /// <param name="channel">The analog input channel number.</param>
-    /// <param name="calM">The calibration slope (gain) coefficient.</param>
+    /// <param name="slope">The calibration slope (gain) coefficient.</param>
     /// <remarks>
     /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
     /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
@@ -830,20 +830,20 @@ public static class ScpiMessageProducer
     /// The slope is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALM channel,calM
     /// </remarks>
-    public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double calM)
+    public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double slope)
     {
         ValidateChannel(channel);
 
-        RequireFinite(calM, nameof(calM), "Calibration slope");
+        RequireFinite(slope, nameof(slope), "Calibration slope");
 
-        return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{calM.ToString(CultureInfo.InvariantCulture)}");
+        return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{slope.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>
     /// Creates a command message to set a single channel's ADC calibration offset (CalB) in device RAM.
     /// </summary>
     /// <param name="channel">The analog input channel number.</param>
-    /// <param name="calB">The calibration offset coefficient.</param>
+    /// <param name="offset">The calibration offset coefficient.</param>
     /// <remarks>
     /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
     /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
@@ -851,13 +851,13 @@ public static class ScpiMessageProducer
     /// The offset is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALB channel,calB
     /// </remarks>
-    public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double calB)
+    public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double offset)
     {
         ValidateChannel(channel);
 
-        RequireFinite(calB, nameof(calB), "Calibration offset");
+        RequireFinite(offset, nameof(offset), "Calibration offset");
 
-        return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{calB.ToString(CultureInfo.InvariantCulture)}");
+        return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{offset.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>
