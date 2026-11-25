@@ -22,8 +22,8 @@ public enum DeviceErrorSource
     /// </summary>
     /// <remarks>
     /// A persistent run of read failures is <em>also</em> what the transport escalates into
-    /// <see cref="ConnectionStatus.Lost"/> (issue #377). Seeing this source is therefore not by
-    /// itself proof the link is gone — watch <see cref="DaqifiDevice.StatusChanged"/> for that.
+    /// <see cref="DeviceState.Lost"/> (issue #377). Seeing this source is therefore not by
+    /// itself proof the link is gone — watch <see cref="DaqifiDevice.StateChanged"/> for that.
     /// </remarks>
     MessageConsumer = 1,
 
@@ -46,8 +46,8 @@ public enum DeviceErrorSource
     Reconnect = 3,
 
     /// <summary>
-    /// A <see cref="DaqifiDevice.StatusChanged"/> subscriber threw while being notified of a
-    /// connection-status transition (issue #494).
+    /// A <see cref="DaqifiDevice.StateChanged"/> subscriber threw while being notified of a
+    /// state change (issue #494).
     /// </summary>
     /// <remarks>
     /// The transition itself already happened and is not rolled back; this reports only that one
@@ -56,5 +56,5 @@ public enum DeviceErrorSource
     /// transition is isolated the same way and reported here too, so a defect inside Core cannot
     /// break a transition either.
     /// </remarks>
-    StatusNotification = 4,
+    StateNotification = 4,
 }

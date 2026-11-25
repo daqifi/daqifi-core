@@ -8,8 +8,8 @@ namespace Daqifi.Core.Device;
 /// Giving up is the loud outcome: alongside this event the failure is logged, raised on
 /// <see cref="DaqifiDevice.ErrorOccurred"/> with
 /// <see cref="DeviceErrorSource.Reconnect"/>, and the device settles on
-/// <see cref="ConnectionStatus.Failed"/>. Cancellation is quieter — it is what the caller asked
-/// for — and leaves the device on <see cref="ConnectionStatus.Lost"/>.
+/// <see cref="DeviceState.Failed"/>. Cancellation is quieter — it is what the caller asked
+/// for — and leaves the device on <see cref="DeviceState.Lost"/>.
 /// </remarks>
 public class ReconnectFailedEventArgs : EventArgs
 {

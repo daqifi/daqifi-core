@@ -22,10 +22,9 @@ reconnect, feature gating, thread-safety rules, and diagnostics.
 The base interface for all DAQiFi devices, providing fundamental connection and communication capabilities:
 
 - `Name` - Device identifier
-- `IsConnected` - Connection status
-- `Status` - Detailed connection status (`Disconnected`, `Connecting`, `Connected`, `Lost`;
-  plus `Retrying` / `Failed` once reconnection is enabled — see
-  [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop))
+- `IsConnected` - Whether the device has a session up
+- `State` - Where the device is in its life, as one `DeviceState` (see
+  [Connection State Monitoring](#connection-state-monitoring))
 - `Connect()` / `Disconnect()` - Blocking connection management
 - `ConnectAsync(CancellationToken)` / `DisconnectAsync(CancellationToken)` - Non-blocking, cancellable
   connection management. These are genuine interface members, not default-interface-method shims over
@@ -34,7 +33,7 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
   against the interface (not just the concrete `DaqifiDevice`) can tear a device down with
   `await using`/`await device.DisposeAsync()` — no cast required.
 - `Send<T>(IOutboundMessage<T>)` - Send commands to device
-- `StatusChanged` event - Connection status notifications
+- `StateChanged` event - Every change of `State`, with the previous and the current value
 - `MessageReceived` event - Incoming data notifications
 - `ErrorOccurred` event - Background read/parse/decode failures (see [Error Surface](#error-surface))
 
@@ -672,45 +671,62 @@ Notes:
   `TransportNotConnectedException` for the transport case — or both, since they classify the same
   way for reporting purposes.
 
-### Connection Status Monitoring
+### Connection State Monitoring
+
+`IDevice.State` is the one answer to where a device is in its life:
+
+| `DeviceState` | Meaning | `IsConnected` |
+|---|---|---|
+| `Disconnected` | No session, and nothing is trying to build one | `false` |
+| `Connecting` | A connect is opening the transport | `false` |
+| `Connected` | The session is up and not initialized | `true` |
+| `Initializing` | The initialization sequence is running | `true` |
+| `Ready` | Initialization succeeded: the device is usable | `true` |
+| `InitializationFailed` | Initialization failed; the session is still up, so it can be retried | `true` |
+| `Disconnecting` | A live session is being torn down | `true` |
+| `Lost` | The connection dropped without anyone asking for it | `false` |
+| `Retrying` | Between automatic reconnect attempts | `false` |
+| `Failed` | Automatic reconnection gave up | `false` |
+| `Disposed` | The device was disposed. Terminal | `false` |
+
+`Retrying` and `Failed` are only ever reported once reconnection is turned on — see
+[Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop). To ask only
+whether there is a session, use `IsConnected`, or `state.IsConnected()` on a value you already hold;
+comparing `State` with `Connected` misses a device that has gone on to `Ready`.
+
+`StateChanged` is raised for every change:
 
 ```csharp
-await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+using var transport = new SerialStreamTransport("COM3");
+await using var device = new DaqifiStreamingDevice("Device", transport);
 
-device.StatusChanged += (sender, args) =>
+device.StateChanged += (sender, args) =>
 {
-    switch (args.Status)
+    Console.WriteLine($"{args.PreviousState} -> {args.CurrentState}");
+
+    if (args.CurrentState == DeviceState.Ready)
     {
-        case ConnectionStatus.Disconnected:
-            Console.WriteLine("Device disconnected");
-            break;
-        case ConnectionStatus.Connecting:
-            Console.WriteLine("Connecting to device...");
-            break;
-        case ConnectionStatus.Connected:
-            Console.WriteLine("Device connected successfully");
-            break;
-        case ConnectionStatus.Lost:
-            Console.WriteLine("Connection lost");
-            break;
-        case ConnectionStatus.Retrying:
-            Console.WriteLine("Reconnecting...");   // only with reconnect enabled
-            break;
-        case ConnectionStatus.Failed:
-            Console.WriteLine("Reconnection gave up");
-            break;
+        Console.WriteLine("Device is usable");
     }
 };
+
+await device.ConnectAsync();     // Disconnected -> Connecting -> Connected
+await device.InitializeAsync();  // Connected -> Initializing -> Ready
 ```
 
-See [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop) for the
-`Retrying` and `Failed` states, which a device only ever reports once reconnection is turned on.
+`DaqifiDeviceFactory` connects and initializes before it hands a device over, so a handler attached
+to one of its devices starts from `Ready`.
+
+Events arrive one at a time, in the order the changes were made, on an arbitrary thread and with no
+lock held. A change made while a handler runs, by that handler or by another thread, is raised after
+the handler returns. So a handler must not wait for a later event, and `device.State` may already be
+further on than `args.CurrentState`.
 
 ### Detecting a dropped connection
 
-`ConnectionStatus.Lost` means the connection ended without anyone asking it to — the USB cable was
+`DeviceState.Lost` means the connection ended without anyone asking it to — the USB cable was
 pulled, the device lost power, the network dropped. `Disconnect()` reports
-`ConnectionStatus.Disconnected` instead, never `Lost`, so the two are always distinguishable.
+`DeviceState.Disconnected` instead, never `Lost`, so the two are always distinguishable.
 
 Neither OS handle is a liveness signal on its own: `SerialPort.IsOpen` stays `true` after a USB
 device is physically unplugged, and `TcpClient.Connected` describes the last completed operation
@@ -737,7 +753,7 @@ like. To disable the serial presence poll and rely on I/O escalation alone, cons
 with `livenessCheckInterval: TimeSpan.Zero`.
 
 When a drop is detected the transport closes its handle, so `IsConnected` already reads `false` by
-the time `StatusChanged` fires. The device's message consumer and producer are *not* stopped
+the time `StateChanged` fires. The device's message consumer and producer are *not* stopped
 automatically — call `Disconnect()` (or `Dispose()`) once you have handled `Lost` to release them.
 
 `Lost` is raised on an internal thread — the reader loop or the liveness timer, whichever detected
@@ -745,18 +761,18 @@ the drop — so treat the handler like any background callback: do the minimum, 
 reconnection onto your own thread rather than blocking inside it.
 
 ```csharp
-device.StatusChanged += (_, e) =>
+device.StateChanged += (_, e) =>
 {
-    if (e.Status != ConnectionStatus.Lost) return;
+    if (e.CurrentState != DeviceState.Lost) return;
     _ = Task.Run(() => device.Disconnect());   // don't tear down inside the callback
 };
 ```
 
 Because that callback runs on a background thread, a UI handler that touches a bound control from it
-throws — so the raise is isolated. A `StatusChanged` subscriber that throws cannot stop the
+throws — so the raise is isolated. A `StateChanged` subscriber that throws cannot stop the
 transition, cannot stop automatic reconnection from starting, and cannot keep the transport from
 releasing its handle; the exception is reported on `ErrorOccurred` as
-`DeviceErrorSource.StatusNotification` and written to the device logger. Isolation is per raise, not
+`DeviceErrorSource.StateNotification` and written to the device logger. Isolation is per raise, not
 per subscriber: the first handler to throw ends that one notification for the rest of the invocation
 list.
 
@@ -765,7 +781,7 @@ reader and writer loops report every read/write outcome to a transport that does
 
 The failures that feed this escalation are also reported individually, as they happen, on
 `IDevice.ErrorOccurred` — see [Error Surface](#error-surface). That event is diagnostics only;
-`ConnectionStatus.Lost` remains the single signal that means "the connection is over".
+`DeviceState.Lost` remains the single signal that means "the connection is over".
 
 ### Reconnecting automatically after a drop
 
@@ -1383,15 +1399,15 @@ device.ErrorOccurred += (_, e) =>
 |---|---|
 | `MessageConsumer` | A read from the transport stream failed, a frame could not be parsed, or a `MessageReceived` subscriber threw |
 | `StreamDecode` | A streaming frame could not be decoded into channel samples. That frame is dropped; the stream continues |
-| `StatusNotification` | A `StatusChanged` subscriber threw. The status transition itself still completed |
+| `StateNotification` | A `StateChanged` subscriber threw. The state change itself still completed |
 | `Reconnect` | Automatic reconnection ran out of attempts (see [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop)) |
 
 ### Observational, never escalating
 
 Raising this event changes nothing about what the device does. There is no tear-down, no retry, no
-`Status` change, and per-frame isolation is unchanged — a single malformed frame is still dropped on
+`State` change, and per-frame isolation is unchanged — a single malformed frame is still dropped on
 its own without disturbing the stream. Deciding that a link is genuinely dead is a separate
-mechanism with its own signal: `ConnectionStatus.Lost` on `StatusChanged` (see
+mechanism with its own signal: `DeviceState.Lost` on `StateChanged` (see
 [Detecting a dropped connection](#detecting-a-dropped-connection)). The two often fire together on a
 real drop — the same failing reads feed both — but neither implies the other, and an `ErrorOccurred`
 on its own is not a reason to reconnect.

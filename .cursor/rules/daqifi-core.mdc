@@ -17,7 +17,7 @@ alwaysApply: true
 
 ```
 src/Daqifi.Core/
-  Device/                    IDevice, IStreamingDevice, DaqifiDevice, DaqifiStreamingDevice, ConnectionStatus
+  Device/                    IDevice, IStreamingDevice, DaqifiDevice, DaqifiStreamingDevice, DeviceState
   Device/Discovery/          IDeviceFinder (not IDiscoveryService / DeviceDiscoveryService)
   Communication/Messages/    IOutboundMessage<T>, IInboundMessage<T>, ScpiMessage, ProtobufMessage
   Communication/Producers/   ScpiMessageProducer
@@ -32,9 +32,9 @@ No `src/Daqifi.Core/Discovery/` and no `Connection/` tree. Connection lives on D
 
 First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-format SCPI option (`ScpiMessageProducer.SetJsonStreamFormat`), not a library `IMessageParser`.
 
-## ConnectionStatus
+## DeviceState
 
-`Disconnected`, `Connecting`, `Connected`, `Lost`, `Retrying`, `Failed`.
+`Disconnected`, `Connecting`, `Connected`, `Initializing`, `Ready`, `InitializationFailed`, `Disconnecting`, `Lost`, `Retrying`, `Failed`, `Disposed`.
 
 ## Build already owns this
 

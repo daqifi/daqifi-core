@@ -20,7 +20,7 @@ namespace Daqifi.Core.Tests.Firmware;
 
 internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
 {
-    private ConnectionStatus _status = ConnectionStatus.Connected;
+    private DeviceState _state = DeviceState.Connected;
 
     /// <param name="name">The device's display label, the thing <see cref="Name"/> returns.</param>
     /// <param name="serialPortName">
@@ -47,7 +47,7 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     /// </remarks>
     public string? SerialPortName { get; set; }
     public bool IsConnected { get; private set; }
-    public ConnectionStatus Status => _status;
+    public DeviceState State => _state;
     public DeviceMetadata Metadata { get; } = new();
     public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
     public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
@@ -66,7 +66,7 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     /// </summary>
     public Action<string>? OnCommandSent { get; set; }
 
-    public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
+    public event EventHandler<DeviceStateChangedEventArgs>? StateChanged;
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived
     {
         add { }
@@ -95,16 +95,18 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
         }
 
         IsConnected = true;
-        _status = ConnectionStatus.Connected;
-        StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+        var previous = _state;
+        _state = DeviceState.Connected;
+        StateChanged?.Invoke(this, new DeviceStateChangedEventArgs(previous, _state));
     }
 
     public void Disconnect()
     {
         DisconnectCalls++;
         IsConnected = false;
-        _status = ConnectionStatus.Disconnected;
-        StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+        var previous = _state;
+        _state = DeviceState.Disconnected;
+        StateChanged?.Invoke(this, new DeviceStateChangedEventArgs(previous, _state));
     }
 
     public Task ConnectAsync(CancellationToken cancellationToken = default)

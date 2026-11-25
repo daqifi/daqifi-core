@@ -9,8 +9,8 @@ namespace Daqifi.Core.Device;
 /// Purely observational (issue #378). Raising this event never changes what the device does: no
 /// tear-down, no retry, no status change, and a single bad frame is still isolated so the stream
 /// survives it. Escalating a genuinely dead link to
-/// <see cref="ConnectionStatus.Lost"/> is the transports' job and is reported through
-/// <see cref="DaqifiDevice.StatusChanged"/>.
+/// <see cref="DeviceState.Lost"/> is the transports' job and is reported through
+/// <see cref="DaqifiDevice.StateChanged"/>.
 /// </para>
 /// <para>
 /// Delivery is throttled per <see cref="Source"/> and exception type — see

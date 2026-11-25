@@ -606,7 +606,7 @@ internal sealed class OperationSerializer : IDisposable
     internal bool TryAcquireForTeardown(TimeSpan wait)
     {
         // This flow already owns the lock — a Disconnect() from inside RunExclusiveAsync, or
-        // from a StatusChanged handler raised within one. Waiting would burn the whole teardown
+        // from a StateChanged handler raised within one. Waiting would burn the whole teardown
         // budget on a lock we are holding ourselves and then tear down anyway; run nested
         // instead, and leave the release to the owner. Reported as "not acquired" precisely so
         // the teardown does not release a lock it never took.

@@ -38,7 +38,6 @@ public class DaqifiDeviceConcurrentInitializeTests
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Hang));
         await second.WaitAsync(Hang);
-        Assert.Equal(DeviceLifecycle.Ready, device.Lifecycle);
         Assert.Equal(DeviceState.Ready, device.State);
     }
 
@@ -61,11 +60,11 @@ public class DaqifiDeviceConcurrentInitializeTests
         // Assert
         Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => first.WaitAsync(Hang)));
         Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => second.WaitAsync(Hang)));
-        Assert.Equal(DeviceLifecycle.Error, device.Lifecycle);
+        Assert.Equal(DeviceState.InitializationFailed, device.State);
 
         // And a failed initialization can still be retried.
         await device.InitializeAsync().WaitAsync(Hang);
-        Assert.Equal(DeviceLifecycle.Ready, device.Lifecycle);
+        Assert.Equal(DeviceState.Ready, device.State);
     }
 
     [Fact]
@@ -86,7 +85,7 @@ public class DaqifiDeviceConcurrentInitializeTests
         await second.WaitAsync(Hang);
 
         // Assert
-        Assert.Equal(DeviceLifecycle.Ready, device.Lifecycle);
+        Assert.Equal(DeviceState.Ready, device.State);
         Assert.Equal(1, device.SetupBlockCount);
         Assert.Single(device.Sent, data => data == ScpiMessageProducer.StopStreaming.Data);
         Assert.Single(device.Sent, data => data == ScpiMessageProducer.SetProtobufStreamFormat.Data);
@@ -111,11 +110,11 @@ public class DaqifiDeviceConcurrentInitializeTests
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second.WaitAsync(Hang));
-        Assert.Equal(DeviceLifecycle.Initializing, device.Lifecycle);
+        Assert.Equal(DeviceState.Initializing, device.State);
 
         gate.Release.SetResult();
         await first.WaitAsync(Hang);
-        Assert.Equal(DeviceLifecycle.Ready, device.Lifecycle);
+        Assert.Equal(DeviceState.Ready, device.State);
         Assert.Equal(1, device.SetupBlockCount);
     }
 
@@ -134,14 +133,14 @@ public class DaqifiDeviceConcurrentInitializeTests
 
         // Act — the link drops, and the first call unwinds with a cancellation that is not the
         // waiting call's own. Nobody asked for a disconnect.
-        Assert.True(device.TryTransition(DeviceLifecycle.Lost));
+        Assert.True(device.TryTransition(DeviceState.Lost));
         cts.Cancel();
 
         // Assert — the waiting call finds no connection to initialize, which is all it says.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Hang));
         var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second.WaitAsync(Hang));
         Assert.False(thrown.IsShuttingDown);
-        Assert.Equal(DeviceLifecycle.Lost, device.Lifecycle);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.Equal(1, device.SetupBlockCount);
     }
 
@@ -159,7 +158,7 @@ public class DaqifiDeviceConcurrentInitializeTests
         var second = device.InitializeAsync();
 
         // Act — a teardown somebody asked for, caught part-way.
-        Assert.True(device.TryTransition(DeviceLifecycle.Disconnecting));
+        Assert.True(device.TryTransition(DeviceState.Disconnecting));
         cts.Cancel();
 
         // Assert
@@ -189,7 +188,7 @@ public class DaqifiDeviceConcurrentInitializeTests
 
         var onNewConnection = device.InitializeAsync();
         await newGate.Entered.Task.WaitAsync(Hang);
-        Assert.Equal(DeviceLifecycle.Initializing, device.Lifecycle);
+        Assert.Equal(DeviceState.Initializing, device.State);
 
         // Act — the old call ends late, and reports Connected (cancelled) or Error (failed).
         if (oldCallIsCancelled)
@@ -205,12 +204,12 @@ public class DaqifiDeviceConcurrentInitializeTests
 
         // Assert — the report was refused: the state still belongs to the new connection's call,
         // which goes on to finish.
-        Assert.Equal(DeviceLifecycle.Initializing, device.Lifecycle);
+        Assert.Equal(DeviceState.Initializing, device.State);
         Assert.False(onNewConnection.IsCompleted);
 
         newGate.Release.SetResult();
         await onNewConnection.WaitAsync(Hang);
-        Assert.Equal(DeviceLifecycle.Ready, device.Lifecycle);
+        Assert.Equal(DeviceState.Ready, device.State);
     }
 
     /// <summary>A place a test holds an initialization: inside its setup block, before any command.</summary>

@@ -299,31 +299,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
         _session.SetDefaultFrequency(StreamingSessionController.CoreDefaultFrequencyHz);
 
-        // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
-        // an intentional Disconnected as well as an unexpected drop (which sets Lost, not
-        // Disconnected) and the Retrying/Failed states. After any of these the device's runtime
-        // PWM state is no longer trustworthy, so a reconnect on the same instance must re-send.
-        // See #345.
-        StatusChanged += (_, e) =>
-        {
-            if (e.Status != ConnectionStatus.Connected)
-            {
-                _channelControl.ResetSentPwmFrequency();
-
-                // The same goes for which channels are in PWM mode (#945).
-                _channelControl.ResetPwmEnabled();
-            }
-        };
-
-        // The stream session ends with the connection too, for the same reason: nothing stopped
-        // it, and what the device does from here is unknown. See #940.
-        StatusChanged += (_, e) =>
-        {
-            if (e.Status != ConnectionStatus.Connected)
-            {
-                _session.EndSessionOnConnectionEnd();
-            }
-        };
     }
 
     /// <summary>
@@ -849,8 +824,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <para>
     /// Automatic reconnection (<see cref="DaqifiDevice.ReconnectOptions"/>) does <b>not</b> resume
     /// an enumeration: the drop ends it, and a caller that wants live samples from the restored
-    /// session starts a new one once <see cref="DaqifiDevice.Status"/> reads
-    /// <see cref="ConnectionStatus.Connected"/> again. Ending is what makes the outcome the same
+    /// session starts a new one once <see cref="DaqifiDevice.State"/> reads
+    /// <see cref="DeviceState.Ready"/> again. Ending is what makes the outcome the same
     /// whether or not reconnect is enabled, and the restored session may not even be built from
     /// the same channel objects this enumeration subscribed to.
     /// </para>
@@ -878,20 +853,37 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _liveSampleStream.StreamSamplesAsync(bufferCapacity, cancellationToken);
 
     /// <summary>
-    /// Ends the live-sample enumerations when the device stops being connected (issue #496).
+    /// Ends what belongs to a session when the device stops being connected: the live-sample
+    /// enumerations (issue #496), the recorded stream session, and the PWM state last sent.
     /// </summary>
     /// <remarks>
-    /// The only device state that has to react to a transition before consumers do. Everything
-    /// else the streaming device owns is either driven by inbound frames — which stop on their
-    /// own — or torn down by the disconnect itself.
+    /// Everything else the streaming device owns is either driven by inbound frames — which stop
+    /// on their own — or torn down by the disconnect itself.
     /// </remarks>
-    internal override void OnConnectionStatusChanged(ConnectionStatus status)
+    internal override void OnStateChanged(DeviceState previous, DeviceState current)
     {
-        base.OnConnectionStatusChanged(status);
+        base.OnStateChanged(previous, current);
 
-        // Null only if a transition could somehow beat InitializeStreamingDevice, which no
-        // constructor path allows; cheap enough to not depend on that staying true.
-        _liveSampleStream?.OnConnectionStatusChanged(status);
+        _liveSampleStream.OnStateChanged(current);
+
+        if (current.IsConnected())
+        {
+            return;
+        }
+
+        // Clear the "already-sent" PWM frequency cache on any transition to a state without a
+        // session — an intentional Disconnected as well as an unexpected drop (which sets Lost, not
+        // Disconnected) and the Retrying/Failed states. After any of these the device's runtime
+        // PWM state is no longer trustworthy, so a reconnect on the same instance must re-send.
+        // See #345.
+        _channelControl.ResetSentPwmFrequency();
+
+        // The same goes for which channels are in PWM mode (#945).
+        _channelControl.ResetPwmEnabled();
+
+        // The stream session ends with the connection too, for the same reason: nothing stopped
+        // it, and what the device does from here is unknown. See #940.
+        _session.EndSessionOnConnectionEnd();
     }
 
     /// <inheritdoc />

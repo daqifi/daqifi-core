@@ -22,19 +22,19 @@ public class DaqifiDeviceTests
         // Assert
         Assert.Equal(deviceName, device.Name);
         Assert.Equal(ipAddress, device.IpAddress);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
     }
 
     [Fact]
-    public void Connect_ChangesStatusAndRaisesEvents()
+    public void Connect_ChangesStateAndRaisesEvents()
     {
         // Arrange
         var device = new DaqifiDevice("TestDevice");
-        var statusChanges = new List<ConnectionStatus>();
-        device.StatusChanged += (_, args) =>
+        var statusChanges = new List<DeviceState>();
+        device.StateChanged += (_, args) =>
         {
-            statusChanges.Add(args.Status);
+            statusChanges.Add(args.CurrentState);
         };
 
         // Act
@@ -42,21 +42,21 @@ public class DaqifiDeviceTests
 
         // Assert
         Assert.Equal(2, statusChanges.Count);
-        Assert.Equal(ConnectionStatus.Connecting, statusChanges[0]);
-        Assert.Equal(ConnectionStatus.Connected, statusChanges[1]);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connecting, statusChanges[0]);
+        Assert.Equal(DeviceState.Connected, statusChanges[1]);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.True(device.IsConnected);
     }
 
     [Fact]
-    public void Disconnect_ChangesStatusAndRaisesEvent()
+    public void Disconnect_ChangesStateAndRaisesEvents()
     {
         // Arrange
         var device = new DaqifiDevice("TestDevice");
         device.Connect(); // Connect first
 
-        var receivedArgs = new List<DeviceStatusEventArgs>();
-        device.StatusChanged += (_, args) =>
+        var receivedArgs = new List<DeviceStateChangedEventArgs>();
+        device.StateChanged += (_, args) =>
         {
             receivedArgs.Add(args);
         };
@@ -65,9 +65,10 @@ public class DaqifiDeviceTests
         device.Disconnect();
 
         // Assert
-        var arg = Assert.Single(receivedArgs);
-        Assert.Equal(ConnectionStatus.Disconnected, arg.Status);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(
+            [DeviceState.Disconnecting, DeviceState.Disconnected],
+            receivedArgs.Select(args => args.CurrentState));
+        Assert.Equal(DeviceState.Disconnected, device.State);
         Assert.False(device.IsConnected);
     }
 

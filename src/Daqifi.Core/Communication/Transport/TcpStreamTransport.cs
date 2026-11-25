@@ -13,7 +13,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// <para>
 /// <b>Drop detection.</b> <see cref="TcpClient.Connected"/> describes the last completed operation
 /// rather than the current link, and nothing used to raise <see cref="StatusChanged"/> for an
-/// unexpected drop, so <see cref="Device.ConnectionStatus.Lost"/> was unreachable here too
+/// unexpected drop, so <see cref="Device.DeviceState.Lost"/> was unreachable here too
 /// (issue #382). Two things now cover it:
 /// </para>
 /// <list type="bullet">

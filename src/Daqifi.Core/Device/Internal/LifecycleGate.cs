@@ -79,7 +79,7 @@ internal sealed class LifecycleGate
     /// True while the current logical flow already holds <see cref="_lifecycleLock"/>.
     /// </summary>
     /// <remarks>
-    /// Both connect and disconnect raise <see cref="DaqifiDevice.StatusChanged"/> from inside
+    /// Both connect and disconnect raise <see cref="DaqifiDevice.StateChanged"/> from inside
     /// their critical section, and a consumer handler calling
     /// <see cref="DaqifiDevice.Disconnect"/> from there is re-entry on the same flow — which
     /// runs nested today with no lock at all and must keep working rather than deadlock against
@@ -205,7 +205,7 @@ internal sealed class LifecycleGate
         // entry-point guards on the sibling collaborators.
         ArgumentNullException.ThrowIfNull(operation);
 
-        // Re-entry from inside the critical section (a StatusChanged handler calling back in)
+        // Re-entry from inside the critical section (a StateChanged handler calling back in)
         // proceeds without acquiring, exactly as a reentrant monitor would.
         if (_isInsideLifecycleOperation.Value)
         {

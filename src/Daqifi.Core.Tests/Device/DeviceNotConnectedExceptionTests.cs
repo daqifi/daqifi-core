@@ -201,9 +201,9 @@ public class DeviceNotConnectedExceptionTests
         // before the transport check further down is ever reached, so this guard is what an
         // in-flight caller actually sees.
         var device = new TextCommandTestableDevice("TestDevice");
-        Assert.True(device.TryTransition(DeviceLifecycle.Connecting));
-        Assert.True(device.TryTransition(DeviceLifecycle.Connected));
-        Assert.True(device.TryTransition(DeviceLifecycle.Disconnecting));
+        Assert.True(device.TryTransition(DeviceState.Connecting));
+        Assert.True(device.TryTransition(DeviceState.Connected));
+        Assert.True(device.TryTransition(DeviceState.Disconnecting));
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.CallExecuteTextCommandAsync());
@@ -216,7 +216,7 @@ public class DeviceNotConnectedExceptionTests
     public async Task TextCommand_WhenDisposed_ThrowsWithIsShuttingDownTrue()
     {
         var device = new TextCommandTestableDevice("TestDevice");
-        Assert.True(device.TryTransition(DeviceLifecycle.Disposed));
+        Assert.True(device.TryTransition(DeviceState.Disposed));
 
         var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.CallExecuteTextCommandAsync());

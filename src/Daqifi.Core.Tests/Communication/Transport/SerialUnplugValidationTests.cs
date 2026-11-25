@@ -8,7 +8,7 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 
 /// <summary>
 /// Hardware-in-the-loop validation for issue #382: a human pulls a real USB cable and this
-/// measures how long Core takes to report <see cref="ConnectionStatus.Lost"/>.
+/// measures how long Core takes to report <see cref="DeviceState.Lost"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -60,21 +60,21 @@ public class SerialUnplugValidationTests
         var transport = new SerialStreamTransport(portName, baudRate);
         using var device = new DaqifiDevice("Unplug Validation", transport);
 
-        var statuses = new List<(DateTime At, ConnectionStatus Status)>();
+        var statuses = new List<(DateTime At, DeviceState Status)>();
         var lost = new ManualResetEventSlim(false);
         var lostAt = DateTime.MinValue;
 
-        device.StatusChanged += (_, e) =>
+        device.StateChanged += (_, e) =>
         {
             var now = DateTime.UtcNow;
             lock (statuses)
             {
-                statuses.Add((now, e.Status));
+                statuses.Add((now, e.CurrentState));
             }
 
-            Log($"StatusChanged: {e.Status}");
+            Log($"StatusChanged: {e.CurrentState}");
 
-            if (e.Status == ConnectionStatus.Lost)
+            if (e.CurrentState == DeviceState.Lost)
             {
                 lostAt = now;
                 lost.Set();
@@ -83,7 +83,7 @@ public class SerialUnplugValidationTests
 
         Log($"Connecting to {portName} @ {baudRate} baud...");
         device.Connect();
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Log("Connected.");
 
         // Phase 1 — a healthy connection must produce no status change at all. This is where a
@@ -92,7 +92,7 @@ public class SerialUnplugValidationTests
         var beforeWarmup = SnapshotCount(statuses);
         Thread.Sleep(warmup);
         Assert.Equal(beforeWarmup, SnapshotCount(statuses));
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
         Assert.True(device.IsConnected);
         Log("No false positives during the healthy window.");
 
@@ -102,7 +102,7 @@ public class SerialUnplugValidationTests
 
         Log(string.Empty);
         Log(">>> UNPLUG THE CABLE NOW <<<");
-        Log($"    (waiting up to {timeout.TotalSeconds:0}s for ConnectionStatus.Lost)");
+        Log($"    (waiting up to {timeout.TotalSeconds:0}s for DeviceState.Lost)");
         Log(string.Empty);
 
         var sawLost = lost.Wait(timeout);
@@ -114,12 +114,12 @@ public class SerialUnplugValidationTests
         }
 
         Assert.True(sawLost,
-            $"No ConnectionStatus.Lost within {timeout.TotalSeconds:0}s. " +
+            $"No DeviceState.Lost within {timeout.TotalSeconds:0}s. " +
             (portGoneAt.HasValue
                 ? "The port did disappear, so detection failed."
                 : "The port never disappeared — was the cable actually unplugged?"));
 
-        Log($"ConnectionStatus.Lost observed at {lostAt:HH:mm:ss.fff}Z");
+        Log($"DeviceState.Lost observed at {lostAt:HH:mm:ss.fff}Z");
 
         if (portGoneAt.HasValue)
         {
@@ -133,13 +133,13 @@ public class SerialUnplugValidationTests
                 $"Detection took {detection.TotalSeconds:0.00}s, well past the documented ~3s bound.");
         }
 
-        Assert.Equal(ConnectionStatus.Lost, device.Status);
+        Assert.Equal(DeviceState.Lost, device.State);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
 
         lock (statuses)
         {
-            Assert.DoesNotContain(ConnectionStatus.Disconnected, statuses.Select(s => s.Status));
+            Assert.DoesNotContain(DeviceState.Disconnected, statuses.Select(s => s.Status));
         }
 
         Log("PASS — unplug reported as Lost, not Disconnected.");
@@ -200,7 +200,7 @@ public class SerialUnplugValidationTests
         Log("PASS — the unplugged device was pruned from the registry.");
     }
 
-    private static int SnapshotCount(List<(DateTime At, ConnectionStatus Status)> statuses)
+    private static int SnapshotCount(List<(DateTime At, DeviceState Status)> statuses)
     {
         lock (statuses)
         {

@@ -65,21 +65,21 @@ public class BootloaderSessionDeviceTests
         var device = new BootloaderSessionDevice();
 
         Assert.True(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
     }
 
     [Fact]
-    public void Disconnect_TransitionsAndRaisesStatusChangedOnce()
+    public void Disconnect_TransitionsAndRaisesStateChangedOnce()
     {
         var device = new BootloaderSessionDevice();
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) => statuses.Add(e.Status);
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) => statuses.Add(e.CurrentState);
 
         device.Disconnect();
 
         Assert.False(device.IsConnected);
-        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-        Assert.Equal([ConnectionStatus.Disconnected], statuses);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+        Assert.Equal([DeviceState.Disconnected], statuses);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class BootloaderSessionDeviceTests
         device.Disconnect();
 
         var raised = 0;
-        device.StatusChanged += (_, _) => raised++;
+        device.StateChanged += (_, _) => raised++;
         device.Disconnect();
 
         Assert.Equal(0, raised);
@@ -100,7 +100,7 @@ public class BootloaderSessionDeviceTests
     {
         var device = new BootloaderSessionDevice();
         var raised = 0;
-        device.StatusChanged += (_, _) => raised++;
+        device.StateChanged += (_, _) => raised++;
 
         device.Connect();
 
@@ -114,12 +114,12 @@ public class BootloaderSessionDeviceTests
         var device = new BootloaderSessionDevice();
         device.Disconnect();
 
-        var statuses = new List<ConnectionStatus>();
-        device.StatusChanged += (_, e) => statuses.Add(e.Status);
+        var statuses = new List<DeviceState>();
+        device.StateChanged += (_, e) => statuses.Add(e.CurrentState);
         device.Connect();
 
         Assert.True(device.IsConnected);
-        Assert.Equal([ConnectionStatus.Connected], statuses);
+        Assert.Equal([DeviceState.Connected], statuses);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class BootloaderSessionDeviceTests
     {
         var device = new BootloaderSessionDevice();
         var raised = 0;
-        device.StatusChanged += (_, _) => raised++;
+        device.StateChanged += (_, _) => raised++;
 
         await device.DisposeAsync();
         await device.DisposeAsync();
@@ -137,11 +137,11 @@ public class BootloaderSessionDeviceTests
     }
 
     [Fact]
-    public async Task ConcurrentDisconnects_RaiseStatusChangedExactlyOnce()
+    public async Task ConcurrentDisconnects_RaiseStateChangedExactlyOnce()
     {
         var device = new BootloaderSessionDevice();
         var raised = 0;
-        device.StatusChanged += (_, _) => Interlocked.Increment(ref raised);
+        device.StateChanged += (_, _) => Interlocked.Increment(ref raised);
 
         // A dialog's teardown can race the update flow's own Disconnect(). Only one of them
         // performed the transition, so only one notification is owed.
@@ -149,6 +149,45 @@ public class BootloaderSessionDeviceTests
 
         Assert.False(device.IsConnected);
         Assert.Equal(1, Volatile.Read(ref raised));
+    }
+
+    [Fact]
+    public void AConnectInsideADisconnectedHandler_IsRaisedInOrder_WithBothValues()
+    {
+        var device = new BootloaderSessionDevice();
+        device.StateChanged += (_, e) =>
+        {
+            if (e.CurrentState == DeviceState.Disconnected)
+            {
+                device.Connect();
+            }
+        };
+        var changes = new List<(DeviceState, DeviceState)>();
+        device.StateChanged += (_, e) => changes.Add((e.PreviousState, e.CurrentState));
+
+        device.Disconnect();
+
+        Assert.Equal(
+            [(DeviceState.Connected, DeviceState.Disconnected), (DeviceState.Disconnected, DeviceState.Connected)],
+            changes);
+    }
+
+    [Fact]
+    public void AThrowingSubscriber_DoesNotFailTheDisconnectOrStopLaterEvents()
+    {
+        var device = new BootloaderSessionDevice();
+        var raised = 0;
+        device.StateChanged += (_, _) =>
+        {
+            raised++;
+            throw new InvalidOperationException("a badly behaved subscriber");
+        };
+
+        device.Disconnect();
+        device.Connect();
+
+        Assert.True(device.IsConnected);
+        Assert.Equal(2, raised);
     }
 
     #endregion

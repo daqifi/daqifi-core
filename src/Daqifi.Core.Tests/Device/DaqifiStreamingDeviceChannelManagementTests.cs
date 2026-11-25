@@ -707,13 +707,13 @@ public class DaqifiStreamingDeviceChannelManagementTests
         var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
         device.SetPwmEnabled(channel, true);
 
-        Assert.True(device.TryTransition(DeviceLifecycle.Lost));
+        Assert.True(device.TryTransition(DeviceState.Lost));
         if (thenRetrying)
         {
-            Assert.True(device.TryTransition(DeviceLifecycle.Retrying));
+            Assert.True(device.TryTransition(DeviceState.Retrying));
         }
 
-        Assert.NotEqual(ConnectionStatus.Connected, device.Status);
+        Assert.False(device.IsConnected);
         Assert.False(channel.IsPwmEnabled);
         Assert.Equal(DigitalPinMode.Input, channel.Mode);
     }

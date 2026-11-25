@@ -4,14 +4,14 @@ namespace Daqifi.Core.Device;
 
 /// <summary>
 /// Policy for automatically re-establishing a session after
-/// <see cref="ConnectionStatus.Lost"/> (issue #379). Assign to
+/// <see cref="DeviceState.Lost"/> (issue #379). Assign to
 /// <see cref="DaqifiDevice.ReconnectOptions"/>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Off by default.</b> A freshly constructed instance has <see cref="Enabled"/> set to
 /// <c>false</c>, which is exactly the behaviour a device has always had: a drop is reported as
-/// <see cref="ConnectionStatus.Lost"/> and nothing else happens. Reconnect has to be asked for.
+/// <see cref="DeviceState.Lost"/> and nothing else happens. Reconnect has to be asked for.
 /// </para>
 /// <para>
 /// The shape mirrors <see cref="Communication.Transport.ConnectionRetryOptions"/>, which governs

@@ -155,10 +155,21 @@
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.UdpTransport.UdpTransport(int localPort) -> void
 *REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.Status.get -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.BootloaderSessionDevice.StatusChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStatusEventArgs!>?
 *REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocument.MergeInto(Daqifi.Core.Device.DeviceCapabilities! capabilities) -> void
 *REMOVED*Daqifi.Core.Device.Capabilities.CapabilityDocumentParser
+*REMOVED*Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Connected = 2 -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Connecting = 1 -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Disconnected = 0 -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Failed = 5 -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Lost = 3 -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.ConnectionStatus.Retrying = 4 -> Daqifi.Core.Device.ConnectionStatus
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.CreateFeatureNotSupportedException(Daqifi.Core.Device.DeviceFeature feature) -> Daqifi.Core.Device.FeatureNotSupportedException!
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.SnapshotChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Channel.IChannel!>!
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.Status.get -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.DaqifiDevice.StatusChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStatusEventArgs!>?
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.StatusMessageReceived -> System.Action<DaqifiOutMessage!>?
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.StreamMessageReceived -> System.Action<DaqifiOutMessage!>?
 *REMOVED*Daqifi.Core.Device.DaqifiDevice.WithChannelsLock(System.Action! action) -> void
@@ -168,8 +179,13 @@
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLoggingSession!>!
 *REMOVED*Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
+*REMOVED*Daqifi.Core.Device.DeviceErrorSource.StatusNotification = 4 -> Daqifi.Core.Device.DeviceErrorSource
 *REMOVED*Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(DaqifiOutMessage! message) -> void
+*REMOVED*Daqifi.Core.Device.DeviceState.Error = 6 -> Daqifi.Core.Device.DeviceState
 *REMOVED*Daqifi.Core.Device.DeviceState.Streaming = 5 -> Daqifi.Core.Device.DeviceState
+*REMOVED*Daqifi.Core.Device.DeviceStatusEventArgs
+*REMOVED*Daqifi.Core.Device.DeviceStatusEventArgs.DeviceStatusEventArgs(Daqifi.Core.Device.ConnectionStatus status) -> void
+*REMOVED*Daqifi.Core.Device.DeviceStatusEventArgs.Status.get -> Daqifi.Core.Device.ConnectionStatus
 *REMOVED*Daqifi.Core.Device.Diagnostics.CommandHistoryParser
 *REMOVED*Daqifi.Core.Device.Diagnostics.LogLevelParser
 *REMOVED*Daqifi.Core.Device.Diagnostics.MemoryDiagnosticsParser
@@ -216,6 +232,8 @@
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.get -> int
 *REMOVED*Daqifi.Core.Device.Discovery.UsbPortDescriptor.VendorId.init -> void
 *REMOVED*Daqifi.Core.Device.IDevice.IpAddress.get -> System.Net.IPAddress?
+*REMOVED*Daqifi.Core.Device.IDevice.Status.get -> Daqifi.Core.Device.ConnectionStatus
+*REMOVED*Daqifi.Core.Device.IDevice.StatusChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStatusEventArgs!>!
 *REMOVED*Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), int? bufferCapacity = null) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 *REMOVED*Daqifi.Core.Device.IStreamingDevice.EnforceStreamingFrequencyCap() -> int?
 *REMOVED*Daqifi.Core.Device.Network.NetworkAddressHelper
@@ -795,12 +813,27 @@ Daqifi.Core.Communication.Transport.SerialStreamTransport.IsUsbConnection.get ->
 Daqifi.Core.Communication.Transport.TcpStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.TcpStreamTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.TcpStreamTransport.IsUsbConnection.get -> bool
+Daqifi.Core.Device.BootloaderSessionDevice.State.get -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.BootloaderSessionDevice.StateChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStateChangedEventArgs!>?
+Daqifi.Core.Device.DaqifiDevice.StateChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStateChangedEventArgs!>?
 Daqifi.Core.Device.DaqifiDevice.StatusMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
 Daqifi.Core.Device.DaqifiDevice.StreamMessageReceived -> System.Action<Daqifi.Core.Communication.Messages.DaqifiOutMessage!>?
 Daqifi.Core.Device.DaqifiStreamingDevice.SetSdCardMinimumFreeSpaceAsync(long bytes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Device.DaqifiStreamingDevice.StartSdCardLoggingAsync(string? fileName = null, Daqifi.Core.Device.SdCard.SdCardLogFormat format = Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardRecording!>!
 Daqifi.Core.Device.DaqifiStreamingDevice.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
+Daqifi.Core.Device.DeviceErrorSource.StateNotification = 4 -> Daqifi.Core.Device.DeviceErrorSource
 Daqifi.Core.Device.DeviceMetadata.UpdateFromProtobuf(Daqifi.Core.Communication.Messages.DaqifiOutMessage! message) -> void
+Daqifi.Core.Device.DeviceState.Disconnecting = 6 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceState.Disposed = 10 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceState.Failed = 9 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceState.InitializationFailed = 5 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceState.Lost = 7 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceState.Retrying = 8 -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceStateChangedEventArgs
+Daqifi.Core.Device.DeviceStateChangedEventArgs.CurrentState.get -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceStateChangedEventArgs.DeviceStateChangedEventArgs(Daqifi.Core.Device.DeviceState previousState, Daqifi.Core.Device.DeviceState currentState) -> void
+Daqifi.Core.Device.DeviceStateChangedEventArgs.PreviousState.get -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.DeviceStateExtensions
 Daqifi.Core.Device.Discovery.AllTransportsDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Daqifi.Core.Device.Discovery.ContinuousDeviceFinder.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -822,6 +855,8 @@ Daqifi.Core.Device.Discovery.DeviceInfo.Type.get -> Daqifi.Core.Device.DeviceTyp
 Daqifi.Core.Device.Discovery.DeviceInfo.Type.init -> void
 Daqifi.Core.Device.Discovery.IDeviceFinder.DiscoverAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 Daqifi.Core.Device.Discovery.IDeviceInfo.Type.get -> Daqifi.Core.Device.DeviceType
+Daqifi.Core.Device.IDevice.State.get -> Daqifi.Core.Device.DeviceState
+Daqifi.Core.Device.IDevice.StateChanged -> System.EventHandler<Daqifi.Core.Device.DeviceStateChangedEventArgs!>!
 Daqifi.Core.Device.ILiveSampleSource.StreamSamplesAsync(int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>!
 Daqifi.Core.Device.INetworkAddressedDevice
 Daqifi.Core.Device.INetworkAddressedDevice.IpAddress.get -> System.Net.IPAddress?
@@ -1061,6 +1096,7 @@ static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetDioPortState(i
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiMode(Daqifi.Core.Device.Network.WifiMode mode) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetNetworkWifiSecurity(Daqifi.Core.Device.Network.WifiSecurityType securityType) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode(bool enabled) -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
+static Daqifi.Core.Device.DeviceStateExtensions.IsConnected(this Daqifi.Core.Device.DeviceState state) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator !=(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
 static Daqifi.Core.Device.Discovery.DeviceInfo.operator ==(Daqifi.Core.Device.Discovery.DeviceInfo? left, Daqifi.Core.Device.Discovery.DeviceInfo? right) -> bool
 static Daqifi.Core.Device.SdCard.SdCardFileParserFactory.ParseAsync(System.IO.Stream! fileStream, string! fileName, Daqifi.Core.Device.SdCard.SdCardParseOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Device.SdCard.SdCardLogSession!>!
