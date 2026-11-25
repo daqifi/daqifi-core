@@ -7,8 +7,8 @@ using System.Threading.Tasks;
 namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>
-/// Factory for creating SD card log file parsers based on file format.
-/// Supports auto-detection via file extension (.bin, .json, .csv).
+/// Parses SD card log files of every format the device writes, choosing the format from the file
+/// extension (.bin, .json, .csv) unless one is given.
 /// </summary>
 public static class SdCardLogFile
 {
