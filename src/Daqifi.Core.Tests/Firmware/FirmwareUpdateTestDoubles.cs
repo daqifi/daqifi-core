@@ -167,14 +167,14 @@ internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
     public Task InitializeAsync(TimeSpan? channelPopulationTimeout = null, CancellationToken cancellationToken = default)
     {
         InitializeCalls++;
-        return InitializeFailure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
+        return OnInitialize?.Invoke(cancellationToken) ?? Task.CompletedTask;
     }
 
     /// <summary>How many times the update asked the device to initialize.</summary>
     public int InitializeCalls { get; private set; }
 
-    /// <summary>When set, every initialize fails with it.</summary>
-    public Exception? InitializeFailure { get; init; }
+    /// <summary>What an initialize does, given the token the update passed; nothing by default.</summary>
+    public Func<CancellationToken, Task>? OnInitialize { get; init; }
 
     public Task RefreshDeviceStatusAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task<CapabilityDocument?> ReadCapabilityDocumentAsync(CancellationToken cancellationToken = default) => Task.FromResult<CapabilityDocument?>(null);
