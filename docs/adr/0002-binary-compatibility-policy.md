@@ -1,9 +1,30 @@
 # ADR 0002: Semver here means source compatibility, not binary compatibility
 
-- **Status:** Accepted (2026-08-22)
+- **Status:** Accepted (2026-08-22), amended (2026-11-24, [#1036](https://github.com/daqifi/daqifi-core/issues/1036))
 - **Issue:** [#557](https://github.com/daqifi/daqifi-core/issues/557)
 - **Follow-ups:** —
 - **Supersedes:** —
+
+## Amendment (2.0): records that can grow are nominal
+
+The decision below still defines what semver means here, but the case that prompted it no longer
+comes up. As of 2.0 every public record that reports something - a snapshot, a result, a progress
+report, a parsed device reply - is nominal: properties with `{ get; init; }`, marked `required`
+when a value must be stated, and no positional parameters. Appending a property to one of these
+changes no constructor and no `Deconstruct`, so it breaks neither source nor binary compatibility
+and needs no suppression and no release-note warning.
+
+- **A new public record is nominal.** `PublicRecordShapeTests` fails on a public record with a
+  positional `Deconstruct` that is not on its short list.
+- **A property added after the type ships is never `required`.** A new `required` member is a
+  source break for anyone who constructs the type. Give it a default instead.
+- **Positional is for closed shapes only**, where the parts are the type's definition and a further
+  part would make it a different type: `FirmwareVersion` (whose `Revision` joined the positional
+  shape in 2.0), `SampleRow`, `ChannelDescriptor` and `LiveSample`. The decision below still covers
+  appending a defaulted part to one of those.
+
+The rest of this document is the original record. It describes `ChannelAcquisitionStatistics` as
+positional because at the time it was.
 
 ## Context
 
@@ -82,7 +103,7 @@ in place.
   guarantee — acceptable today because DAQiFi's own consumers are the only known integrators,
   but worth revisiting if that changes.
 
-**Pack gate**
+**Pack gate** (as it applied before the 2.0 amendment)
 - A PR that appends a parameter to a public positional record will fail `dotnet pack` (and
   CI's package-validation step): `EnablePackageValidation` reports `CP0002` for the old-arity
   constructor and `Deconstruct`, on both target frameworks, against the

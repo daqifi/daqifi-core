@@ -95,7 +95,7 @@ public class SdCardSpaceParserTests
     [Fact]
     public void UsedBytes_ComputesDifference()
     {
-        var info = new SdCardStorageInfo(FreeBytes: 300, TotalBytes: 1000);
+        var info = new SdCardStorageInfo { FreeBytes = 300, TotalBytes = 1000 };
         Assert.Equal(700L, info.UsedBytes);
     }
 }

@@ -2113,7 +2113,7 @@ public class FirmwareUpdateServiceTests
         {
             LatestWifiRelease = new FirmwareReleaseInfo
             {
-                Version = new FirmwareVersion(19, 5, 4, null, 0),
+                Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
                 TagName = "19.5.4",
                 IsPreRelease = false
             }
@@ -3496,7 +3496,7 @@ public class FirmwareUpdateServiceTests
     {
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
             TagName = "19.5.4",
             IsPreRelease = false
         };
@@ -3681,7 +3681,7 @@ public class FirmwareUpdateServiceTests
     {
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            Version = new FirmwareVersion(19, 6, 1, 0, null, 0),
             TagName = "19.6.1",
             IsPreRelease = false
         };
@@ -4203,7 +4203,7 @@ public class FirmwareUpdateServiceTests
         // expected status object and DOES NOT mutate service state.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
             TagName = "19.5.4",
             IsPreRelease = false
         };
@@ -4244,7 +4244,7 @@ public class FirmwareUpdateServiceTests
     {
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            Version = new FirmwareVersion(19, 6, 1, 0, null, 0),
             TagName = "19.6.1",
             IsPreRelease = false
         };
@@ -4294,7 +4294,7 @@ public class FirmwareUpdateServiceTests
 
         // The bar is a property of Core's policy, not of the device, so it is reported
         // even when no device version was ever read. The verdict is not.
-        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, 0, null, 0), status.MinimumSupportedVersion);
         Assert.Null(status.MeetsMinimumSupportedVersion);
     }
 
@@ -4366,7 +4366,7 @@ public class FirmwareUpdateServiceTests
 
         // New: the network-independent verdict.
         Assert.True(status.MeetsMinimumSupportedVersion);
-        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, 0, null, 0), status.MinimumSupportedVersion);
     }
 
     [Fact]
@@ -4445,7 +4445,7 @@ public class FirmwareUpdateServiceTests
 
         Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
         Assert.Null(status.MeetsMinimumSupportedVersion);
-        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, 0, null, 0), status.MinimumSupportedVersion);
     }
 
     [Fact]
@@ -4453,7 +4453,7 @@ public class FirmwareUpdateServiceTests
     {
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 7, 7, null, 0),
+            Version = new FirmwareVersion(19, 7, 7, 0, null, 0),
             TagName = "19.7.7",
             IsPreRelease = false
         };
@@ -4505,7 +4505,7 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
-        Assert.Equal(new FirmwareVersion(19, 9, 0, null, 0), status.MinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 9, 0, 0, null, 0), status.MinimumSupportedVersion);
         Assert.False(status.MeetsMinimumSupportedVersion);
     }
 
@@ -4516,7 +4516,7 @@ public class FirmwareUpdateServiceTests
         // consistently instead of switching on Reason to know whether it is populated.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 8, 0, null, 0),
+            Version = new FirmwareVersion(19, 8, 0, 0, null, 0),
             TagName = "19.8.0",
             IsPreRelease = false
         };
@@ -4554,7 +4554,7 @@ public class FirmwareUpdateServiceTests
         // current version equals the latest, the flash flow runs.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
             TagName = "19.5.4",
             IsPreRelease = false
         };
@@ -4621,7 +4621,7 @@ public class FirmwareUpdateServiceTests
         // the update completes normally.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            Version = new FirmwareVersion(19, 6, 1, 0, null, 0),
             TagName = "19.6.1",
             IsPreRelease = false
         };
@@ -4713,7 +4713,7 @@ public class FirmwareUpdateServiceTests
         // reflash. The retry budget covers the startup window.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
             TagName = "19.5.4",
             IsPreRelease = false
         };
@@ -4793,7 +4793,7 @@ public class FirmwareUpdateServiceTests
         // retry loop must send that kick exactly once and then recover.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 7, 7, null, 0),
+            Version = new FirmwareVersion(19, 7, 7, 0, null, 0),
             TagName = "19.7.7",
             IsPreRelease = false
         };
@@ -5168,7 +5168,7 @@ public class FirmwareUpdateServiceTests
         // Steady-state path: no retry overhead when the first call works.
         var wifiRelease = new FirmwareReleaseInfo
         {
-            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            Version = new FirmwareVersion(19, 5, 4, 0, null, 0),
             TagName = "19.5.4",
             IsPreRelease = false
         };

@@ -57,7 +57,7 @@ public class DeviceFeatureSupportTests
         // relax it back below the version firmware #598/#599 actually shipped in.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdFileTransferOverWifi);
 
-        Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), requirement.MinVersion);
         Assert.Equal(
             HardwareRequirement.SdCard | HardwareRequirement.WiFi,
             requirement.Hardware);
@@ -73,7 +73,7 @@ public class DeviceFeatureSupportTests
         // start throwing (#887).
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdListingEndMarker);
 
-        Assert.Equal(new FirmwareVersion(3, 8, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 8, 0, 0, null, 0), requirement.MinVersion);
         Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
     }
 
@@ -85,7 +85,7 @@ public class DeviceFeatureSupportTests
         // let Core command frequencies the 16-bit timer wraps into the kilohertz range (#958).
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.PwmFrequencyFloor);
 
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.None, requirement.Hardware);
     }
@@ -97,7 +97,7 @@ public class DeviceFeatureSupportTests
         // firmware answers it with -113.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdCardCrcProtection);
 
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
     }
@@ -129,7 +129,7 @@ public class DeviceFeatureSupportTests
         // Firmware #914 (PR #1106) first shipped in v3.9.0. Below it an open failure queues
         // nothing, so reading the error queue after an empty SD:GET would only cost an exchange.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdGetOpenFailureError);
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
 
         Assert.Equal(
@@ -144,7 +144,7 @@ public class DeviceFeatureSupportTests
         // so there is no board or hardware axis — only the version gate.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.Identify);
 
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.None, requirement.Hardware);
     }
@@ -156,7 +156,7 @@ public class DeviceFeatureSupportTests
         // is an undefined header, so asking it would leave an error in the device's queue.
         var requirement = DeviceFeatureRequirements.For(DeviceFeature.StoredStreamingRateQuery);
 
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), requirement.MinVersion);
         Assert.Null(requirement.Boards);
         Assert.Equal(HardwareRequirement.None, requirement.Hardware);
     }
@@ -171,7 +171,7 @@ public class DeviceFeatureSupportTests
             () => device.EnsureSupported(DeviceFeature.Identify));
 
         Assert.Equal(DeviceFeature.Identify, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 9, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 9, 0, 0, null, 0), ex.RequiredVersion);
         Assert.Equal("3.8.0", ex.ActualVersion);
     }
 
@@ -370,7 +370,7 @@ public class DeviceFeatureSupportTests
             () => device.EnsureSupported(DeviceFeature.SdFileTransferOverWifi));
 
         Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
-        Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), ex.RequiredVersion);
         Assert.Equal("3.6.3", ex.ActualVersion);
         Assert.Equal(DeviceType.Nyquist1, ex.Board);
     }
@@ -432,7 +432,7 @@ public class DeviceFeatureSupportTests
         var ex = Assert.Throws<FeatureNotSupportedException>(
             () => device.EnsureSupported(DeviceFeature.SdFileTransferOverWifi));
 
-        Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+        Assert.Equal(new FirmwareVersion(3, 7, 0, 0, null, 0), ex.RequiredVersion);
         Assert.Contains("Requires firmware >= 3.7.0", ex.Message);
     }
 

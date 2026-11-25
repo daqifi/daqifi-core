@@ -840,7 +840,7 @@ public class WifiModuleUpdaterTests : IDisposable
 
         // Reported even here: a caller must always be able to say what bar it was judging
         // against, including on the paths that never got to read the device.
-        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, 0, null, 0), status.MinimumSupportedVersion);
 
         // Three-state on purpose — "could not tell", not "below the minimum".
         Assert.Null(status.MeetsMinimumSupportedVersion);

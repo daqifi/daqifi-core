@@ -9,7 +9,7 @@ public class DaqifiDeviceFirmwareSupportTests
     [Fact]
     public void MinSupportedFirmware_IsV3_5_0()
     {
-        Assert.Equal(new FirmwareVersion(3, 5, 0, null, 0), DaqifiDevice.MinSupportedFirmware);
+        Assert.Equal(new FirmwareVersion(3, 5, 0, 0, null, 0), DaqifiDevice.MinSupportedFirmware);
     }
 
     [Fact]

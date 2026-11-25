@@ -32,94 +32,120 @@ namespace Daqifi.Core.Device;
 /// for a misbehaving one. <see cref="OutOfOrderSampleCount"/> says whether it happened at all.
 /// </para>
 /// </remarks>
-/// <param name="ChannelType">The type of the channel these statistics describe.</param>
-/// <param name="ChannelNumber">The channel number these statistics describe.</param>
-/// <param name="Name">
-/// The channel's name as it read when the most recent sample was recorded. Names are mutable, so
-/// this is the last observed value rather than an identity — <paramref name="ChannelType"/> plus
-/// <paramref name="ChannelNumber"/> is what a channel is tracked by, which is also what keeps a
-/// channel's statistics intact when a status message replaces the channel objects mid-session.
-/// </param>
-/// <param name="SampleCount">The number of samples recorded for this channel in the window.</param>
-/// <param name="EarliestSampleTimestamp">
-/// The earliest <see cref="IDataSample.Timestamp"/> seen — device time, not arrival time. The
-/// timestamp of the first sample recorded unless the device sent one out of order.
-/// </param>
-/// <param name="LatestSampleTimestamp">
-/// The latest <see cref="IDataSample.Timestamp"/> seen, likewise the most recent one recorded
-/// unless the device sent one out of order.
-/// </param>
-/// <param name="FirstReceivedAt">The host clock reading when the first sample was recorded.</param>
-/// <param name="LastReceivedAt">The host clock reading when the most recent sample was recorded.</param>
-/// <param name="MinSampleInterval">
-/// The smallest gap between a sample's timestamp and the latest timestamp seen before it (device
-/// clock). Firmware that stamps several samples with the same tick value reports
-/// <see cref="TimeSpan.Zero"/> here, which is a true statement about the timestamps rather than a
-/// defect in the measurement. Samples counted by <see cref="OutOfOrderSampleCount"/> contribute
-/// no interval at all, since a negative number is not a gap.
-/// </param>
-/// <param name="MaxSampleInterval">
-/// The largest such gap — the jitter figure that matters, since a single stalled interval is what
-/// a dropped block of samples looks like.
-/// </param>
-/// <param name="OutOfOrderSampleCount">
-/// How many samples carried a timestamp earlier than the latest one already seen on this channel.
-/// Normally zero; a non-zero value means the device's timestamps did not advance monotonically,
-/// so every device-clock figure here describes a stream that moved backwards at some point and
-/// should be read as approximate. The host-clock figures are unaffected.
-/// </param>
-/// <param name="MinValue">
-/// The smallest value seen, seeded from the first sample, in <paramref name="Unit"/>.
-/// </param>
-/// <param name="MaxValue">
-/// The largest value seen, seeded from the first sample, in <paramref name="Unit"/>.
-/// </param>
-/// <param name="MeanValue">
-/// The arithmetic mean of every value seen in the window, in <paramref name="Unit"/>.
-/// </param>
-/// <param name="Unit">
-/// The unit the three value figures are expressed in — the channel's configured engineering
-/// unit (e.g. <c>"PSI"</c>) when it has one, otherwise whatever its scaling states, or
-/// <c>null</c> when unstated.
-/// <para>
-/// It is here because without it the three numbers cannot be interpreted and cannot be
-/// converted after the fact. This type is the only place in Core that consumes samples on the
-/// consumer's behalf and returns just derived figures — every other path hands over the sample,
-/// so a caller can read <c>ScaledValue</c> and <c>Unit</c> itself. A negative gain also
-/// transposes the extremes, so re-applying a scaling by hand is not a safe workaround
-/// (issue #534).
-/// </para>
-/// </param>
-/// <param name="ValueSampleCount">
-/// How many samples the three value figures above were computed from. Normally equal to
-/// <paramref name="SampleCount"/>.
-/// <para>
-/// It differs when the channel's scaling was reassigned mid-window. Aggregating across that is
-/// meaningless — a minimum in PSI and a maximum in Bar are not the extremes of anything — so
-/// the value figures restart at the change and describe only the samples taken under the
-/// scaling <paramref name="Unit"/> names. This field is what makes that restart visible
-/// instead of an unexplained gap. The timing, ordering and count statistics are unaffected by
-/// scaling and continue across it.
-/// </para>
-/// </param>
-public sealed record ChannelAcquisitionStatistics(
-    ChannelType ChannelType,
-    int ChannelNumber,
-    string Name,
-    long SampleCount,
-    DateTime EarliestSampleTimestamp,
-    DateTime LatestSampleTimestamp,
-    DateTime FirstReceivedAt,
-    DateTime LastReceivedAt,
-    TimeSpan MinSampleInterval,
-    TimeSpan MaxSampleInterval,
-    long OutOfOrderSampleCount,
-    double MinValue,
-    double MaxValue,
-    double MeanValue,
-    string? Unit = null,
-    long ValueSampleCount = 0)
+public sealed record ChannelAcquisitionStatistics
 {
+    /// <summary>
+    /// Gets the type of the channel these statistics describe.
+    /// </summary>
+    public required ChannelType ChannelType { get; init; }
+
+    /// <summary>
+    /// Gets the channel number these statistics describe.
+    /// </summary>
+    public required int ChannelNumber { get; init; }
+
+    /// <summary>
+    /// Gets the channel's name as it read when the most recent sample was recorded. Names are mutable, so
+    /// this is the last observed value rather than an identity — <see cref="ChannelType"/> plus
+    /// <see cref="ChannelNumber"/> is what a channel is tracked by, which is also what keeps a
+    /// channel's statistics intact when a status message replaces the channel objects mid-session.
+    /// </summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Gets the number of samples recorded for this channel in the window.
+    /// </summary>
+    public required long SampleCount { get; init; }
+
+    /// <summary>
+    /// Gets the earliest <see cref="IDataSample.Timestamp"/> seen — device time, not arrival time. The
+    /// timestamp of the first sample recorded unless the device sent one out of order.
+    /// </summary>
+    public required DateTime EarliestSampleTimestamp { get; init; }
+
+    /// <summary>
+    /// Gets the latest <see cref="IDataSample.Timestamp"/> seen, likewise the most recent one recorded
+    /// unless the device sent one out of order.
+    /// </summary>
+    public required DateTime LatestSampleTimestamp { get; init; }
+
+    /// <summary>
+    /// Gets the host clock reading when the first sample was recorded.
+    /// </summary>
+    public required DateTime FirstReceivedAt { get; init; }
+
+    /// <summary>
+    /// Gets the host clock reading when the most recent sample was recorded.
+    /// </summary>
+    public required DateTime LastReceivedAt { get; init; }
+
+    /// <summary>
+    /// Gets the smallest gap between a sample's timestamp and the latest timestamp seen before it (device
+    /// clock). Firmware that stamps several samples with the same tick value reports
+    /// <see cref="TimeSpan.Zero"/> here, which is a true statement about the timestamps rather than a
+    /// defect in the measurement. Samples counted by <see cref="OutOfOrderSampleCount"/> contribute
+    /// no interval at all, since a negative number is not a gap.
+    /// </summary>
+    public required TimeSpan MinSampleInterval { get; init; }
+
+    /// <summary>
+    /// Gets the largest such gap — the jitter figure that matters, since a single stalled interval is what
+    /// a dropped block of samples looks like.
+    /// </summary>
+    public required TimeSpan MaxSampleInterval { get; init; }
+
+    /// <summary>
+    /// Gets how many samples carried a timestamp earlier than the latest one already seen on this channel.
+    /// Normally zero; a non-zero value means the device's timestamps did not advance monotonically,
+    /// so every device-clock figure here describes a stream that moved backwards at some point and
+    /// should be read as approximate. The host-clock figures are unaffected.
+    /// </summary>
+    public required long OutOfOrderSampleCount { get; init; }
+
+    /// <summary>
+    /// Gets the smallest value seen, seeded from the first sample, in <see cref="Unit"/>.
+    /// </summary>
+    public required double MinValue { get; init; }
+
+    /// <summary>
+    /// Gets the largest value seen, seeded from the first sample, in <see cref="Unit"/>.
+    /// </summary>
+    public required double MaxValue { get; init; }
+
+    /// <summary>
+    /// Gets the arithmetic mean of every value seen in the window, in <see cref="Unit"/>.
+    /// </summary>
+    public required double MeanValue { get; init; }
+
+    /// <summary>
+    /// Gets the unit the three value figures are expressed in — the channel's configured engineering
+    /// unit (e.g. <c>"PSI"</c>) when it has one, otherwise whatever its scaling states, or
+    /// <c>null</c> when unstated.
+    /// </summary>
+    /// <remarks>
+    /// It is here because without it the three numbers cannot be interpreted and cannot be
+    /// converted after the fact. This type is the only place in Core that consumes samples on the
+    /// consumer's behalf and returns just derived figures — every other path hands over the sample,
+    /// so a caller can read <c>ScaledValue</c> and <c>Unit</c> itself. A negative gain also
+    /// transposes the extremes, so re-applying a scaling by hand is not a safe workaround
+    /// (issue #534).
+    /// </remarks>
+    public string? Unit { get; init; }
+
+    /// <summary>
+    /// Gets how many samples the three value figures above were computed from. Normally equal to
+    /// <see cref="SampleCount"/>.
+    /// </summary>
+    /// <remarks>
+    /// It differs when the channel's scaling was reassigned mid-window. Aggregating across that is
+    /// meaningless — a minimum in PSI and a maximum in Bar are not the extremes of anything — so
+    /// the value figures restart at the change and describe only the samples taken under the
+    /// scaling <see cref="Unit"/> names. This field is what makes that restart visible
+    /// instead of an unexplained gap. The timing, ordering and count statistics are unaffected by
+    /// scaling and continue across it.
+    /// </remarks>
+    public long ValueSampleCount { get; init; }
+
     /// <summary>
     /// Gets the sample rate the host actually received this channel at, in Hz, measured against
     /// the host clock: <c>(SampleCount - 1) / (LastReceivedAt - FirstReceivedAt)</c>.

@@ -352,6 +352,8 @@ var config = new NetworkConfiguration
 await device.UpdateNetworkConfigurationAsync(config);
 ```
 
+To show the settings the device has, read `device.Metadata.Ssid`, `WifiInfrastructureMode` (`WifiMode?`) and `WifiSecurityMode` (`WifiSecurityType?`). They come from the status message the device sends at connect; the two modes are `null` if it did not report them, or reported a value this version does not know. Applying a configuration does not change them, and the device never reports the password.
+
 On firmware v3.9.0 and later, `IWifiLinkStatusProvider` (also implemented by `DaqifiStreamingDevice`) reports whether the change actually took: `GetWifiLinkStateAsync()` returns the live link state (`Connected`, `AccessPointIdle`, `NoLink`, `Initializing`, `InitializationFault`, or `Unavailable` while WiFi is off or the device is in standby), and `GetActiveWifiModeAsync()` returns the mode the radio is running rather than the staged one (`null` when none is up). Over a WiFi connection the apply usually drops the control link, so poll these over USB. Older firmware gets a `FeatureNotSupportedException`; check `device.Supports(DeviceFeature.WifiLinkStatus)` first.
 
 ```csharp
@@ -428,9 +430,9 @@ This library follows semantic versioning. Releases are automated via GitHub Acti
 
 The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`), and, unless it is a pre-release, lists that version in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.daqifi/daqifi-mcp` so MCP clients can find it without going through this README. The listing is published from `src/Daqifi.Mcp/.mcp/server.json`, whose committed version is a placeholder that the release stamps from the tag.
 
-Semver here tracks **source** compatibility, not binary compatibility: appending a parameter
-to a public positional record (with a default) is not treated as a breaking change requiring
-a major bump, and is called out in release notes instead. Consumers who need binary
+Semver here tracks **source** compatibility, not binary compatibility. Snapshot, result and
+progress types are nominal records (`init` properties, no positional constructor), so they gain
+fields without breaking either. Consumers who need binary
 compatibility across versions should recompile against each release rather than swap the DLL
 in place. See [ADR 0002](https://github.com/daqifi/daqifi-core/blob/main/docs/adr/0002-binary-compatibility-policy.md)
 for the reasoning.

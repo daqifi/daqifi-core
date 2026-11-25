@@ -475,8 +475,8 @@ public class LanChipInfoProviderExtensionsTests
         Assert.True(result.Succeeded);
         Assert.Equal(
             [
-                new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay),
-                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
+                AttemptFailed(1, 3, false, FastRetryDelay),
+                AttemptFailed(2, 3, false, FastRetryDelay),
             ],
             progress.Reports);
     }
@@ -497,9 +497,9 @@ public class LanChipInfoProviderExtensionsTests
         Assert.Equal(3, device.GetLanChipInfoCallCount);
         Assert.Equal(
             [
-                new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay),
-                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
-                new LanChipInfoProbeProgress(3, 3, false, TimeSpan.Zero),
+                AttemptFailed(1, 3, false, FastRetryDelay),
+                AttemptFailed(2, 3, false, FastRetryDelay),
+                AttemptFailed(3, 3, false, TimeSpan.Zero),
             ],
             progress.Reports);
     }
@@ -521,8 +521,8 @@ public class LanChipInfoProviderExtensionsTests
         Assert.True(result.Succeeded);
         Assert.Equal(
             [
-                new LanChipInfoProbeProgress(1, 3, true, FastRetryDelay),
-                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
+                AttemptFailed(1, 3, true, FastRetryDelay),
+                AttemptFailed(2, 3, false, FastRetryDelay),
             ],
             progress.Reports);
     }
@@ -537,7 +537,7 @@ public class LanChipInfoProviderExtensionsTests
 
         Assert.True(result.Succeeded);
         Assert.Equal(
-            [new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay)],
+            [AttemptFailed(1, 3, false, FastRetryDelay)],
             progress.Reports);
     }
 
@@ -669,7 +669,7 @@ public class LanChipInfoProviderExtensionsTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(
-            [new LanChipInfoProbeProgress(1, 1, false, TimeSpan.Zero)],
+            [AttemptFailed(1, 1, false, TimeSpan.Zero)],
             progress.Reports);
     }
 
@@ -683,6 +683,15 @@ public class LanChipInfoProviderExtensionsTests
     /// throwing handler behind its own marshalling. This one reports on the probe's own thread,
     /// which is the strict case.
     /// </remarks>
+    private static LanChipInfoProbeProgress AttemptFailed(
+        int attempt, int maxAttempts, bool wasLanNotInitialized, TimeSpan retryDelay) => new()
+        {
+            Attempt = attempt,
+            MaxAttempts = maxAttempts,
+            WasLanNotInitialized = wasLanNotInitialized,
+            RetryDelay = retryDelay
+        };
+
     private sealed class RecordingProgress(Action<LanChipInfoProbeProgress>? onReport = null)
         : IProgress<LanChipInfoProbeProgress>
     {
