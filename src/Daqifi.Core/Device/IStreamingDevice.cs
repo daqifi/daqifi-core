@@ -158,7 +158,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <exception cref="DeviceCommandFailedException">
     /// Thrown when the device reports that it is still streaming, or did not answer.
     /// </exception>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when the operation is cancelled, or another caller starts the stream again before the stop
+    /// is confirmed.
+    /// </exception>
     Task StopStreamingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -1,10 +1,16 @@
+using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
+using Daqifi.Core.Device.SdCard;
+using Daqifi.Core.Tests.TestSupport;
+using Microsoft.Extensions.Time.Testing;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -313,6 +319,72 @@ public class DaqifiStreamingDeviceConfirmationTests
         await Assert.ThrowsAsync<DeviceNotConnectedException>(() => start);
     }
 
+    [Fact]
+    public async Task Start_LosingToAnotherCallersStart_LeavesTheWinnersDecoderAlone()
+    {
+        // The loser gets as far as the reader check and is held there while the winner starts the
+        // stream and receives its first frame. What the loser does then must not cost the winner
+        // that frame.
+        var clock = new FakeTimeProvider();
+        var device = ConnectedDevice();
+        device.SetTimeProviderForTesting(clock);
+        using var reader = new HeldReader(device);
+
+        var loser = Task.Run(device.StartStreaming);
+        reader.WaitUntilHeld();
+        var winner = device.StartStreamingAsync();
+        device.SendFrame();
+        reader.Release();
+        await loser;
+        await FakeClockPump.UntilAsync(clock, winner, TimeSpan.FromMilliseconds(20));
+        await winner;
+
+        Assert.Equal(["SYSTem:StartStreamData 1000"], device.Sent);
+        Assert.Equal(0, device.Exchanges);
+    }
+
+    [Fact]
+    public async Task Start_LosingToAnotherCallersStart_LeavesTheRateTheStreamRunsAt()
+    {
+        var device = ConnectedDevice();
+        using var reader = new HeldReader(device);
+
+        var loser = Task.Run(device.StartStreaming);
+        reader.WaitUntilHeld();
+        device.StartStreaming();
+        device.Metadata.Capabilities.MaxSamplingRate = 10;
+        reader.Release();
+        await loser;
+
+        Assert.Equal(["SYSTem:StartStreamData 1000"], device.Sent);
+        Assert.Equal(1000, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public async Task Start_AnotherCallerStopsBeforeTheCommandIsOut_GoesOutAheadOfThatStop()
+    {
+        // The other way round, the device streams with no session recorded.
+        var device = ConnectedDevice();
+        var stop = device.DuringSendOf("StartStreamData", device.StopStreaming);
+
+        device.StartStreaming();
+        await stop();
+
+        Assert.Equal(["SYSTem:StartStreamData 1000", Stop], device.Sent);
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public void Start_CommandCannotBeSent_LeavesNoSession()
+    {
+        var device = ConnectedDevice();
+        device.BeforeSend = _ => throw new TransportNotConnectedException("gone");
+
+        Assert.Throws<TransportNotConnectedException>(device.StartStreaming);
+
+        Assert.False(device.IsStreaming);
+    }
+
     #endregion
 
     #region Stop
@@ -378,7 +450,7 @@ public class DaqifiStreamingDeviceConfirmationTests
             device.StopStreaming();
         };
 
-        await Assert.ThrowsAsync<DeviceCommandFailedException>(() => device.StopStreamingAsync());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.StopStreamingAsync());
 
         Assert.False(device.IsStreaming);
     }
@@ -432,6 +504,69 @@ public class DaqifiStreamingDeviceConfirmationTests
 
         Assert.True(device.IsStreaming);
         Assert.Empty(device.Sent);
+    }
+
+    [Fact]
+    public async Task Stop_AnotherCallerStartsBeforeTheCommandIsOut_GoesOutAheadOfThatStart()
+    {
+        // The other way round, the device is stopped with a session recorded.
+        var device = StreamingDevice();
+        var start = device.DuringSendOf(Stop, device.StartStreaming);
+
+        device.StopStreaming();
+        await start();
+
+        Assert.Equal([Stop, "SYSTem:StartStreamData 1000"], device.Sent);
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task SdOperationsStop_AnotherCallerStartsMeanwhile_LeavesThatStartRecorded()
+    {
+        var device = StreamingDevice();
+        var start = device.DuringSendOf(Stop, device.StartStreaming);
+
+        Assert.True(((IDeviceOperationHost)device).SendStreamStop());
+        await start();
+
+        Assert.Equal([Stop, "SYSTem:StartStreamData 1000"], device.Sent);
+        Assert.True(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task SdLogStart_AnotherCallerStopsMeanwhile_EndsTheLog()
+    {
+        var device = ConnectedDevice();
+        var stop = device.DuringSendOf("StartStreamData", device.StopStreaming);
+
+        ((ISdCardOperationHost)device).StartSdCardLogStream(1000);
+        await stop();
+
+        Assert.Equal(["SYSTem:StartStreamData 1000", Stop], device.Sent.Take(2));
+        Assert.False(device.IsStreaming);
+    }
+
+    [Fact]
+    public async Task Stop_OvertakenByAnotherCallersStart_LeavesThatStartToBeConfirmed()
+    {
+        var device = StreamingDevice();
+        device.StreamingFrequency = 10;
+        device.Replies.Enqueue(["1"]);
+        Task? start = null;
+        device.DuringExchange = () =>
+        {
+            device.DuringExchange = null;
+            start = device.StartStreamingAsync();
+            SpinWait.SpinUntil(() => device.IsStreaming, TimeSpan.FromSeconds(5));
+        };
+
+        // The "1" is that stream's, so it is neither a failure of this stop nor a reason to bring
+        // the stopped session back.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.StopStreamingAsync());
+
+        Assert.True(device.IsStreaming);
+        device.SendFrame();
+        await start!;
     }
 
     #endregion
@@ -619,6 +754,31 @@ public class DaqifiStreamingDeviceConfirmationTests
         /// <summary>Runs once the exchange has sent its commands, before its reply is read.</summary>
         public Action? DuringExchange { get; set; }
 
+        /// <summary>Runs before a command is recorded as sent.</summary>
+        public Action<string>? BeforeSend { get; set; }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> on another thread when the first command containing
+        /// <paramref name="text"/> is on its way out, and gives it time to overtake that command.
+        /// </summary>
+        /// <returns>Waits for the other thread to finish.</returns>
+        public Func<Task> DuringSendOf(string text, Action action)
+        {
+            Task? other = null;
+            BeforeSend = command =>
+            {
+                if (command.Contains(text, StringComparison.Ordinal))
+                {
+                    BeforeSend = null;
+                    other = Task.Factory.StartNew(
+                        action, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                    other.Wait(TimeSpan.FromMilliseconds(200));
+                }
+            };
+
+            return () => other ?? throw new InvalidOperationException($"{text} was not sent.");
+        }
+
         public override void Send<T>(IOutboundMessage<T> message)
         {
             if (message is not IOutboundMessage<string> command)
@@ -626,13 +786,8 @@ public class DaqifiStreamingDeviceConfirmationTests
                 return;
             }
 
+            BeforeSend?.Invoke(command.Data);
             Sent.Add(command.Data);
-
-            // What the real Send does for a raw command: the session follows what went out.
-            if (command.Data == ScpiMessageProducer.StopStreaming.Data)
-            {
-                ((Daqifi.Core.Device.Internal.IDeviceOperationHost)this).EndStreamingSession();
-            }
 
             if (command.Data.Contains("StartStreamData", StringComparison.Ordinal))
             {
@@ -671,6 +826,70 @@ public class DaqifiStreamingDeviceConfirmationTests
             DuringExchange?.Invoke();
             return Task.FromResult<IReadOnlyList<string>>(
                 Replies.TryDequeue(out var reply) ? reply : []);
+        }
+    }
+
+    /// <summary>
+    /// Stands in for the device's message reader and holds the first caller that asks whether it is
+    /// running, which is a start that has seen an idle device and not yet claimed it.
+    /// </summary>
+    private sealed class HeldReader : IMessageConsumer<WireMessage>
+    {
+        private readonly ManualResetEventSlim _held = new();
+        private readonly ManualResetEventSlim _release = new();
+        private readonly FieldInfo _field =
+            typeof(DaqifiDevice).GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        private readonly DaqifiDevice _device;
+        private int _asked;
+
+        public HeldReader(DaqifiDevice device)
+        {
+            _device = device;
+            _field.SetValue(device, this);
+        }
+
+        public bool IsRunning
+        {
+            get
+            {
+                if (Interlocked.Increment(ref _asked) == 1)
+                {
+                    _held.Set();
+                    _release.Wait(TimeSpan.FromSeconds(10));
+                }
+
+                return true;
+            }
+        }
+
+        public int QueuedMessageCount => 0;
+
+        public event EventHandler<MessageReceivedEventArgs<WireMessage>>? MessageReceived { add { } remove { } }
+
+        public event EventHandler<MessageConsumerErrorEventArgs>? ErrorOccurred { add { } remove { } }
+
+        public void WaitUntilHeld() => Assert.True(_held.Wait(TimeSpan.FromSeconds(10)));
+
+        public void Release() => _release.Set();
+
+        public void Start()
+        {
+        }
+
+        public void Stop()
+        {
+        }
+
+        public bool StopSafely(int timeoutMs = 1000) => true;
+
+        public void ClearBuffer()
+        {
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _field.SetValue(_device, null);
         }
     }
 }

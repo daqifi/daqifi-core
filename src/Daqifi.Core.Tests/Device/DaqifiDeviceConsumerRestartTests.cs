@@ -294,6 +294,43 @@ public class DaqifiDeviceConsumerRestartTests
     }
 
     [Fact]
+    public async Task StartStreaming_StoppedByTheOperationItIsParkedBehind_IsNotSent()
+    {
+        // The operation's own stop goes straight out, so replaying the parked start behind it would
+        // leave the device streaming with no session recorded.
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new StreamingConsumerRestartTestableDevice("Capturing Device", transport);
+
+        device.Connect();
+        Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
+
+        using var inCapture = new ManualResetEventSlim(false);
+        using var endCapture = new ManualResetEventSlim(false);
+        var capture = Task.Run(() => device.CallRawCaptureAsync((_, _) =>
+        {
+            inCapture.Set();
+            endCapture.Wait(TimeSpan.FromSeconds(10));
+            device.StopStreaming();
+            return Task.CompletedTask;
+        }));
+
+        Assert.True(inCapture.Wait(TimeSpan.FromSeconds(10)));
+        device.StartStreaming();
+        endCapture.Set();
+        await capture;
+
+        Assert.False(device.IsStreaming);
+        device.Send(new ScpiMessage("MARKER"));
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.Written.Contains("MARKER", StringComparison.Ordinal), TimeSpan.FromSeconds(5)),
+            "The marker must reach the wire.");
+        Assert.Contains("StopStreamData", transport.Written, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("StartStreamData", transport.Written, StringComparison.OrdinalIgnoreCase);
+
+        device.Disconnect();
+    }
+
+    [Fact]
     public async Task StartStreaming_DuringARawCaptureWhoseRestartFails_SendsNoStartAndEndsTheSession()
     {
         // Issue #975, the concurrent half. A start on another flow during the capture cannot check

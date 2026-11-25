@@ -908,6 +908,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <see cref="IsStreaming"/> goes back to what it was. If it does not answer, the stop was
     /// sent and <see cref="IsStreaming"/> is <c>false</c>; call this again to ask again.
     /// </para>
+    /// <para>
+    /// If another caller of this object starts the stream again while this is waiting and the
+    /// device answers that it is streaming, this ends as cancelled: the answer is about the new
+    /// stream, which is left alone.
+    /// </para>
     /// </remarks>
     public async Task StopStreamingAsync(CancellationToken cancellationToken = default)
     {
@@ -917,18 +922,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         await RunExclusiveAsync(
             async ct =>
             {
-                var running = _session.Current;
-
-                if (IsStreaming)
-                {
-                    StopStreaming();
-                }
-                else
-                {
-                    Send(ScpiMessageProducer.StopStreaming);
-                }
-
-                var stopped = _session.Current;
+                var (running, stopped) = _session.StopStreamingInAnyCase();
 
                 await Task.Delay(StoppedStreamSettleDelay, Clock, ct).ConfigureAwait(false);
 
@@ -943,9 +937,12 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
                 if (isStreaming.Value)
                 {
-                    if (running.Kind == StreamingSessionKind.LiveStream)
+                    if (!_session.TryMarkStopNotTaken(stopped, running))
                     {
-                        _session.MarkStopNotTaken(stopped, running);
+                        EnsureConnected();
+
+                        throw new OperationCanceledException(
+                            "Another caller used the stream before the device had confirmed that it stopped.");
                     }
 
                     throw DeviceCommandFailedException.Contradicted(
@@ -967,7 +964,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
     /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
     /// arrived (issue #379). <see cref="SessionCommandInterpreter"/> reads the commands that
-    /// define a session, and <see cref="StreamingSessionController.TrackSessionCommand"/>
+    /// define a session, and <see cref="StreamingSessionController.SendTracked"/>
     /// applies what they imply — the same state <see cref="StartStreaming"/> /
     /// <see cref="StopStreaming"/> and <see cref="EnableChannel"/> would have set. See that
     /// method for exactly what equivalence with the typed API covers.
@@ -981,13 +978,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <param name="message">The message to send.</param>
     public override void Send<T>(IOutboundMessage<T> message)
     {
-        base.Send(message);
-
-        // Only after the send has actually gone through: a command that threw never reached
-        // the device and must not move this device's idea of the session.
         if (message is IOutboundMessage<string> textCommand)
         {
-            _session.TrackSessionCommand(textCommand.Data);
+            _session.SendTracked(textCommand.Data, () => base.Send(message));
+        }
+        else
+        {
+            base.Send(message);
         }
     }
 
@@ -1845,9 +1842,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     bool IDeviceOperationHost.IsStreaming => IsStreaming;
 
-    void IDeviceOperationHost.EndStreamingSession() => _session.EndSession();
-
-    void IDeviceOperationHost.MarkStreamingStartRefused() => _session.MarkStartRefused();
+    bool IDeviceOperationHost.SendStreamStop() => _session.SendStreamStop();
 
     int IDeviceOperationHost.StreamingFrequency => StreamingFrequency;
 
@@ -1903,7 +1898,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     bool ISdCardOperationHost.IsLoggingToSdCard => IsLoggingToSdCard;
 
-    void ISdCardOperationHost.BeginSdCardLogSession() => _session.BeginSdCardLogSession();
+    void ISdCardOperationHost.StartSdCardLogStream(int rateHz) => _session.StartSdCardLogStream(rateHz);
 
     async Task ISdCardOperationHost.LowerInheritedStreamingFrequencyAsync(CancellationToken cancellationToken)
     {
@@ -1968,8 +1963,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
-    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
-        SendRequiringReader(message, nameof(StartStreaming), onNotSent);
+    void IStreamingSessionHost.SendStreamStart<T>(
+        IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent) =>
+        SendRequiringReader(message, nameof(StartStreaming), stillWanted, onNotSent);
 
     int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
 

@@ -45,8 +45,9 @@ namespace Daqifi.Core.Device.Internal;
 /// resets before it sends the command. The raw-<c>Send</c> path can only reset after the
 /// command has gone out, but it leaves <see cref="IDeviceOperationHost.IsStreaming"/> false
 /// until the reset completes, so a frame landing in that window is re-raised as a stray frame
-/// and never decoded. Starting a stream concurrently with another thread's in-flight session is
-/// outside the device's contract, exactly as it was before this was extracted.
+/// and never decoded. Only the caller that claims an idle session resets, and it does so while
+/// no other can (<see cref="StreamingSessionController"/>), so a start that loses to another one
+/// never resets the winner's decoder.
 /// </para>
 /// <para>
 /// The two counters are interlocked because they are read from arbitrary threads through the

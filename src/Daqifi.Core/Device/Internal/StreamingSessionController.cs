@@ -85,6 +85,28 @@ internal sealed class StreamingSessionController
     /// </summary>
     internal StreamingSession Current => Volatile.Read(ref _current);
 
+    /// <summary>
+    /// Makes each start and each stop one step: what is recorded, the decoder's reset, and the
+    /// command going out.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two callers that interleave inside those steps leave the device doing one thing and
+    /// <see cref="IsStreaming"/> saying another (a stop overtaking the start it was meant to stop),
+    /// or reset the decoder under a stream that is delivering (a start that loses to another one).
+    /// A caller that loses waits here for the winner and then sees a session that is running or
+    /// stopped, never one half-way.
+    /// </para>
+    /// <para>
+    /// Nothing that ends a session without sending anything takes it, so a teardown never waits for
+    /// a send: those replace <see cref="_current"/> by reference, and a start that finds it replaced
+    /// begins again. A session only <em>begins</em> under it. Taken before the channels lock, never
+    /// inside it, and never held across an await. It is reentrant, because a typed start or stop
+    /// sends through <see cref="SendTracked"/>.
+    /// </para>
+    /// </remarks>
+    private readonly Lock _transitions = new();
+
     private void SetCurrent(StreamingSessionKind kind) => Volatile.Write(ref _current, new StreamingSession(kind));
 
     private bool TryReplace(StreamingSession expected, StreamingSession replacement) =>
@@ -101,19 +123,42 @@ internal sealed class StreamingSessionController
     internal bool IsLoggingToSdCard => Current.Kind == StreamingSessionKind.SdCardLog;
 
     /// <summary>
-    /// Records that the stream now running is going to the SD card.
+    /// Sends the start of an SD card log and records that the stream now running is going to the
+    /// card.
     /// </summary>
-    internal void BeginSdCardLogSession() => SetCurrent(StreamingSessionKind.SdCardLog);
+    internal void StartSdCardLogStream(int rateHz)
+    {
+        lock (_transitions)
+        {
+            _host.Send(ScpiMessageProducer.StartStreaming(rateHz));
+            SetCurrent(StreamingSessionKind.SdCardLog);
+        }
+    }
 
     /// <summary>
-    /// Records that the session, of either kind, has been stopped: a stop command went to the
-    /// device.
+    /// Sends a stop whatever is recorded, and ends the session of either kind.
     /// </summary>
     /// <remarks>
-    /// Also what the SD operations call after the stop they send defensively before they touch
-    /// the card (issue #118).
+    /// What the SD operations send defensively before they touch the card (issue #118). A stop that
+    /// cannot be sent leaves the session as it was.
     /// </remarks>
-    internal void EndSession()
+    /// <returns>Whether a session was running.</returns>
+    internal bool SendStreamStop()
+    {
+        lock (_transitions)
+        {
+            var wasStreaming = IsStreaming;
+            _host.Send(ScpiMessageProducer.StopStreaming);
+            EndSession();
+            return wasStreaming;
+        }
+    }
+
+    /// <summary>
+    /// Records that the session, of either kind, has been stopped: a stop command went, or is about
+    /// to go, to the device.
+    /// </summary>
+    private void EndSession()
     {
         SetCurrent(StreamingSessionKind.None);
         Volatile.Write(ref _stopSent, new StopSent(_host.Clock.GetTimestamp()));
@@ -141,13 +186,8 @@ internal sealed class StreamingSessionController
     }
 
     /// <summary>
-    /// Records that a start did not take effect — the device refused it, or the command could
-    /// not be sent — so no session is running, whatever was recorded when the start went out.
-    /// </summary>
-    internal void MarkStartRefused() => SetCurrent(StreamingSessionKind.None);
-
-    /// <summary>
-    /// The same, for the start of one particular session.
+    /// Records that the start of <paramref name="session"/> did not take effect — the device refused
+    /// it, or the command could not be sent — so that session is not running.
     /// </summary>
     /// <returns>
     /// <c>false</c>, with nothing changed, when that session is no longer the current one: what is
@@ -158,12 +198,24 @@ internal sealed class StreamingSessionController
 
     /// <summary>
     /// Records that the live stream a stop was sent to is still running, because the device says so.
-    /// Does nothing when the session has moved on since that stop.
     /// </summary>
     /// <param name="stopped">What was current once the stop had been recorded.</param>
     /// <param name="running">The session the stop was sent to.</param>
-    internal void MarkStopNotTaken(StreamingSession stopped, StreamingSession running) =>
-        TryReplace(stopped, running);
+    /// <returns>
+    /// <c>false</c>, with nothing changed, when the session has moved on since that stop: what the
+    /// device is streaming now is not what was stopped.
+    /// </returns>
+    internal bool TryMarkStopNotTaken(StreamingSession stopped, StreamingSession running)
+    {
+        lock (_transitions)
+        {
+            // Only a live stream comes back: an SD log owns the card's bus too, which the stop has
+            // handed on, and where nothing was running there is nothing to bring back.
+            return running.Kind == StreamingSessionKind.LiveStream
+                ? TryReplace(stopped, running)
+                : ReferenceEquals(Current, stopped);
+        }
+    }
 
     /// <summary>
     /// Records that a live start parked behind a raw capture was never sent, because the reader
@@ -312,7 +364,7 @@ internal sealed class StreamingSessionController
     /// Never throws: it runs inside the connect sequence, and a reply Core cannot use must not
     /// fail a connect that is otherwise fine. A rate outside <c>1..MaxSamplingRate</c> is left
     /// alone, and the ceiling is read once and the backing field assigned directly, for the same
-    /// reason <see cref="TrackSessionCommand"/> gives. Adopting it does not count as choosing it,
+    /// reason <see cref="SendTracked"/> gives. Adopting it does not count as choosing it,
     /// so a later read can still bring the rate up to date.
     /// </para>
     /// </remarks>
@@ -459,41 +511,53 @@ internal sealed class StreamingSessionController
     /// </returns>
     internal (StreamingSession Session, bool Started) StartStreaming()
     {
-        _host.EnsureConnected();
-
         while (true)
         {
-            var observed = Current;
-            if (observed.Kind != StreamingSessionKind.None)
+            _host.EnsureConnected();
+
+            // What a start has to ask the device object first, and only a start does. Done before
+            // the claim, so that a caller held up here holds up nobody else; nothing it does is
+            // visible to a stream another caller starts meanwhile.
+            int? ceilingHz = null;
+            if (!IsStreaming)
             {
-                return (observed, false);
+                // Before anything about the session changes, and before the start command is sent:
+                // a stream start whose frames nothing reads is a running session that delivers
+                // nothing, with no error anywhere (issue #975). A reader that cannot start throws
+                // here instead.
+                _host.EnsureMessageReaderRunning();
+                ceilingHz = _host.MaximumStreamingFrequencyHz;
             }
 
-            if (TryStartStreaming(observed) is { } started)
+            lock (_transitions)
             {
-                return (started, true);
+                var observed = Current;
+                if (observed.Kind != StreamingSessionKind.None)
+                {
+                    return (observed, false);
+                }
+
+                if (ceilingHz is { } ceiling && TryStartStreaming(observed, ceiling) is { } started)
+                {
+                    return (started, true);
+                }
             }
 
-            // Another caller began or ended a session while this one was getting ready: decide
-            // again from what is there now.
+            // The session that was running has ended since, or the connection has: decide again
+            // from what is there now.
         }
     }
 
     /// <summary>
-    /// Begins a live session and sends its start, unless the session has changed since
-    /// <paramref name="idle"/> was read.
+    /// Begins a live session and sends its start, unless the connection has ended since
+    /// <paramref name="idle"/> was read. Runs under <see cref="_transitions"/>.
     /// </summary>
-    private StreamingSession? TryStartStreaming(StreamingSession idle)
+    private StreamingSession? TryStartStreaming(StreamingSession idle, int ceilingHz)
     {
-        // Before anything about the session changes, and before the start command is sent: a
-        // stream start whose frames nothing reads is a running session that delivers nothing,
-        // with no error anywhere (issue #975). A reader that cannot start throws here instead.
-        _host.EnsureMessageReaderRunning();
-
         // One value for the decoder and the wire: re-reading the rate for each would let a
         // caller's change in between configure the decoder for one rate and start the device
         // at another, or send a rate the cap never saw.
-        var rateHz = ClampRateAndChooseItForThisStart();
+        var rateHz = ClampRateAndChooseItForThisStart(ceilingHz);
 
         BeginStreamingSession(rateHz);
 
@@ -503,13 +567,27 @@ internal sealed class StreamingSessionController
             return null;
         }
 
-        // The check above cannot answer for a start that is parked behind a raw capture on another
-        // flow: that capture stopped the reader on purpose. The parked start checks again when it
-        // is replayed, after the capture's restart, and is dropped with the session ended if the
-        // reader still cannot start (issue #975).
-        _host.SendStreamStart(
-            ScpiMessageProducer.StartStreaming(rateHz),
-            refusal => MarkParkedStartNotSent(session, refusal));
+        try
+        {
+            // The reader check cannot answer for a start that is parked behind a raw capture on
+            // another flow: that capture stopped the reader on purpose. The parked start checks
+            // again when it is replayed, after the capture's restart, and is dropped with the
+            // session ended if the reader still cannot start (issue #975). It is dropped as well
+            // when its session has ended meanwhile: the operation it waited for can have sent a
+            // stop of its own, which does not wait, and the start must not follow that stop out.
+            _host.SendStreamStart(
+                ScpiMessageProducer.StartStreaming(rateHz),
+                () => ReferenceEquals(Current, session),
+                refusal => MarkParkedStartNotSent(session, refusal));
+        }
+        catch
+        {
+            // Nothing went out, so nothing is streaming, and a later start must not return early
+            // on a session that never began.
+            TryMarkStartRefused(session);
+            throw;
+        }
+
         return session;
     }
 
@@ -540,22 +618,21 @@ internal sealed class StreamingSessionController
     /// <para>
     /// The adjusted value is assigned to the backing field rather than through the validating
     /// <see cref="StreamingFrequency"/> setter, for the reason
-    /// <see cref="TrackSessionCommand"/> spells out: that setter re-reads
+    /// <see cref="SendTracked"/> spells out: that setter re-reads
     /// <see cref="DeviceCapabilities.MaxSamplingRate"/>, and a cap already bounded by one read
     /// of it must not be able to fail against another. A cap of <c>0</c> — nothing enabled —
     /// leaves the rate alone; see <see cref="SampleRateCap.Enforce"/>.
     /// </para>
     /// </remarks>
+    /// <param name="ceilingHz">The most the enabled channel set can sustain, in Hz.</param>
     /// <returns>The rate this start runs at, as committed.</returns>
-    private int ClampRateAndChooseItForThisStart()
+    private int ClampRateAndChooseItForThisStart(int ceilingHz)
     {
-        // The ceiling is read first, outside the lock (it calls into the host); the rate it is
+        // The ceiling was read first, outside the lock (that calls into the host); the rate it is
         // applied to is read inside, so a caller's change landing during the ceiling read is the
         // rate that gets clamped rather than being overwritten by a clamp of the old one. The
         // clamped rate is marked chosen in the same step: the rate a stream ran at is the one a
         // reconnect resumes it at, whatever the device reports afterwards.
-        var ceilingHz = _host.MaximumStreamingFrequencyHz;
-
         int newRateHz;
         int? adjustedFromHz;
         lock (_frequencyLock)
@@ -596,22 +673,51 @@ internal sealed class StreamingSessionController
     {
         _host.EnsureConnected();
 
-        if (!IsStreaming) return;
-
-        if (IsLoggingToSdCard)
+        lock (_transitions)
         {
-            _host.EndSdCardLogSession();
-            return;
-        }
+            if (!IsStreaming) return;
 
-        EndSession();
-        _host.Send(ScpiMessageProducer.StopStreaming);
+            if (IsLoggingToSdCard)
+            {
+                _host.EndSdCardLogSession();
+                return;
+            }
+
+            EndSession();
+            _host.Send(ScpiMessageProducer.StopStreaming);
+        }
+    }
+
+    /// <summary>
+    /// Stops the stream as <see cref="StopStreaming"/> does, and sends the stop even when no
+    /// session is recorded.
+    /// </summary>
+    /// <returns>
+    /// The session the stop was sent to, and what was current once it was: what
+    /// <see cref="TryMarkStopNotTaken"/> needs.
+    /// </returns>
+    internal (StreamingSession Running, StreamingSession Stopped) StopStreamingInAnyCase()
+    {
+        lock (_transitions)
+        {
+            var running = Current;
+            if (running.Kind == StreamingSessionKind.None)
+            {
+                SendStreamStop();
+            }
+            else
+            {
+                StopStreaming();
+            }
+
+            return (running, Current);
+        }
     }
 
     #region Session state tracking for commands sent directly (issue #379)
 
     /// <summary>
-    /// Updates the streaming-session view from a command that has just been sent.
+    /// Sends a text command and updates the streaming-session view from it.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -674,47 +780,66 @@ internal sealed class StreamingSessionController
     /// fail the send that carried it.
     /// </para>
     /// </remarks>
-    internal void TrackSessionCommand(string? command)
+    /// <param name="command">The command's text.</param>
+    /// <param name="send">Sends it. What it throws leaves the session as it was.</param>
+    internal void SendTracked(string? command, Action send)
     {
         var effect = SessionCommandInterpreter.Interpret(command, _host.MaxSamplingRate);
 
         switch (effect.Kind)
         {
             case SessionCommandEffectKind.StopStreaming:
-                EndSession();
+                lock (_transitions)
+                {
+                    send();
+                    EndSession();
+                }
+
                 break;
 
             case SessionCommandEffectKind.StartStreaming:
-                // Frequency first: anything observing IsStreaming must never catch it true next
-                // to a rate belonging to a previous session.
-                lock (_frequencyLock)
+                lock (_transitions)
                 {
-                    _streamingFrequency = effect.StreamingFrequency;
-                    _frequencySource = FrequencySource.Chosen;
-                }
+                    var before = Current;
+                    send();
 
-                // A restart while already streaming is not a session boundary — the typed API
-                // cannot even express it (StartStreaming returns early) — so there is nothing to
-                // re-anchor and recording the new rate is all that is warranted.
-                if (!IsStreaming)
-                {
-                    // A session is beginning, so it gets exactly the preparation StartStreaming
-                    // would have given it. Ordering matches too: the state is ready before the
-                    // flag flips.
-                    BeginStreamingSession(effect.StreamingFrequency);
-                    SetCurrent(StreamingSessionKind.LiveStream);
+                    // Frequency first: anything observing IsStreaming must never catch it true next
+                    // to a rate belonging to a previous session.
+                    lock (_frequencyLock)
+                    {
+                        _streamingFrequency = effect.StreamingFrequency;
+                        _frequencySource = FrequencySource.Chosen;
+                    }
+
+                    // A restart while already streaming is not a session boundary — the typed API
+                    // cannot even express it (StartStreaming returns early) — so there is nothing to
+                    // re-anchor and recording the new rate is all that is warranted.
+                    if (before.Kind == StreamingSessionKind.None)
+                    {
+                        // A session is beginning, so it gets exactly the preparation StartStreaming
+                        // would have given it. Ordering matches too: the state is ready before the
+                        // flag flips. If the connection ended since the send, no session begins.
+                        BeginStreamingSession(effect.StreamingFrequency);
+                        TryReplace(before, new StreamingSession(StreamingSessionKind.LiveStream));
+                    }
                 }
 
                 break;
 
             case SessionCommandEffectKind.UnusableStreamingStart:
+                send();
                 SafeTrace(
-                    $"[{nameof(TrackSessionCommand)}] Ignoring a start-streaming command with an unusable rate "
+                    $"[{nameof(SendTracked)}] Ignoring a start-streaming command with an unusable rate "
                     + $"('{effect.RejectedRate}'); the session state is unchanged.");
                 break;
 
             case SessionCommandEffectKind.SetAdcEnableMask:
+                send();
                 ApplyAdcEnableMask(effect.AdcEnableMask);
+                break;
+
+            default:
+                send();
                 break;
         }
     }

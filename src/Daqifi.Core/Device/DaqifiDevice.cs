@@ -151,11 +151,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     /// <param name="message">The message whose answer only the reader can deliver.</param>
     /// <param name="operation">The name of the operation, for the refusal's message.</param>
+    /// <param name="stillWanted">Whether a parked message should still go out, asked as it is about to; if not, it is dropped without <paramref name="onNotSent"/>. Runs on the replaying thread.</param>
     /// <param name="onNotSent">Undoes what the caller recorded when it sent the message, and receives the refusal. Runs on the replaying thread.</param>
-    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action<Exception> onNotSent)
+    internal void SendRequiringReader<T>(
+        IOutboundMessage<T> message, string operation, Func<bool> stillWanted, Action<Exception> onNotSent)
     {
         var previous = t_parkedSendReaderCheck;
-        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, onNotSent);
+        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, stillWanted, onNotSent);
         try
         {
             Send(message);
@@ -175,10 +177,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     [ThreadStatic]
     private static ParkedSendReaderCheck? t_parkedSendReaderCheck;
 
-    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action<Exception> OnNotSent);
+    private sealed record ParkedSendReaderCheck(
+        DaqifiDevice Device, string Operation, Func<bool> StillWanted, Action<Exception> OnNotSent);
 
     /// <summary>
-    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. True
+    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. False,
+    /// with nothing reported, when the message is no longer wanted. Otherwise true
     /// when the reader runs (started now if it has to be). False when it cannot start, after
     /// <see cref="ParkedSendReaderCheck.OnNotSent"/> has run and the refusal has been logged and
     /// raised. Usually the throttle on <c>ErrorOccurred</c> folds that raise into the capture's own
@@ -186,6 +190,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     private bool ReaderRunsForParkedSend(ParkedSendReaderCheck check)
     {
+        if (!check.StillWanted())
+        {
+            return false;
+        }
+
         try
         {
             StartStoppedReader(check.Operation);

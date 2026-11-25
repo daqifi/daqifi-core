@@ -49,12 +49,13 @@ internal interface IStreamingSessionHost
     void Send<T>(IOutboundMessage<T> message);
 
     /// <summary>
-    /// Sends the stream start. If it is parked behind a raw capture, the reader is checked again
-    /// before it goes out, and <paramref name="onNotSent"/> runs instead of the send when the
+    /// Sends the stream start. If it is parked behind an operation on another flow, it is dropped
+    /// when <paramref name="stillWanted"/> no longer holds as it is about to go out; otherwise the
+    /// reader is checked again, and <paramref name="onNotSent"/> runs instead of the send when the
     /// reader cannot start (issue #975). <paramref name="onNotSent"/> receives the refusal.
     /// </summary>
     /// <remarks>See <see cref="DaqifiDevice.SendRequiringReader{T}"/>.</remarks>
-    void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent);
+    void SendStreamStart<T>(IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent);
 
     /// <summary>
     /// The device's advertised maximum sampling rate
@@ -64,7 +65,7 @@ internal interface IStreamingSessionHost
     /// <remarks>
     /// It is a mutable, unvalidated public property, so each caller reads it exactly once and
     /// validates against that single read — see
-    /// <see cref="StreamingSessionController.TrackSessionCommand"/> for why reading it twice
+    /// <see cref="StreamingSessionController.SendTracked"/> for why reading it twice
     /// around one operation is a defect rather than a style choice.
     /// </remarks>
     int MaxSamplingRate { get; }

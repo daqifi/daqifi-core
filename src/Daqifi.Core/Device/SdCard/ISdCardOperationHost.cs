@@ -40,14 +40,16 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// <remarks>
     /// Read from the device's one session value, so it cannot disagree with
     /// <see cref="IDeviceOperationHost.IsStreaming"/>.
-    /// <see cref="IDeviceOperationHost.EndStreamingSession"/> is what ends the session (issue #932).
+    /// <see cref="IDeviceOperationHost.SendStreamStop"/> is what ends the session (issue #932).
     /// </remarks>
     bool IsLoggingToSdCard { get; }
 
     /// <summary>
-    /// Records that the stream just started is going to the SD card.
+    /// Sends the stream start of an SD card log and records that the stream is going to the card,
+    /// as one step.
     /// </summary>
-    void BeginSdCardLogSession();
+    /// <param name="rateHz">The rate to start at, in Hz.</param>
+    void StartSdCardLogStream(int rateHz);
 
     /// <summary>
     /// When the streaming rate is one the device object inherited from the device rather than

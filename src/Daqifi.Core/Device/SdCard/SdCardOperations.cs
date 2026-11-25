@@ -670,20 +670,10 @@ internal sealed class SdCardOperations
     /// </returns>
     /// <remarks>
     /// The capture has to come before the stop with nothing in between: read it afterwards and
-    /// it reports state this method has already cleared, so the stream is never resumed. Owning
-    /// both halves here is what holds that ordering at every call site, rather than each one
-    /// re-deriving it.
+    /// it reports state the stop has already cleared, so the stream is never resumed. That is why
+    /// the host does both as one step.
     /// </remarks>
-    private bool PauseStreamingForSdOperation()
-    {
-        var wasStreaming = _host.IsStreaming;
-
-        // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-        _host.Send(ScpiMessageProducer.StopStreaming);
-        _host.EndStreamingSession();
-
-        return wasStreaming;
-    }
+    private bool PauseStreamingForSdOperation() => _host.SendStreamStop();
 
     /// <summary>
     /// Resumes streaming after an SD-card operation's defensive stop, if a live stream was
@@ -722,15 +712,8 @@ internal sealed class SdCardOperations
             // DownloadSdCardFileAsync's finally): called from a finally block, so letting a
             // failure here escape would replace whatever the SD operation itself threw — or
             // turn a clean success into a failure — over a device that may simply have dropped
-            // between the IsConnected check above and this call.
-            //
-            // DaqifiStreamingDevice.StartStreaming sets IsStreaming = true BEFORE it sends the
-            // SCPI command, so a Send failure here can leave the flag true for a stream that
-            // never actually resumed. Left alone, that is exactly the "flag says streaming, the
-            // device isn't" staleness #533 exists to fix — just relocated to this catch instead
-            // of fixed by it. Correcting it here is safe: this catch is the only code that knows
-            // the resume attempt failed.
-            _host.MarkStreamingStartRefused();
+            // between the IsConnected check above and this call. A start that could not be sent
+            // leaves no session recorded, so nothing here reports a stream that never resumed.
         }
     }
 
@@ -1643,9 +1626,7 @@ internal sealed class SdCardOperations
             // from a faster USB stream would otherwise be refused, and nothing recorded.
             await _host.LowerInheritedStreamingFrequencyAsync(cancellationToken).ConfigureAwait(false);
 
-            _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
-
-            _host.BeginSdCardLogSession();
+            _host.StartSdCardLogStream(_host.StreamingFrequency);
 
             // From the mode this start claimed. Nothing else leaves LogStarting — a stop is refused
             // on it and the cleanup below is this start's own — so this cannot miss.
@@ -1788,8 +1769,7 @@ internal sealed class SdCardOperations
     private void SendLogStopSequence()
     {
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-        _host.Send(ScpiMessageProducer.StopStreaming);
-        _host.EndStreamingSession();
+        _host.SendStreamStop();
 
         // Put the stream encoding back to protobuf, the format the library runs live streaming in
         // (DaqifiDevice.InitializeAsync sets it at connect time, and the frame decoder reads

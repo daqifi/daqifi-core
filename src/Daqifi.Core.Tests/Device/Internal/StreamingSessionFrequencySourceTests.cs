@@ -6,6 +6,7 @@ namespace Daqifi.Core.Tests.Device.Internal;
 
 /// <summary>
 /// A caller's rate choice and a device-reported stored rate racing each other: the choice wins.
+/// And a raw start and a raw stop racing each other: what is recorded follows what went out.
 /// </summary>
 public class StreamingSessionFrequencySourceTests
 {
@@ -58,6 +59,40 @@ public class StreamingSessionFrequencySourceTests
 
         Assert.Equal(200, host.DecoderRateHz);
         Assert.Equal("SYSTem:StartStreamData 200", host.StartCommand);
+    }
+
+    [Fact]
+    public async Task ARawStop_ThatFollowsARawStartOut_IsRecordedAfterIt()
+    {
+        // The start is recorded after it went out. A stop that got in between would be recorded
+        // first, leaving a session recorded on a device that has stopped.
+        var session = new StreamingSessionController(new FakeHost());
+        Task? stop = null;
+
+        session.SendTracked(
+            "SYSTem:StartStreamData 100",
+            () =>
+            {
+                stop = Task.Factory.StartNew(
+                    () => session.SendTracked("SYSTem:StopStreamData", () => { }),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                stop.Wait(TimeSpan.FromMilliseconds(200));
+            });
+        await stop!;
+
+        Assert.False(session.IsStreaming);
+    }
+
+    [Fact]
+    public void ARawStart_WhoseConnectionEndsAsItGoesOut_BeginsNoSession()
+    {
+        var session = new StreamingSessionController(new FakeHost());
+
+        session.SendTracked("SYSTem:StartStreamData 100", session.EndSessionOnConnectionEnd);
+
+        Assert.False(session.IsStreaming);
     }
 
     private sealed class FakeHost : IStreamingSessionHost
@@ -124,7 +159,7 @@ public class StreamingSessionFrequencySourceTests
 
         public Action? OnBeginDecoderSession { get; set; }
 
-        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
+        public void SendStreamStart<T>(IOutboundMessage<T> message, Func<bool> stillWanted, Action<Exception> onNotSent) =>
             StartCommand = message.Data as string;
 
         public void BeginDecoderSession(int streamingFrequencyHz)
