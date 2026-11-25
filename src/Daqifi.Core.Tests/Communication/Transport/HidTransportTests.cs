@@ -3,13 +3,13 @@ using Daqifi.Core.Communication.Transport;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
-public class HidLibraryTransportTests
+public class HidTransportTests
 {
     [Fact]
     public void Constructor_DefaultReadTimeout_IsTenSeconds()
     {
         var platform = new FakeHidPlatform([]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         Assert.Equal(TimeSpan.FromSeconds(10), transport.ReadTimeout);
         Assert.Equal(TimeSpan.FromSeconds(10), transport.WriteTimeout);
@@ -21,7 +21,7 @@ public class HidLibraryTransportTests
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await transport.ConnectAsync(0x04D8, 0x003C);
 
@@ -39,7 +39,7 @@ public class HidLibraryTransportTests
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await transport.ConnectAsync(0x04D8, 0x003C);
 
@@ -54,7 +54,7 @@ public class HidLibraryTransportTests
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
 
-        using var transport = new HidLibraryTransport(platform) { ExclusiveAccess = true };
+        using var transport = new HidTransport(platform) { ExclusiveAccess = true };
 
         await transport.ConnectAsync(0x04D8, 0x003C);
 
@@ -70,7 +70,7 @@ public class HidLibraryTransportTests
         var second = new FakeHidTransportDevice(0x04D8, 0x003C, "path-b", "SN-B");
         var platform = new FakeHidPlatform([first, second]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await transport.ConnectAsync(0x04D8, 0x003C, serialNumber: "SN-B");
 
@@ -88,7 +88,7 @@ public class HidLibraryTransportTests
         var second = new FakeHidTransportDevice(0x04D8, 0x003C, "path-b", "SN-B");
         var platform = new FakeHidPlatform([first, second]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
@@ -101,7 +101,7 @@ public class HidLibraryTransportTests
     public async Task ConnectAsync_WhenNoMatchingDevice_ThrowsIOException()
     {
         var platform = new FakeHidPlatform([]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await Assert.ThrowsAsync<IOException>(() => transport.ConnectAsync(0x04D8, 0x003C));
     }
@@ -114,7 +114,7 @@ public class HidLibraryTransportTests
         var deviceB = new FakeHidTransportDevice(0x04D8, 0x003C, "path-b", string.Empty);
         var platform = new FakeHidPlatform([deviceA, deviceB]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await transport.ConnectByPathAsync("path-b");
 
@@ -129,7 +129,7 @@ public class HidLibraryTransportTests
     {
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await Assert.ThrowsAsync<IOException>(() => transport.ConnectByPathAsync("path-z"));
         Assert.False(transport.IsConnected);
@@ -140,7 +140,7 @@ public class HidLibraryTransportTests
     public async Task ConnectByPathAsync_WithEmptyPath_ThrowsArgumentException()
     {
         var platform = new FakeHidPlatform([]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await Assert.ThrowsAsync<ArgumentException>(() => transport.ConnectByPathAsync("  "));
     }
@@ -149,7 +149,7 @@ public class HidLibraryTransportTests
     public async Task WriteAsync_WhenNotConnected_ThrowsInvalidOperationException()
     {
         var platform = new FakeHidPlatform([]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => transport.WriteAsync([0x01]));
     }
@@ -163,7 +163,7 @@ public class HidLibraryTransportTests
         };
 
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         await Assert.ThrowsAsync<IOException>(() => transport.WriteAsync([0xAB, 0xCD]));
@@ -174,7 +174,7 @@ public class HidLibraryTransportTests
     {
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform)
+        using var transport = new HidTransport(platform)
         {
             WriteTimeout = TimeSpan.FromMilliseconds(321)
         };
@@ -194,7 +194,7 @@ public class HidLibraryTransportTests
         };
 
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         await Assert.ThrowsAsync<TimeoutException>(() => transport.ReadAsync());
@@ -209,7 +209,7 @@ public class HidLibraryTransportTests
         };
 
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         await Assert.ThrowsAsync<IOException>(() => transport.ReadAsync());
@@ -224,7 +224,7 @@ public class HidLibraryTransportTests
         };
 
         var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         var data = await transport.ReadAsync(TimeSpan.FromMilliseconds(250));
@@ -239,7 +239,7 @@ public class HidLibraryTransportTests
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
         var platform = new FakeHidPlatform([device]);
 
-        using var transport = new HidLibraryTransport(platform);
+        using var transport = new HidTransport(platform);
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         await transport.DisconnectAsync();
@@ -262,7 +262,7 @@ public class HidLibraryTransportTests
             PendingRead = new TaskCompletionSource<HidTransportReadResult>(
                 TaskCreationOptions.RunContinuationsAsynchronously)
         };
-        using var transport = new HidLibraryTransport(new FakeHidPlatform([device]));
+        using var transport = new HidTransport(new FakeHidPlatform([device]));
         await transport.ConnectAsync(0x04D8, 0x003C);
         var read = transport.ReadAsync();
 

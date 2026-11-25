@@ -2,7 +2,7 @@ using Daqifi.Core.Communication.Transport;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
-public class HidLibraryDeviceEnumeratorTests
+public class HidDeviceEnumeratorTests
 {
     [Fact]
     public async Task EnumerateAsync_WithoutFilters_ReturnsAllDevices()
@@ -13,7 +13,7 @@ public class HidLibraryDeviceEnumeratorTests
             new FakeHidTransportDevice(0x1234, 0x5678, "path-b", "SN-B", "Other")
         ]);
 
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
 
         var devices = await enumerator.EnumerateAsync();
 
@@ -32,7 +32,7 @@ public class HidLibraryDeviceEnumeratorTests
             new FakeHidTransportDevice(0x1234, 0x003C, "path-b", "SN-B", "Other")
         ]);
 
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
 
         var devices = await enumerator.EnumerateAsync(vendorId: 0x04D8);
 
@@ -50,7 +50,7 @@ public class HidLibraryDeviceEnumeratorTests
             new FakeHidTransportDevice(0x04D8, 0x4444, "path-b", "SN-B", "Other")
         ]);
 
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
 
         var devices = await enumerator.EnumerateAsync(productId: 0x003C);
 
@@ -69,7 +69,7 @@ public class HidLibraryDeviceEnumeratorTests
             new FakeHidTransportDevice(0x1234, 0x003C, "path-c", "SN-C", "Other")
         ]);
 
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
 
         var devices = await enumerator.EnumerateAsync(vendorId: 0x04D8, productId: 0x003C);
 
@@ -81,7 +81,7 @@ public class HidLibraryDeviceEnumeratorTests
     public async Task EnumerateAsync_WhenCancelled_ThrowsOperationCanceledException()
     {
         var platform = new FakeHidPlatform([]);
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -93,7 +93,7 @@ public class HidLibraryDeviceEnumeratorTests
     public async Task EnumerateAsync_WhenPlatformThrows_ThrowsInvalidOperationExceptionWithFilterContext()
     {
         var platform = new ThrowingHidPlatform(new InvalidOperationException("HID backend unavailable."));
-        var enumerator = new HidLibraryDeviceEnumerator(platform);
+        var enumerator = new HidDeviceEnumerator(platform);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => enumerator.EnumerateAsync(vendorId: 0x04D8, productId: 0x003C));

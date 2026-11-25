@@ -9,7 +9,7 @@ namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
 /// macOS HID platform backed directly by the native IOKit/CoreFoundation system
-/// frameworks. Used instead of <see cref="HidLibraryPlatform"/> on macOS, where
+/// frameworks. Used instead of <see cref="HidSharpPlatform"/> on macOS, where
 /// HidSharp 2.6.4 enumerates 0 HID devices (daqifi-core #262): its macOS backend
 /// walks the IOKit registry and silently drops the PIC32 HID bootloader, so the
 /// firmware-update flow stalls at <c>WaitingForBootloader</c>. IOKit enumerates

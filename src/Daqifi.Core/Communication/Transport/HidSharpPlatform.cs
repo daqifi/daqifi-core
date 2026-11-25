@@ -51,14 +51,14 @@ internal readonly record struct HidTransportReadResult(
         => new(HidTransportReadStatus.Error, data, message);
 }
 
-internal sealed class HidLibraryPlatform : IHidPlatform
+internal sealed class HidSharpPlatform : IHidPlatform
 {
     public IReadOnlyList<IHidTransportDevice> EnumerateDevices()
     {
         try
         {
             return DeviceList.Local.GetHidDevices()
-                .Select(device => (IHidTransportDevice)new HidLibraryTransportDevice(device))
+                .Select(device => (IHidTransportDevice)new HidSharpTransportDevice(device))
                 .ToList();
         }
         catch (Exception ex) when (
@@ -75,12 +75,12 @@ internal sealed class HidLibraryPlatform : IHidPlatform
     }
 }
 
-internal sealed class HidLibraryTransportDevice : IHidTransportDevice
+internal sealed class HidSharpTransportDevice : IHidTransportDevice
 {
     private readonly HidDevice _device;
     private HidStream? _stream;
 
-    public HidLibraryTransportDevice(HidDevice device)
+    public HidSharpTransportDevice(HidDevice device)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
         VendorId = _device.VendorID;

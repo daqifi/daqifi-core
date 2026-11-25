@@ -7,7 +7,7 @@ namespace Daqifi.Core.Communication.Transport;
 /// Windows and Linux, native IOKit on macOS (HidSharp enumerates no HID devices there —
 /// issue #262).
 /// </summary>
-public sealed class HidLibraryTransport : IHidTransport
+public sealed class HidTransport : IHidTransport
 {
     private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultWriteTimeout = TimeSpan.FromSeconds(10);
@@ -25,12 +25,12 @@ public sealed class HidLibraryTransport : IHidTransport
     /// Initializes a new transport instance backed by the platform-appropriate HID
     /// adapter (HidSharp on Windows/Linux, native IOKit on macOS).
     /// </summary>
-    public HidLibraryTransport()
+    public HidTransport()
         : this(HidPlatformFactory.CreateForCurrentPlatform())
     {
     }
 
-    internal HidLibraryTransport(IHidPlatform hidPlatform)
+    internal HidTransport(IHidPlatform hidPlatform)
     {
         _hidPlatform = hidPlatform ?? throw new ArgumentNullException(nameof(hidPlatform));
     }
@@ -403,7 +403,7 @@ public sealed class HidLibraryTransport : IHidTransport
     {
         if (_disposed)
         {
-            throw new ObjectDisposedException(nameof(HidLibraryTransport));
+            throw new ObjectDisposedException(nameof(HidTransport));
         }
     }
 }

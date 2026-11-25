@@ -102,7 +102,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
             _context,
             hidTransport,
             bootloaderProtocol ?? new Pic32BootloaderProtocol(),
-            hidDeviceEnumerator ?? new HidLibraryDeviceEnumerator(),
+            hidDeviceEnumerator ?? new HidDeviceEnumerator(),
             usbLocationProvider ?? UsbLocationProviderFactory.CreateForCurrentPlatform());
 
         _pic32Updater = new Pic32FirmwareUpdater(_context, _bootloaderSession);

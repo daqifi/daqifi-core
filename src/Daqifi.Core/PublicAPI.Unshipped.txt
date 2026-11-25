@@ -126,12 +126,30 @@
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryDeviceEnumerator.HidLibraryDeviceEnumerator() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Connect(int vendorId, int productId, string? serialNumber = null) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ConnectAsync(int vendorId, int productId, string? serialNumber = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ConnectByPath(string! devicePath) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ConnectByPathAsync(string! devicePath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.DevicePath.get -> string?
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Disconnect() -> void
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.DisconnectAsync() -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Dispose() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ExclusiveAccess.get -> bool
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ExclusiveAccess.set -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.HidLibraryTransport() -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.IsConnected.get -> bool
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ProductId.get -> int?
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Read(System.TimeSpan? timeout = null) -> byte[]!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ReadAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ReadTimeout.get -> System.TimeSpan
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.ReadTimeout.set -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.SerialNumber.get -> string?
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.VendorId.get -> int?
 *REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.Write(byte[]! data) -> void
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.WriteAsync(byte[]! data, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.WriteTimeout.get -> System.TimeSpan
+*REMOVED*Daqifi.Core.Communication.Transport.HidLibraryTransport.WriteTimeout.set -> void
 *REMOVED*Daqifi.Core.Communication.Transport.IHidDeviceEnumerator
 *REMOVED*Daqifi.Core.Communication.Transport.IHidDeviceEnumerator.EnumerateAsync(int? vendorId = null, int? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Daqifi.Core.Communication.Transport.HidDeviceInfo!>!>!
 *REMOVED*Daqifi.Core.Communication.Transport.IHidTransport.Connect(int vendorId, int productId, string? serialNumber = null) -> void
@@ -1222,7 +1240,25 @@ Daqifi.Core.Communication.Transport.ConnectionRetryOptions.MaximumAttempts.get -
 Daqifi.Core.Communication.Transport.ConnectionRetryOptions.MaximumAttempts.set -> void
 Daqifi.Core.Communication.Transport.ConnectionRetryOptions.MaximumDelay.get -> System.TimeSpan
 Daqifi.Core.Communication.Transport.ConnectionRetryOptions.MaximumDelay.set -> void
-Daqifi.Core.Communication.Transport.HidLibraryTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.HidTransport
+Daqifi.Core.Communication.Transport.HidTransport.ConnectAsync(int vendorId, int productId, string? serialNumber = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.HidTransport.ConnectByPathAsync(string! devicePath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.HidTransport.DevicePath.get -> string?
+Daqifi.Core.Communication.Transport.HidTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.HidTransport.Dispose() -> void
+Daqifi.Core.Communication.Transport.HidTransport.ExclusiveAccess.get -> bool
+Daqifi.Core.Communication.Transport.HidTransport.ExclusiveAccess.set -> void
+Daqifi.Core.Communication.Transport.HidTransport.HidTransport() -> void
+Daqifi.Core.Communication.Transport.HidTransport.IsConnected.get -> bool
+Daqifi.Core.Communication.Transport.HidTransport.ProductId.get -> int?
+Daqifi.Core.Communication.Transport.HidTransport.ReadAsync(System.TimeSpan? timeout = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+Daqifi.Core.Communication.Transport.HidTransport.ReadTimeout.get -> System.TimeSpan
+Daqifi.Core.Communication.Transport.HidTransport.ReadTimeout.set -> void
+Daqifi.Core.Communication.Transport.HidTransport.SerialNumber.get -> string?
+Daqifi.Core.Communication.Transport.HidTransport.VendorId.get -> int?
+Daqifi.Core.Communication.Transport.HidTransport.WriteAsync(byte[]! data, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Daqifi.Core.Communication.Transport.HidTransport.WriteTimeout.get -> System.TimeSpan
+Daqifi.Core.Communication.Transport.HidTransport.WriteTimeout.set -> void
 Daqifi.Core.Communication.Transport.IHidTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.IStreamTransport.ConnectAsync(Daqifi.Core.Communication.Transport.ConnectionRetryOptions? retryOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Daqifi.Core.Communication.Transport.IStreamTransport.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
