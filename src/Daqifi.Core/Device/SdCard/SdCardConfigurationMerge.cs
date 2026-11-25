@@ -40,17 +40,19 @@ internal static class SdCardConfigurationMerge
             return parsed;
         }
 
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: parsed.AnalogPortCount > 0 ? parsed.AnalogPortCount : overrideConfig.AnalogPortCount,
-            DigitalPortCount: parsed.DigitalPortCount > 0 ? parsed.DigitalPortCount : overrideConfig.DigitalPortCount,
-            TimestampFrequency: parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
-            DeviceSerialNumber: Stated(parsed.DeviceSerialNumber) ?? Stated(overrideConfig.DeviceSerialNumber),
-            DevicePartNumber: Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
-            FirmwareVersion: Stated(parsed.FirmwareVersion) ?? Stated(overrideConfig.FirmwareVersion),
-            CalibrationValues: parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
-            Resolution: parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
-            PortRange: parsed.PortRange ?? overrideConfig.PortRange,
-            InternalScaleM: parsed.InternalScaleM ?? overrideConfig.InternalScaleM);
+        return new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = parsed.AnalogPortCount > 0 ? parsed.AnalogPortCount : overrideConfig.AnalogPortCount,
+            DigitalPortCount = parsed.DigitalPortCount > 0 ? parsed.DigitalPortCount : overrideConfig.DigitalPortCount,
+            TimestampFrequency = parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
+            DeviceSerialNumber = Stated(parsed.DeviceSerialNumber) ?? Stated(overrideConfig.DeviceSerialNumber),
+            DevicePartNumber = Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
+            FirmwareVersion = Stated(parsed.FirmwareVersion) ?? Stated(overrideConfig.FirmwareVersion),
+            CalibrationValues = parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
+            Resolution = parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
+            PortRange = parsed.PortRange ?? overrideConfig.PortRange,
+            InternalScaleM = parsed.InternalScaleM ?? overrideConfig.InternalScaleM
+        };
     }
 
     /// <summary>

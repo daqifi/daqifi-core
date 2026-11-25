@@ -19,10 +19,20 @@ namespace Daqifi.Core.Firmware;
 /// normalizes only the leading <c>v</c> and the separator before the label: <c>3.8.0-rc1</c>
 /// prints as <c>3.8.0rc1</c>.
 /// </remarks>
+/// <param name="Major">The first version part.</param>
+/// <param name="Minor">The second version part.</param>
+/// <param name="Patch">The third version part.</param>
+/// <param name="Revision">
+/// The fourth, build-number part of a four-part version ("3.8.0.1" has a revision of 1). Zero for
+/// the three-part versions the firmware releases use.
+/// </param>
+/// <param name="PreLabel">The raw pre-release label text, or <see langword="null"/> for a release.</param>
+/// <param name="PreNumber">The number after the pre-release label, or zero when it has none.</param>
 public readonly record struct FirmwareVersion(
     int Major,
     int Minor,
     int Patch,
+    int Revision,
     string? PreLabel,
     int PreNumber) : IComparable<FirmwareVersion>
 {
@@ -44,17 +54,6 @@ public readonly record struct FirmwareVersion(
     /// Whether this version is a pre-release (alpha, beta, rc, etc.).
     /// </summary>
     public bool IsPreRelease => !string.IsNullOrEmpty(PreLabel);
-
-    /// <summary>
-    /// The fourth, build-number part of a four-part version ("3.8.0.1" has a revision of 1).
-    /// Zero for the three-part versions the firmware releases use.
-    /// </summary>
-    /// <remarks>
-    /// This is a separate member rather than a fifth positional parameter, because the primary
-    /// constructor and <c>Deconstruct</c> of this record struct are shipped public API and
-    /// adding a parameter to either would break every caller.
-    /// </remarks>
-    public int Revision { get; init; }
 
     /// <inheritdoc />
     public int CompareTo(FirmwareVersion other)
@@ -123,7 +122,7 @@ public readonly record struct FirmwareVersion(
         _ = int.TryParse(
             m.Groups["prenum"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var preNum);
 
-        version = new FirmwareVersion(major, minor, patch, label, preNum) { Revision = revision };
+        version = new FirmwareVersion(major, minor, patch, revision, label, preNum);
         return true;
     }
 

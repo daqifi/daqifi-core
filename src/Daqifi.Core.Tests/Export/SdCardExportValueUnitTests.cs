@@ -32,17 +32,19 @@ public class SdCardExportValueUnitTests
     /// What a connected Nq1 supplies: a resolution and a unity calibration, so one ADC count is
     /// 1/1024 V exactly, which is the scale the live path reports.
     /// </summary>
-    private static SdCardDeviceConfiguration LiveConfiguration() => new(
-        AnalogPortCount: 2,
-        DigitalPortCount: 1,
-        TimestampFrequency: TickRate,
-        DeviceSerialNumber: "9090539562006014104",
-        DevicePartNumber: "Nyquist 1",
-        FirmwareVersion: "3.8.0",
-        CalibrationValues: [(1.0, 0.0), (1.0, 0.0)],
-        Resolution: Resolution,
-        PortRange: [1.0, 1.0],
-        InternalScaleM: [1.0, 1.0]);
+    private static SdCardDeviceConfiguration LiveConfiguration() => new()
+    {
+        AnalogPortCount = 2,
+        DigitalPortCount = 1,
+        TimestampFrequency = TickRate,
+        DeviceSerialNumber = "9090539562006014104",
+        DevicePartNumber = "Nyquist 1",
+        FirmwareVersion = "3.8.0",
+        CalibrationValues = [(1.0, 0.0), (1.0, 0.0)],
+        Resolution = Resolution,
+        PortRange = [1.0, 1.0],
+        InternalScaleM = [1.0, 1.0]
+    };
 
     private static async Task<string[]> ExportAsync(SdCardLogSession session)
     {

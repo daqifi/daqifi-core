@@ -233,7 +233,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     internal List<SdCardFileInfo> SdFiles { get; } = new();
 
     /// <summary>Storage figures the card reports.</summary>
-    internal SdCardStorageInfo SdStorage { get; set; } = new(FreeBytes: 750, TotalBytes: 1000);
+    internal SdCardStorageInfo SdStorage { get; set; } = new() { FreeBytes = 750, TotalBytes = 1000 };
 
     /// <summary>When set, every card query fails with it — how a busy or collapsed card behaves.</summary>
     internal Exception? SdFailure { get; set; }

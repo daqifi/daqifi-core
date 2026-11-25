@@ -63,14 +63,16 @@ public static class SdCardSpaceCheck
 
         var message = BuildMessage(free, estimatedBytes, minimumFreeBytes, isNearlyFull, isInsufficient, timeUntilFull);
 
-        return new SdCardSpaceCheckResult(
-            storage,
-            estimatedBytes,
-            minimumFreeBytes,
-            isNearlyFull,
-            isInsufficient,
-            timeUntilFull,
-            message);
+        return new SdCardSpaceCheckResult
+        {
+            Storage = storage,
+            EstimatedCaptureBytes = estimatedBytes,
+            MinimumFreeBytes = minimumFreeBytes,
+            IsNearlyFull = isNearlyFull,
+            IsInsufficientForCapture = isInsufficient,
+            EstimatedTimeUntilFull = timeUntilFull,
+            Message = message
+        };
     }
 
     private static string? BuildMessage(

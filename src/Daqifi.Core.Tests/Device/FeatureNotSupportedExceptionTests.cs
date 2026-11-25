@@ -12,7 +12,7 @@ public class FeatureNotSupportedExceptionTests
         // The message is built from the constructor *parameters* before the properties are
         // assigned, so the message tests below cannot catch a regression that drops one of
         // these assignments. This is the only coverage that they are actually stored.
-        var requiredVersion = new FirmwareVersion(3, 5, 0, null, 0);
+        var requiredVersion = new FirmwareVersion(3, 5, 0, 0, null, 0);
 
         var ex = new FeatureNotSupportedException(
             DeviceFeature.SdStorageQuery,
@@ -40,7 +40,7 @@ public class FeatureNotSupportedExceptionTests
     [Fact]
     public void Message_IncludesFeatureRequiredAndActualVersion()
     {
-        var requiredVersion = new FirmwareVersion(3, 5, 0, null, 0);
+        var requiredVersion = new FirmwareVersion(3, 5, 0, 0, null, 0);
 
         var ex = new FeatureNotSupportedException(
             DeviceFeature.SdStorageQuery,
@@ -55,7 +55,7 @@ public class FeatureNotSupportedExceptionTests
     [Fact]
     public void Message_WithUnknownActualVersion_SaysUnknown()
     {
-        var requiredVersion = new FirmwareVersion(3, 5, 0, null, 0);
+        var requiredVersion = new FirmwareVersion(3, 5, 0, 0, null, 0);
 
         var ex = new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, requiredVersion, null);
 

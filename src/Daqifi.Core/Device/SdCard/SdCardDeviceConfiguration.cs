@@ -7,31 +7,59 @@ namespace Daqifi.Core.Device.SdCard;
 /// <summary>
 /// Device context extracted from a status message in an SD card log file.
 /// </summary>
-/// <param name="AnalogPortCount">Number of analog input ports.</param>
-/// <param name="DigitalPortCount">Number of digital ports.</param>
-/// <param name="TimestampFrequency">Clock frequency for tick-to-time conversion.</param>
-/// <param name="DeviceSerialNumber">
-/// Device serial number, if present, in decimal as <see cref="DeviceMetadata.SerialNumber"/>
-/// reports it. CSV and JSON logs state it in hex; the parsers convert it.
-/// </param>
-/// <param name="DevicePartNumber">Device part number, if present.</param>
-/// <param name="FirmwareVersion">Firmware revision string, if present.</param>
-/// <param name="CalibrationValues">Per-channel calibration slope/intercept pairs, if present.</param>
-/// <param name="Resolution">ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.</param>
-/// <param name="PortRange">Per-channel voltage port range values, if present.</param>
-/// <param name="InternalScaleM">Per-channel internal scale factors, if present.</param>
-public sealed record SdCardDeviceConfiguration(
-    int AnalogPortCount,
-    int DigitalPortCount,
-    uint TimestampFrequency,
-    string? DeviceSerialNumber,
-    string? DevicePartNumber,
-    string? FirmwareVersion,
-    IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues,
-    uint Resolution = 0,
-    IReadOnlyList<double>? PortRange = null,
-    IReadOnlyList<double>? InternalScaleM = null)
+public sealed record SdCardDeviceConfiguration
 {
+    /// <summary>
+    /// Number of analog input ports.
+    /// </summary>
+    public required int AnalogPortCount { get; init; }
+
+    /// <summary>
+    /// Number of digital ports.
+    /// </summary>
+    public required int DigitalPortCount { get; init; }
+
+    /// <summary>
+    /// Clock frequency for tick-to-time conversion.
+    /// </summary>
+    public required uint TimestampFrequency { get; init; }
+
+    /// <summary>
+    /// Device serial number, if present, in decimal as <see cref="DeviceMetadata.SerialNumber"/>
+    /// reports it. CSV and JSON logs state it in hex; the parsers convert it.
+    /// </summary>
+    public required string? DeviceSerialNumber { get; init; }
+
+    /// <summary>
+    /// Device part number, if present.
+    /// </summary>
+    public required string? DevicePartNumber { get; init; }
+
+    /// <summary>
+    /// Firmware revision string, if present.
+    /// </summary>
+    public required string? FirmwareVersion { get; init; }
+
+    /// <summary>
+    /// Per-channel calibration slope/intercept pairs, if present.
+    /// </summary>
+    public required IReadOnlyList<(double Slope, double Intercept)>? CalibrationValues { get; init; }
+
+    /// <summary>
+    /// ADC resolution (e.g., 65535 for 16-bit), used for raw ADC scaling.
+    /// </summary>
+    public uint Resolution { get; init; }
+
+    /// <summary>
+    /// Per-channel voltage port range values, if present.
+    /// </summary>
+    public IReadOnlyList<double>? PortRange { get; init; }
+
+    /// <summary>
+    /// Per-channel internal scale factors, if present.
+    /// </summary>
+    public IReadOnlyList<double>? InternalScaleM { get; init; }
+
     /// <summary>
     /// Creates an <see cref="SdCardDeviceConfiguration"/> from a connected device's
     /// channel configuration. This captures the calibration, resolution, port range,
@@ -68,18 +96,20 @@ public sealed record SdCardDeviceConfiguration(
         var digitalCount = channels.Count(c => c.Type == ChannelType.Digital);
         var firstAnalog = analogChannels[0];
 
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: analogChannels.Count,
-            DigitalPortCount: digitalCount,
-            TimestampFrequency: device.TimestampFrequency,
-            DeviceSerialNumber: device.Metadata.SerialNumber,
-            DevicePartNumber: device.Metadata.PartNumber,
-            FirmwareVersion: device.Metadata.FirmwareVersion,
-            CalibrationValues: analogChannels
+        return new SdCardDeviceConfiguration
+        {
+            AnalogPortCount = analogChannels.Count,
+            DigitalPortCount = digitalCount,
+            TimestampFrequency = device.TimestampFrequency,
+            DeviceSerialNumber = device.Metadata.SerialNumber,
+            DevicePartNumber = device.Metadata.PartNumber,
+            FirmwareVersion = device.Metadata.FirmwareVersion,
+            CalibrationValues = analogChannels
                 .Select(ch => (ch.CalibrationM, ch.CalibrationB))
                 .ToArray(),
-            Resolution: firstAnalog.Resolution,
-            PortRange: analogChannels.Select(ch => ch.PortRange).ToArray(),
-            InternalScaleM: analogChannels.Select(ch => ch.InternalScaleM).ToArray());
+            Resolution = firstAnalog.Resolution,
+            PortRange = analogChannels.Select(ch => ch.PortRange).ToArray(),
+            InternalScaleM = analogChannels.Select(ch => ch.InternalScaleM).ToArray()
+        };
     }
 }

@@ -9,43 +9,49 @@ namespace Daqifi.Core.Export;
 /// than one that failed, so everything that did not reach the file is counted here rather than
 /// swallowed.
 /// </summary>
-/// <param name="SampleCount">
-/// Live samples read off the device stream, including any counted in
-/// <paramref name="UnmappedSampleCount"/>.
-/// </param>
-/// <param name="RowCount">
-/// CSV data lines written, not counting the header. A line is a timestamp, not a sample — every
-/// channel decoded from one device frame shares that frame's timestamp and the exporter collapses
-/// them into a single line. Describes a default export; an averaged one
-/// (<see cref="CsvExportOptions.AverageWindow"/>) writes one line per window instead.
-/// </param>
-/// <param name="DroppedSampleCount">
-/// Samples the device discarded during this recording because the recording could not keep up with
-/// the incoming rate — <see cref="ILiveSampleSource.DroppedLiveSampleCount"/> measured across the
-/// recording rather than since the device connected. Non-zero means the CSV has gaps; a larger
-/// <c>bufferCapacity</c>, a slower stream rate, or a faster writer are the fixes.
-/// <para>
-/// The underlying counter is device-wide, so if another live consumer is enumerating the same
-/// device while the recording runs, its drops are included here too. Nothing stops several
-/// enumerations at once and the device reports drops as one health signal, so this is a delta over
-/// a shared number rather than a per-recording one. With a single consumer — the normal case — it
-/// is exactly this recording's losses.
-/// </para>
-/// </param>
-/// <param name="UnmappedSampleCount">
-/// Samples that arrived for a channel the recording had no column for — one enabled by another
-/// caller after it started. Non-zero means the CSV is missing a channel the device was sending.
-/// </param>
-/// <param name="NonMonotonicSampleCount">
-/// Samples whose timestamp went backwards relative to the one before. Expected to be zero; see
-/// <see cref="LiveStreamSampleSource.NonMonotonicSampleCount"/> for when it might not be.
-/// </param>
-public readonly record struct LiveCsvRecordingResult(
-    long SampleCount,
-    long RowCount,
-    long DroppedSampleCount,
-    long UnmappedSampleCount,
-    long NonMonotonicSampleCount);
+public readonly record struct LiveCsvRecordingResult
+{
+    /// <summary>
+    /// Live samples read off the device stream, including any counted in
+    /// <see cref="UnmappedSampleCount"/>.
+    /// </summary>
+    public required long SampleCount { get; init; }
+
+    /// <summary>
+    /// CSV data lines written, not counting the header. A line is a timestamp, not a sample — every
+    /// channel decoded from one device frame shares that frame's timestamp and the exporter collapses
+    /// them into a single line. Describes a default export; an averaged one
+    /// (<see cref="CsvExportOptions.AverageWindow"/>) writes one line per window instead.
+    /// </summary>
+    public required long RowCount { get; init; }
+
+    /// <summary>
+    /// Samples the device discarded during this recording because the recording could not keep up with
+    /// the incoming rate — <see cref="ILiveSampleSource.DroppedLiveSampleCount"/> measured across the
+    /// recording rather than since the device connected. Non-zero means the CSV has gaps; a larger
+    /// <c>bufferCapacity</c>, a slower stream rate, or a faster writer are the fixes.
+    /// </summary>
+    /// <remarks>
+    /// The underlying counter is device-wide, so if another live consumer is enumerating the same
+    /// device while the recording runs, its drops are included here too. Nothing stops several
+    /// enumerations at once and the device reports drops as one health signal, so this is a delta over
+    /// a shared number rather than a per-recording one. With a single consumer — the normal case — it
+    /// is exactly this recording's losses.
+    /// </remarks>
+    public required long DroppedSampleCount { get; init; }
+
+    /// <summary>
+    /// Samples that arrived for a channel the recording had no column for — one enabled by another
+    /// caller after it started. Non-zero means the CSV is missing a channel the device was sending.
+    /// </summary>
+    public required long UnmappedSampleCount { get; init; }
+
+    /// <summary>
+    /// Samples whose timestamp went backwards relative to the one before. Expected to be zero; see
+    /// <see cref="LiveStreamSampleSource.NonMonotonicSampleCount"/> for when it might not be.
+    /// </summary>
+    public required long NonMonotonicSampleCount { get; init; }
+}
 
 /// <summary>
 /// Records a streaming device's live samples straight to CSV.
@@ -180,12 +186,14 @@ public static class LiveCsvRecordingExtensions
         // all-zeros result for a recording with no enabled channels.
         var dropped = channels.Count == 0 ? 0 : live.DroppedLiveSampleCount - droppedBefore;
 
-        return new LiveCsvRecordingResult(
-            source.SampleCount,
-            source.RowCount,
-            dropped,
-            source.UnmappedSampleCount,
-            source.NonMonotonicSampleCount);
+        return new LiveCsvRecordingResult
+        {
+            SampleCount = source.SampleCount,
+            RowCount = source.RowCount,
+            DroppedSampleCount = dropped,
+            UnmappedSampleCount = source.UnmappedSampleCount,
+            NonMonotonicSampleCount = source.NonMonotonicSampleCount
+        };
     }
 
     /// <summary>
