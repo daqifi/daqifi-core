@@ -101,7 +101,13 @@ internal sealed class OperationSerializer : IDisposable
     /// it. It therefore stays non-null (and may be empty) for the whole drain, and is nulled
     /// only in the same locked moment the drain observes it empty.
     /// </remarks>
-    private Queue<Action>? _deferredSends;
+    private Queue<DeferredSend>? _deferredSends;
+
+    /// <summary>
+    /// One parked send. It leaves the backlog by being replayed, or through
+    /// <see cref="DiscardDeferredSends"/>.
+    /// </summary>
+    private readonly record struct DeferredSend(Action Send, IHeldBackSend? HeldBack);
 
     /// <summary>Backing field for <see cref="DroppedDeferredSendCount"/>.</summary>
     private long _droppedDeferredSendCount;
@@ -347,7 +353,7 @@ internal sealed class OperationSerializer : IDisposable
     {
         for (var sent = 0; sent < MaxDeferredSendsPerFlush; sent++)
         {
-            Action next;
+            DeferredSend next;
             lock (_deferralGate)
             {
                 if (_deferredSends == null || _deferredSends.Count == 0)
@@ -398,12 +404,7 @@ internal sealed class OperationSerializer : IDisposable
                 // The only way in is a disposed device, where nothing else can be running and
                 // these sends can never reach anything. Drop the backlog rather than leave
                 // Send() deferring into one nobody will drain.
-                lock (_deferralGate)
-                {
-                    _deferredSends = null;
-                    _operationInFlight = false;
-                    _deferralOverflowReported = false;
-                }
+                DiscardBacklog();
 
                 SafeLog(() => _host.Logger.LogWarning(
                     ex,
@@ -414,19 +415,62 @@ internal sealed class OperationSerializer : IDisposable
     }
 
     /// <summary>Sends one parked message, never throwing.</summary>
-    private void ReplayDeferredSend(Action send)
+    private void ReplayDeferredSend(DeferredSend deferred)
     {
         try
         {
-            send();
+            if (deferred.HeldBack is { } heldBack)
+            {
+                heldBack.Replay(deferred.Send);
+            }
+            else
+            {
+                deferred.Send();
+            }
         }
         catch (Exception ex)
         {
+            DiscardDeferredSends([deferred], ex);
             SafeLog(() => _host.Logger.LogWarning(
                 ex,
                 "A message deferred while an exclusive operation was running could not be "
                 + "sent afterwards; it was dropped."));
         }
+    }
+
+    /// <summary>
+    /// Tells the senders of parked messages that asked that theirs will not be sent. The one way a
+    /// message leaves the backlog unsent, whatever the reason. Never called with
+    /// <see cref="_deferralGate"/> held.
+    /// </summary>
+    private void DiscardDeferredSends(IEnumerable<DeferredSend> discarded, Exception? reason)
+    {
+        foreach (var deferred in discarded)
+        {
+            try
+            {
+                deferred.HeldBack?.NotSent(reason);
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _host.Logger.LogWarning(ex, "Reporting a message that was not sent failed."));
+            }
+        }
+    }
+
+    /// <summary>Stops deferring and discards whatever is parked.</summary>
+    private void DiscardBacklog()
+    {
+        Queue<DeferredSend>? backlog;
+        lock (_deferralGate)
+        {
+            backlog = _deferredSends;
+            _deferredSends = null;
+            _operationInFlight = false;
+            _deferralOverflowReported = false;
+        }
+
+        DiscardDeferredSends(backlog ?? [], null);
     }
 
     /// <summary>
@@ -472,12 +516,7 @@ internal sealed class OperationSerializer : IDisposable
         // both "not deferring" and "not the owner" at the same instant.
         Interlocked.Increment(ref _operationGeneration);
 
-        lock (_deferralGate)
-        {
-            _deferredSends = null;
-            _operationInFlight = false;
-            _deferralOverflowReported = false;
-        }
+        DiscardBacklog();
     }
 
     private void ReleaseOperationLock()
@@ -520,13 +559,12 @@ internal sealed class OperationSerializer : IDisposable
     /// cannot turn a fire-and-forget send into a wait.
     /// </para>
     /// <para>
-    /// <paramref name="replay"/>, when given, runs on the replaying thread in place of the send, and
-    /// sends the message with the action it receives, or drops it by not calling that. A stream
-    /// start uses it to check the reader once the operation that stopped it has ended (issue #975),
-    /// and stream starts and stops to keep their order with the operation's own.
+    /// <paramref name="heldBack"/>, when given, decides on the replaying thread whether the message
+    /// still goes out, and hears about it when the message will not. Stream starts and stops use it
+    /// to keep what is recorded and what the device is doing the same.
     /// </para>
     /// </remarks>
-    internal bool TryDeferSend<T>(IOutboundMessage<T> message, Action<Action>? replay = null)
+    internal bool TryDeferSend<T>(IOutboundMessage<T> message, IHeldBackSend? heldBack = null)
     {
         if (OwnsCurrentSession)
         {
@@ -538,6 +576,7 @@ internal sealed class OperationSerializer : IDisposable
         // Clamped so an override can never drive Dequeue past empty.
         var cap = Math.Max(1, _host.MaxDeferredSends);
 
+        List<DeferredSend>? evicted = null;
         bool reportOverflow;
         lock (_deferralGate)
         {
@@ -546,14 +585,14 @@ internal sealed class OperationSerializer : IDisposable
                 return false;
             }
 
-            var backlog = _deferredSends ??= new Queue<Action>();
+            var backlog = _deferredSends ??= new Queue<DeferredSend>();
 
             // A loop rather than a single test, so a cap that shrank still converges on the
             // first append after it did.
             var dropped = 0;
             while (backlog.Count >= cap)
             {
-                backlog.Dequeue();
+                (evicted ??= []).Add(backlog.Dequeue());
                 dropped++;
             }
 
@@ -570,9 +609,14 @@ internal sealed class OperationSerializer : IDisposable
                 _deferralOverflowReported = true;
             }
 
-            backlog.Enqueue(replay == null
-                ? () => _host.SendNow(message)
-                : () => replay(() => _host.SendNow(message)));
+            backlog.Enqueue(new DeferredSend(() => _host.SendNow(message), heldBack));
+        }
+
+        if (evicted != null)
+        {
+            DiscardDeferredSends(evicted, new InvalidOperationException(
+                "The command was not sent: it was held back while another operation had exclusive use of the "
+                + $"device, and the backlog of such commands overflowed its cap of {cap}."));
         }
 
         if (reportOverflow)

@@ -132,72 +132,32 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Sends <paramref name="message"/> through <see cref="Send{T}"/>, but if the send is parked
-    /// behind an operation on another flow, checks the reader again before the parked message
-    /// goes out (issue #975).
+    /// Whether the reader runs, started now if it has to be, for a held-back command whose answer
+    /// only the reader can deliver and whose turn has come (issue #975).
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// <see cref="EnsureMessageReaderRunning"/> cannot answer for a send that is parked: a raw
+    /// <see cref="EnsureMessageReaderRunning"/> cannot answer for a command that is held back: a raw
     /// capture on another flow has stopped the reader on purpose, and whether its restart works is
-    /// known only when the capture ends. The parked message is replayed right after that restart,
-    /// so the check runs there. If the reader still cannot start, the message is not sent,
-    /// <paramref name="onNotSent"/> runs, and the refusal is raised on <c>ErrorOccurred</c>.
-    /// </para>
-    /// <para>
-    /// The message still goes through the virtual <see cref="Send{T}"/>, so an override sees it
-    /// exactly as before. The check rides along on this thread for the length of that one call.
-    /// </para>
+    /// known only when the capture ends. The command is replayed right after that restart. Usually
+    /// the throttle on <c>ErrorOccurred</c> folds the raise here into the capture's own report of the
+    /// same stuck reader, a moment earlier.
     /// </remarks>
-    /// <param name="message">The message whose answer only the reader can deliver.</param>
     /// <param name="operation">The name of the operation, for the refusal's message.</param>
-    /// <param name="onNotSent">Undoes what the caller recorded when it sent the message, and receives the refusal. Runs on the replaying thread.</param>
-    internal void SendRequiringReader<T>(IOutboundMessage<T> message, string operation, Action<Exception> onNotSent)
-    {
-        var previous = t_parkedSendReaderCheck;
-        t_parkedSendReaderCheck = new ParkedSendReaderCheck(this, operation, onNotSent);
-        try
-        {
-            Send(message);
-        }
-        finally
-        {
-            t_parkedSendReaderCheck = previous;
-        }
-    }
-
-    /// <summary>
-    /// The reader check that <see cref="SendRequiringReader{T}"/> hands to the <see cref="Send{T}"/>
-    /// it calls. Thread-static, because <see cref="Send{T}"/> is synchronous and the check must
-    /// reach only that one call. It names its device, so a send to another device from inside an
-    /// override does not take it.
-    /// </summary>
-    [ThreadStatic]
-    private static ParkedSendReaderCheck? t_parkedSendReaderCheck;
-
-    private sealed record ParkedSendReaderCheck(DaqifiDevice Device, string Operation, Action<Exception> OnNotSent);
-
-    /// <summary>
-    /// Runs just before a parked <see cref="SendRequiringReader{T}"/> message is replayed. True
-    /// when the reader runs (started now if it has to be). False when it cannot start, after
-    /// <see cref="ParkedSendReaderCheck.OnNotSent"/> has run and the refusal has been logged and
-    /// raised. Usually the throttle on <c>ErrorOccurred</c> folds that raise into the capture's own
-    /// report of the same stuck reader, a moment earlier.
-    /// </summary>
-    private bool ReaderRunsForParkedSend(ParkedSendReaderCheck check)
+    /// <param name="onNotSent">Receives the refusal, before it is logged and raised on <c>ErrorOccurred</c>, when the reader cannot start.</param>
+    internal bool ReaderRunsForHeldBackSend(string operation, Action<Exception> onNotSent)
     {
         try
         {
-            StartStoppedReader(check.Operation);
+            StartStoppedReader(operation);
             return true;
         }
         catch (ConsumerThreadNotExitedException ex)
         {
-            check.OnNotSent(ex);
+            onNotSent(ex);
             SafeLog(() => _logger.LogWarning(
                 ex,
                 "{Operation} was parked behind a raw capture and was not sent: the reader could not start again.",
-                check.Operation));
+                operation));
             RaiseDeviceError(DeviceErrorSource.MessageConsumer, ex);
             return false;
         }
@@ -2208,7 +2168,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// The body of <see cref="Send{T}"/>.
     /// </summary>
     /// <param name="message">The message to send.</param>
-    /// <param name="heldBack">What to replay the message through if it is held back.</param>
+    /// <param name="heldBack">Hears what becomes of the message if it is held back.</param>
     /// <returns><c>true</c> when the message was held back; <c>false</c> when it went out.</returns>
     private protected bool SendOrHoldBack<T>(IOutboundMessage<T> message, IHeldBackSend? heldBack)
     {
@@ -2228,32 +2188,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _lastExchangeTextCommand = textCommand.Data;
         }
 
-        // Taken by this call only (issue #975): a send an override makes from inside it is not
-        // the message SendRequiringReader asked about.
-        var readerCheck = t_parkedSendReaderCheck is { } check && ReferenceEquals(check.Device, this) ? check : null;
-        t_parkedSendReaderCheck = null;
-
-        var replay = readerCheck == null && heldBack == null
-            ? (Action<Action>?)null
-            : send =>
-            {
-                if (heldBack is { IsOvertaken: true }
-                    || (readerCheck != null && !ReaderRunsForParkedSend(readerCheck)))
-                {
-                    return;
-                }
-
-                if (heldBack == null)
-                {
-                    send();
-                }
-                else
-                {
-                    heldBack.Replay(send);
-                }
-            };
-
-        if (_operations.TryDeferSend(message, replay))
+        if (_operations.TryDeferSend(message, heldBack))
         {
             return true;
         }

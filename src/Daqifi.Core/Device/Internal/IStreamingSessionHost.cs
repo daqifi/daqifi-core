@@ -52,12 +52,12 @@ internal interface IStreamingSessionHost
     void Send<T>(IOutboundMessage<T> message);
 
     /// <summary>
-    /// Sends the stream start. If it is parked behind a raw capture, the reader is checked again
-    /// before it goes out, and <paramref name="onNotSent"/> runs instead of the send when the
-    /// reader cannot start (issue #975). <paramref name="onNotSent"/> receives the refusal.
+    /// Sends without holding back, for a command whose turn has come.
     /// </summary>
-    /// <remarks>See <see cref="DaqifiDevice.SendRequiringReader{T}"/>.</remarks>
-    void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent);
+    void SendNow<T>(IOutboundMessage<T> message);
+
+    /// <inheritdoc cref="DaqifiDevice.ReaderRunsForHeldBackSend"/>
+    bool ReaderRunsForHeldBackStart(Action<Exception> onNotSent);
 
     /// <summary>
     /// The device's advertised maximum sampling rate

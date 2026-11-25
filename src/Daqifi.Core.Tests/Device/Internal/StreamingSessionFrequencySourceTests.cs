@@ -102,6 +102,59 @@ public class StreamingSessionFrequencySourceTests
         Assert.False(session.IsStreaming);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AHeldBackCommandThatWillNotBeSent_TakesTheRecordBack(bool isStart)
+    {
+        var session = new StreamingSessionController(new FakeHost());
+        if (!isStart)
+        {
+            session.StartStreaming();
+        }
+
+        IHeldBackSend? heldBack = null;
+        session.SendTracked(
+            isStart ? "SYSTem:StartStreamData 100" : "SYSTem:StopStreamData",
+            command =>
+            {
+                heldBack = command;
+                return true;
+            });
+        Assert.Equal(isStart, session.IsStreaming);
+
+        heldBack!.NotSent(new InvalidOperationException("not sent"));
+
+        Assert.Equal(!isStart, session.IsStreaming);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AHeldBackCommandThatWillNotBeSent_LeavesWhatWasRecordedSinceAlone(bool connectionEnded)
+    {
+        var session = new StreamingSessionController(new FakeHost());
+        session.StartStreaming();
+        IHeldBackSend? stop = null;
+        session.SendTracked(
+            "SYSTem:StopStreamData",
+            command =>
+            {
+                stop = command;
+                return true;
+            });
+        if (connectionEnded)
+        {
+            session.EndSessionOnConnectionEnd();
+        }
+
+        session.StartStreaming();
+        var current = session.Current;
+        stop!.NotSent(null);
+
+        Assert.Same(current, session.Current);
+    }
+
     private sealed class FakeHost : IStreamingSessionHost
     {
         private Action? _onMaxSamplingRateRead;
@@ -158,9 +211,9 @@ public class StreamingSessionFrequencySourceTests
         {
         }
 
-        public void Send<T>(IOutboundMessage<T> message)
-        {
-        }
+        public void Send<T>(IOutboundMessage<T> message) => StartCommand = message.Data as string;
+
+        public void SendNow<T>(IOutboundMessage<T> message) => throw new NotSupportedException();
 
         public string? StartCommand { get; private set; }
 
@@ -168,8 +221,7 @@ public class StreamingSessionFrequencySourceTests
 
         public Action? OnBeginDecoderSession { get; set; }
 
-        public void SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
-            StartCommand = message.Data as string;
+        public bool ReaderRunsForHeldBackStart(Action<Exception> onNotSent) => true;
 
         public void BeginDecoderSession(int streamingFrequencyHz)
         {

@@ -464,7 +464,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
 
         var (session, startSent) = _session.StartStreaming();
-        var framesBefore = startSent || session.IsStartHeldBack ? 0L : _frameDecoder.AdmittedStreamFrameCount;
+        var framesBefore = startSent || _session.IsStartHeldBack(session) ? 0L : _frameDecoder.AdmittedStreamFrameCount;
 
         Exception? confirmationFailure = null;
         try
@@ -477,8 +477,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
             confirmationFailure = ex;
         }
 
-        // A start parked behind a raw capture on another flow is dropped, not sent, when the
-        // capture cannot restart the reader. The wait then sees the session end, or the exchange
+        // A start parked behind an operation on another flow is dropped, not sent, when the backlog
+        // overflows, or when that operation was a raw capture that cannot restart the reader. The wait then sees the session end, or the exchange
         // that follows it fails on the same stuck reader; neither is a refusal, so the reason the
         // start never reached the device goes out in place of either (issue #975).
         if (session.StartNotSent is { } notSent)
@@ -822,7 +822,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         {
             // Read before the count, which starts again when a held-back start goes out: until then
             // the frames arriving are those of the stream before it.
-            var startHeldBack = session.IsStartHeldBack;
+            var startHeldBack = _session.IsStartHeldBack(session);
             var admitted = _frameDecoder.AdmittedStreamFrameCount;
 
             // Checked after the count is read, so a frame of a later session cannot be taken for
@@ -1973,8 +1973,11 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
-    void IStreamingSessionHost.SendStreamStart<T>(IOutboundMessage<T> message, Action<Exception> onNotSent) =>
-        SendRequiringReader(message, nameof(StartStreaming), onNotSent);
+    void IStreamingSessionHost.SendNow<T>(IOutboundMessage<T> message) =>
+        ((IOperationSerializationHost)this).SendNow(message);
+
+    bool IStreamingSessionHost.ReaderRunsForHeldBackStart(Action<Exception> onNotSent) =>
+        ReaderRunsForHeldBackSend(nameof(StartStreaming), onNotSent);
 
     bool IStreamingSessionHost.SendsAreNeverHeldBack => SendsAreNeverHeldBack;
 

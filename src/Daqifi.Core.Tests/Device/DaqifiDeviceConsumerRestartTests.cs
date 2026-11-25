@@ -394,6 +394,148 @@ public class DaqifiDeviceConsumerRestartTests
         Assert.Equal(["Start", InOperation], written);
     }
 
+    [Fact]
+    public async Task AStartEvictedFromTheBacklog_LeavesNoSession_SoARetryStartsTheDevice()
+    {
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            _ => { },
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.StartStreaming();
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device =>
+            {
+                Assert.False(device.IsStreaming);
+                device.StartStreaming();
+            });
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start"], written);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStopEvictedFromTheBacklog_LeavesTheSession_SoARetryStopsTheDevice(bool raw)
+    {
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.BacklogCap = 2;
+                if (raw)
+                {
+                    device.Send(ScpiMessageProducer.StopStreaming);
+                }
+                else
+                {
+                    device.StopStreaming();
+                }
+
+                SendFillers(device, 2);
+            },
+            _ => { },
+            device =>
+            {
+                Assert.True(device.IsStreaming);
+                device.StopStreaming();
+            });
+
+        Assert.False(isStreaming);
+        Assert.Equal(["Start", "Stop"], written);
+    }
+
+    [Fact]
+    public async Task AStopAndAStartEvictedFromTheBacklog_LeaveTheStreamThatIsRunning()
+    {
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.StopStreaming();
+                device.StartStreaming();
+                SendFillers(device, 2);
+            },
+            _ => { });
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start"], written);
+    }
+
+    [Fact]
+    public async Task AStopEvictedFromTheBacklogAheadOfAStart_StillGoesOutAheadOfIt()
+    {
+        // The start is for a device that has stopped: what it streams after the stop is not what
+        // it streamed before, and it may have been an SD log.
+        var (written, isStreaming) = await ParkBehindAnOperationAsync(
+            device => device.StartStreaming(),
+            device =>
+            {
+                device.BacklogCap = 2;
+                device.StopStreaming();
+                device.StartStreaming();
+                SendFillers(device, 1);
+            },
+            _ => { });
+
+        Assert.True(isStreaming);
+        Assert.Equal(["Start", "Stop", "Start"], written);
+    }
+
+    [Fact]
+    public async Task AStartEvictedFromTheBacklogByAStop_LeavesNoSession()
+    {
+        var (_, isStreaming) = await ParkBehindAnOperationAsync(
+            _ => { },
+            device =>
+            {
+                device.BacklogCap = 1;
+                device.Send(ScpiMessageProducer.StartStreaming(100));
+                device.Send(ScpiMessageProducer.StopStreaming);
+            },
+            _ => { });
+
+        Assert.False(isStreaming);
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_EvictedFromTheBacklog_SaysSo()
+    {
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
+        using var device = new StreamingConsumerRestartTestableDevice("Parking Device", transport) { BacklogCap = 1 };
+        device.Connect();
+
+        var inOperation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endOperation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            inOperation.SetResult();
+            await endOperation.Task;
+        }));
+        await inOperation.Task;
+
+        var start = device.StartStreamingAsync();
+        SendFillers(device, 1);
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("backlog", failure.Message, StringComparison.Ordinal);
+        Assert.False(device.IsStreaming);
+        endOperation.SetResult();
+        await operation;
+    }
+
+    private static void SendFillers(DaqifiDevice device, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            device.Send(new ScpiMessage("FILLER"));
+        }
+    }
+
     private const string InOperation = "IN-OPERATION";
 
     [Fact]
@@ -454,7 +596,8 @@ public class DaqifiDeviceConsumerRestartTests
 
     /// <summary>
     /// Has an operation take the device and <paramref name="operation"/> run in it once
-    /// <paramref name="parked"/> has been called on another flow.
+    /// <paramref name="parked"/> has been called on another flow, and <paramref name="afterwards"/>
+    /// once the operation has ended.
     /// </summary>
     /// <returns>
     /// The stream commands on the wire, and <see cref="InOperation"/>, in order; and whether a
@@ -462,8 +605,9 @@ public class DaqifiDeviceConsumerRestartTests
     /// </returns>
     private static async Task<(string[] Written, bool IsStreaming)> ParkBehindAnOperationAsync(
         Action<DaqifiStreamingDevice> first,
-        Action<DaqifiStreamingDevice> parked,
-        Action<DaqifiStreamingDevice> operation)
+        Action<StreamingConsumerRestartTestableDevice> parked,
+        Action<DaqifiStreamingDevice> operation,
+        Action<DaqifiStreamingDevice>? afterwards = null)
     {
         using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
         using var device = new StreamingConsumerRestartTestableDevice("Parking Device", transport);
@@ -483,6 +627,7 @@ public class DaqifiDeviceConsumerRestartTests
         parked(device);
         endOperation.SetResult();
         await exclusive;
+        afterwards?.Invoke(device);
 
         var isStreaming = device.IsStreaming;
         device.Send(new ScpiMessage("MARKER"));
@@ -683,6 +828,10 @@ public class DaqifiDeviceConsumerRestartTests
         }
 
         public ConcurrentQueue<string> SentCommands { get; } = new();
+
+        public int BacklogCap { get; set; } = DefaultMaxDeferredSends;
+
+        internal override int MaxDeferredSends => BacklogCap;
 
         private uint _deviceTicks;
 
