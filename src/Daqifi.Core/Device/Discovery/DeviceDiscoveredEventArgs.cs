@@ -5,7 +5,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Event args for device discovered events.
 /// </summary>
-public class DeviceDiscoveredEventArgs : EventArgs
+public sealed class DeviceDiscoveredEventArgs : EventArgs
 {
     /// <summary>
     /// Initializes a new instance of the DeviceDiscoveredEventArgs class.

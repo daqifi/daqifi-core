@@ -1,24 +1,26 @@
 using Daqifi.Core.Communication.Messages;
-using System;
 
 namespace Daqifi.Core.Device;
 
 /// <summary>
-/// Provides data for the <see cref="IDevice.MessageReceived"/> event.
+/// Provides data for <see cref="IDevice.MessageReceived"/>,
+/// <see cref="DaqifiDevice.StatusMessageReceived"/> and <see cref="DaqifiDevice.StreamMessageReceived"/>.
 /// </summary>
-public class MessageReceivedEventArgs : EventArgs
+public sealed class MessageReceivedEventArgs : EventArgs
 {
     /// <summary>
-    /// Gets the inbound message.
+    /// Gets the message received from the device.
     /// </summary>
-    public IInboundMessage<object> Message { get; }
+    public DaqifiOutMessage Message { get; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MessageReceivedEventArgs"/> class.
     /// </summary>
-    /// <param name="message">The inbound message.</param>
-    public MessageReceivedEventArgs(IInboundMessage<object> message)
+    /// <param name="message">The message received from the device.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="message"/> is null.</exception>
+    public MessageReceivedEventArgs(DaqifiOutMessage message)
     {
+        ArgumentNullException.ThrowIfNull(message);
         Message = message;
     }
 }

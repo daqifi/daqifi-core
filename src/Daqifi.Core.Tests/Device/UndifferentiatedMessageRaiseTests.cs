@@ -10,43 +10,43 @@ namespace Daqifi.Core.Tests.Device;
 /// Tests for when <see cref="DaqifiDevice.MessageReceived"/> is raised (issue #490).
 /// </summary>
 /// <remarks>
-/// Every inbound frame used to be wrapped in an <see cref="IInboundMessage{T}"/> so it could be
-/// offered to this event, whether or not anything was listening — an allocation per frame, which on
-/// a streaming device is one per sample period. The wrapper is now built only when there is a
-/// subscriber; what these pin is that nothing else about the frame's journey changed.
+/// The event arguments are an allocation per frame, which on a streaming device is one per sample
+/// period, so they are built only when there is a subscriber. What these pin is that nothing else
+/// about the frame's journey depends on one: <see cref="DaqifiDevice.OnMessageReceived"/> and the
+/// classified events see every frame either way.
 /// </remarks>
 public class UndifferentiatedMessageRaiseTests
 {
     [Fact]
-    public void WithNoSubscriber_TheUndifferentiatedEventIsNotRaised()
+    public void WithNoSubscriber_AnOverrideStillSeesEveryFrame()
     {
         using var device = new RaiseProbeDevice("TestDevice");
 
         device.InvokeStatusMessage(StatusFrame());
         device.InvokeStreamMessage(StreamFrame());
 
-        Assert.Equal(0, device.UndifferentiatedRaises);
+        Assert.Equal(2, device.FramesSeen);
     }
 
     [Fact]
     public void WithASubscriber_BothStatusAndStreamFramesAreRaised()
     {
         using var device = new RaiseProbeDevice("TestDevice");
-        var received = new List<object?>();
-        device.MessageReceived += (_, e) => received.Add(e.Message.Data);
+        var received = new List<(object? Sender, DaqifiOutMessage Message)>();
+        device.MessageReceived += (sender, e) => received.Add((sender, e.Message));
+        var status = StatusFrame();
+        var stream = StreamFrame();
 
-        device.InvokeStatusMessage(StatusFrame());
-        device.InvokeStreamMessage(StreamFrame());
+        device.InvokeStatusMessage(status);
+        device.InvokeStreamMessage(stream);
 
-        Assert.Equal(2, received.Count);
-        Assert.All(received, data => Assert.IsType<DaqifiOutMessage>(data));
-        Assert.Equal(2, device.UndifferentiatedRaises);
+        Assert.Equal([(device, status), (device, stream)], received);
+        Assert.Equal(2, device.FramesSeen);
     }
 
     /// <summary>
     /// The classified events are the ones Core's own consumers and the decode path ride on, so they
-    /// have to stay unconditional — the subscriber check applies only to the undifferentiated event
-    /// whose payload had to be allocated.
+    /// have to stay independent of whether anyone listens to the undifferentiated event.
     /// </summary>
     [Fact]
     public void TheClassifiedEventsStillFireWithNoUndifferentiatedSubscriber()
@@ -55,15 +55,14 @@ public class UndifferentiatedMessageRaiseTests
 
         var statusFrames = 0;
         var streamFrames = 0;
-        device.StatusMessageReceived += _ => statusFrames++;
-        device.StreamMessageReceived += _ => streamFrames++;
+        device.StatusMessageReceived += (_, _) => statusFrames++;
+        device.StreamMessageReceived += (_, _) => streamFrames++;
 
         device.InvokeStatusMessage(StatusFrame());
         device.InvokeStreamMessage(StreamFrame());
 
         Assert.Equal(1, statusFrames);
         Assert.Equal(1, streamFrames);
-        Assert.Equal(0, device.UndifferentiatedRaises);
     }
 
     private static DaqifiOutMessage StatusFrame()
@@ -85,9 +84,7 @@ public class UndifferentiatedMessageRaiseTests
     }
 
     /// <summary>
-    /// Counts how many times a frame actually made it as far as
-    /// <see cref="DaqifiDevice.OnMessageReceived"/> — the point past which the wrapper has already
-    /// been allocated.
+    /// Counts how many frames reach <see cref="DaqifiDevice.OnMessageReceived"/>.
     /// </summary>
     private sealed class RaiseProbeDevice : DaqifiStreamingDevice
     {
@@ -95,15 +92,15 @@ public class UndifferentiatedMessageRaiseTests
         {
         }
 
-        public int UndifferentiatedRaises { get; private set; }
+        public int FramesSeen { get; private set; }
 
         public void InvokeStatusMessage(DaqifiOutMessage message) => OnStatusMessageReceived(message);
 
         public void InvokeStreamMessage(DaqifiOutMessage message) => OnStreamMessageReceived(message);
 
-        protected override void OnMessageReceived(IInboundMessage<object> message)
+        protected override void OnMessageReceived(DaqifiOutMessage message)
         {
-            UndifferentiatedRaises++;
+            FramesSeen++;
             base.OnMessageReceived(message);
         }
 

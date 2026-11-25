@@ -26,7 +26,7 @@ public sealed class MessageSendFailedEventArgs<T> : EventArgs
         Message = message ?? throw new ArgumentNullException(nameof(message));
         Error = error ?? throw new ArgumentNullException(nameof(error));
         IsTimeout = error is TimeoutException;
-        Timestamp = DateTime.UtcNow;
+        Timestamp = DateTimeOffset.UtcNow;
     }
 
     /// <summary>
@@ -53,5 +53,5 @@ public sealed class MessageSendFailedEventArgs<T> : EventArgs
     /// <summary>
     /// Gets the UTC timestamp when the failure was recorded.
     /// </summary>
-    public DateTime Timestamp { get; }
+    public DateTimeOffset Timestamp { get; }
 }

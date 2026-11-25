@@ -1069,7 +1069,8 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 var sampleCount = 0;
 device.MessageReceived += (sender, e) =>
 {
-    if (e.Message.Data is DaqifiOutMessage msg && msg.AnalogInData.Count > 0)
+    DaqifiOutMessage msg = e.Message;
+    if (msg.AnalogInData.Count > 0)
     {
         sampleCount++;
         Console.WriteLine($"Sample {sampleCount}: {string.Join(", ", msg.AnalogInData)}");

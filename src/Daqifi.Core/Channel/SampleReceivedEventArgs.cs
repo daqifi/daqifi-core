@@ -3,7 +3,7 @@ namespace Daqifi.Core.Channel;
 /// <summary>
 /// Event arguments for when a channel receives a new data sample.
 /// </summary>
-public class SampleReceivedEventArgs : EventArgs
+public sealed class SampleReceivedEventArgs : EventArgs
 {
     /// <summary>
     /// Gets the channel the sample was received on. This lets a single handler subscribed to
