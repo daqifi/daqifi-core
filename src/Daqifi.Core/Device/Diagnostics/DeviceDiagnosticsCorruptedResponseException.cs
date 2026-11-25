@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// <para>
 /// The remedy is to stop streaming and query again — a retry while the stream is still running
 /// hits the same interference, so Core does not attempt one on the caller's behalf.
-/// <see cref="DeviceDiagnosticsException.RawDeviceResponse"/> carries the reply exactly as it
+/// <see cref="DaqifiDeviceException.RawDeviceResponse"/> carries the reply exactly as it
 /// arrived, mangled line included, for callers that want to log or salvage it.
 /// </para>
 /// </remarks>
