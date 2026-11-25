@@ -159,8 +159,9 @@ release whose prerelease box disagrees with its tag, or whose tag is not on `mai
 
 If a release run fails part-way, use **Re-run failed jobs**, not **Re-run all jobs**. The packages
 are packed once and every later job uses those archives, so a retry pushes and attaches the same
-ones. Re-running everything packs again, and if NuGet already took the first archive, the one on the
-GitHub Release no longer matches it.
+ones. Re-running everything deletes them and packs again. That still pushes a package NuGet does not
+have yet, but `release-assets` refuses to attest or attach anything unless it matches what NuGet
+published, and leaves the files already on the GitHub Release alone.
 
 The tag alone decides the released version. `VersionPrefix` in `Directory.Build.props` only names
 the builds in between: a local or CI build is the next version with `-dev` on the end.

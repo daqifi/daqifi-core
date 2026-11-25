@@ -101,6 +101,22 @@ public class PackagingDecisionsTests
     }
 
     [Fact]
+    public void ReleaseWorkflow_ComparesWithNuGetBeforeItAttestsOrAttaches()
+    {
+        // "Re-run all jobs" deletes the original artifact and packs again, while --skip-duplicate
+        // keeps NuGet's first one. Without this check the release would be given the second.
+        var assets = Job("release-assets");
+        var compare = assets.IndexOf("diff -r ", StringComparison.Ordinal);
+
+        Assert.Contains("https://api.nuget.org/v3-flatcontainer/", assets, StringComparison.Ordinal);
+        Assert.True(compare >= 0, "release-assets no longer compares its packages with NuGet's.");
+        Assert.Contains("exit 1", assets[compare..], StringComparison.Ordinal);
+        Assert.True(compare < assets.IndexOf("actions/attest@", StringComparison.Ordinal));
+        Assert.True(compare < assets.IndexOf("gh release upload", StringComparison.Ordinal));
+        Assert.DoesNotContain("continue-on-error", assets, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReleaseWorkflow_ChecksThePrereleaseBoxAndTheTagInTheJobThatPushes()
     {
         // In the pushing job, and before the push, so that a re-run of that job alone checks again.
