@@ -4,14 +4,19 @@
     python3 scripts/check-migration-guide.py              # names only, no build
     python3 scripts/check-migration-guide.py --compile    # also builds the code samples
 
-1. Every *REMOVED* line in PublicAPI.Unshipped.txt is named in the left column of a table row (a
-   removed type by its name, a member by type and member). A line that differs only in a namespace
-   needs the moved type to be named, once.
-2. Every interface member that implementers now have to add (CP0006) and every type that became
-   sealed (CP0009), per CompatibilitySuppressions.xml, is named in the guide.
+1. Every *REMOVED* line in PublicAPI.Unshipped.txt has a table row that is about it: a code span in the
+   left column is that type, or that type's member. Mentioning it as a parameter or in another row does
+   not count, nor does a "Behaviour" row. A lost setter may be in a "Setters" row; a lost or re-typed
+   getter may not. A line that differs only in a namespace needs a row for the type that moved.
+   Overloads are not told apart: one row naming a method covers all its removed overloads.
+2. Per CompatibilitySuppressions.xml: every member that implementers now have to add (CP0005, CP0006) is
+   in that type's row under "If you implement", and every type that became sealed (CP0009) is in
+   the list of newly sealed types there.
 3. Every Core name in a right column or a 2.0 sample exists in the current API.
 4. With --compile, the 1.x samples build against the 1.10.0 package and the 2.0 ones against this
    checkout.
+
+Each run first checks itself on guides that are wrong on purpose.
 
 The removed lines and suppressions are folded away once 2.0 has shipped, so from then on only 3 and 4
 say anything.
@@ -40,6 +45,7 @@ Daqifi Core Communication Messages Device Export Logging Discovery DAQiFi AI0
 SAMPLE = """
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
@@ -113,36 +119,41 @@ def names(text):
 
 class Row:
     def __init__(self, intro, left, right, section):
-        self.left, self.right, self.section = left, right, section
+        self.right, self.section = right, section
         self.behaviour = intro.startswith("Behaviour")
-        self.left_names = names(" ".join(spans(left)))
-        self.scope = names(" ".join(spans(intro)))
-        self.qualified = set(re.findall(rf"({IDENT})(?:<\w+>)?\.({IDENT})", " ".join(spans(left))))
-        self.unqualified = set()
+        self.setters = re.match(r"setters?\b", left, re.I) is not None
+        self.types, self.members = set(), set()  # what the row is about
+        # `A.X`, `.Y`, `Z` is about three members of A; `X` alone, of the types the intro names.
+        current, scope = None, names(" ".join(spans(intro)))
         for span in spans(left):
-            self.unqualified |= set(re.findall(rf"(?<![\w.>])\.?({IDENT})", span))
+            alone = re.fullmatch(rf"(?:Daqifi\.[\w.]+\.)?({IDENT})(?:<{IDENT}>)?", span)
+            if alone:
+                self.types.add(alone[1])
+            head = re.sub(r"<[^<>]*>", "", span.split("(")[0].split(" = ")[0]).split()
+            if not head or not re.fullmatch(rf"\.?{IDENT}(\.{IDENT})*", head[-1]):
+                continue
+            path = head[-1].split(".")
+            if span.startswith("new "):
+                self.members.add((path[-1], path[-1]))
+            elif len(path) == 1:
+                self.members |= {(owner, path[0]) for owner in scope | {current}}
+            else:
+                current = path[-2] or current
+                self.members.add((current, path[-1]))
 
-    def names_member(self, type_name, member):
-        if member == type_name:  # a constructor
-            return re.search(rf"\bnew {type_name}(?:<\w+>)?\(", self.left) is not None
-        if (type_name, member) in self.qualified:
-            return True
-        return member in self.unqualified and (type_name in self.left_names or type_name in self.scope)
+    def covers(self, type_name, member, setter=False):
+        return (type_name, member) in self.members and (setter or not self.setters)
 
 
 def tables(guide):
     """Every two-column row, with the paragraph directly above its table."""
-    rows, intro, paragraph, section, in_table, in_code = [], "", [], "", False, False
+    rows, intro, paragraph, section = [], "", [], ""
+    in_table = in_code = ended = False
     for line in guide.splitlines():
         if line.startswith("```"):
             in_code = not in_code
+        elif in_code:
             continue
-        if in_code:
-            continue
-        if line.startswith("#"):
-            if line.startswith("## "):
-                section = line[3:]
-            paragraph, in_table = [], False
         elif line.startswith("|"):
             if not in_table:
                 intro, in_table, paragraph = " ".join(paragraph), True, []
@@ -150,13 +161,15 @@ def tables(guide):
             cells = [cell.strip() for cell in line.strip("|").split(" | ")]
             if len(cells) == 2 and not line.startswith("|---"):
                 rows.append(Row(intro, cells[0], cells[1], section))
-        elif line.strip():
-            if in_table or not paragraph:
+        else:
+            in_table = False
+            if line.startswith("## "):
+                section = line[3:]
+            if line.startswith("#"):
                 paragraph = []
-            in_table = False
-            paragraph.append(line)
-        elif in_table:
-            in_table = False
+            elif line.strip():
+                paragraph = [line] if ended else paragraph + [line]
+            ended = not line.strip()
     return rows
 
 
@@ -188,31 +201,79 @@ def check_removed(rows, removed, current):
             continue  # what the compiler generates for a record
         of_removed = next((t for t in removed_types if declaration(line).startswith(t + ".")), None)
         if is_type(line) or of_removed and (local(of_removed) not in live_names or local(line) in still):
-            if not any(type_name in row.left_names | row.scope for row in rows):
+            if not any(type_name in row.types for row in rows):
                 problems.append(f"type {type_name}")
-        elif not any(row.names_member(type_name, member) for row in rows):
-            problems.append(f"{type_name}.{member}: {local(line)}")
+        else:
+            setter = re.search(r"\.set -> ", line) is not None
+            if not any(row.covers(type_name, member, setter) for row in rows):
+                problems.append(f"{type_name}.{member}: {local(line)}")
     return sorted(set(problems))
 
 
-def check_suppressions(guide):
-    path = os.path.join(CORE, "CompatibilitySuppressions.xml")
-    if not os.path.exists(path):
-        return []
-    guide = re.sub(r"```.*?```", "", guide, flags=re.S)
-    text = names(" ".join(spans(guide)))
-    # One row or paragraph has to name both the interface and the member.
-    blocks = [names(" ".join(spans(block))) for line in guide.split("\n\n")
-              for block in (line.splitlines() if line.startswith("|") else [line])]
+def check_suppressions(guide, rows, suppressions):
+    listed = re.search(r"^Newly sealed types\.(.*?)(?:\n\n|\Z)", guide, re.S | re.M)
+    sealed = names(" ".join(spans(listed[1]))) if listed else set()
+    implement = [row for row in rows if row.section.startswith("If you implement")]
     problems = []
-    for rule, target in re.findall(r"<DiagnosticId>(CP0006|CP0009)</DiagnosticId>\s*<Target>\w:([^<(]+)",
-                                   read(path)):
+    for rule, target in re.findall(r"<DiagnosticId>(CP0005|CP0006|CP0009)</DiagnosticId>\s*<Target>\w:([^<(]+)",
+                                   suppressions):
         owner, member = target.split(".")[-2:]
-        if rule == "CP0009" and member not in text:
+        if rule == "CP0009" and member not in sealed:
             problems.append(f"sealed type {member}")
-        if rule == "CP0006" and not any({owner, member} <= block for block in blocks):
-            problems.append(f"new interface member {owner}.{member}")
+        if rule != "CP0009" and not any(owner in row.types and member in names(" ".join(spans(without_drops(row))))
+                                        for row in implement):
+            problems.append(f"new member to implement {owner}.{member}")
     return problems
+
+
+def without_drops(row):
+    """The right column less "Drop `X`", which names what is gone."""
+    return re.sub(r"\bDrop [^.]*", "", row.right)
+
+
+def self_test():
+    def removed(guide, line, *current):
+        return check_removed(tables(guide), [line], list(current))
+
+    def table(left, right="x", intro="", section="Reference"):
+        return f"## {section}\n\n{intro}\n\n| 1.x | 2.0 |\n|---|---|\n| {left} | {right} |\n"
+
+    def suppressed(guide, rule, target):
+        xml = f"<DiagnosticId>{rule}</DiagnosticId><Target>{target}</Target>"
+        return check_suppressions(guide, tables(guide), xml)
+
+    sealing = "Newly sealed types. These were open: `ScpiMessage`.\n"
+    arguments = "T:Daqifi.Core.Device.ReconnectAttemptEventArgs"
+    gone, getter, setter = "N.Gone", "N.Kept.Value.get -> int", "N.Kept.Value.set -> void"
+    for expected, problems in (
+            # A type that became sealed has to be in the list; a row about its timestamp is not that.
+            (1, suppressed(table("`DateTime ReconnectAttemptEventArgs.Timestamp`") + "\n" + sealing, "CP0009", arguments)),
+            (0, suppressed(sealing.replace("ScpiMessage", "ReconnectAttemptEventArgs"), "CP0009", arguments)),
+            # A new interface member has to be in the implementer's row, as something to add.
+            (1, suppressed(table("`IThing.Added`"), "CP0006", "M:N.IThing.Added")),
+            (1, suppressed(table("`IThing`", "Drop `Added`", section="If you implement"), "CP0006", "M:N.IThing.Added")),
+            (0, suppressed(table("`IThing`", "Add `Added`", section="If you implement"), "CP0006", "M:N.IThing.Added")),
+            # A removed type has to be what the row is about.
+            (1, removed(table("`Kept.Use(Gone)`"), gone)),
+            (1, removed(table("`Kept.Gone`"), gone)),
+            (1, removed(table("`Kept`", "`Gone`"), gone)),
+            (1, removed(table("`Kept`", intro="On `Gone`:"), gone)),
+            (1, removed(table("`Gone`", intro="Behaviour:"), gone)),
+            (0, removed(table("`Gone`"), gone)),
+            # So does a removed member, and on its own type.
+            (1, removed(table("`Other.Value`, `Kept.More`"), getter, "N.Kept")),
+            (1, removed(table("`Kept.Use(Value)`"), getter, "N.Kept")),
+            (1, removed(table("`Kept.Value`", intro="Behaviour:"), getter, "N.Kept")),
+            (1, removed(table("Setters `Kept.Value`"), getter, "N.Kept")),
+            (1, removed(table("`Value`", intro="On `Kept`:\n\nNot this."), getter, "N.Kept")),
+            (0, removed(table("Setters `Kept.More`, `.Value`"), setter, "N.Kept")),
+            (0, removed(table("`int Kept.Value`"), getter, "N.Kept")),
+            (0, removed(table("`Value`", intro="On `Kept`:"), getter, "N.Kept")),
+            # A constructor is not the type.
+            (1, removed(table("`Kept`"), "N.Kept.Kept() -> void", "N.Kept")),
+            (0, removed(table("`new Kept()`"), "N.Kept.Kept() -> void", "N.Kept"))):
+        if len(problems) != expected:
+            sys.exit(f"This script is broken: expected {expected} problem(s), got {problems}")
 
 
 def check_names(rows, guide, current):
@@ -221,8 +282,7 @@ def check_names(rows, guide, current):
         type_name, member = symbol(line)
         members.setdefault(type_name, set()).add(member)
     known = set(NOT_CORE).union(members, *members.values())
-    # "Drop `X`" names what is gone.
-    parts = [(" ".join(spans(re.sub(r"\bDrop [^.]*", "", row.right))), row.right)
+    parts = [(" ".join(spans(without_drops(row))), row.right)
              for row in rows if row.section != "MCP server"]
     parts += [(re.sub(r'"[^"]*"|//.*', "", code), code) for version, code in samples(guide) if version == "2.0"]
     problems = set()
@@ -266,13 +326,16 @@ def main():
     parser.add_argument("--wrapper", default="", help="command to run dotnet through, e.g. a build queue")
     args = parser.parse_args()
 
+    self_test()
     guide = read(GUIDE)
+    suppressions = os.path.join(CORE, "CompatibilitySuppressions.xml")
+    suppressions = read(suppressions) if os.path.exists(suppressions) else ""
     rows = tables(guide)
     removed, current = api_lines()
     failed = False
     for title, problems in (
             (f"Removed and not covered ({len(removed)} *REMOVED* lines)", check_removed(rows, removed, current)),
-            ("Implementer changes not covered", check_suppressions(guide)),
+            ("Implementer changes not covered", check_suppressions(guide, rows, suppressions)),
             ("Names that are not in the current API", check_names(rows, guide, current))):
         print(f"{title}: {len(problems) or 'none'}")
         for problem in problems:
