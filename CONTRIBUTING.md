@@ -157,6 +157,11 @@ MCP Registry. A prerelease tag (`vX.Y.Z-rc.1`) publishes to NuGet only. Either w
 attached to the GitHub Release with a build-provenance attestation. `release.yml` refuses a
 release whose prerelease box disagrees with its tag, or whose tag is not on `main`.
 
+If a release run fails part-way, use **Re-run failed jobs**, not **Re-run all jobs**. The packages
+are packed once and every later job uses those archives, so a retry pushes and attaches the same
+ones. Re-running everything packs again, and if NuGet already took the first archive, the one on the
+GitHub Release no longer matches it.
+
 The tag alone decides the released version. `VersionPrefix` in `Directory.Build.props` only names
 the builds in between: a local or CI build is the next version with `-dev` on the end.
 

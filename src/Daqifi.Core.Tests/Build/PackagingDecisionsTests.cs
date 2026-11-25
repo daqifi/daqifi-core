@@ -75,34 +75,62 @@ public class PackagingDecisionsTests
     {
         // Both, because the packs are --no-build: the first stamps the assemblies, the second
         // names the packages. Without them a release would publish VersionPrefix-dev.
-        var publish = Job("publish");
+        var pack = Job("pack");
 
-        Assert.Contains("dotnet build --configuration Release --no-restore /p:Version=${VERSION}", publish, StringComparison.Ordinal);
-        var packs = publish.Split('\n').Where(l => l.Contains("run: dotnet pack", StringComparison.Ordinal)).ToList();
+        Assert.Contains("dotnet build --configuration Release --no-restore /p:Version=${VERSION}", pack, StringComparison.Ordinal);
+        var packs = pack.Split('\n').Where(l => l.Contains("run: dotnet pack", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, packs.Count);
-        Assert.All(packs, pack => Assert.Contains("-p:PackageVersion=${VERSION}", pack, StringComparison.Ordinal));
+        Assert.All(packs, line => Assert.Contains("-p:PackageVersion=${VERSION}", line, StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ReleaseWorkflow_AttachesWhatItPublished_WithoutGivingThePublishJobWriteAccess()
+    public void ReleaseWorkflow_PushesAttestsAndAttachesTheSameArchives()
     {
-        var publish = Job("publish");
-        var assets = Job("release-assets");
+        // Two packs of one build hash differently. A retried push that packed again would attest
+        // and attach an archive NuGet never accepted, because --skip-duplicate keeps the first.
+        Assert.Contains("actions/upload-artifact@", Job("pack"), StringComparison.Ordinal);
 
-        // Nothing reaches the release page unless every gate in `publish` passed and the push worked.
-        Assert.Contains("\n    needs: publish\n", "\n" + assets, StringComparison.Ordinal);
-        Assert.True(
-            publish.IndexOf("actions/upload-artifact@", StringComparison.Ordinal)
-                > publish.LastIndexOf("dotnet nuget push", StringComparison.Ordinal),
-            "The packages must be handed to release-assets only after they were pushed.");
+        foreach (var (job, needs) in new[] { ("publish", "pack"), ("release-assets", "publish") })
+        {
+            var text = Job(job);
+            Assert.Contains($"\n    needs: {needs}\n", "\n" + text, StringComparison.Ordinal);
+            Assert.Contains("actions/download-artifact@", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet pack", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet build", text, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_ChecksThePrereleaseBoxAndTheTagInTheJobThatPushes()
+    {
+        // In the pushing job, and before the push, so that a re-run of that job alone checks again.
+        var publish = Job("publish");
+        var push = publish.IndexOf("dotnet nuget push", StringComparison.Ordinal);
+
+        foreach (var gate in new[] { "--json isPrerelease", "git merge-base --is-ancestor HEAD origin/main" })
+        {
+            var at = publish.IndexOf(gate, StringComparison.Ordinal);
+            Assert.True(at >= 0 && at < push, $"'{gate}' must run before the push.");
+        }
+
+        Assert.Contains("fetch-depth: 0", publish, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_AttachesToTheReleaseWithoutGivingTheOtherJobsWriteAccess()
+    {
+        var assets = Job("release-assets");
 
         Assert.Contains("gh release upload", assets, StringComparison.Ordinal);
         Assert.Contains("actions/attest@", assets, StringComparison.Ordinal);
+        Assert.Contains("contents: write", assets, StringComparison.Ordinal);
 
         // It adds files. Editing or creating the release could undo the prerelease gate.
         Assert.DoesNotContain("gh release edit", ReleaseWorkflowText, StringComparison.Ordinal);
         Assert.DoesNotContain("gh release create", ReleaseWorkflowText, StringComparison.Ordinal);
-        Assert.DoesNotContain("contents: write", publish, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(": write", Job("pack"), StringComparison.Ordinal);
+        Assert.DoesNotContain("contents: write", Job("publish"), StringComparison.Ordinal);
     }
 
     [Fact]
