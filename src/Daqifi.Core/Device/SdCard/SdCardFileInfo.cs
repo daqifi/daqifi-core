@@ -5,7 +5,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// <summary>
 /// Represents information about a file stored on the device's SD card.
 /// </summary>
-public class SdCardFileInfo
+public sealed class SdCardFileInfo
 {
     /// <summary>
     /// Gets the name of the file.

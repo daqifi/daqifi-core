@@ -280,7 +280,8 @@ internal sealed class SdCardCsvFileParser
                 }
                 else if (content.StartsWith("Serial Number:", StringComparison.OrdinalIgnoreCase))
                 {
-                    serialNumber = content["Serial Number:".Length..].Trim();
+                    // Firmware writes hex; every other path reports decimal (issue #915).
+                    serialNumber = FirmwareSerialNumber.ToDecimal(content["Serial Number:".Length..]);
                 }
                 else if (content.StartsWith("Timestamp Tick Rate:", StringComparison.OrdinalIgnoreCase))
                 {
@@ -366,7 +367,7 @@ internal sealed class SdCardCsvFileParser
             TimestampFrequency: timestampFreq,
             DeviceSerialNumber: serialNumber,
             DevicePartNumber: deviceName,
-            FirmwareRevision: null,
+            FirmwareVersion: null,
             CalibrationValues: null);
 
         return new CsvHeader(

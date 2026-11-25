@@ -1526,7 +1526,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         => _sdCardOperations.GetSdCardCrcProtectionAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+    public Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         => _sdCardOperations.StartSdCardLoggingAsync(fileName, format, cancellationToken);
 
     /// <inheritdoc />

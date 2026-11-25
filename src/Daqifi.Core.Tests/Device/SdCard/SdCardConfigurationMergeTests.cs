@@ -21,7 +21,7 @@ public class SdCardConfigurationMergeTests
         TimestampFrequency: 0u,
         DeviceSerialNumber: null,
         DevicePartNumber: null,
-        FirmwareRevision: null,
+        FirmwareVersion: null,
         CalibrationValues: null);
 
     [Fact]
@@ -121,7 +121,7 @@ public class SdCardConfigurationMergeTests
         {
             DeviceSerialNumber = "SN-DEVICE",
             DevicePartNumber = "PN-DEVICE",
-            FirmwareRevision = "1.2.3",
+            FirmwareVersion = "1.2.3",
             CalibrationValues = calibration,
             PortRange = portRange,
             InternalScaleM = internalScale
@@ -133,7 +133,7 @@ public class SdCardConfigurationMergeTests
         // Assert
         Assert.Equal("SN-DEVICE", merged.DeviceSerialNumber);
         Assert.Equal("PN-DEVICE", merged.DevicePartNumber);
-        Assert.Equal("1.2.3", merged.FirmwareRevision);
+        Assert.Equal("1.2.3", merged.FirmwareVersion);
         Assert.Same(calibration, merged.CalibrationValues);
         Assert.Same(portRange, merged.PortRange);
         Assert.Same(internalScale, merged.InternalScaleM);
@@ -150,7 +150,7 @@ public class SdCardConfigurationMergeTests
         {
             DeviceSerialNumber = "SN-FILE",
             DevicePartNumber = "PN-FILE",
-            FirmwareRevision = "0.9.0",
+            FirmwareVersion = "0.9.0",
             CalibrationValues = fileCalibration,
             PortRange = filePortRange,
             InternalScaleM = fileInternalScale
@@ -159,7 +159,7 @@ public class SdCardConfigurationMergeTests
         {
             DeviceSerialNumber = "SN-DEVICE",
             DevicePartNumber = "PN-DEVICE",
-            FirmwareRevision = "1.2.3",
+            FirmwareVersion = "1.2.3",
             CalibrationValues = new[] { (Slope: 9.0, Intercept: 9.0) },
             PortRange = new[] { 99.0 },
             InternalScaleM = new[] { 99.0 }
@@ -172,7 +172,7 @@ public class SdCardConfigurationMergeTests
         // precedence rule exists to prevent.
         Assert.Equal("SN-FILE", merged.DeviceSerialNumber);
         Assert.Equal("PN-FILE", merged.DevicePartNumber);
-        Assert.Equal("0.9.0", merged.FirmwareRevision);
+        Assert.Equal("0.9.0", merged.FirmwareVersion);
         Assert.Same(fileCalibration, merged.CalibrationValues);
         Assert.Same(filePortRange, merged.PortRange);
         Assert.Same(fileInternalScale, merged.InternalScaleM);
@@ -196,7 +196,7 @@ public class SdCardConfigurationMergeTests
             AnalogPortCount = 16,
             TimestampFrequency = 42_000_000u,
             Resolution = 4095u,
-            FirmwareRevision = "3.7.2",
+            FirmwareVersion = "3.7.2",
             CalibrationValues = calibration
         };
 
@@ -210,7 +210,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal("Nyquist 1", merged.DevicePartNumber);
         Assert.Equal(42_000_000u, merged.TimestampFrequency);
         Assert.Equal(4095u, merged.Resolution);
-        Assert.Equal("3.7.2", merged.FirmwareRevision);
+        Assert.Equal("3.7.2", merged.FirmwareVersion);
         Assert.Same(calibration, merged.CalibrationValues);
         Assert.Null(merged.PortRange);
         Assert.Null(merged.InternalScaleM);
@@ -233,7 +233,7 @@ public class SdCardConfigurationMergeTests
         Assert.Equal(0u, merged.Resolution);
         Assert.Null(merged.DeviceSerialNumber);
         Assert.Null(merged.DevicePartNumber);
-        Assert.Null(merged.FirmwareRevision);
+        Assert.Null(merged.FirmwareVersion);
         Assert.Null(merged.CalibrationValues);
         Assert.Null(merged.PortRange);
         Assert.Null(merged.InternalScaleM);
@@ -253,13 +253,13 @@ public class SdCardConfigurationMergeTests
         {
             DeviceSerialNumber = blank,
             DevicePartNumber = blank,
-            FirmwareRevision = blank
+            FirmwareVersion = blank
         };
         var overrideConfig = Empty() with
         {
             DeviceSerialNumber = "SN-DEVICE",
             DevicePartNumber = "PN-DEVICE",
-            FirmwareRevision = "1.2.3"
+            FirmwareVersion = "1.2.3"
         };
 
         // Act
@@ -268,7 +268,7 @@ public class SdCardConfigurationMergeTests
         // Assert
         Assert.Equal("SN-DEVICE", merged.DeviceSerialNumber);
         Assert.Equal("PN-DEVICE", merged.DevicePartNumber);
-        Assert.Equal("1.2.3", merged.FirmwareRevision);
+        Assert.Equal("1.2.3", merged.FirmwareVersion);
     }
 
     [Fact]
@@ -283,7 +283,7 @@ public class SdCardConfigurationMergeTests
         {
             DeviceSerialNumber = "",
             DevicePartNumber = "",
-            FirmwareRevision = ""
+            FirmwareVersion = ""
         };
 
         // Act
@@ -293,7 +293,7 @@ public class SdCardConfigurationMergeTests
         // "not present" value, so callers have one absence to test for instead of two.
         Assert.Null(merged.DeviceSerialNumber);
         Assert.Null(merged.DevicePartNumber);
-        Assert.Null(merged.FirmwareRevision);
+        Assert.Null(merged.FirmwareVersion);
     }
 
     [Fact]

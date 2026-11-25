@@ -245,7 +245,7 @@ joins them: it writes rows through `CsvExporter` as frames decode, so the record
 grow with its length, and it hands back what reached the file and what did not.
 
 ```csharp
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
 device.StreamingFrequency = 100;
 device.StartStreaming();
@@ -265,8 +265,23 @@ if (result.DroppedSampleCount > 0)
 The columns are the channels that were enabled when the call started, in device order. `duration`
 elapsing is a clean finish — the last frame is written and the result comes back; cancelling the
 `CancellationToken` is an abort and throws, so a recording cut short is never mistaken for a complete
-one. Need the rows somewhere other than a `TextWriter`? Build a `LiveSampleSource` over
+one. Need the rows somewhere other than a `TextWriter`? Build a `LiveStreamSampleSource` over
 `StreamSamplesAsync` and hand it to `CsvExporter` (or any other `ISampleSource` consumer) yourself.
+
+Columns are named `{device name}:{serial number}:{channel}`, with the serial in decimal. To export a
+downloaded SD-card log under the same column names, give it the device's name, which the log does not
+record:
+
+```csharp
+await using var log = File.OpenRead(path);
+var session = await SdCardFileParserFactory.ParseAsync(log, "run.csv", SdCardParseOptions.ForDevice(device));
+var source = session.AsSampleSource(SdCardDeviceConfiguration.FromDevice(device), device.Name);
+await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions());
+```
+
+A device connected through discovery is named after what that transport reported (a part number over
+USB, a host name over WiFi). Set `DeviceConnectionOptions.DeviceName` to keep one name everywhere, or
+join on the serial number, which is the same in every export.
 
 ### Digital output
 

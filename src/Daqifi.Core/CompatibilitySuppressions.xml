@@ -269,6 +269,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.SdCard.SdCardLoggingSession</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
     <Target>T:Daqifi.Core.Device.SdCard.SdCardSpaceParser</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -333,6 +340,97 @@
   <Suppression>
     <DiagnosticId>CP0001</DiagnosticId>
     <Target>T:Daqifi.Core.Firmware.Pic32BootloaderProtocol</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.ChannelDescriptor</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.ChannelDescriptorComparer</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.ChannelNameComparer</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.CsvExporter</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.CsvExportOptions</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.ISampleSource</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.LiveCsvRecordingExtensions</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.LiveCsvRecordingResult</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.LiveSampleSource</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.SampleRow</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.SampleValueUnits</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.SdCardLogSampleSource</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:Daqifi.Core.Logging.Export.SdCardLogSessionExtensions</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -969,6 +1067,41 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.get_FirmwareRevision</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration.set_FirmwareRevision(System.String)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.SdCard.SdCardDownloadResult.get_FileSize</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.SdCard.SdCardDownloadResult.set_FileSize(System.Int64)</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
+    <Target>M:Daqifi.Core.Device.SdCard.SdCardLogSession.get_FileCreatedDate</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0002</DiagnosticId>
     <Target>M:Daqifi.Core.Device.SdCard.SdCardParseOptions.set_BufferSize(System.Int32)</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
@@ -1173,6 +1306,13 @@
   <Suppression>
     <DiagnosticId>CP0009</DiagnosticId>
     <Target>T:Daqifi.Core.Communication.Producers.ScpiMessageProducer</Target>
+    <Left>lib/net10.0/Daqifi.Core.dll</Left>
+    <Right>lib/net10.0/Daqifi.Core.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0009</DiagnosticId>
+    <Target>T:Daqifi.Core.Device.SdCard.SdCardFileInfo</Target>
     <Left>lib/net10.0/Daqifi.Core.dll</Left>
     <Right>lib/net10.0/Daqifi.Core.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>

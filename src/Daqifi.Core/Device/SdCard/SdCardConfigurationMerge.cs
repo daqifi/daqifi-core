@@ -46,7 +46,7 @@ internal static class SdCardConfigurationMerge
             TimestampFrequency: parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
             DeviceSerialNumber: Stated(parsed.DeviceSerialNumber) ?? Stated(overrideConfig.DeviceSerialNumber),
             DevicePartNumber: Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
-            FirmwareRevision: Stated(parsed.FirmwareRevision) ?? Stated(overrideConfig.FirmwareRevision),
+            FirmwareVersion: Stated(parsed.FirmwareVersion) ?? Stated(overrideConfig.FirmwareVersion),
             CalibrationValues: parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
             Resolution: parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
             PortRange: parsed.PortRange ?? overrideConfig.PortRange,

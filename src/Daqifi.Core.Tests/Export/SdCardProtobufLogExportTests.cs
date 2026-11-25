@@ -1,8 +1,8 @@
 using Daqifi.Core.Device.SdCard;
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 using Daqifi.Core.Tests.Device.SdCard;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 /// <summary>
 /// Exports a protobuf SD-card log that carries no configuration block, which is what firmware
@@ -60,10 +60,10 @@ public class SdCardProtobufLogExportTests
         var source = session.AsSampleSource();
 
         Assert.Equal(16, source.AnalogChannelCount);
-        Assert.Equal(17, source.GetChannels().Count);
-        Assert.Equal("Daqifi:unknown:AI0", source.GetChannels()[0].Key);
-        Assert.Equal("Daqifi:unknown:AI15", source.GetChannels()[15].Key);
-        Assert.Equal("Daqifi:unknown:DIO", source.GetChannels()[16].Key);
+        Assert.Equal(17, source.Channels.Count);
+        Assert.Equal("DAQiFi Device:unknown:AI0", source.Channels[0].Key);
+        Assert.Equal("DAQiFi Device:unknown:AI15", source.Channels[15].Key);
+        Assert.Equal("DAQiFi Device:unknown:DIO", source.Channels[16].Key);
     }
 
     [Fact]
@@ -81,8 +81,8 @@ public class SdCardProtobufLogExportTests
         // Each analog column names its unit; this log carries no calibration, so the values are
         // as the file held them and the header says so (#903). The digital column holds a port
         // value, which has no unit.
-        Assert.StartsWith("Time,Daqifi:unknown:AI0 (unscaled),", lines[0], StringComparison.Ordinal);
-        Assert.EndsWith(",Daqifi:unknown:AI15 (unscaled),Daqifi:unknown:DIO", lines[0], StringComparison.Ordinal);
+        Assert.StartsWith("Time,DAQiFi Device:unknown:AI0 (unscaled),", lines[0], StringComparison.Ordinal);
+        Assert.EndsWith(",DAQiFi Device:unknown:AI15 (unscaled),DAQiFi Device:unknown:DIO", lines[0], StringComparison.Ordinal);
 
         // 1 header + 1 digital-only entry + 4 entries carrying values.
         Assert.Equal(6, lines.Length);
@@ -107,7 +107,7 @@ public class SdCardProtobufLogExportTests
         var source = session.AsSampleSource();
 
         Assert.Equal(0, source.AnalogChannelCount);
-        Assert.Equal(new[] { "Daqifi:unknown:DIO" }, source.GetChannels().Select(c => c.Key).ToArray());
+        Assert.Equal(new[] { "DAQiFi Device:unknown:DIO" }, source.Channels.Select(c => c.Key).ToArray());
         Assert.Equal(0, session.ObservedAnalogValueCount);
     }
 
@@ -172,7 +172,7 @@ public class SdCardProtobufLogExportTests
                     TimestampFrequency: 80_000_000,
                     DeviceSerialNumber: "LIVE-SN",
                     DevicePartNumber: null,
-                    FirmwareRevision: null,
+                    FirmwareVersion: null,
                     CalibrationValues: null)
             });
 

@@ -1607,14 +1607,14 @@ internal sealed class SdCardOperations
     /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
+    /// A task that resolves to an <see cref="SdCardRecording"/> carrying the effective on-card
     /// file name (supplied or auto-generated) and the logging format.
     /// </returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="SdCardRequiresUsbException">Thrown when the device is not connected over USB/serial.</exception>
     /// <exception cref="SdCardBusyException">Thrown when an SD log is already starting, recording or stopping.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-    internal async Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+    internal async Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
     {
         _host.EnsureConnected();
 
@@ -1730,7 +1730,7 @@ internal sealed class SdCardOperations
             throw;
         }
 
-        return new SdCardLoggingSession(logFileName, format);
+        return new SdCardRecording(logFileName, format);
     }
 
     /// <summary>

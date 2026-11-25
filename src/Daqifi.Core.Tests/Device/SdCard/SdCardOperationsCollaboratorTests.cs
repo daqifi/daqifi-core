@@ -1890,7 +1890,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         Assert.Empty(destination.ToArray());
         Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
     }
@@ -2095,7 +2095,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         Assert.Equal(new[] { "-250,\"Mass storage error\"" }, host.QueuedErrors);
     }
 
@@ -2116,7 +2116,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         AssertEveryGetFollowsAnEmptyQueue(host, "empty.bin");
         Assert.Empty(host.QueuedErrors);
     }
@@ -2190,7 +2190,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         Assert.Equal(2, host.Calls.Count(c => c == "drain"));
 
         // The read after the GET still ran, so the stale entry is not left to trip the next
@@ -2257,7 +2257,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         Assert.Equal(2, host.Calls.Count(c => c == "drain"));
     }
 
@@ -2277,7 +2277,7 @@ public partial class SdCardOperationsCollaboratorTests
 
         var result = await ops.DownloadSdCardFileAsync("data.bin", destination);
 
-        Assert.Equal(payload.Length, result.FileSize);
+        Assert.Equal(payload.Length, result.SizeInBytes);
         var calls = host.Calls.ToList();
         Assert.Equal(1, calls.Count(c => c == "drain"));
         Assert.True(calls.IndexOf("drain") < calls.IndexOf("send:SYSTem:STORage:SD:GET \"data.bin\""), string.Join(" | ", calls));

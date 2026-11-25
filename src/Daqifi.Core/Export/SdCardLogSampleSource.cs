@@ -4,9 +4,10 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Adapts a parsed SD-card log — the <see cref="SdCardLogEntry"/> stream behind
@@ -16,7 +17,7 @@ namespace Daqifi.Core.Logging.Export;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the SD-card counterpart of <see cref="LiveSampleSource"/>, and the other half of the
+/// This is the SD-card counterpart of <see cref="LiveStreamSampleSource"/>, and the other half of the
 /// join described there: Core shipped the parsers that produce an <see cref="SdCardLogSession"/>
 /// and the exporter that consumes an <see cref="ISampleSource"/>, but nothing in between — so
 /// every consumer that wanted a CSV out of a log file wrote the same adapter (issue #655).
@@ -35,7 +36,7 @@ namespace Daqifi.Core.Logging.Export;
 /// in memory. The counters below are the only state kept, and they are all scalars.
 /// </para>
 /// <para>
-/// <b>Enumerate one export at a time.</b> <see cref="StreamSamples"/> reads the entry stream this
+/// <b>Enumerate one export at a time.</b> <see cref="StreamSamplesAsync"/> reads the entry stream this
 /// source was built with, and a session parsed from a caller-supplied <see cref="System.IO.Stream"/>
 /// has a single read cursor: a second, overlapping enumeration throws rather than interleaving
 /// reads and handing back corrupt samples. Two concurrent exports of one stream-backed session are
@@ -46,14 +47,6 @@ namespace Daqifi.Core.Logging.Export;
 public sealed class SdCardLogSampleSource : ISampleSource
 {
     /// <summary>
-    /// The device name used in channel keys when the caller supplies none. An SD-card log records
-    /// a serial number and a part number but no device name, so there is nothing better to read
-    /// off the file; this is the name every hand-rolled copy of this adapter used before it moved
-    /// into Core, so keys stay comparable with CSVs those produced.
-    /// </summary>
-    public const string DefaultDeviceName = "Daqifi";
-
-    /// <summary>
     /// The channel name given to the digital-port column.
     /// </summary>
     public const string DigitalChannelName = "DIO";
@@ -62,7 +55,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// Stands in for a serial number that is missing or blank. A blank string is a gap rather than
     /// an answer, and letting one through produces channel keys like <c>Daqifi::AI0</c> whose
     /// columns cannot be told apart between two unidentified devices — the same disposition
-    /// <see cref="LiveSampleSource"/> and #627 take.
+    /// <see cref="LiveStreamSampleSource"/> and #627 take.
     /// </summary>
     private const string Unknown = "unknown";
 
@@ -76,12 +69,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// </summary>
     /// <param name="samples">
     /// The entries to read, normally <see cref="SdCardLogSession.Samples"/>. It is enumerated when
-    /// the exporter calls <see cref="StreamSamples"/>, not before.
-    /// </param>
-    /// <param name="deviceSerialNumber">
-    /// The serial number to build channel keys from, normally
-    /// <see cref="SdCardDeviceConfiguration.DeviceSerialNumber"/>. Null or blank becomes
-    /// <c>"unknown"</c>.
+    /// the exporter calls <see cref="StreamSamplesAsync"/>, not before.
     /// </param>
     /// <param name="analogChannelCount">
     /// How many analog columns to emit, normally
@@ -90,8 +78,14 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// channels, so an analog-less device would otherwise produce an empty file.
     /// </param>
     /// <param name="deviceName">
-    /// The device name to build channel keys from. Null or blank becomes
-    /// <see cref="DefaultDeviceName"/>, since a log file carries no device name.
+    /// The device name to build channel keys from. A log file carries none, so null or blank
+    /// becomes <see cref="DeviceConnectionOptions.DefaultDeviceName"/>. Pass the connected device's
+    /// <see cref="IDevice.Name"/> to get the same keys as a live recording of that device.
+    /// </param>
+    /// <param name="deviceSerialNumber">
+    /// The decimal serial number to build channel keys from, normally
+    /// <see cref="SdCardDeviceConfiguration.DeviceSerialNumber"/>. Null or blank becomes
+    /// <c>"unknown"</c>.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="samples"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
@@ -99,9 +93,9 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// </exception>
     public SdCardLogSampleSource(
         IAsyncEnumerable<SdCardLogEntry> samples,
-        string? deviceSerialNumber,
         int analogChannelCount,
-        string? deviceName = null)
+        string? deviceName,
+        string? deviceSerialNumber)
     {
         ArgumentNullException.ThrowIfNull(samples);
 
@@ -115,7 +109,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
 
         _samples = samples;
 
-        var name = string.IsNullOrWhiteSpace(deviceName) ? DefaultDeviceName : deviceName;
+        var name = string.IsNullOrWhiteSpace(deviceName) ? DeviceConnectionOptions.DefaultDeviceName : deviceName;
         var serial = string.IsNullOrWhiteSpace(deviceSerialNumber) ? Unknown : deviceSerialNumber;
 
         AnalogChannelCount = analogChannelCount;
@@ -147,8 +141,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// </remarks>
     /// <value>
     /// One of <see cref="SampleValueUnits"/>, or <see langword="null"/> for a source that states
-    /// none. Set through an object initializer rather than a constructor argument, so that a
-    /// consumer compiled against the four-argument constructor keeps working.
+    /// none.
     /// </value>
     public string? ValueUnit { get; init; }
 
@@ -201,7 +194,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// Gets the number of entries whose timestamp went backwards relative to the entry before it.
     /// </summary>
     /// <remarks>
-    /// <see cref="ISampleSource.StreamSamples"/> is contractually ascending, and a log normally
+    /// <see cref="ISampleSource.StreamSamplesAsync"/> is contractually ascending, and a log normally
     /// satisfies it: <see cref="SdCardTimestampReconstructor"/> rebuilds a monotonic time across
     /// the device counter's rollover. This counts the exception rather than assuming it away — a
     /// rollover mis-detection, or a log spliced from two recordings, produces a CSV whose time
@@ -211,22 +204,22 @@ public sealed class SdCardLogSampleSource : ISampleSource
     public long NonMonotonicEntryCount { get; private set; }
 
     /// <inheritdoc />
-    public IReadOnlyList<ChannelDescriptor> GetChannels() => _channels;
+    public IReadOnlyList<ChannelDescriptor> Channels => _channels;
 
     /// <summary>
-    /// Always returns 0 — the length of a log is not known without reading it.
+    /// Always returns <see langword="null"/> — the length of a log is not known without reading it.
     /// </summary>
     /// <remarks>
-    /// This is exactly the "count is unavailable" case
-    /// <see cref="ISampleSource.GetSampleCountAsync"/> documents, and returning 0 is what makes
+    /// This is exactly the "not known" case
+    /// <see cref="ISampleSource.GetSampleCountAsync"/> documents, and returning null is what makes
     /// <see cref="CsvExporter"/> skip percentage progress rather than divide by a total it does not
     /// have. Counting first would mean reading the whole log before exporting it — twice the I/O,
     /// and on a stream-backed session an extra pass over the one read cursor it has. Read
     /// <see cref="SampleCount"/> or <see cref="RowCount"/> as the export runs instead.
     /// </remarks>
     /// <param name="cancellationToken">Unused; the answer needs no work.</param>
-    public ValueTask<int> GetSampleCountAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(0);
+    public ValueTask<long?> GetSampleCountAsync(CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<long?>(null);
 
     /// <summary>
     /// Streams the log entries as export rows — one row per analog column that has a value, then
@@ -245,7 +238,7 @@ public sealed class SdCardLogSampleSource : ISampleSource
     /// </para>
     /// </remarks>
     /// <param name="cancellationToken">Ends the enumeration, and with it the read of the log.</param>
-    public async IAsyncEnumerable<SampleRow> StreamSamples(
+    public async IAsyncEnumerable<SampleRow> StreamSamplesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         long? previousTicks = null;

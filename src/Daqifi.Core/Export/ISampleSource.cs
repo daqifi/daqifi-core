@@ -1,4 +1,4 @@
-namespace Daqifi.Core.Logging.Export;
+namespace Daqifi.Core.Export;
 
 /// <summary>
 /// Abstracts the data source for a CSV export, hiding storage details (EF Core, SQLite,
@@ -7,10 +7,13 @@ namespace Daqifi.Core.Logging.Export;
 public interface ISampleSource
 {
     /// <summary>
-    /// Returns the ordered list of channels present in this source.
+    /// Gets the ordered list of channels present in this source.
     /// The order determines column order in the exported CSV.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <see cref="CsvExporter"/> reads this once per export.
+    /// </para>
     /// <para>
     /// An implementation that discovers its channels — from a database, a file, a set of samples —
     /// rather than being handed them in a caller-chosen order should return them in
@@ -20,15 +23,15 @@ public interface ISampleSource
     /// device's <c>AI10</c> and <c>AI11</c> columns between <c>AI1</c> and <c>AI2</c> (issue #675).
     /// </para>
     /// <para>
-    /// An implementation whose channels are supplied by the caller — <see cref="LiveSampleSource"/>,
+    /// An implementation whose channels are supplied by the caller — <see cref="LiveStreamSampleSource"/>,
     /// for one — keeps the caller's order instead, since choosing the columns is the point of
     /// passing them in.
     /// </para>
     /// </remarks>
-    IReadOnlyList<ChannelDescriptor> GetChannels();
+    IReadOnlyList<ChannelDescriptor> Channels { get; }
 
     /// <summary>
-    /// The unit the analog values of <see cref="StreamSamples"/> are in, named in the exported
+    /// The unit the analog values of <see cref="StreamSamplesAsync"/> are in, named in the exported
     /// column headers. <see langword="null"/> states no unit and writes the headers unchanged.
     /// </summary>
     /// <remarks>
@@ -44,21 +47,19 @@ public interface ISampleSource
     /// has no unit, so it is never labelled.
     /// </para>
     /// <para>
-    /// It has a default of <see langword="null"/> so that a source written before this existed
-    /// still compiles, and because a source that does not know its unit must say nothing rather
-    /// than guess.
+    /// A source that does not know its unit must return <see langword="null"/> rather than guess.
     /// </para>
     /// </remarks>
-    string? ValueUnit => null;
+    string? ValueUnit { get; }
 
     /// <summary>
-    /// Returns the total number of sample rows, used for progress reporting.
-    /// May return 0 if the count is unavailable.
+    /// Returns the total number of sample rows, used for progress reporting, or
+    /// <see langword="null"/> when the count is not known without reading the samples.
     /// </summary>
-    ValueTask<int> GetSampleCountAsync(CancellationToken cancellationToken = default);
+    ValueTask<long?> GetSampleCountAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streams all samples in ascending <see cref="SampleRow.TimestampTicks"/> order.
     /// </summary>
-    IAsyncEnumerable<SampleRow> StreamSamples(CancellationToken cancellationToken = default);
+    IAsyncEnumerable<SampleRow> StreamSamplesAsync(CancellationToken cancellationToken = default);
 }

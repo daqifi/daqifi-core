@@ -256,7 +256,7 @@ public interface ISdCardOperations
     /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>
-    /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
+    /// A task that resolves to an <see cref="SdCardRecording"/> carrying the effective on-card
     /// file name (supplied or auto-generated) and the logging format, so callers can report,
     /// download, or later delete the log without re-deriving Core's naming convention.
     /// </returns>
@@ -266,7 +266,7 @@ public interface ISdCardOperations
     /// </exception>
     /// <exception cref="SdCardBusyException">Thrown when an SD log is already starting, recording or stopping.</exception>
     /// <exception cref="System.ArgumentException">Thrown when the file name contains invalid characters.</exception>
-    Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
+    Task<SdCardRecording> StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stops logging data to the SD card and returns the device to the state a live stream

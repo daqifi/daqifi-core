@@ -2422,7 +2422,7 @@ public partial class SdCardOperationsTests
 
         var result = await device.DownloadSdCardFileAsync("wifi.bin", destination);
 
-        Assert.Equal(fileData.Length, result.FileSize);
+        Assert.Equal(fileData.Length, result.SizeInBytes);
         Assert.Equal(fileData, destination.ToArray());
     }
 
@@ -2527,7 +2527,7 @@ public partial class SdCardOperationsTests
         // Assert
         Assert.Equal(fileData, destinationStream.ToArray());
         Assert.Equal("data.bin", result.FileName);
-        Assert.Equal(fileData.Length, result.FileSize);
+        Assert.Equal(fileData.Length, result.SizeInBytes);
         Assert.True(result.Duration > TimeSpan.Zero);
     }
 
@@ -2607,7 +2607,7 @@ public partial class SdCardOperationsTests
 
         // Assert
         Assert.Equal(fileData, destinationStream.ToArray());
-        Assert.Equal(fileData.Length, result.FileSize);
+        Assert.Equal(fileData.Length, result.SizeInBytes);
 
         var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
         Assert.Equal(2, getCommands);
@@ -2632,7 +2632,7 @@ public partial class SdCardOperationsTests
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
         // Assert
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         Assert.Empty(destinationStream.ToArray());
 
         var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
@@ -2829,7 +2829,7 @@ public partial class SdCardOperationsTests
 
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        Assert.Equal(512, result.FileSize);
+        Assert.Equal(512, result.SizeInBytes);
         Assert.Equal(fileData, destinationStream.ToArray());
     }
 
@@ -2931,7 +2931,7 @@ public partial class SdCardOperationsTests
 
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        Assert.Equal(0, result.FileSize);
+        Assert.Equal(0, result.SizeInBytes);
         var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
         Assert.Equal(1, getCommands);
     }
@@ -3188,7 +3188,7 @@ public partial class SdCardOperationsTests
 
         // Assert — every byte arrived, and the transfer really did take its time getting here.
         Assert.Equal(fileData, destinationStream.ToArray());
-        Assert.Equal(fileData.Length, result.FileSize);
+        Assert.Equal(fileData.Length, result.SizeInBytes);
         Assert.True(
             result.Duration >= TimeSpan.FromMilliseconds(200),
             $"Transfer completed in {result.Duration.TotalMilliseconds}ms — too fast to prove a slow transfer survives.");

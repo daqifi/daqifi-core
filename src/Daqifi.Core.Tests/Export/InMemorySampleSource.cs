@@ -1,6 +1,6 @@
-using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Export;
 
-namespace Daqifi.Core.Tests.Logging.Export;
+namespace Daqifi.Core.Tests.Export;
 
 internal sealed class InMemorySampleSource : ISampleSource
 {
@@ -15,12 +15,14 @@ internal sealed class InMemorySampleSource : ISampleSource
         _samples = samples.OrderBy(s => s.TimestampTicks).ToList();
     }
 
-    public IReadOnlyList<ChannelDescriptor> GetChannels() => _channels;
+    public IReadOnlyList<ChannelDescriptor> Channels => _channels;
 
-    public ValueTask<int> GetSampleCountAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(_samples.Count);
+    public string? ValueUnit => null;
 
-    public async IAsyncEnumerable<SampleRow> StreamSamples(
+    public ValueTask<long?> GetSampleCountAsync(CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<long?>(_samples.Count);
+
+    public async IAsyncEnumerable<SampleRow> StreamSamplesAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var sample in _samples)
