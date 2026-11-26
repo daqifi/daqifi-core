@@ -289,6 +289,13 @@ internal sealed class StreamingSessionController
     /// </remarks>
     internal bool IsStreaming => Current.Kind != StreamingSessionKind.None;
 
+    /// <summary>
+    /// Whether the device is acquiring as of the last start or stop that went out, in the order
+    /// commands reach it. Differs from <see cref="IsStreaming"/> while a start or stop is held
+    /// back behind another operation, or has overtaken a command that was.
+    /// </summary>
+    internal bool IsAcquiringOnDevice => Volatile.Read(ref _state).OnDevice.Kind != StreamingSessionKind.None;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
     internal bool IsLoggingToSdCard => Current.Kind == StreamingSessionKind.SdCardLog;
 
@@ -1003,16 +1010,6 @@ internal sealed class StreamingSessionController
                 SafeTrace(
                     $"[{nameof(SendTracked)}] Ignoring a start-streaming command with an unusable rate "
                     + $"('{effect.RejectedRate}'); the session state is unchanged.");
-                break;
-
-            case SessionCommandEffectKind.SetAdcEnableMask when IsStreaming:
-                // The firmware refuses a channel enable while a stream or SD log runs and keeps
-                // its channel set, so recording this mask would decode every later frame against
-                // channels the device is not sending (#1079). It still goes out: it is the caller's.
-                send(null);
-                SafeTrace(
-                    $"[{nameof(SendTracked)}] Not recording an ADC enable mask sent while streaming; "
-                    + "the device refuses it and keeps its channel set.");
                 break;
 
             case SessionCommandEffectKind.SetAdcEnableMask:

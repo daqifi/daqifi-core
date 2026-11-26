@@ -102,7 +102,11 @@ internal sealed class TrackedMessage(Func<IOutboundMessage<string>> message, Tra
 /// </remarks>
 /// <param name="get">Reads the recorded state.</param>
 /// <param name="record">Records the state.</param>
-internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
+/// <param name="takesEffect">
+/// Whether the device takes a command for this state as it goes out; <c>null</c> for always. One it
+/// refuses is dropped, as if it had not been sent.
+/// </param>
+internal sealed class CommandedState<T>(Func<T> get, Action<T> record, Func<bool>? takesEffect = null)
 {
     /// <summary>Guards the list below. Taken before the channels lock, and never held across a send.</summary>
     private readonly Lock _lock = new();
@@ -179,6 +183,14 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
             {
                 lock (_lock)
                 {
+                    // A command the device refuses as it arrives changes nothing it has, so it is
+                    // dropped as one that never went out: neither recorded nor built on.
+                    if (takesEffect?.Invoke() == false)
+                    {
+                        _outstanding.Remove(outstanding);
+                        return;
+                    }
+
                     record(outstanding.Sets);
 
                     var index = _outstanding.IndexOf(outstanding);

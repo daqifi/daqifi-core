@@ -194,6 +194,44 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
+    public async Task AHeldBackEnable_ThatAStartOvertakes_IsNotRecorded()
+    {
+        // Review on #1081: the enable passed the check while idle, but went out after a start the
+        // operation it waited behind sent. The device refuses it then, so Core must not record it.
+        using var device = await HeldDevice.CreateAsync();
+        device.DisableChannel(device.Analog(0));
+        device.EnableChannel(device.Analog(1));
+        var sampled = new List<int>();
+        foreach (var number in new[] { 0, 1 })
+        {
+            device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
+        }
+
+        await device.WhileHeldAsync(
+            () => device.EnableChannel(device.Analog(0)),
+            inOperation: device.StartStreaming);
+        device.DeliverFrame(1000);
+
+        Assert.Equal("AI1", device.Enabled);
+        Assert.Equal([1], sampled);
+    }
+
+    [Fact]
+    public async Task AHeldBackRawAdcMask_ThatGoesOutAfterAStop_IsRecorded()
+    {
+        // Review on #1081: sent while streaming, but held back behind an operation that stopped
+        // the stream, the mask reaches an idle device, which takes it.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+
+        await device.WhileHeldAsync(
+            () => device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010)),
+            inOperation: device.StopStreaming);
+
+        Assert.Equal("AI1", device.Enabled);
+    }
+
+    [Fact]
     public async Task RawAdcMask_WhileStreaming_GoesOutButIsNotRecorded()
     {
         // A raw command is still the caller's to send, but the device refuses it while streaming

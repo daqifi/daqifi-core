@@ -149,7 +149,11 @@ internal sealed class ChannelControlOperations
                     SetEnabled(channel, enabled.Contains(channel.ChannelNumber));
                 }
             }
-        }));
+        }),
+        // Judged when the command goes out, in the order commands reach the device: one held
+        // back behind an operation can land after a start or a stop that operation sent. The
+        // firmware refuses a channel enable while acquiring and keeps its set (#1079).
+        takesEffect: () => !_host.IsAcquiringOnDevice);
 
     private HashSet<int> ReadEnabled(ChannelType type) => _host.SnapshotChannels()
         .Where(channel => channel.Type == type && channel.IsEnabled)
