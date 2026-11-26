@@ -491,6 +491,24 @@ public class ChannelCommandDroppedTests
     /// A connected device with analog channel 0 enabled and PWM running on digital channel 4, whose
     /// operation lock a test can hold.
     /// </summary>
+    [Theory]
+    [InlineData("SYSTem:ECHO 1", true)]
+    [InlineData("syst:echo -1", false)]
+    [InlineData("SYSTem:ECHO 0", false)]
+    public async Task DeviceEchoes_FollowsTheEchoCommandsSent(string command, bool expected)
+    {
+        // #1078: an SD download takes its GET's echo out of the file only when the device is known
+        // to echo. The send path keeps track, raw commands included.
+        using var device = await HeldDevice.CreateAsync();
+        device.Send(ScpiMessageProducer.EnableDeviceEcho);
+        device.Send(ScpiMessageProducer.DisableDeviceEcho);
+        Assert.False(device.DeviceEchoes);
+
+        device.Send(new ScpiMessage(command));
+
+        Assert.Equal(expected, device.DeviceEchoes);
+    }
+
     private sealed class HeldDevice : DaqifiStreamingDevice
     {
         private readonly int _backlogCap;

@@ -406,7 +406,7 @@ public class SdCardFileReceiverTests
         var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), ScpiMessageProducer.GetSdFile(name).GetBytes(), payload, EofMarker);
         using var source = new ChunkedMemoryStream(reply, chunkSize);
         using var destination = new MemoryStream();
-        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize) { DeviceEchoes = true };
 
         var received = await receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: payload.Length);
 
@@ -426,7 +426,7 @@ public class SdCardFileReceiverTests
         var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), ScpiMessageProducer.GetSdFile(name).GetBytes(), payload, EofMarker);
         using var source = new ChunkedMemoryStream(reply, chunkSize);
         using var destination = new MemoryStream();
-        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize) { DeviceEchoes = true };
 
         await Assert.ThrowsAsync<SdCardTruncatedTransferException>(() => receiver.ReceiveAsync(
             destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: payload.Length + 26));
@@ -446,7 +446,30 @@ public class SdCardFileReceiverTests
         var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), get, file, EofMarker);
         using var source = new ChunkedMemoryStream(reply, chunkSize);
         using var destination = new MemoryStream();
-        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize) { DeviceEchoes = true };
+
+        var received = await receiver.ReceiveAsync(
+            destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: listed ? file.Length : null);
+
+        Assert.Equal(file.Length, received);
+        Assert.Equal(file, destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(4096, false)]
+    [InlineData(1, true)]
+    [InlineData(4096, true)]
+    public async Task ReceiveAsync_EchoOffAndAFileThatStartsWithTheCommand_KeepsTheWholeFile(int chunkSize, bool listed)
+    {
+        // Review on #1078: Core connects with echo off, so there is no echo to take out, and a
+        // first line spelled exactly like the command is the file's. Before this PR it downloaded
+        // whole; it must still.
+        const string name = "commands.txt";
+        var file = Combine(ScpiMessageProducer.GetSdFile(name).GetBytes(), Encoding.ASCII.GetBytes("done\n"));
+        using var source = new ChunkedMemoryStream(Combine(file, EofMarker), chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize) { DeviceEchoes = false };
 
         var received = await receiver.ReceiveAsync(
             destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: listed ? file.Length : null);

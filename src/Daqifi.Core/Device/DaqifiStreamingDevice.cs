@@ -1789,6 +1789,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool ISdCardOperationHost.IsUsbConnection => IsUsbConnection;
 
+    bool? ISdCardOperationHost.DeviceEchoes => DeviceEchoes;
+
     bool ISdCardOperationHost.IsLoggingToSdCard => IsLoggingToSdCard;
 
     void ISdCardOperationHost.StartSdCardLogStream(int rateHz) => _session.StartSdCardLogStream(rateHz);

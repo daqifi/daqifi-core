@@ -173,6 +173,13 @@ internal sealed class SdCardFileReceiver
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private readonly Stream _sourceStream;
+
+    /// <summary>
+    /// Whether the device echoes commands. Only then is a line that is exactly the GET as it went
+    /// out the device repeating it, and taken out of the file; with echo off, or unknown, such a
+    /// line is the file's own first line and is kept, as it always was (#1078).
+    /// </summary>
+    internal bool DeviceEchoes { get; init; }
     private readonly int _bufferSize;
     private readonly bool _zeroLengthReadMeansClosed;
     private readonly TimeSpan? _idleTimeout;
@@ -483,7 +490,9 @@ internal sealed class SdCardFileReceiver
                 return;
             }
 
-            var (_, _, echo) = ClassifyReplyHead(probed.GetBuffer().AsSpan(0, (int)probed.Length), expectedEcho);
+            var echo = DeviceEchoes
+                ? ClassifyReplyHead(probed.GetBuffer().AsSpan(0, (int)probed.Length), expectedEcho).EchoBytes
+                : 0;
             var content = (int)Math.Max(0, probed.Length - echo - MaxMarkerLength);
             await heldContent.WriteAsync(probed.GetBuffer(), echo, content, token).ConfigureAwait(false);
             totalBytesReceived += content;
@@ -612,7 +621,7 @@ internal sealed class SdCardFileReceiver
                     // command: not file data, so it is neither written, counted against the
                     // listed size, nor scanned for a marker (one can be spelled in the file name).
                     // Blank lines after it are kept: they can be the file's own.
-                    if (echoBytes > 0)
+                    if (DeviceEchoes && echoBytes > 0)
                     {
                         data = data[echoBytes..];
                         count = data.Length;
