@@ -149,7 +149,11 @@ internal sealed class ChannelControlOperations
                     SetEnabled(channel, enabled.Contains(channel.ChannelNumber));
                 }
             }
-        }));
+        }),
+        // Judged when the command goes out, in the order commands reach the device: one held
+        // back behind an operation can land after a start or a stop that operation sent. The
+        // firmware refuses a channel enable while acquiring and keeps its set (#1079).
+        takesEffect: () => !_host.IsAcquiringOnDevice);
 
     private HashSet<int> ReadEnabled(ChannelType type) => _host.SnapshotChannels()
         .Where(channel => channel.Type == type && channel.IsEnabled)
@@ -276,6 +280,7 @@ internal sealed class ChannelControlOperations
     internal void DisableAllChannels()
     {
         _host.EnsureConnected();
+        EnsureNotStreaming();
 
         // Push the cleared state for whichever channel types this device actually has.
         ApplyEnabled(_host.SnapshotChannels, enabled: false, all: true);
@@ -680,7 +685,32 @@ internal sealed class ChannelControlOperations
             EnsureChannelBelongs(channel);
         }
 
+        EnsureNotStreaming();
+
         ApplyEnabled(() => channels, enabled, all: false);
+    }
+
+    /// <summary>
+    /// Refuses a channel enable or disable while a stream or SD log runs (#1079).
+    /// </summary>
+    /// <remarks>
+    /// The firmware refuses both <c>ENAble:VOLTage:DC</c> and <c>DIO:PORt:ENAble</c> while
+    /// streaming: it queues <c>-200</c> and keeps its channel set. Sending the command anyway let
+    /// Core record a change the device never made and decode every later frame against the wrong
+    /// channel list, so one channel's readings were reported as another's.
+    /// </remarks>
+    private void EnsureNotStreaming()
+    {
+        // Judged as of when this caller's command will go out. The flow that owns the device for
+        // an operation sends straight away, ahead of anything held back behind it, so what counts
+        // is the state on the device now; any other flow's command goes out after what has been
+        // recorded, held back or not.
+        var acquiring = _host.SendsAreNeverHeldBack ? _host.IsAcquiringOnDevice : _host.IsStreaming;
+        if (acquiring)
+        {
+            throw new InvalidOperationException(
+                "Channels cannot be enabled or disabled while the device is streaming or logging to the SD card: the firmware refuses the change. Stop streaming first, change the channels, then start again.");
+        }
     }
 
     /// <summary>

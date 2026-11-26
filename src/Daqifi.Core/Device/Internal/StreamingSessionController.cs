@@ -289,6 +289,13 @@ internal sealed class StreamingSessionController
     /// </remarks>
     internal bool IsStreaming => Current.Kind != StreamingSessionKind.None;
 
+    /// <summary>
+    /// Whether the device is acquiring as of the last start or stop that went out, in the order
+    /// commands reach it. Differs from <see cref="IsStreaming"/> while a start or stop is held
+    /// back behind another operation, or has overtaken a command that was.
+    /// </summary>
+    internal bool IsAcquiringOnDevice => Volatile.Read(ref _state).OnDevice.Kind != StreamingSessionKind.None;
+
     /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
     internal bool IsLoggingToSdCard => Current.Kind == StreamingSessionKind.SdCardLog;
 

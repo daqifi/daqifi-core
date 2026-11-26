@@ -1730,6 +1730,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     bool IDeviceOperationHost.IsStreaming => IsStreaming;
 
+    bool IDeviceOperationHost.IsAcquiringOnDevice => _session.IsAcquiringOnDevice;
+
     bool IDeviceOperationHost.SendStreamStop() => _session.SendStreamStop();
 
     int IDeviceOperationHost.SampleRateHz => SampleRateHz;

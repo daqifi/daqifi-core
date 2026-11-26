@@ -172,10 +172,11 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
-    public async Task HeldBackEnable_DoesNotTakeTheReadingsOfTheChannelsTheDeviceStreams()
+    public async Task EnableWhileStreaming_IsRefused_SoFramesKeepTheirChannels()
     {
         // A frame has one value per channel the device streams, so counting a channel it does not
-        // stream yet gives it another channel's reading.
+        // stream gives it another channel's reading. The device refuses an enable while streaming,
+        // so Core refuses it too rather than recording it (#1079).
         using var device = await HeldDevice.CreateAsync();
         device.DisableChannel(device.Analog(0));
         device.EnableChannel(device.Analog(1));
@@ -186,14 +187,119 @@ public class ChannelCommandDroppedTests
             device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
         }
 
-        await device.WhileHeldAsync(() =>
-        {
-            device.EnableChannel(device.Analog(0));
-            device.DeliverFrame(1000);
-            device.DropWhatIsHeldBack();
-        });
+        Assert.Throws<InvalidOperationException>(() => device.EnableChannel(device.Analog(0)));
+        device.DeliverFrame(1000);
 
         Assert.Equal([1], sampled);
+    }
+
+    [Fact]
+    public async Task AHeldBackEnable_ThatAStartOvertakes_IsNotRecorded()
+    {
+        // Review on #1081: the enable passed the check while idle, but went out after a start the
+        // operation it waited behind sent. The device refuses it then, so Core must not record it.
+        using var device = await HeldDevice.CreateAsync();
+        device.DisableChannel(device.Analog(0));
+        device.EnableChannel(device.Analog(1));
+        var sampled = new List<int>();
+        foreach (var number in new[] { 0, 1 })
+        {
+            device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
+        }
+
+        await device.WhileHeldAsync(
+            () => device.EnableChannel(device.Analog(0)),
+            inOperation: device.StartStreaming);
+        device.DeliverFrame(1000);
+
+        Assert.Equal("AI1", device.Enabled);
+        Assert.Equal([1], sampled);
+    }
+
+    [Fact]
+    public async Task AHeldBackRawAdcMask_ThatGoesOutAfterAStop_IsRecorded()
+    {
+        // Review on #1081: sent while streaming, but held back behind an operation that stopped
+        // the stream, the mask reaches an idle device, which takes it.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+
+        await device.WhileHeldAsync(
+            () => device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010)),
+            inOperation: device.StopStreaming);
+
+        Assert.Equal("AI1", device.Enabled);
+    }
+
+    [Fact]
+    public async Task AnEnableQueuedBehindARefusedRawMask_IsWorkedOutWithoutIt()
+    {
+        // Review on #1081: the raw mask was refused (the device was still streaming when it went
+        // out), so the enable queued after the stop must not carry the mask's channels with it.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010));
+            device.StopStreaming();
+            device.EnableChannel(device.Analog(2));
+        });
+
+        Assert.Equal("AI0 AI2", device.Enabled);
+    }
+
+    [Fact]
+    public async Task TheOperationOwner_EnablesAheadOfAStartHeldBehindIt()
+    {
+        // Review on #1081: the owner's command goes out before another caller's held-back start,
+        // so the device takes it, and refusing it would block a valid configuration.
+        using var device = await HeldDevice.CreateAsync();
+        Exception? thrown = null;
+
+        await device.WhileHeldAsync(
+            device.StartStreaming,
+            inOperation: () => thrown = Record.Exception(() => device.EnableChannel(device.Analog(1))));
+
+        Assert.Null(thrown);
+        Assert.Equal("AI0 AI1", device.Enabled);
+    }
+
+    [Fact]
+    public async Task TheOperationOwner_IsRefusedWhileAStopIsHeldBehindIt()
+    {
+        // Review on #1081: the device is still acquiring when the owner's command goes out, ahead
+        // of another caller's held-back stop, so it refuses it; the owner must hear that.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+        Exception? thrown = null;
+
+        await device.WhileHeldAsync(
+            device.StopStreaming,
+            inOperation: () => thrown = Record.Exception(() => device.EnableChannel(device.Analog(1))));
+
+        Assert.IsType<InvalidOperationException>(thrown);
+        Assert.Equal("AI0", device.Enabled);
+    }
+
+    [Fact]
+    public async Task RawAdcMask_WhileStreaming_GoesOutButIsNotRecorded()
+    {
+        // A raw command is still the caller's to send, but the device refuses it while streaming
+        // (#1079), so Core keeps decoding against the channels the device actually streams.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+        var sampled = new List<int>();
+        foreach (var number in new[] { 0, 1 })
+        {
+            device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
+        }
+
+        device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010));
+        device.DeliverFrame(1000);
+
+        Assert.Equal("AI0", device.Enabled);
+        Assert.Equal([0], sampled);
     }
 
     [Fact]

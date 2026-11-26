@@ -102,7 +102,11 @@ internal sealed class TrackedMessage(Func<IOutboundMessage<string>> message, Tra
 /// </remarks>
 /// <param name="get">Reads the recorded state.</param>
 /// <param name="record">Records the state.</param>
-internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
+/// <param name="takesEffect">
+/// Whether the device takes a command for this state as it goes out; <c>null</c> for always. One it
+/// refuses is dropped, as if it had not been sent.
+/// </param>
+internal sealed class CommandedState<T>(Func<T> get, Action<T> record, Func<bool>? takesEffect = null)
 {
     /// <summary>Guards the list below. Taken before the channels lock, and never held across a send.</summary>
     private readonly Lock _lock = new();
@@ -121,6 +125,9 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
 
         /// <summary>Whether what it sets stays as it is.</summary>
         internal bool IsFixed { get; set; }
+
+        /// <summary>What this command does to the state it is worked out from; <c>null</c> for none.</summary>
+        internal Func<T, T>? Change { get; init; }
     }
 
     /// <summary>The recorded state.</summary>
@@ -150,7 +157,7 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
     /// commands this one goes out ahead of, so that they do not undo it.
     /// </param>
     internal TrackedCommand Command(T state, Func<T, T>? change = null)
-        => Command(new Outstanding(state) { IsFixed = true }, change);
+        => Command(new Outstanding(state) { IsFixed = true, Change = change }, change);
 
     /// <summary>
     /// Sends a command that sets what is there already with <paramref name="change"/> applied to it:
@@ -158,7 +165,7 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
     /// </summary>
     internal void Send(IDeviceOperationHost host, T current, Func<T, T> change, Func<T, IOutboundMessage<string>> message)
     {
-        var outstanding = new Outstanding(change(current));
+        var outstanding = new Outstanding(change(current)) { Change = change };
 
         // Fails here if it cannot be sent at all.
         _ = message(outstanding.Sets);
@@ -172,6 +179,29 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
         });
     }
 
+    /// <summary>
+    /// Works the commands still held back from <paramref name="index"/> on out again, each from the
+    /// one before it (the first from the recorded state), after a command they were worked out from
+    /// was refused. One already going out keeps what it sends. Runs under <see cref="_lock"/>.
+    /// </summary>
+    private void WorkOutAgainFrom(int index)
+    {
+        for (var i = index; i < _outstanding.Count; i++)
+        {
+            var queued = _outstanding[i];
+            if (queued.Change is not { } change)
+            {
+                continue;
+            }
+
+            queued.Requested = change(i == 0 ? get() : _outstanding[i - 1].Requested);
+            if (!queued.IsFixed)
+            {
+                queued.Sets = queued.Requested;
+            }
+        }
+    }
+
     private TrackedCommand Command(Outstanding outstanding, Func<T, T>? change)
     {
         var command = new TrackedCommand(
@@ -179,6 +209,16 @@ internal sealed class CommandedState<T>(Func<T> get, Action<T> record)
             {
                 lock (_lock)
                 {
+                    // A command the device refuses as it arrives changes nothing it has, so it is
+                    // dropped as one that never went out: neither recorded nor built on.
+                    if (takesEffect?.Invoke() == false)
+                    {
+                        var refused = _outstanding.IndexOf(outstanding);
+                        _outstanding.RemoveAt(refused);
+                        WorkOutAgainFrom(refused);
+                        return;
+                    }
+
                     record(outstanding.Sets);
 
                     var index = _outstanding.IndexOf(outstanding);

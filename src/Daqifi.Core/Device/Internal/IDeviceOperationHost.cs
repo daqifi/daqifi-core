@@ -46,6 +46,12 @@ internal interface IDeviceOperationHost
     bool IsStreaming { get; }
 
     /// <summary>
+    /// Whether the device is acquiring as of the last start or stop that went out, in the order
+    /// commands reach it — what decides whether it takes a channel enable that goes out now (#1079).
+    /// </summary>
+    bool IsAcquiringOnDevice => IsStreaming;
+
+    /// <summary>
     /// Sends a stream stop whatever <see cref="IsStreaming"/> says, and ends the session, as one
     /// step. The SD operations defensively stop streaming before they touch the card (issue #118).
     /// </summary>
