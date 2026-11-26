@@ -39,6 +39,63 @@ public class DaqifiStreamingDeviceChannelManagementTests
     private static IDigitalChannel DigitalChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
         device.Channels.OfType<IDigitalChannel>().First(c => c.ChannelNumber == channelNumber);
 
+    #region Channel commands while streaming (#1079)
+
+    // The firmware refuses ENAble:VOLTage:DC and DIO:PORt:ENAble while a stream or SD log runs
+    // and keeps its channel set. Core recording the change anyway decoded every later frame
+    // against the wrong channel list: disabling AI0 mid-stream handed AI0's readings to AI1.
+
+    private static TestableDaqifiStreamingDevice CreateStreamingDevice()
+    {
+        var device = CreateConnectedDevice();
+        device.EnableChannels([AnalogChannelAt(device, 0), AnalogChannelAt(device, 1), DigitalChannelAt(device, 0)]);
+        device.StartStreaming();
+        device.SentMessages.Clear();
+        return device;
+    }
+
+    public static TheoryData<string> ChannelCommands => new() { "enable", "enable-many", "disable", "disable-all", "enable-digital", "disable-digital" };
+
+    [Theory]
+    [MemberData(nameof(ChannelCommands))]
+    public void ChannelCommand_WhileStreaming_IsRefusedAndChangesNothing(string command)
+    {
+        var device = CreateStreamingDevice();
+        var before = device.Channels.Select(c => (c.Type, c.ChannelNumber, c.IsEnabled)).ToList();
+
+        Action act = command switch
+        {
+            "enable" => () => device.EnableChannel(AnalogChannelAt(device, 2)),
+            "enable-many" => () => device.EnableChannels([AnalogChannelAt(device, 2), AnalogChannelAt(device, 3)]),
+            "disable" => () => device.DisableChannel(AnalogChannelAt(device, 0)),
+            "disable-all" => device.DisableAllChannels,
+            "enable-digital" => () => device.EnableChannel(DigitalChannelAt(device, 1)),
+            "disable-digital" => () => device.DisableChannel(DigitalChannelAt(device, 0)),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(act);
+
+        Assert.Contains("streaming", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(device.SentMessages);
+        Assert.Equal(before, device.Channels.Select(c => (c.Type, c.ChannelNumber, c.IsEnabled)).ToList());
+    }
+
+    [Fact]
+    public void ChannelCommand_AfterTheStreamStops_IsSentAgain()
+    {
+        var device = CreateStreamingDevice();
+        device.StopStreaming();
+        device.SentMessages.Clear();
+
+        device.DisableChannel(AnalogChannelAt(device, 0));
+
+        Assert.False(AnalogChannelAt(device, 0).IsEnabled);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels(0b10).Data);
+    }
+
+    #endregion
+
     #region EnableChannel / DisableChannel - Analog bitmask
 
     [Fact]

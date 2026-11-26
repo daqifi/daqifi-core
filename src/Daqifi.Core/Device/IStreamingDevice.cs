@@ -215,6 +215,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// is updated. The channel's <see cref="IChannel.IsEnabled"/> flag is <c>true</c> once the command
     /// has gone out.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The device is streaming or logging to the SD card. The firmware refuses channel changes
+    /// then, so nothing is sent or recorded; stop streaming first.
+    /// </exception>
     void EnableChannel(IChannel channel);
 
     /// <summary>
@@ -226,6 +230,10 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// receives at most one command per affected channel type: the recomputed ADC enable bitmask for
     /// analog channels and the global DIO enable for digital channels. The input is enumerated once.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The device is streaming or logging to the SD card. The firmware refuses channel changes
+    /// then, so nothing is sent or recorded; stop streaming first.
+    /// </exception>
     void EnableChannels(IEnumerable<IChannel> channels);
 
     /// <summary>
@@ -237,11 +245,19 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// ADC enable bitmask is recomputed over the remaining enabled analog channels; for digital channels
     /// the global DIO enable state is updated.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The device is streaming or logging to the SD card. The firmware refuses channel changes
+    /// then, so nothing is sent or recorded; stop streaming first.
+    /// </exception>
     void DisableChannel(IChannel channel);
 
     /// <summary>
     /// Disables all channels on the device.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The device is streaming or logging to the SD card. The firmware refuses channel changes
+    /// then, so nothing is sent or recorded; stop streaming first.
+    /// </exception>
     void DisableAllChannels();
 
     /// <summary>

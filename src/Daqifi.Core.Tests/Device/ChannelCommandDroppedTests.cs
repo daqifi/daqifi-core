@@ -172,10 +172,11 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
-    public async Task HeldBackEnable_DoesNotTakeTheReadingsOfTheChannelsTheDeviceStreams()
+    public async Task EnableWhileStreaming_IsRefused_SoFramesKeepTheirChannels()
     {
         // A frame has one value per channel the device streams, so counting a channel it does not
-        // stream yet gives it another channel's reading.
+        // stream gives it another channel's reading. The device refuses an enable while streaming,
+        // so Core refuses it too rather than recording it (#1079).
         using var device = await HeldDevice.CreateAsync();
         device.DisableChannel(device.Analog(0));
         device.EnableChannel(device.Analog(1));
@@ -186,14 +187,30 @@ public class ChannelCommandDroppedTests
             device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
         }
 
-        await device.WhileHeldAsync(() =>
-        {
-            device.EnableChannel(device.Analog(0));
-            device.DeliverFrame(1000);
-            device.DropWhatIsHeldBack();
-        });
+        Assert.Throws<InvalidOperationException>(() => device.EnableChannel(device.Analog(0)));
+        device.DeliverFrame(1000);
 
         Assert.Equal([1], sampled);
+    }
+
+    [Fact]
+    public async Task RawAdcMask_WhileStreaming_GoesOutButIsNotRecorded()
+    {
+        // A raw command is still the caller's to send, but the device refuses it while streaming
+        // (#1079), so Core keeps decoding against the channels the device actually streams.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+        var sampled = new List<int>();
+        foreach (var number in new[] { 0, 1 })
+        {
+            device.Analog(number).SampleReceived += (_, e) => sampled.Add(e.Channel.ChannelNumber);
+        }
+
+        device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010));
+        device.DeliverFrame(1000);
+
+        Assert.Equal("AI0", device.Enabled);
+        Assert.Equal([0], sampled);
     }
 
     [Fact]

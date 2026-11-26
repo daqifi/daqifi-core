@@ -1005,6 +1005,16 @@ internal sealed class StreamingSessionController
                     + $"('{effect.RejectedRate}'); the session state is unchanged.");
                 break;
 
+            case SessionCommandEffectKind.SetAdcEnableMask when IsStreaming:
+                // The firmware refuses a channel enable while a stream or SD log runs and keeps
+                // its channel set, so recording this mask would decode every later frame against
+                // channels the device is not sending (#1079). It still goes out: it is the caller's.
+                send(null);
+                SafeTrace(
+                    $"[{nameof(SendTracked)}] Not recording an ADC enable mask sent while streaming; "
+                    + "the device refuses it and keeps its channel set.");
+                break;
+
             case SessionCommandEffectKind.SetAdcEnableMask:
                 var mask = _host.TrackAdcEnableMask(effect.AdcEnableMask);
                 try

@@ -915,8 +915,11 @@ public class DaqifiStreamingDeviceDecodeTests
         device.InvokeStreamMessage(digital);
         Assert.Equal(1.0, dio0.ActiveSample!.Value);
 
-        // Enable analog mid-stream, then a short analog frame arrives (guard was never armed).
-        device.EnableChannels(new[] { ai0, ai1 });
+        // Analog becomes enabled mid-stream, then a short analog frame arrives (guard was never
+        // armed). The public commands refuse this while streaming (#1079), so the state is set
+        // directly: the decoder's own handling is what this pins.
+        ai0.SetEnabled(true);
+        ai1.SetEnabled(true);
         var shortAnalog = new DaqifiOutMessage { MsgTimeStamp = 2 };
         shortAnalog.AnalogInDataFloat.Add(7f); // one value for two enabled channels
 

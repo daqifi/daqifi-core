@@ -276,6 +276,7 @@ internal sealed class ChannelControlOperations
     internal void DisableAllChannels()
     {
         _host.EnsureConnected();
+        EnsureNotStreaming();
 
         // Push the cleared state for whichever channel types this device actually has.
         ApplyEnabled(_host.SnapshotChannels, enabled: false, all: true);
@@ -680,7 +681,27 @@ internal sealed class ChannelControlOperations
             EnsureChannelBelongs(channel);
         }
 
+        EnsureNotStreaming();
+
         ApplyEnabled(() => channels, enabled, all: false);
+    }
+
+    /// <summary>
+    /// Refuses a channel enable or disable while a stream or SD log runs (#1079).
+    /// </summary>
+    /// <remarks>
+    /// The firmware refuses both <c>ENAble:VOLTage:DC</c> and <c>DIO:PORt:ENAble</c> while
+    /// streaming: it queues <c>-200</c> and keeps its channel set. Sending the command anyway let
+    /// Core record a change the device never made and decode every later frame against the wrong
+    /// channel list, so one channel's readings were reported as another's.
+    /// </remarks>
+    private void EnsureNotStreaming()
+    {
+        if (_host.IsStreaming)
+        {
+            throw new InvalidOperationException(
+                "Channels cannot be enabled or disabled while the device is streaming or logging to the SD card: the firmware refuses the change. Stop streaming first, change the channels, then start again.");
+        }
     }
 
     /// <summary>
