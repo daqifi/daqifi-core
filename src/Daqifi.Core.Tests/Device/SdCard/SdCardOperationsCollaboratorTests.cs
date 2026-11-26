@@ -1921,7 +1921,7 @@ public partial class SdCardOperationsCollaboratorTests
         var payload = Encoding.ASCII.GetBytes("real log bytes");
         var host = new FakeHost
         {
-            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Concat(payload, EofMarker)),
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, Concat(payload, EofMarker)),
         };
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
@@ -1943,7 +1943,7 @@ public partial class SdCardOperationsCollaboratorTests
         var payload = Encoding.ASCII.GetBytes("real log bytes");
         var host = new FakeHost
         {
-            RawCaptureStreamFactory = () => new OneByteReads(ScriptedStream.Of(echoed, Concat(payload, EofMarker))),
+            RawCaptureStreamFactory = () => new OneByteReads(ScriptedStream.Of(echoed, Quiet, Concat(payload, EofMarker))),
         };
         var ops = new SdCardOperations(host);
         using var destination = new AppendOnlyStream();
@@ -1958,7 +1958,7 @@ public partial class SdCardOperationsCollaboratorTests
     {
         var host = new FakeHost
         {
-            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, NoCardReply, NoCardReply, NoCardReply, NoCardReply),
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet),
         };
         var ops = new SdCardOperations(host);
         using var destination = new MemoryStream();
@@ -2585,6 +2585,12 @@ public partial class SdCardOperationsCollaboratorTests
             base.Dispose(disposing);
         }
     }
+
+    /// <summary>
+    /// A script segment that reads as nothing: the device going quiet, as it does after answering
+    /// "No SD Card Detected" until it is asked again. Serial reports that as a zero-length read.
+    /// </summary>
+    private static readonly byte[] Quiet = [];
 
     private sealed class ScriptedStream : Stream
     {

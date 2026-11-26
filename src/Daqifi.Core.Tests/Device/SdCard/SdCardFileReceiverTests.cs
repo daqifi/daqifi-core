@@ -336,6 +336,43 @@ public class SdCardFileReceiverTests
         Assert.Equal(canBecomeOne ? SdCardFileReceiver.ReplyHeadKind.NoCardLine : SdCardFileReceiver.ReplyHeadKind.Content, kind);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public async Task ReceiveAsync_FileThatStartsWithACopyOfTheWholeAnswer_DownloadsTheContent(int chunkSize)
+    {
+        // Review on #1078: a saved transcript can open with the device's exact two-line answer.
+        // The match stays tentative until the reply goes quiet; what follows makes it a file.
+        var content = Combine(
+            Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\n**ERROR: -200, \"Execution error\"\r\n"),
+            Encoding.ASCII.GetBytes("card reinserted, acquisition resumed\r\n"));
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        var received = await receiver.ReceiveAsync(destination, "incident.log", listedFileSizeBytes: content.Length);
+
+        Assert.Equal(content.Length, received);
+        Assert.Equal(content, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NoCardReplyThenThePromptOnASocket_ThrowsNotPresentWithinTheQuietWindow()
+    {
+        // With echo on the prompt follows the answer; it is still the answer, and the short quiet
+        // window ends it rather than the 20-second inactivity window.
+        using var source = new ThenSilentStream(Combine(NoCardReply, Encoding.ASCII.GetBytes("DAQIFI>")));
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromSeconds(20));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, "log.bin", timeout: TimeSpan.FromSeconds(30)));
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+        Assert.Empty(destination.ToArray());
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {

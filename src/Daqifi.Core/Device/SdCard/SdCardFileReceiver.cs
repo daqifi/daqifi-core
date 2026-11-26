@@ -551,7 +551,7 @@ internal sealed class SdCardFileReceiver
 
                     // Bounded however the bytes arrive: past the limit after the framing, or past
                     // the whole probe, the opening is not the answer.
-                    if (kind is ReplyHeadKind.Undecided or ReplyHeadKind.NoCardLine
+                    if (kind is ReplyHeadKind.Undecided or ReplyHeadKind.NoCardLine or ReplyHeadKind.NoCardAnswer
                         && (replyHead.Length - framingBytes > ReplyHeadLimitBytes || replyHead.Length > MaxReplyProbeBytes))
                     {
                         kind = ReplyHeadKind.Content;
@@ -560,8 +560,10 @@ internal sealed class SdCardFileReceiver
                     switch (kind)
                     {
                         case ReplyHeadKind.NoCardAnswer:
-                            throw NoCardAnswer(heldContent, replyHead);
                         case ReplyHeadKind.NoCardLine:
+                            // Tentative until the reply goes quiet: the short quiet window then
+                            // ends it as the answer, while anything more that arrives first is
+                            // classified again with it.
                             noCardAnswerSeen = true;
                             break;
                         case ReplyHeadKind.Content:
@@ -803,7 +805,10 @@ internal sealed class SdCardFileReceiver
         /// <summary>The reply opens with the no-card line; an error line may still follow it.</summary>
         NoCardLine,
 
-        /// <summary>The reply is the no-card line followed by the device's error line.</summary>
+        /// <summary>
+        /// The reply so far is the no-card line followed by the device's error line, with nothing
+        /// after it but blank lines and the prompt. It is the answer once the reply goes quiet.
+        /// </summary>
         NoCardAnswer,
     }
 
@@ -867,7 +872,12 @@ internal sealed class SdCardFileReceiver
                     continue;
                 }
 
-                return (ScpiErrorLine.IsMatch(line.ToString()) ? ReplyHeadKind.NoCardAnswer : ReplyHeadKind.Content, framingBytes);
+                // The whole answer, so far: it is the device's only while nothing but blank lines
+                // and the prompt follow it. A file can open with a copy of it (a saved transcript),
+                // and then its next line settles that it is content.
+                return (ScpiErrorLine.IsMatch(line.ToString()) && OnlyPromptsAndBlankLinesFrom(text, lineStart)
+                    ? ReplyHeadKind.NoCardAnswer
+                    : ReplyHeadKind.Content, framingBytes);
             }
 
             if (line.IsEmpty || line.Equals(echo, StringComparison.OrdinalIgnoreCase))
@@ -884,6 +894,20 @@ internal sealed class SdCardFileReceiver
 
             return (ReplyHeadKind.Content, framingBytes);
         }
+    }
+
+    /// <summary>Whether everything in <paramref name="text"/> from <paramref name="start"/> is blank lines and prompts.</summary>
+    private static bool OnlyPromptsAndBlankLinesFrom(string text, int start)
+    {
+        foreach (var line in text.AsSpan(start).EnumerateLines())
+        {
+            if (!WithoutPrompt(line.Trim()).IsEmpty)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
