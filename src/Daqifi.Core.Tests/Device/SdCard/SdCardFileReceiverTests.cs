@@ -331,7 +331,7 @@ public class SdCardFileReceiverTests
     {
         var head = Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\n" + partial);
 
-        var (kind, _) = SdCardFileReceiver.ClassifyReplyHead(head, "SYSTem:STORage:SD:GET \"x.bin\"");
+        var (kind, _, _) = SdCardFileReceiver.ClassifyReplyHead(head, "SYSTem:STORage:SD:GET \"x.bin\"");
 
         Assert.Equal(canBecomeOne ? SdCardFileReceiver.ReplyHeadKind.NoCardLine : SdCardFileReceiver.ReplyHeadKind.Content, kind);
     }
@@ -396,22 +396,57 @@ public class SdCardFileReceiverTests
     [Theory]
     [InlineData(1)]
     [InlineData(4096)]
-    public async Task ReceiveAsync_EchoOfANameHoldingAMarkerThenTheFile_KeepsEveryByte(int chunkSize)
+    public async Task ReceiveAsync_EchoOfANameHoldingAMarkerThenTheFile_DownloadsOnlyTheFile(int chunkSize)
     {
-        // The other way round: when the opening proves to be file content, the bytes held while
-        // it was classified are kept, and a marker inside the echo does not end the transfer.
+        // Review on #1078: the echoed GET is the device repeating Core's command, not file data.
+        // It stays out of the file, the count and the listed-size check; a marker spelled inside
+        // it does not end the transfer.
         const string name = "archive__END_OF_FILE__.bin";
-        var content = Combine(
-            ScpiMessageProducer.GetSdFile(name).GetBytes(),
-            Encoding.ASCII.GetBytes("row,1\r\nrow,2\r\n"));
-        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), chunkSize);
+        var payload = Encoding.ASCII.GetBytes("row,1\r\nrow,2\r\n");
+        var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), ScpiMessageProducer.GetSdFile(name).GetBytes(), payload, EofMarker);
+        using var source = new ChunkedMemoryStream(reply, chunkSize);
         using var destination = new MemoryStream();
         var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
 
-        var received = await receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10));
+        var received = await receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: payload.Length);
 
-        Assert.Equal(content.Length, received);
-        Assert.Equal(content, destination.ToArray());
+        Assert.Equal(payload.Length, received);
+        Assert.Equal(payload, destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public async Task ReceiveAsync_EchoThenATruncatedFile_IsReportedShort(int chunkSize)
+    {
+        // Review on #1078: counting the echo as file bytes let an end marker 26 bytes short of the
+        // listed size pass the size check, and the truncated file was reported complete.
+        const string name = "archive__END_OF_FILE__.bin";
+        var payload = Encoding.ASCII.GetBytes("row,1\r\nrow,2\r\n");
+        var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), ScpiMessageProducer.GetSdFile(name).GetBytes(), payload, EofMarker);
+        using var source = new ChunkedMemoryStream(reply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        await Assert.ThrowsAsync<SdCardTruncatedTransferException>(() => receiver.ReceiveAsync(
+            destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: payload.Length + 26));
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_StaleEmptyListingWithAnOversizedBlankOpeningThenAStall_KeepsTheBytes()
+    {
+        // Review on #1078: 4,352 spaces cross the probe limit and are file content, so a stale
+        // zero-byte listing must not discard them as reply framing when the transfer then stalls.
+        var opening = Encoding.ASCII.GetBytes(new string(' ', 4352));
+        using var source = new MemoryStream(opening);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: 8192);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(() => receiver.ReceiveAsync(
+            destination, "blank.txt", timeout: TimeSpan.FromSeconds(5), listedFileSizeBytes: 0));
+
+        Assert.Equal(opening.Length - TrailingWindow, ex.BytesReceived);
+        Assert.Equal(ex.BytesReceived, destination.Length);
     }
 
     [Theory]
