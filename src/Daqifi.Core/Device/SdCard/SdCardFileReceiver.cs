@@ -894,7 +894,7 @@ internal sealed class SdCardFileReceiver
                     return (IsErrorLineSoFar(partial) ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Content, framingBytes, echoBytes);
                 }
 
-                if (IsEchoSoFar(partial, echo))
+                if (echoBytes == 0 && IsEchoSoFar(text.AsSpan(lineStart), echo))
                 {
                     framingBytes = text.Length;
                     return (ReplyHeadKind.Undecided, framingBytes, echoBytes);
@@ -903,7 +903,8 @@ internal sealed class SdCardFileReceiver
                 return (IsAnswerLineSoFar(partial) ? ReplyHeadKind.Undecided : ReplyHeadKind.Content, framingBytes, echoBytes);
             }
 
-            var line = text.AsSpan(lineStart, newline - lineStart).Trim();
+            var rawLine = text.AsSpan(lineStart, newline - lineStart);
+            var line = rawLine.Trim();
             lineStart = newline + 1;
 
             // The prompt can open any line when echo is on; what follows it is the line.
@@ -933,7 +934,10 @@ internal sealed class SdCardFileReceiver
                 continue;
             }
 
-            if (line.Equals(echo, StringComparison.OrdinalIgnoreCase))
+            // One GET, one echo: the first line that is exactly the bytes that went out, behind the
+            // prompt. The same line again, or one that differs in case, spacing or line ending, is
+            // the file's own.
+            if (echoBytes == 0 && IsEchoLine(rawLine, echo))
             {
                 framingBytes = lineStart;
                 echoBytes = lineStart;
@@ -965,23 +969,33 @@ internal sealed class SdCardFileReceiver
     }
 
     /// <summary>
+    /// Whether a complete line (without its LF) is the echo: the command exactly as it went out,
+    /// optionally behind the prompt, ending in the CR it was sent with.
+    /// </summary>
+    private static bool IsEchoLine(ReadOnlySpan<char> rawLine, string echo)
+        => rawLine.EndsWith("\r", StringComparison.Ordinal)
+            && WithoutEchoPrompt(rawLine[..^1]).SequenceEqual(echo);
+
+    /// <summary>
     /// Whether an unfinished line can still become the echo: a start of the prompt, or the prompt
-    /// (if any) followed by a start of the echoed command.
+    /// (if any) followed by a start of the command exactly as it went out and its CR.
     /// </summary>
     private static bool IsEchoSoFar(ReadOnlySpan<char> partial, string echo)
     {
-        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal))
         {
             return true;
         }
 
-        if (partial.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            partial = partial[PromptPrefix.Length..].TrimStart();
-        }
-
-        return echo.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase);
+        var command = WithoutEchoPrompt(partial);
+        return (echo + "\r").AsSpan().StartsWith(command, StringComparison.Ordinal);
     }
+
+    /// <summary>The line with the prompt the firmware prints ahead of an echo, and the spaces after it, removed.</summary>
+    private static ReadOnlySpan<char> WithoutEchoPrompt(ReadOnlySpan<char> line)
+        => line.StartsWith(PromptPrefix, StringComparison.Ordinal)
+            ? line[PromptPrefix.Length..].TrimStart(' ')
+            : line;
 
     /// <summary>Whether an unfinished line can still become the no-card line, prompt or not.</summary>
     private static bool IsAnswerLineSoFar(ReadOnlySpan<char> partial)

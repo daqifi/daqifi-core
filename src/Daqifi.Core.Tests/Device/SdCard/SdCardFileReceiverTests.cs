@@ -432,6 +432,48 @@ public class SdCardFileReceiverTests
             destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: payload.Length + 26));
     }
 
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(4096, false)]
+    [InlineData(1, true)]
+    [InlineData(4096, true)]
+    public async Task ReceiveAsync_EchoThenATranscriptThatStartsWithTheSameCommand_KeepsTheTranscript(int chunkSize, bool listed)
+    {
+        // Review on #1078: one GET has one echo. The same command again is the file's own line.
+        const string name = "commands.txt";
+        var get = ScpiMessageProducer.GetSdFile(name).GetBytes();
+        var file = Combine(get, Encoding.ASCII.GetBytes("done\n"));
+        var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), get, file, EofMarker);
+        using var source = new ChunkedMemoryStream(reply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        var received = await receiver.ReceiveAsync(
+            destination, name, timeout: TimeSpan.FromSeconds(10), listedFileSizeBytes: listed ? file.Length : null);
+
+        Assert.Equal(file.Length, received);
+        Assert.Equal(file, destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData("  systEM:storage:sd:get \"commands.txt\"\n")]
+    [InlineData("SYSTem:STORage:SD:GET \"commands.txt\"\n")]
+    [InlineData("SYSTem:STORage:SD:GET  \"commands.txt\"\r\n")]
+    public async Task ReceiveAsync_FirstLineThatDiffersFromTheCommandAsSent_IsKept(string firstLine)
+    {
+        // Review on #1078: only the exact bytes that went out are the echo. A line that differs in
+        // case, whitespace or line ending is the file's.
+        var file = Encoding.ASCII.GetBytes(firstLine + "done\n");
+        using var source = new ChunkedMemoryStream(Combine(file, EofMarker), 4096);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var received = await receiver.ReceiveAsync(destination, "commands.txt", listedFileSizeBytes: file.Length);
+
+        Assert.Equal(file.Length, received);
+        Assert.Equal(file, destination.ToArray());
+    }
+
     [Fact]
     public async Task ReceiveAsync_StaleEmptyListingWithAnOversizedBlankOpeningThenAStall_KeepsTheBytes()
     {
