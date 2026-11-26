@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Producers;
 using System;
 using System.IO;
 using System.Text;
@@ -16,6 +17,12 @@ namespace Daqifi.Core.Device.SdCard;
 /// A third ending has no marker at all: firmware v3.7.3 still abandons a stalled peer after
 /// partial data without sending a terminator, by design, so the inactivity window below remains
 /// the only thing that ends such a transfer.
+/// <para>
+/// The device can also answer with no file at all: <c>Error !! No SD Card Detected</c> and its
+/// error line, sent while it believes no card is present. The first bytes of every transfer are
+/// held back until they show whether the reply opens with that answer, which ends the transfer
+/// with <see cref="SdCardNotPresentException"/> and leaves the destination untouched (#1077).
+/// </para>
 /// <para>
 /// Both markers are ASCII text, so a log file can hold the same bytes. The listed file size is
 /// what settles that: when the caller passes one, the receiver reads at least that many bytes of
@@ -130,6 +137,40 @@ internal sealed class SdCardFileReceiver
     /// </para>
     /// </remarks>
     internal const int ListedEmptyFileReplyFramingLimitBytes = 256;
+
+    /// <summary>
+    /// The text of the device's answer to an SD <c>GET</c> when it believes no card is present,
+    /// sent in place of the file (#1077).
+    /// </summary>
+
+    /// <summary>
+    /// How many bytes at the start of a transfer are held back from the destination stream while
+    /// they could still be the device's no-card answer rather than file content.
+    /// </summary>
+    /// <remarks>
+    /// The answer is 66 bytes as the bench device sends it, plus the command echo and prompt when
+    /// echo is on. A transfer that has sent more than this without opening with the answer is a
+    /// real transfer, and its bytes are released and written as they arrive from then on.
+    /// </remarks>
+    internal const int ReplyHeadLimitBytes = 256;
+
+    /// <summary>
+    /// The most raw bytes the opening of a reply is ever inspected over, framing included. The
+    /// command echo carries the file name, which has no length limit of its own, so the limit
+    /// above counts only what follows the framing; this one bounds the whole probe.
+    /// </summary>
+    internal const int MaxReplyProbeBytes = 4096;
+
+    /// <summary>The device's no-card line, exactly as the firmware prints it.</summary>
+    private const string NoSdCardAnswerLine = "Error !! No SD Card Detected";
+
+    /// <summary>The prompt the firmware prints ahead of a command echo when echo is on.</summary>
+    private const string PromptPrefix = "DAQIFI>";
+
+    /// <summary>A SCPI error line as the firmware prints it: <c>**ERROR: -200, "Execution error"</c>.</summary>
+    private static readonly System.Text.RegularExpressions.Regex ScpiErrorLine = new(
+        @"^\*\*ERROR:\s*-?\d+\s*,\s*"".*""$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -336,10 +377,32 @@ internal sealed class SdCardFileReceiver
         // as an empty file instead of as the framing around it (#888). A stale listing is still
         // honored — a marker commits whatever preceded it, and anything bigger than reply framing is
         // released and the transfer carries on as any other.
-        using var heldContent = listedFileSizeBytes is 0
-            ? new HeldContentStream(destinationStream, ListedEmptyFileReplyFramingLimitBytes)
-            : null;
-        var contentTarget = heldContent is null ? destinationStream : (Stream)heldContent;
+        //
+        // Every other transfer holds back its first bytes too, for a different reason: until they
+        // are known not to be the device's "No SD Card Detected" answer, they may not be file
+        // content at all, and the caller's stream must not receive them (#1077).
+        var listedEmpty = listedFileSizeBytes is 0;
+        using var heldContent = new HeldContentStream(
+            destinationStream,
+            listedEmpty ? ListedEmptyFileReplyFramingLimitBytes : ReplyHeadLimitBytes);
+        var contentTarget = (Stream)heldContent;
+
+        // While the opening is still being inspected, nothing is released however much is held:
+        // the limit could otherwise be crossed (a long echoed file name, one-byte reads) before
+        // the answer's error line completes, and a retry would append the file to those bytes.
+        heldContent.HoldUntilReleased = true;
+
+        // The raw bytes the reply opened with, kept until they settle whether it is the no-card
+        // answer; null once they have settled that it is not.
+        var replyHead = new MemoryStream();
+
+        // What echo repeats when it is on: the GET exactly as it went out.
+        var expectedEcho = ExpectedEcho(fileName);
+
+        // Set when the reply opened with the no-card line. The transfer then ends at the first
+        // quiet moment instead of after the inactivity window, since the device sends nothing
+        // more after that answer.
+        var noCardAnswerSeen = false;
 
         // Set once any byte of the device's reply has arrived. Only then does the quiet window for
         // a listed-empty file apply; see ListedEmptyFileQuietWindow.
@@ -369,15 +432,29 @@ internal sealed class SdCardFileReceiver
         // transport and is only worked out once a stall is actually being reported: probing the
         // stream for a download that has already completed could fail it after the fact, since a
         // disconnected stream's CanRead may throw.
-        long EndWithoutTerminator(
+        async Task<long> EndWithoutTerminatorAsync(
             SdCardTransferStallReason? reason, TimeSpan? window = null, Exception? cause = null)
         {
-            if (heldContent is { HasReleasedContent: false })
+            if (noCardAnswerSeen && !heldContent.HasReleasedContent)
+            {
+                throw NoCardAnswer(heldContent, replyHead);
+            }
+
+            await HoldProbedBytesAsContentAsync().ConfigureAwait(false);
+
+            if (listedEmpty && !heldContent.HasReleasedContent)
             {
                 heldContent.DiscardHeldBytes();
                 progress?.Report(new SdCardTransferProgress { BytesReceived = 0, FileName = fileName });
                 return 0;
             }
+
+            // Whatever is still held back was content after all: it goes to the caller's stream,
+            // as everything outside the marker window always has on a transfer that ended early.
+            // Under the live token, so a destination that blocks cannot outlast the caller's
+            // cancellation; and not at all once the deadline has passed, rather than starting an
+            // unbounded write after it. At most the probe's few hundred bytes are lost that way.
+            await ReleaseHeldContentIfStillLiveAsync(heldContent, token, cancellationToken).ConfigureAwait(false);
 
             ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
@@ -395,6 +472,22 @@ internal sealed class SdCardFileReceiver
             throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason.Value, window, cause);
         }
 
+        // An opening still being classified when the transfer ends some other way than with the
+        // no-card answer was file content after all. Its bytes join what is held back for the
+        // destination, outside the marker window as every early end leaves it, and are counted
+        // only while the transfer is still live to write them.
+        async Task HoldProbedBytesAsContentAsync()
+        {
+            if (listedEmpty || noCardAnswerSeen || replyHead is not { Length: > 0 } probed || token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var content = (int)Math.Max(0, probed.Length - MaxMarkerLength);
+            await heldContent.WriteAsync(probed.GetBuffer(), 0, content, token).ConfigureAwait(false);
+            totalBytesReceived += content;
+        }
+
         try
         {
             while (true)
@@ -406,8 +499,13 @@ internal sealed class SdCardFileReceiver
                 // completion it is rather than as a stall. Once content has been released to the
                 // destination the listing was stale, a real transfer is under way, and the
                 // ordinary inactivity window is the right one again.
+                //
+                // The same short window ends a reply that opened with the no-card answer: the
+                // device sends nothing after it, so waiting longer only delays the answer.
                 var idleWindow = _idleTimeout;
-                if (replyStarted && heldContent is { HasReleasedContent: false })
+                if (replyStarted
+                    && !heldContent.HasReleasedContent
+                    && (listedEmpty || noCardAnswerSeen))
                 {
                     idleWindow = idleWindow is { } configured && configured < ListedEmptyFileQuietWindow
                         ? configured
@@ -442,7 +540,7 @@ internal sealed class SdCardFileReceiver
                     // `token`: the deadline's own source is marked cancelled a moment before its
                     // cancellation reaches the linked token, and an idle window expiring in that
                     // moment must still be reported as the deadline.
-                    return EndWithoutTerminator(SdCardTransferStallReason.NoDataReceived, idleWindow, ex);
+                    return await EndWithoutTerminatorAsync(SdCardTransferStallReason.NoDataReceived, idleWindow, ex).ConfigureAwait(false);
                 }
 
                 // A read can complete without ever having observed the token: System.IO.Ports'
@@ -457,10 +555,58 @@ internal sealed class SdCardFileReceiver
                 {
                     // No reason given: whether zero bytes means quiet or closed is settled inside
                     // the helper, and only if a stall is actually being reported.
-                    return EndWithoutTerminator(reason: null);
+                    return await EndWithoutTerminatorAsync(reason: null).ConfigureAwait(false);
                 }
 
                 replyStarted = true;
+
+                // What this iteration hands to the marker scan and the destination: the read, or,
+                // on the read that settles the opening as content, every byte held while it was
+                // being classified.
+                var data = buffer;
+                var count = bytesRead;
+
+                if (replyHead is not null)
+                {
+                    replyHead.Write(buffer, 0, bytesRead);
+
+                    var (kind, framingBytes) = ClassifyReplyHead(
+                        replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length), expectedEcho);
+
+                    // Bounded however the bytes arrive: past the limit after the framing, or past
+                    // the whole probe, the opening is not the answer.
+                    if (kind is ReplyHeadKind.Undecided or ReplyHeadKind.NoCardLine or ReplyHeadKind.NoCardAnswer
+                        && (replyHead.Length - framingBytes > ReplyHeadLimitBytes || replyHead.Length > MaxReplyProbeBytes))
+                    {
+                        kind = ReplyHeadKind.Content;
+                    }
+
+                    switch (kind)
+                    {
+                        case ReplyHeadKind.NoCardAnswer:
+                        case ReplyHeadKind.NoCardLine:
+                            // Tentative until the reply goes quiet: the short quiet window then
+                            // ends it as the answer, while anything more that arrives first is
+                            // classified again with it.
+                            noCardAnswerSeen = true;
+                            break;
+                        case ReplyHeadKind.Content:
+                            noCardAnswerSeen = false;
+                            data = replyHead.ToArray();
+                            count = data.Length;
+                            replyHead.Dispose();
+                            replyHead = null;
+                            break;
+                    }
+
+                    if (replyHead is not null)
+                    {
+                        // Still being classified, so nothing about these bytes is decided yet:
+                        // they are not scanned for a marker (one can be spelled inside the echoed
+                        // file name), not written, and not reported as progress (#1078).
+                        continue;
+                    }
+                }
 
                 // The listed size is a floor for the EOF marker: the marker is ASCII text, so a log
                 // file can contain it, and below the floor it is the file's own content rather than
@@ -473,12 +619,12 @@ internal sealed class SdCardFileReceiver
                     var bytesStillOwed = listedSize - totalBytesReceived;
                     eofFloor = bytesStillOwed <= 0
                         ? 0
-                        : (int)Math.Min(bytesStillOwed, trailingCount + bytesRead);
+                        : (int)Math.Min(bytesStillOwed, trailingCount + count);
                 }
 
                 // Check if a terminal marker is contained in or spans the new data
                 var (foundMarker, markerPosition, isTransferError, subFloorEofPosition) =
-                    FindTerminalMarker(trailingBytes, trailingCount, buffer, bytesRead, eofFloor);
+                    FindTerminalMarker(trailingBytes, trailingCount, data, count, eofFloor);
 
                 if (subFloorEofPosition >= 0 && shortReplyContentLength is null)
                 {
@@ -518,7 +664,7 @@ internal sealed class SdCardFileReceiver
                         // Write the portion of new data before the marker
                         if (newDataFileBytes > 0)
                         {
-                            await contentTarget.WriteAsync(buffer, 0, newDataFileBytes, token)
+                            await contentTarget.WriteAsync(data, 0, newDataFileBytes, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += newDataFileBytes;
                         }
@@ -528,10 +674,7 @@ internal sealed class SdCardFileReceiver
                     // the listing was stale and they are file content, so they go to the caller's
                     // stream now. This has to happen before the two throws below, both of which
                     // document the content that arrived as left in the destination stream.
-                    if (heldContent is not null)
-                    {
-                        await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
-                    }
+                    await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
 
                     if (isTransferError)
                     {
@@ -565,9 +708,9 @@ internal sealed class SdCardFileReceiver
                     // A marker at or past that size is not a terminator when content follows it.
                     // Confirm both sized and unsized transfers before reporting a complete file.
                     await ConfirmMarkerEndedTheFileAsync(
-                        buffer,
+                        data,
                         markerPosition + EndOfFileMarker.Length - trailingCount,
-                        bytesRead,
+                        count,
                         fileName,
                         totalBytesReceived,
                         cancellationToken,
@@ -587,7 +730,7 @@ internal sealed class SdCardFileReceiver
 
                 // No terminal marker found — combine trailing + new data, write
                 // everything except the last MaxMarkerLength bytes (the new trailing window).
-                var combinedLen = trailingCount + bytesRead;
+                var combinedLen = trailingCount + count;
 
                 if (combinedLen >= MaxMarkerLength)
                 {
@@ -609,7 +752,7 @@ internal sealed class SdCardFileReceiver
                         var fromNew = safeCount - fromTrailing;
                         if (fromNew > 0)
                         {
-                            await contentTarget.WriteAsync(buffer, 0, fromNew, token)
+                            await contentTarget.WriteAsync(data, 0, fromNew, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += fromNew;
                         }
@@ -617,7 +760,7 @@ internal sealed class SdCardFileReceiver
 
                     // Build the new trailing window from the last MaxMarkerLength bytes of [trailing + new]
                     var newTrailingCount = MaxMarkerLength;
-                    var fromNewData = Math.Min(bytesRead, newTrailingCount);
+                    var fromNewData = Math.Min(count, newTrailingCount);
                     var fromTrailingData = newTrailingCount - fromNewData;
 
                     if (fromTrailingData > 0)
@@ -627,7 +770,7 @@ internal sealed class SdCardFileReceiver
 
                     if (fromNewData > 0)
                     {
-                        Array.Copy(buffer, bytesRead - fromNewData, trailingBytes, fromTrailingData, fromNewData);
+                        Array.Copy(data, count - fromNewData, trailingBytes, fromTrailingData, fromNewData);
                     }
 
                     trailingCount = newTrailingCount;
@@ -635,8 +778,24 @@ internal sealed class SdCardFileReceiver
                 else
                 {
                     // Combined data is still shorter than the marker — just accumulate
-                    Array.Copy(buffer, 0, trailingBytes, trailingCount, bytesRead);
+                    Array.Copy(data, 0, trailingBytes, trailingCount, count);
                     trailingCount = combinedLen;
+                }
+
+                if (replyHead is null && heldContent.HoldUntilReleased)
+                {
+                    // The opening has been settled as content. A listed-empty transfer goes back
+                    // to its framing limit; any other writes what it holds now, so bytes known to
+                    // be file content are in the caller's stream even if the deadline comes next.
+                    if (listedEmpty)
+                    {
+                        await heldContent.StopHoldingAsync(token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        heldContent.HoldUntilReleased = false;
+                        await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
+                    }
                 }
 
                 progress?.Report(new SdCardTransferProgress { BytesReceived = totalBytesReceived, FileName = fileName });
@@ -644,8 +803,327 @@ internal sealed class SdCardFileReceiver
         }
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            return EndWithoutTerminator(SdCardTransferStallReason.TransferTimeout, effectiveTimeout, ex);
+            return await EndWithoutTerminatorAsync(SdCardTransferStallReason.TransferTimeout, effectiveTimeout, ex).ConfigureAwait(false);
         }
+        catch (Exception) when (!listedEmpty && !heldContent.HasReleasedContent)
+        {
+            // A transport failure or a cancellation part-way through: bytes held back only to
+            // rule out the no-card answer were real content, and they reach the caller's stream
+            // as they did before the hold existed. A no-card answer has been discarded already.
+            try
+            {
+                await HoldProbedBytesAsContentAsync().ConfigureAwait(false);
+                await ReleaseHeldContentIfStillLiveAsync(heldContent, token, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The exception being handled is the one to report.
+            }
+
+            throw;
+        }
+        finally
+        {
+            replyHead?.Dispose();
+        }
+    }
+
+    /// <summary>What the opening bytes of a reply to an SD <c>GET</c> have shown so far.</summary>
+    internal enum ReplyHeadKind
+    {
+        /// <summary>Not enough has arrived to tell.</summary>
+        Undecided,
+
+        /// <summary>The reply opens with something other than the no-card answer: file content.</summary>
+        Content,
+
+        /// <summary>The reply opens with the no-card line; an error line may still follow it.</summary>
+        NoCardLine,
+
+        /// <summary>
+        /// The reply so far is the no-card line followed by the device's error line, with nothing
+        /// after it but blank lines and the prompt. It is the answer once the reply goes quiet.
+        /// </summary>
+        NoCardAnswer,
+    }
+
+    /// <summary>
+    /// Decides whether a reply opens with the device's "No SD Card Detected" answer (#1077).
+    /// </summary>
+    /// <remarks>
+    /// Only the opening counts: blank lines, the prompt and the echo of this file's <c>GET</c> may
+    /// come first, and the first other complete line has to be the answer. A log that quotes the
+    /// same words further in is file content, so a text file whose first line is anything else is
+    /// never mistaken for it. An unfinished last line that is still on course to be the echo counts
+    /// as framing too, so a long file name arriving a byte at a time does not use up the answer's
+    /// limit before its newline arrives.
+    /// </remarks>
+    /// <param name="head">The bytes the reply has opened with so far.</param>
+    /// <param name="echo">The GET as it went out (see <see cref="ExpectedEcho"/>).</param>
+    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string echo)
+    {
+        var text = Encoding.ASCII.GetString(head);
+        var seenNoCardLine = false;
+        var lineStart = 0;
+        var framingBytes = 0;
+        var echoSeen = false;
+
+        while (true)
+        {
+            var newline = text.IndexOf('\n', lineStart);
+            if (newline < 0)
+            {
+                // An unfinished line is judged by what it can still become: the echo (framing),
+                // the answer line, or after it the error line. One that can become none of them —
+                // binary content, say — settles the opening as content now rather than at a
+                // newline that may never come before the deadline.
+                var partial = text.AsSpan(lineStart).Trim();
+                if (seenNoCardLine)
+                {
+                    return (IsErrorLineSoFar(partial) ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Content, framingBytes);
+                }
+
+                if (!echoSeen && IsEchoSoFar(text.AsSpan(lineStart), echo))
+                {
+                    framingBytes = text.Length;
+                    return (ReplyHeadKind.Undecided, framingBytes);
+                }
+
+                return (IsAnswerLineSoFar(partial) ? ReplyHeadKind.Undecided : ReplyHeadKind.Content, framingBytes);
+            }
+
+            var rawLine = text.AsSpan(lineStart, newline - lineStart);
+            var line = rawLine.Trim();
+            lineStart = newline + 1;
+
+            // The prompt can open any line when echo is on; what follows it is the line.
+            if (line.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                line = line[PromptPrefix.Length..].Trim();
+            }
+
+            if (seenNoCardLine)
+            {
+                if (line.IsEmpty)
+                {
+                    continue;
+                }
+
+                // The whole answer, so far: it is the device's only while nothing but blank lines
+                // and the prompt follow it. A file can open with a copy of it (a saved transcript),
+                // and then its next line settles that it is content.
+                return (ScpiErrorLine.IsMatch(line.ToString()) && OnlyPromptsAndBlankLinesFrom(text, lineStart)
+                    ? ReplyHeadKind.NoCardAnswer
+                    : ReplyHeadKind.Content, framingBytes);
+            }
+
+            if (line.IsEmpty)
+            {
+                framingBytes = lineStart;
+                continue;
+            }
+
+            // One GET, one echo: the first line that is exactly the bytes that went out, behind the
+            // prompt. The same line again, or one that differs in case, spacing or line ending, is
+            // the file's own.
+            if (!echoSeen && IsEchoLine(rawLine, echo))
+            {
+                framingBytes = lineStart;
+                echoSeen = true;
+                continue;
+            }
+
+            if (line.Equals(NoSdCardAnswerLine, StringComparison.OrdinalIgnoreCase))
+            {
+                seenNoCardLine = true;
+                continue;
+            }
+
+            return (ReplyHeadKind.Content, framingBytes);
+        }
+    }
+
+    /// <summary>Whether everything in <paramref name="text"/> from <paramref name="start"/> is blank lines and prompts.</summary>
+    private static bool OnlyPromptsAndBlankLinesFrom(string text, int start)
+    {
+        foreach (var line in text.AsSpan(start).EnumerateLines())
+        {
+            if (!WithoutPrompt(line.Trim()).IsEmpty)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a complete line (without its LF) is the echo: the command exactly as it went out,
+    /// optionally behind the prompt, ending in the CR it was sent with.
+    /// </summary>
+    private static bool IsEchoLine(ReadOnlySpan<char> rawLine, string echo)
+        => rawLine.EndsWith("\r", StringComparison.Ordinal)
+            && WithoutEchoPrompt(rawLine[..^1]).SequenceEqual(echo);
+
+    /// <summary>
+    /// Whether an unfinished line can still become the echo: a start of the prompt, or the prompt
+    /// (if any) followed by a start of the command exactly as it went out and its CR.
+    /// </summary>
+    private static bool IsEchoSoFar(ReadOnlySpan<char> partial, string echo)
+    {
+        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var command = WithoutEchoPrompt(partial);
+        return (echo + "\r").AsSpan().StartsWith(command, StringComparison.Ordinal);
+    }
+
+    /// <summary>The line with the prompt the firmware prints ahead of an echo, and the spaces after it, removed.</summary>
+    private static ReadOnlySpan<char> WithoutEchoPrompt(ReadOnlySpan<char> line)
+        => line.StartsWith(PromptPrefix, StringComparison.Ordinal)
+            ? line[PromptPrefix.Length..].TrimStart(' ')
+            : line;
+
+    /// <summary>Whether an unfinished line can still become the no-card line, prompt or not.</summary>
+    private static bool IsAnswerLineSoFar(ReadOnlySpan<char> partial)
+        => NoSdCardAnswerLine.AsSpan().StartsWith(WithoutPrompt(partial), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The GET for <paramref name="fileName"/> as it reaches the device: the bytes
+    /// <see cref="ScpiMessageProducer.GetSdFile"/> sends, decoded the way the reply is, so a name
+    /// ASCII cannot carry ("café.bin") is matched as it is echoed ("caf?.bin").
+    /// </summary>
+    private static string ExpectedEcho(string fileName)
+    {
+        try
+        {
+            return Encoding.ASCII.GetString(ScpiMessageProducer.GetSdFile(fileName).GetBytes()).TrimEnd('\r', '\n');
+        }
+        catch (ArgumentException)
+        {
+            // A name the producer would not send: no GET for it went out, so there is no echo.
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Whether an unfinished line can still become a SCPI error line, prompt or not:
+    /// <c>**ERROR:</c>, a numeric code, a comma and a quoted message, as <see cref="ScpiErrorLine"/>
+    /// matches it once complete.
+    /// </summary>
+    private static bool IsErrorLineSoFar(ReadOnlySpan<char> partial)
+    {
+        const string ErrorLinePrefix = "**ERROR:";
+        partial = WithoutPrompt(partial);
+        if (partial.Length <= ErrorLinePrefix.Length)
+        {
+            return ErrorLinePrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal);
+        }
+
+        if (!partial.StartsWith(ErrorLinePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var rest = partial[ErrorLinePrefix.Length..].TrimStart();
+        if (rest.IsEmpty)
+        {
+            return true;
+        }
+
+        if (rest[0] == '-')
+        {
+            rest = rest[1..];
+            if (rest.IsEmpty)
+            {
+                return true;
+            }
+        }
+
+        var digits = 0;
+        while (digits < rest.Length && char.IsAsciiDigit(rest[digits]))
+        {
+            digits++;
+        }
+
+        if (digits == 0)
+        {
+            return false;
+        }
+
+        rest = rest[digits..].TrimStart();
+        if (rest.IsEmpty)
+        {
+            return true;
+        }
+
+        if (rest[0] != ',')
+        {
+            return false;
+        }
+
+        rest = rest[1..].TrimStart();
+
+        // Once the message's opening quote has arrived, anything can follow it: the line still
+        // ends in its closing quote.
+        return rest.IsEmpty || rest[0] == '"';
+    }
+
+    /// <summary>
+    /// The line with a leading prompt removed; a line that is still only part of the prompt is
+    /// left empty, since it can become anything that follows one.
+    /// </summary>
+    private static ReadOnlySpan<char> WithoutPrompt(ReadOnlySpan<char> partial)
+    {
+        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadOnlySpan<char>.Empty;
+        }
+
+        return partial.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase)
+            ? partial[PromptPrefix.Length..].TrimStart()
+            : partial;
+    }
+
+    private static async Task ReleaseHeldContentIfStillLiveAsync(
+        HeldContentStream heldContent, CancellationToken transferToken, CancellationToken callerToken)
+    {
+        if (transferToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            await heldContent.ReleaseHeldBytesAsync(transferToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            // The deadline passed during the write; the transfer is reported for what ended it.
+        }
+    }
+
+    private static SdCardNotPresentException NoCardAnswer(HeldContentStream heldContent, MemoryStream? replyHead)
+    {
+        heldContent.DiscardHeldBytes();
+
+        var lines = replyHead is null
+            ? Array.Empty<string>()
+            : Encoding.ASCII.GetString(replyHead.GetBuffer(), 0, (int)replyHead.Length)
+                .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        string? lastScpiError = null;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("**ERROR", StringComparison.Ordinal))
+            {
+                lastScpiError = line;
+            }
+        }
+
+        return new SdCardNotPresentException(lines, lastScpiError);
     }
 
     /// <summary>
@@ -964,6 +1442,23 @@ internal sealed class SdCardFileReceiver
         /// </summary>
         public bool HasReleasedContent { get; private set; }
 
+        /// <summary>
+        /// While set, nothing is released however much is held: the limit is suspended until
+        /// <see cref="StopHoldingAsync"/> or <see cref="ReleaseHeldBytesAsync"/>.
+        /// </summary>
+        public bool HoldUntilReleased { get; set; }
+
+        /// <summary>Puts the ordinary limit back, releasing at once if it is already crossed.</summary>
+        public async Task StopHoldingAsync(CancellationToken cancellationToken)
+        {
+            HoldUntilReleased = false;
+
+            if (_heldBytes is { } held && held.Length > _framingLimitBytes)
+            {
+                await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         public override bool CanRead => false;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -1019,7 +1514,7 @@ internal sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length <= _framingLimitBytes)
+            if (HoldUntilReleased || held.Length <= _framingLimitBytes)
             {
                 return;
             }
@@ -1045,7 +1540,7 @@ internal sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length > _framingLimitBytes)
+            if (!HoldUntilReleased && held.Length > _framingLimitBytes)
             {
                 await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
             }

@@ -44,7 +44,7 @@ internal sealed class SdCardOperations
     private const int SD_LIST_MAX_RETRIES = 1;
 
     /// <summary>
-    /// How many times a listing or storage query asks again after the device answered
+    /// How many times a listing, storage query or download asks again after the device answered
     /// "No SD Card Detected", before reporting the card absent (#896). Recheck <c>n</c> waits
     /// <c>n</c> × <see cref="ISdCardOperationHost.SdNoCardRecheckDelay"/>, so the three cover
     /// 1 + 2 + 3 = 6 s.
@@ -2195,6 +2195,10 @@ internal sealed class SdCardOperations
     /// short reply, such as a SCPI error line, in place of the file. Anything already written
     /// to <paramref name="destinationStream"/> is not the file and must be discarded.
     /// </exception>
+    /// <exception cref="SdCardNotPresentException">
+    /// Thrown when the device still answers "No SD Card Detected" after asking again three times
+    /// over about 6 s. Nothing is written to the destination stream in that case.
+    /// </exception>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
     /// the transport returned an empty read, closed, or — the only signal a socket gives —
@@ -2396,6 +2400,7 @@ internal sealed class SdCardOperations
                     var listedFileSizeBytes = TryGetListedFileSize(fileName);
                     long bytesReceived;
                     var retries = 0;
+                    var noCardRechecks = 0;
                     while (true)
                     {
                         try
@@ -2427,6 +2432,17 @@ internal sealed class SdCardOperations
                         {
                             retries++;
                             await Task.Delay(SdInterfaceSettleDelay, Clock, ct).ConfigureAwait(false);
+                            _host.Send(ScpiMessageProducer.GetSdFile(fileName));
+                        }
+                        catch (SdCardNotPresentException) when (noCardRechecks < SD_NO_CARD_MAX_RECHECKS)
+                        {
+                            // The device answers presence from its last card-detect poll, and can
+                            // say "No SD Card Detected" for a card that is there. A listing asks
+                            // again on the same schedule before believing it (#896); so does a
+                            // download (#1077). The receiver kept the answer out of the caller's
+                            // stream, so the retry starts on an untouched destination.
+                            noCardRechecks++;
+                            await Task.Delay(SdNoCardRecheckDelay * noCardRechecks, Clock, ct).ConfigureAwait(false);
                             _host.Send(ScpiMessageProducer.GetSdFile(fileName));
                         }
                     }

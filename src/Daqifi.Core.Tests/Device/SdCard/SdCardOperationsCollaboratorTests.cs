@@ -1909,6 +1909,87 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
     }
 
+    private static readonly byte[] NoCardReply =
+        Encoding.ASCII.GetBytes("\r\nError !! No SD Card Detected\r\n**ERROR: -200, \"Execution error\"\r\n");
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_DeviceAnswersNoCardThenSendsTheFile_ReturnsTheFile()
+    {
+        // #1077: the device answers "No SD Card Detected" for a card that is there, for a moment.
+        // A listing asks again (#896); a download now does too, and the answer never reaches the
+        // caller's stream.
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("log.bin", destination);
+
+        Assert.Equal(payload.Length, result.SizeInBytes);
+        Assert.Equal(payload, destination.ToArray());
+        Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"log.bin\""));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_NoCardThenTheFile_ProgressCountsOnlyTheFile()
+    {
+        // Review on #1078: the no-card answer held for classification was reported as 48 file
+        // bytes, then progress went back to 14. Progress counts the file only, and never goes back.
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+        var reported = new List<long>();
+
+        await ops.DownloadSdCardFileAsync("log.bin", destination, new InlineProgress(p => reported.Add(p.BytesReceived)));
+
+        Assert.All(reported, bytes => Assert.InRange(bytes, 0, payload.Length));
+        Assert.Equal(reported.OrderBy(b => b), reported);
+        Assert.Equal(payload.Length, reported[^1]);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EchoedNoCardThenTheFile_NonSeekableDestinationHoldsOnlyTheFile()
+    {
+        // Review on #1078 (P1): the retry writes into the same stream, which cannot be rewound, so
+        // the attempt that got the no-card answer must have written nothing to it.
+        var name = new string('n', 183) + ".bin";
+        var echoed = Concat(Encoding.ASCII.GetBytes($"DAQIFI> SYSTem:STORage:SD:GET \"{name}\"\r\n"), NoCardReply);
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => new OneByteReads(ScriptedStream.Of(echoed, Quiet, Concat(payload, EofMarker))),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new AppendOnlyStream();
+
+        await ops.DownloadSdCardFileAsync(name, destination);
+
+        Assert.Equal(payload, destination.Written.ToArray());
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_DeviceKeepsAnsweringNoCard_ThrowsNotPresentAfterThreeRechecks()
+    {
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet, NoCardReply, Quiet),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
+
+        Assert.Empty(destination.ToArray());
+        Assert.Equal(4, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"log.bin\""));
+    }
+
     [Fact]
     public async Task DownloadSdCardFileAsync_TwoListedFilesShareAName_TreatsTheSizeAsUnknown()
     {
@@ -2474,6 +2555,64 @@ public partial class SdCardOperationsCollaboratorTests
     /// each successive <c>SYSTem:STORage:SD:GET</c> sees. A single <see cref="MemoryStream"/> cannot:
     /// the receiver reads greedily, so it would swallow a later segment into the same read.
     /// </summary>
+    /// <summary>Hands out one byte per read from an inner stream.</summary>
+    private sealed class OneByteReads(Stream inner) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, Math.Min(1, count));
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => inner.ReadAsync(buffer, offset, Math.Min(1, count), cancellationToken);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A write-only, non-seekable destination that records what reached it.</summary>
+    private sealed class AppendOnlyStream : Stream
+    {
+        public MemoryStream Written { get; } = new();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => Written.Write(buffer, offset, count);
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Written.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// A script segment that reads as nothing: the device going quiet, as it does after answering
+    /// "No SD Card Detected" until it is asked again. Serial reports that as a zero-length read.
+    /// </summary>
+    private static readonly byte[] Quiet = [];
+
     private sealed class ScriptedStream : Stream
     {
         private readonly IReadOnlyList<byte[]> _segments;
