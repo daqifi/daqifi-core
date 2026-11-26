@@ -232,6 +232,24 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
+    public async Task AnEnableQueuedBehindARefusedRawMask_IsWorkedOutWithoutIt()
+    {
+        // Review on #1081: the raw mask was refused (the device was still streaming when it went
+        // out), so the enable queued after the stop must not carry the mask's channels with it.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+
+        await device.WhileHeldAsync(() =>
+        {
+            device.Send(ScpiMessageProducer.EnableAdcChannels(0b0010));
+            device.StopStreaming();
+            device.EnableChannel(device.Analog(2));
+        });
+
+        Assert.Equal("AI0 AI2", device.Enabled);
+    }
+
+    [Fact]
     public async Task RawAdcMask_WhileStreaming_GoesOutButIsNotRecorded()
     {
         // A raw command is still the caller's to send, but the device refuses it while streaming
