@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Producers;
 using System;
 using System.Globalization;
 using System.IO;
@@ -279,6 +280,60 @@ public class SdCardFileReceiverTests
         Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
         Assert.Equal(head.Length - TrailingWindow, ex.BytesReceived);
         Assert.Equal(ex.BytesReceived, destination.Length);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NoCardReplyBehindTheEchoOfANonAsciiName_ThrowsNotPresent()
+    {
+        // Review on #1078: the GET goes out ASCII-encoded, so "café.bin" is echoed as "caf?.bin".
+        // The echo is matched as it was sent, not as the caller spelled the name.
+        const string name = "café.bin";
+        var echo = ScpiMessageProducer.GetSdFile(name).GetBytes();
+        using var source = new ChunkedMemoryStream(Combine(Encoding.ASCII.GetBytes("DAQIFI> "), echo, NoCardReply), 4096);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_AnswerLineThenAnErrorLineWithNoCode_IsContentAtTheDeadline()
+    {
+        // Review on #1078: "**ERROR: u..." can no longer become a SCPI error line, which needs a
+        // numeric code, so the opening is file content before its newline arrives.
+        var head = Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\n**ERROR: unavailable in this run");
+        using var source = new ThenSilentStream(head);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destination, "diag.log", timeout: TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(head.Length - TrailingWindow, ex.BytesReceived);
+        Assert.Equal(ex.BytesReceived, destination.Length);
+    }
+
+    [Theory]
+    [InlineData("**ERROR: -2", true)]
+    [InlineData("**ERROR: -200, \"Exec", true)]
+    [InlineData("**ERROR:", true)]
+    [InlineData("**ERR", true)]
+    [InlineData("DAQIFI> **ERROR: 1", true)]
+    [InlineData("**ERROR: u", false)]
+    [InlineData("**ERROR: -200 x", false)]
+    [InlineData("**ERROR: -200, x", false)]
+    [InlineData("**ERROR: -", true)]
+    [InlineData("**ERROR: --", false)]
+    public void ErrorLineSoFar_FollowsTheScpiErrorFormat(string partial, bool canBecomeOne)
+    {
+        var head = Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\n" + partial);
+
+        var (kind, _) = SdCardFileReceiver.ClassifyReplyHead(head, "SYSTem:STORage:SD:GET \"x.bin\"");
+
+        Assert.Equal(canBecomeOne ? SdCardFileReceiver.ReplyHeadKind.NoCardLine : SdCardFileReceiver.ReplyHeadKind.Content, kind);
     }
 
     [Fact]

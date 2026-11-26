@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Producers;
 using System;
 using System.IO;
 using System.Text;
@@ -395,6 +396,9 @@ internal sealed class SdCardFileReceiver
         // answer; null once they have settled that it is not.
         var replyHead = new MemoryStream();
 
+        // What echo repeats when it is on: the GET exactly as it went out.
+        var expectedEcho = ExpectedEcho(fileName);
+
         // Set when the reply opened with the no-card line. The transfer then ends at the first
         // quiet moment instead of after the inactivity window, since the device sends nothing
         // more after that answer.
@@ -543,7 +547,7 @@ internal sealed class SdCardFileReceiver
                     replyHead.Write(buffer, 0, bytesRead);
 
                     var (kind, framingBytes) = ClassifyReplyHead(
-                        replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length), fileName);
+                        replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length), expectedEcho);
 
                     // Bounded however the bytes arrive: past the limit after the framing, or past
                     // the whole probe, the opening is not the answer.
@@ -814,10 +818,10 @@ internal sealed class SdCardFileReceiver
     /// as framing too, so a long file name arriving a byte at a time does not use up the answer's
     /// limit before its newline arrives.
     /// </remarks>
-    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string fileName)
+    /// <param name="head">The bytes the reply has opened with so far.</param>
+    /// <param name="echo">The GET as it went out (see <see cref="ExpectedEcho"/>).</param>
+    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string echo)
     {
-        // The command exactly as ScpiMessageProducer.GetSdFile sends it, which is what echo repeats.
-        var echo = $"SYSTem:STORage:SD:GET \"{fileName}\"";
         var text = Encoding.ASCII.GetString(head);
         var seenNoCardLine = false;
         var lineStart = 0;
@@ -905,13 +909,85 @@ internal sealed class SdCardFileReceiver
     private static bool IsAnswerLineSoFar(ReadOnlySpan<char> partial)
         => NoSdCardAnswerLine.AsSpan().StartsWith(WithoutPrompt(partial), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether an unfinished line can still become a SCPI error line, prompt or not.</summary>
+    /// <summary>
+    /// The GET for <paramref name="fileName"/> as it reaches the device: the bytes
+    /// <see cref="ScpiMessageProducer.GetSdFile"/> sends, decoded the way the reply is, so a name
+    /// ASCII cannot carry ("café.bin") is matched as it is echoed ("caf?.bin").
+    /// </summary>
+    private static string ExpectedEcho(string fileName)
+    {
+        try
+        {
+            return Encoding.ASCII.GetString(ScpiMessageProducer.GetSdFile(fileName).GetBytes()).TrimEnd('\r', '\n');
+        }
+        catch (ArgumentException)
+        {
+            // A name the producer would not send: no GET for it went out, so there is no echo.
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Whether an unfinished line can still become a SCPI error line, prompt or not:
+    /// <c>**ERROR:</c>, a numeric code, a comma and a quoted message, as <see cref="ScpiErrorLine"/>
+    /// matches it once complete.
+    /// </summary>
     private static bool IsErrorLineSoFar(ReadOnlySpan<char> partial)
     {
         const string ErrorLinePrefix = "**ERROR:";
         partial = WithoutPrompt(partial);
-        return ErrorLinePrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal)
-            || partial.StartsWith(ErrorLinePrefix, StringComparison.Ordinal);
+        if (partial.Length <= ErrorLinePrefix.Length)
+        {
+            return ErrorLinePrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal);
+        }
+
+        if (!partial.StartsWith(ErrorLinePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var rest = partial[ErrorLinePrefix.Length..].TrimStart();
+        if (rest.IsEmpty)
+        {
+            return true;
+        }
+
+        if (rest[0] == '-')
+        {
+            rest = rest[1..];
+            if (rest.IsEmpty)
+            {
+                return true;
+            }
+        }
+
+        var digits = 0;
+        while (digits < rest.Length && char.IsAsciiDigit(rest[digits]))
+        {
+            digits++;
+        }
+
+        if (digits == 0)
+        {
+            return false;
+        }
+
+        rest = rest[digits..].TrimStart();
+        if (rest.IsEmpty)
+        {
+            return true;
+        }
+
+        if (rest[0] != ',')
+        {
+            return false;
+        }
+
+        rest = rest[1..].TrimStart();
+
+        // Once the message's opening quote has arrived, anything can follow it: the line still
+        // ends in its closing quote.
+        return rest.IsEmpty || rest[0] == '"';
     }
 
     /// <summary>
