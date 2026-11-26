@@ -148,6 +148,21 @@ internal class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 
         var remainingData = data.Slice(offset);
 
+        // The firmware ends its SYSInfoPB? reply with CR LF, so a status refresh during a stream
+        // leaves those two bytes between the reply and the next frame. Read as a frame, the CR is
+        // a length of 13 and the LF a plausible first tag; the parse failed, the resync then took
+        // the LF as a length of 10 and decoded the start of the next frame as a frame of its own,
+        // and from inside that frame a run of digital-channel frames (whose 18-byte length prefix
+        // is also a valid field tag) parsed as one bogus message: about 128 ms of samples lost
+        // per refresh, none of them counted (#1080). No frame starts with CR LF — a 13-byte frame
+        // whose first field is field 1 with a length-delimited wire type, which DaqifiOutMessage
+        // does not have — so the pair is the line ending and is stepped over.
+        if (remainingData.Length >= 2 && remainingData[0] == (byte)'\r' && remainingData[1] == (byte)'\n')
+        {
+            nextOffset = offset + 2;
+            return ProtobufFrameStep.Resync;
+        }
+
         if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
         {
             if (prefixIsMalformed)

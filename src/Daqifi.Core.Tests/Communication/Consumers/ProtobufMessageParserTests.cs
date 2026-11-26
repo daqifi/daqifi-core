@@ -28,6 +28,63 @@ public class ProtobufMessageParserTests
         Assert.Equal(data.Length, consumedBytes);
     }
 
+    // ---- #1080: the device ends its SYSInfoPB? reply with CR LF, mid-stream ----
+
+    /// <summary>
+    /// A status reply as the device sends it while streaming — the frame, then CR LF — followed by
+    /// frames of an analog channel and the digital port, as the bench device streams them at 1 kHz.
+    /// </summary>
+    private static (byte[] Bytes, uint[] FrameTimestamps) StatusThenDigitalFrames(int frameCount)
+    {
+        using var stream = new MemoryStream();
+        var status = new DaqifiOutMessage { MsgTimeStamp = 1_749_063_410, AnalogInPortNum = 16, DigitalPortNum = 16, AnalogOutPortNum = 0 };
+        status.WriteDelimitedTo(stream);
+        stream.Write("\r\n"u8);
+
+        var timestamps = new uint[frameCount];
+        for (var i = 0; i < frameCount; i++)
+        {
+            timestamps[i] = 1_749_105_376u + (uint)(i * 42_000);
+            var frame = new DaqifiOutMessage
+            {
+                MsgTimeStamp = timestamps[i],
+                DigitalData = ByteString.CopyFrom(0, 0),
+                DigitalPortDir = ByteString.CopyFrom(0xFF, 0xFF),
+            };
+            frame.AnalogInData.Add(20);
+            frame.WriteDelimitedTo(stream);
+        }
+
+        return (stream.ToArray(), timestamps);
+    }
+
+    [Theory]
+    [InlineData(1 << 20)]
+    [InlineData(4096)]
+    [InlineData(64)]
+    [InlineData(1)]
+    public void ParseMessages_StatusReplyEndingInCrLfAheadOfDigitalFrames_LosesNoFrame(int readSize)
+    {
+        // The bug: the parser took the CR (13) for a frame length, landed inside the next frame,
+        // and read the run of digital frames after it as one bogus message — about 128 ms of
+        // samples gone per status refresh, with nothing counted.
+        var (bytes, expected) = StatusThenDigitalFrames(200);
+        var parser = new ProtobufMessageParser();
+        var pending = new List<byte>();
+        var frames = new List<DaqifiOutMessage>();
+
+        for (var offset = 0; offset < bytes.Length; offset += readSize)
+        {
+            pending.AddRange(bytes.Skip(offset).Take(readSize));
+            var messages = parser.ParseMessages(pending.ToArray(), out var consumed).ToList();
+            pending.RemoveRange(0, consumed);
+            frames.AddRange(messages.Select(m => m.Data));
+        }
+
+        Assert.Single(frames, f => f.AnalogInPortNum == 16);
+        Assert.Equal(expected, frames.Where(f => f.AnalogInPortNum == 0).Select(f => f.MsgTimeStamp));
+    }
+
     [Fact]
     public void ProtobufMessageParser_ParseMessages_WithInvalidData_ShouldReturnEmpty()
     {
@@ -405,10 +462,11 @@ public class ProtobufMessageParserTests
         Assert.Equal(1234567UL, parsed.DeviceSn);
         Assert.Equal(ProtobufMessageType.Status, ProtobufProtocolHandler.DetectMessageType(parsed));
 
-        // ...and the parser consumed through the end of the frame. The trailing
-        // "DAQIFI>" prompt is left buffered (it looks like the start of another
-        // frame), but the status message has already been delivered.
-        Assert.Equal(echo.Length + frame.Length, consumedBytes);
+        // ...and the parser consumed through the end of the frame and the CR LF the
+        // device ends it with (#1080). The trailing "DAQIFI>" prompt is left buffered
+        // (it looks like the start of another frame), but the status message has
+        // already been delivered.
+        Assert.Equal(echo.Length + frame.Length + 2, consumedBytes);
     }
 
     [Fact]
