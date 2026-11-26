@@ -184,8 +184,9 @@ public class CompositeMessageParserBenchCaptureTests
         Assert.Equal(1234567UL, message.DeviceSn);
         Assert.Equal(16u, message.AnalogInPortNum);
 
-        // The frame is consumed; the trailing CRLF is left for the next read.
-        Assert.Equal(586, consumedBytes);
+        // The frame is consumed, and so is the CRLF that ends it: left for the next read, it
+        // was taken for a frame length when stream frames followed it (#1080).
+        Assert.Equal(588, consumedBytes);
     }
 
     [Fact]
