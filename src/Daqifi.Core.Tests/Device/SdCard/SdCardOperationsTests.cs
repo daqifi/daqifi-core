@@ -3285,6 +3285,11 @@ public partial class SdCardOperationsTests
 
     private class RetryableSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -3425,6 +3430,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private class TestableSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <summary>
         /// No SPI-bus settle wait by default. Every SD operation pays that period twice —
         /// switching the bus to the card and switching it back — and almost nothing in this class
@@ -3678,6 +3688,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private class TestableDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -3845,6 +3860,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private class TestableRetryDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4021,6 +4041,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private sealed class ParkedDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4109,6 +4134,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private sealed class SlowDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4209,6 +4239,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private class TestableNonUsbStreamingDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4233,6 +4268,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private class TestableNonUsbSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4324,6 +4364,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private sealed class ChunkedWifiDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 
@@ -4359,6 +4404,11 @@ public partial class SdCardOperationsTests
     /// </summary>
     private sealed class SilentWifiDownloadDevice : DaqifiStreamingDevice
     {
+        // These doubles answer text exchanges with canned SD replies; echo is reported off
+        // here so a download reaches the commands each test is about (#1083).
+        internal override Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<string>>(["-1"]);
+
         /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
         internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
 

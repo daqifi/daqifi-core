@@ -208,6 +208,12 @@ public static class ScpiMessageProducer
     /// Command: SYSTem:ECHO 1
     /// </remarks>
     public static IOutboundMessage<string> EnableDeviceEcho { get; } = new ScpiMessage("SYSTem:ECHO 1");
+
+    /// <summary>
+    /// Asks whether the device echoes commands. Command: SYSTem:ECHO? (firmware v3.5.0+). Its
+    /// answer is a definite reply, so an exchange that ends with it finishes as soon as it arrives.
+    /// </summary>
+    internal static IOutboundMessage<string> GetDeviceEcho { get; } = new ScpiMessage("SYSTem:ECHO?");
     
     /// <summary>
     /// Creates a command message to enable SD card logging.

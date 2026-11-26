@@ -359,6 +359,11 @@ public interface ISdCardOperations
     /// Thrown when the device still answers "No SD Card Detected" after asking again three times
     /// over about 6 s. Nothing is written to the destination in that case.
     /// </exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device does not confirm its command echo is off after three tries. With
+    /// echo on, the commands the download sends would be read as the start of the file, so the
+    /// download does not start; nothing is written to the destination (#1083).
+    /// </exception>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
     /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
@@ -395,6 +400,11 @@ public interface ISdCardOperations
     /// <exception cref="SdCardNotPresentException">
     /// Thrown when the device still answers "No SD Card Detected" after asking again three times
     /// over about 6 s. Nothing is written to the destination in that case.
+    /// </exception>
+    /// <exception cref="DeviceCommandFailedException">
+    /// Thrown when the device does not confirm its command echo is off after three tries. With
+    /// echo on, the commands the download sends would be read as the start of the file, so the
+    /// download does not start; nothing is written to the destination (#1083).
     /// </exception>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress or does not finish within the
