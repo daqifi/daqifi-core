@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
@@ -2298,6 +2299,11 @@ internal sealed class SdCardOperations
         // transport (#959). Below it the queue never says why, so it is not read.
         var readsOpenFailure = _host.Supports(DeviceFeature.SdGetOpenFailureError);
 
+        // Whether this download switched the bus to the SD card, and so has a switch to undo. One
+        // that stopped before it, such as when echo could not be confirmed off, leaves the
+        // interface as the caller had it.
+        var busSwitched = false;
+
         try
         {
             await RunWithHardDeadlineAsync(
@@ -2380,6 +2386,7 @@ internal sealed class SdCardOperations
                     // the bus already prepared by the first attempt.
                     if (attempt == 0)
                     {
+                        busSwitched = true;
                         PrepareSdInterface();
                     }
 
@@ -2472,13 +2479,16 @@ internal sealed class SdCardOperations
             // reconnect or power-cycle, and both re-establish the interface anyway (#399/#401).
             if (!workerAbandoned && _host.IsConnected)
             {
-                try
+                if (busSwitched)
                 {
-                    PrepareWifiInterface();
-                }
-                catch
-                {
-                    // Best-effort restoration; the device may have disconnected
+                    try
+                    {
+                        PrepareWifiInterface();
+                    }
+                    catch
+                    {
+                        // Best-effort restoration; the device may have disconnected
+                    }
                 }
 
                 // Same "still owns the transport" reasoning as the LAN restore above applies to
@@ -2625,8 +2635,12 @@ internal sealed class SdCardOperations
             {
                 lastAnswer = await _host.TurnDeviceEchoOffAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException and not DeviceNotConnectedException)
+            catch (Exception ex) when (ex is not OperationCanceledException
+                and not DeviceNotConnectedException
+                and not TransportNotConnectedException)
             {
+                // A closed link is the caller's to see as it is; anything else this connection can
+                // still recover from is asked again.
                 lastAnswer = Array.Empty<string>();
                 continue;
             }
@@ -2637,9 +2651,11 @@ internal sealed class SdCardOperations
             }
         }
 
-        throw new DeviceCommandFailedException(
-            ScpiMessageProducer.DisableDeviceEcho.Data,
-            lastAnswer.Count == 0 ? null : string.Join("\n", lastAnswer));
+        var command = ScpiMessageProducer.DisableDeviceEcho.Data;
+        var response = lastAnswer.Count == 0 ? null : string.Join("\n", lastAnswer);
+        throw EchoSetting(lastAnswer) is "0" or "1"
+            ? DeviceCommandFailedException.Contradicted(command, "still reported its command echo on", response!)
+            : DeviceCommandFailedException.Unconfirmed(command, response);
     }
 
     /// <summary>
@@ -2647,7 +2663,10 @@ internal sealed class SdCardOperations
     /// bare <c>-1</c>, <c>0</c> or <c>1</c>, possibly behind the prompt; the echo of the command
     /// that preceded it is a whole command line and never matches.
     /// </summary>
-    internal static bool EchoIsOff(IReadOnlyList<string> answer)
+    internal static bool EchoIsOff(IReadOnlyList<string> answer) => EchoSetting(answer) == "-1";
+
+    /// <summary>The last echo setting in an answer to <c>SYSTem:ECHO?</c>, or <c>null</c> for none.</summary>
+    private static string? EchoSetting(IReadOnlyList<string> answer)
     {
         string? setting = null;
         foreach (var raw in answer)
@@ -2664,7 +2683,7 @@ internal sealed class SdCardOperations
             }
         }
 
-        return setting == "-1";
+        return setting;
     }
 
     /// <summary>

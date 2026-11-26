@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
@@ -2034,9 +2035,48 @@ public partial class SdCardOperationsCollaboratorTests
         var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
 
         Assert.Equal("SYSTem:ECHO -1", ex.Command);
+        Assert.Contains("echo on", ex.Message, StringComparison.Ordinal);
         Assert.Equal(3, host.Calls.Count(c => c == "echo-off"));
         Assert.Empty(destination.ToArray());
         Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:SYSTem:STORage:SD:GET", StringComparison.Ordinal));
+
+        // Review on #1084: the download never switched the bus, so it has nothing to switch back.
+        Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:SYSTem:STORage:SD:ENAble", StringComparison.Ordinal)
+            || c.StartsWith("send:SYSTem:COMMunicate:LAN", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EchoNeverAnswered_SaysItWasNotConfirmed()
+    {
+        // Review on #1084: silence is not a refusal. The message says what this step asked about.
+        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker) };
+        for (var i = 0; i < 3; i++)
+        {
+            host.EchoOffReplies.Enqueue(() => []);
+        }
+
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
+
+        Assert.Contains("did not confirm 'SYSTem:ECHO -1'", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("error queue", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_TransportClosedDuringTheEchoCheck_ReportsTheClosedTransport()
+    {
+        // Review on #1084: a caller that reconnects on a closed transport must see that, not an
+        // echo-command failure after three pointless retries.
+        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(EofMarker) };
+        host.EchoOffReplies.Enqueue(() => throw new TransportNotConnectedException("port closed"));
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await Assert.ThrowsAsync<TransportNotConnectedException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
+
+        Assert.Equal(1, host.Calls.Count(c => c == "echo-off"));
     }
 
     [Theory]
