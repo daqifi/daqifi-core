@@ -828,12 +828,23 @@ internal sealed class SdCardFileReceiver
             var newline = text.IndexOf('\n', lineStart);
             if (newline < 0)
             {
-                if (!seenNoCardLine && IsEchoSoFar(text.AsSpan(lineStart).Trim(), echo))
+                // An unfinished line is judged by what it can still become: the echo (framing),
+                // the answer line, or after it the error line. One that can become none of them —
+                // binary content, say — settles the opening as content now rather than at a
+                // newline that may never come before the deadline.
+                var partial = text.AsSpan(lineStart).Trim();
+                if (seenNoCardLine)
                 {
-                    framingBytes = text.Length;
+                    return (IsErrorLineSoFar(partial) ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Content, framingBytes);
                 }
 
-                return (seenNoCardLine ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Undecided, framingBytes);
+                if (IsEchoSoFar(partial, echo))
+                {
+                    framingBytes = text.Length;
+                    return (ReplyHeadKind.Undecided, framingBytes);
+                }
+
+                return (IsAnswerLineSoFar(partial) ? ReplyHeadKind.Undecided : ReplyHeadKind.Content, framingBytes);
             }
 
             var line = text.AsSpan(lineStart, newline - lineStart).Trim();
@@ -888,6 +899,35 @@ internal sealed class SdCardFileReceiver
         }
 
         return echo.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Whether an unfinished line can still become the no-card line, prompt or not.</summary>
+    private static bool IsAnswerLineSoFar(ReadOnlySpan<char> partial)
+        => NoSdCardAnswerLine.AsSpan().StartsWith(WithoutPrompt(partial), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether an unfinished line can still become a SCPI error line, prompt or not.</summary>
+    private static bool IsErrorLineSoFar(ReadOnlySpan<char> partial)
+    {
+        const string ErrorLinePrefix = "**ERROR:";
+        partial = WithoutPrompt(partial);
+        return ErrorLinePrefix.AsSpan().StartsWith(partial, StringComparison.Ordinal)
+            || partial.StartsWith(ErrorLinePrefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The line with a leading prompt removed; a line that is still only part of the prompt is
+    /// left empty, since it can become anything that follows one.
+    /// </summary>
+    private static ReadOnlySpan<char> WithoutPrompt(ReadOnlySpan<char> partial)
+    {
+        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadOnlySpan<char>.Empty;
+        }
+
+        return partial.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase)
+            ? partial[PromptPrefix.Length..].TrimStart()
+            : partial;
     }
 
     private static async Task ReleaseHeldContentIfStillLiveAsync(

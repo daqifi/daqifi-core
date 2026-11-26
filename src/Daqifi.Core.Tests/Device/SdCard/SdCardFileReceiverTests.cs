@@ -259,6 +259,28 @@ public class SdCardFileReceiverTests
         Assert.Equal(head[..(head.Length - TrailingWindow)], destination.ToArray());
     }
 
+    [Theory]
+    [InlineData("nul")]
+    [InlineData("after-answer-line")]
+    public async Task ReceiveAsync_BinaryOpeningThenTheDeadline_LeavesTheReceivedBytesInTheStream(string shape)
+    {
+        // Review on #1078: an unfinished opening that can no longer become the echo, the answer
+        // line or its error line is file content at once, newline or not.
+        var head = shape == "nul"
+            ? new byte[72]
+            : Combine(Encoding.ASCII.GetBytes("Error !! No SD Card Detected\r\n"), new byte[42]);
+        using var source = new ThenSilentStream(head);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destination, "data.bin", timeout: TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+        Assert.Equal(head.Length - TrailingWindow, ex.BytesReceived);
+        Assert.Equal(ex.BytesReceived, destination.Length);
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {
