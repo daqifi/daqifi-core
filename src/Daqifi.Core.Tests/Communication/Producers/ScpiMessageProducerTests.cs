@@ -121,6 +121,7 @@ public class ScpiMessageProducerTests
         { () => ScpiMessageProducer.GetSystemLog, "SYSTem:LOG?" },
         { () => ScpiMessageProducer.ClearSystemLog, "SYSTem:LOG:CLEar" },
         { () => ScpiMessageProducer.GetCommandHistory, "SYSTem:LOG:CMDHistory?" },
+        { () => ScpiMessageProducer.GetDeviceEcho, "SYSTem:ECHO?" },
         { () => ScpiMessageProducer.TestSystemLog, "SYSTem:LOG:TEST" },
         { () => ScpiMessageProducer.GetSystemErrorCount, "SYSTem:ERRor:COUNt?" },
         { () => ScpiMessageProducer.GetStreamStats, "SYSTem:STReam:STATS?" },

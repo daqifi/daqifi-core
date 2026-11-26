@@ -1933,6 +1933,40 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"log.bin\""));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DownloadSdCardFileAsync_TurnsEchoOffBeforeAnythingElseIsSent(bool readsOpenFailure)
+    {
+        // #1083: with echo on, every command the download sends was repeated into the raw capture
+        // ahead of the file. Echo goes off first, on both firmware paths, and only once.
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, Concat(payload, EofMarker)),
+        };
+        if (readsOpenFailure)
+        {
+            host.SupportedFeatures.Add(DeviceFeature.SdGetOpenFailureError);
+        }
+
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await ops.DownloadSdCardFileAsync("log.bin", destination);
+
+        // Before the error-queue read and the capture, and so before every SD command; only the
+        // defensive stream stop, which no download reads a reply to, goes out ahead of it.
+        var calls = host.Calls.ToList();
+        var echoOff = calls.IndexOf("echo-off");
+        var trace = string.Join(" | ", calls);
+        Assert.True(calls.Count(c => c == "echo-off") == 1, trace);
+        Assert.True(echoOff >= 0 && echoOff < calls.IndexOf("rawcapture"), trace);
+        Assert.True(!readsOpenFailure || echoOff < calls.IndexOf("drain"), trace);
+        Assert.DoesNotContain(calls.Take(echoOff), c => c.StartsWith("send:SYSTem:STORage", StringComparison.Ordinal) || c.StartsWith("send:SYSTem:COMM", StringComparison.Ordinal));
+        Assert.Equal(payload, destination.ToArray());
+    }
+
     [Fact]
     public async Task DownloadSdCardFileAsync_NoCardThenTheFile_ProgressCountsOnlyTheFile()
     {
@@ -2905,6 +2939,12 @@ public partial class SdCardOperationsCollaboratorTests
             {
                 EnqueueResponse(lines);
             }
+        }
+
+        public Task TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+        {
+            Record("echo-off");
+            return Task.CompletedTask;
         }
 
         private void Record(string call)

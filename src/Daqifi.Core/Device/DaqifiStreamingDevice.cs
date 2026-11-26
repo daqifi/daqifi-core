@@ -1818,6 +1818,42 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IDeviceIden
 
     TimeSpan ISdCardOperationHost.SdNoCardRecheckDelay => SdNoCardRecheckDelay;
 
+    Task ISdCardOperationHost.TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+        => TurnDeviceEchoOffAsync(cancellationToken);
+
+    /// <inheritdoc cref="ISdCardOperationHost.TurnDeviceEchoOffAsync"/>
+    /// <remarks>
+    /// One text exchange: the echo-off command, then the echo query, whose answer ends the
+    /// exchange promptly. With echo on, the echo of the first command arrives in the same
+    /// exchange and is dropped with it; the query itself is no longer echoed. A failure is not
+    /// the download's to report: with echo already off, which initialization sets, the download
+    /// is unaffected, so it goes on and reports its own outcome.
+    /// </remarks>
+    internal virtual async Task TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ExecuteTextCommandAsync(
+                () =>
+                {
+                    Send(ScpiMessageProducer.DisableDeviceEcho);
+                    Send(ScpiMessageProducer.GetDeviceEcho);
+                },
+                completionTimeout: EchoOffCompletionTimeout,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not DeviceNotConnectedException)
+        {
+            // Best effort; see remarks.
+        }
+    }
+
+    /// <summary>
+    /// How long the device must be quiet after the echo query's answer before the exchange that
+    /// turns echo off ends. The answer is one short line, so this only covers a trailing prompt.
+    /// </summary>
+    private static readonly TimeSpan EchoOffCompletionTimeout = TimeSpan.FromMilliseconds(100);
+
     /// <inheritdoc />
     TimeProvider ISdCardOperationHost.TimeProvider => Clock;
 

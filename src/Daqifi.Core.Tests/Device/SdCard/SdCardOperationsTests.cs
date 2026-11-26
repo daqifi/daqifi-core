@@ -2545,7 +2545,7 @@ public partial class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_OverUsb_SendsTheGetBetweenTheBusSwitchAndItsRestore()
     {
-        // The defensive stop even though nothing is streaming (#118), the bus switch, the GET,
+        // The defensive stop even though nothing is streaming (#118), echo off (#1083), the bus switch, the GET,
         // and the restore once the transfer completes, in that order. The restore here is the
         // complement of DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_IsAbandonedWithoutARestore:
         // skipping it for an abandoned transfer must not become "the download never restores".
@@ -2561,6 +2561,8 @@ public partial class SdCardOperationsTests
             new[]
             {
                 "SYSTem:StopStreamData",
+                "SYSTem:ECHO -1",
+                "SYSTem:ECHO?",
                 "SYSTem:COMMunicate:LAN:ENAbled 0",
                 "SYSTem:STORage:SD:ENAble 1",
                 "SYSTem:STORage:SD:GET \"data.bin\"",

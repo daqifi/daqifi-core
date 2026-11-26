@@ -2303,7 +2303,7 @@ internal sealed class SdCardOperations
             await RunWithHardDeadlineAsync(
                 token => readsOpenFailure
                     ? _host.RunExclusiveAsync(DownloadReadingOpenFailureAsync, token)
-                    : ReceiveSdFileAsync(attempt: 0, token),
+                    : DownloadAsync(token),
                 budget,
                 fileName,
                 () => received.Bytes,
@@ -2313,8 +2313,18 @@ internal sealed class SdCardOperations
             // The v3.9.0+ download. All of it runs in one exclusive block, so no other caller's
             // command lands between the GET and the reads of the error queue around it: a query
             // could take the GET's error off the queue, and a failing command could add its own.
+            async Task DownloadAsync(CancellationToken token)
+            {
+                await _host.TurnDeviceEchoOffAsync(token).ConfigureAwait(false);
+                await ReceiveSdFileAsync(attempt: 0, token).ConfigureAwait(false);
+            }
+
             async Task DownloadReadingOpenFailureAsync(CancellationToken token)
             {
+                // Echo first (#1083): with it on, every command below would be repeated into the
+                // raw capture ahead of the file.
+                await _host.TurnDeviceEchoOffAsync(token).ConfigureAwait(false);
+
                 // Empty the queue before the GET, so what it holds afterwards came from this
                 // download and not from an earlier command (a stale -256 would turn a legitimately
                 // empty file into "not found"). Read with SYSTem:ERRor? rather than cleared with

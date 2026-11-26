@@ -104,6 +104,14 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     TimeSpan SdNoCardRecheckDelay { get; }
 
     /// <summary>
+    /// Turns the device's command echo off ahead of an SD download, so nothing the download sends
+    /// is repeated into the raw capture it reads the file from (#1083). Whatever the old setting
+    /// echoed is read and dropped as text before the capture starts. Best effort; a test double
+    /// does nothing.
+    /// </summary>
+    Task TurnDeviceEchoOffAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
     /// The clock the SD operations measure their budgets and settle delays on (issue #637).
     /// </summary>
     /// <remarks>
