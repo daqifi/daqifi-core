@@ -2301,9 +2301,10 @@ internal sealed class SdCardOperations
         try
         {
             await RunWithHardDeadlineAsync(
-                token => readsOpenFailure
-                    ? _host.RunExclusiveAsync(DownloadReadingOpenFailureAsync, token)
-                    : DownloadAsync(token),
+                // One operation from echo-off to the end of the capture on both paths, so no other
+                // caller's command (an echo-on among them) lands in between (#1083).
+                token => _host.RunExclusiveAsync(
+                    readsOpenFailure ? DownloadReadingOpenFailureAsync : DownloadAsync, token),
                 budget,
                 fileName,
                 () => received.Bytes,
@@ -2315,7 +2316,7 @@ internal sealed class SdCardOperations
             // could take the GET's error off the queue, and a failing command could add its own.
             async Task DownloadAsync(CancellationToken token)
             {
-                await _host.TurnDeviceEchoOffAsync(token).ConfigureAwait(false);
+                await EnsureDeviceEchoOffAsync(token).ConfigureAwait(false);
                 await ReceiveSdFileAsync(attempt: 0, token).ConfigureAwait(false);
             }
 
@@ -2323,7 +2324,7 @@ internal sealed class SdCardOperations
             {
                 // Echo first (#1083): with it on, every command below would be repeated into the
                 // raw capture ahead of the file.
-                await _host.TurnDeviceEchoOffAsync(token).ConfigureAwait(false);
+                await EnsureDeviceEchoOffAsync(token).ConfigureAwait(false);
 
                 // Empty the queue before the GET, so what it holds afterwards came from this
                 // download and not from an earlier command (a stale -256 would turn a legitimately
@@ -2598,6 +2599,72 @@ internal sealed class SdCardOperations
         {
             return null;
         }
+    }
+
+    /// <summary>How many times a download asks the device to turn echo off before giving up.</summary>
+    private const int EchoOffAttempts = 3;
+
+    /// <summary>
+    /// Turns the device's echo off and confirms it from the device's own answer, before a
+    /// download sends anything it reads a file back from (#1083).
+    /// </summary>
+    /// <remarks>
+    /// With echo on, the bus-switch and GET commands are repeated into the raw capture and read as
+    /// the start of the file, and the download reports success. So the answer to the echo query
+    /// has to say off (<c>-1</c>; the firmware echoes for both <c>0</c> and <c>1</c>). A missing
+    /// or contrary answer, or a failed exchange, is asked again; after
+    /// <see cref="EchoOffAttempts"/> the download fails before anything reaches the destination.
+    /// </remarks>
+    /// <exception cref="DeviceCommandFailedException">Echo was not confirmed off.</exception>
+    private async Task EnsureDeviceEchoOffAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> lastAnswer = Array.Empty<string>();
+        for (var attempt = 0; attempt < EchoOffAttempts; attempt++)
+        {
+            try
+            {
+                lastAnswer = await _host.TurnDeviceEchoOffAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not DeviceNotConnectedException)
+            {
+                lastAnswer = Array.Empty<string>();
+                continue;
+            }
+
+            if (EchoIsOff(lastAnswer))
+            {
+                return;
+            }
+        }
+
+        throw new DeviceCommandFailedException(
+            ScpiMessageProducer.DisableDeviceEcho.Data,
+            lastAnswer.Count == 0 ? null : string.Join("\n", lastAnswer));
+    }
+
+    /// <summary>
+    /// Whether the last echo setting in an answer to <c>SYSTem:ECHO?</c> is off. The answer is a
+    /// bare <c>-1</c>, <c>0</c> or <c>1</c>, possibly behind the prompt; the echo of the command
+    /// that preceded it is a whole command line and never matches.
+    /// </summary>
+    internal static bool EchoIsOff(IReadOnlyList<string> answer)
+    {
+        string? setting = null;
+        foreach (var raw in answer)
+        {
+            var line = raw.Trim();
+            if (line.StartsWith("DAQIFI>", StringComparison.OrdinalIgnoreCase))
+            {
+                line = line["DAQIFI>".Length..].Trim();
+            }
+
+            if (line is "-1" or "0" or "1")
+            {
+                setting = line;
+            }
+        }
+
+        return setting == "-1";
     }
 
     /// <summary>

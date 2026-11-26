@@ -1965,7 +1965,91 @@ public partial class SdCardOperationsCollaboratorTests
         Assert.True(!readsOpenFailure || echoOff < calls.IndexOf("drain"), trace);
         Assert.DoesNotContain(calls.Take(echoOff), c => c.StartsWith("send:SYSTem:STORage", StringComparison.Ordinal) || c.StartsWith("send:SYSTem:COMM", StringComparison.Ordinal));
         Assert.Equal(payload, destination.ToArray());
+
+        // Review on #1084: echo-off and the capture are one operation on both paths, so no other
+        // caller's echo-on can land between them.
+        var begin = calls.IndexOf("exclusive:begin");
+        Assert.True(begin >= 0 && begin < echoOff && calls.IndexOf("exclusive:end") > calls.IndexOf("rawcapture"), trace);
     }
+
+    public static TheoryData<string, IReadOnlyList<string>[]> EchoNotConfirmedFirst => new()
+    {
+        // The reviewer's case: the disable write failed, the query still went out, echo is on.
+        { "query says on", [["1"], ["-1"]] },
+        { "query says 0 (also echoes)", [["0"], ["-1"]] },
+        { "no answer", [[], ["-1"]] },
+    };
+
+    [Theory]
+    [MemberData(nameof(EchoNotConfirmedFirst))]
+    public async Task DownloadSdCardFileAsync_EchoNotConfirmedOff_AsksAgainBeforeTheCapture(string why, IReadOnlyList<string>[] answers)
+    {
+        // Review on #1084: the echo query's answer decides whether the capture may start.
+        _ = why;
+        var payload = Encoding.ASCII.GetBytes("payload");
+        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)) };
+        foreach (var answer in answers)
+        {
+            host.EchoOffReplies.Enqueue(() => answer);
+        }
+
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await ops.DownloadSdCardFileAsync("log.bin", destination);
+
+        Assert.Equal(2, host.Calls.Count(c => c == "echo-off"));
+        Assert.Equal(payload, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EchoExchangeFails_AsksAgain()
+    {
+        var payload = Encoding.ASCII.GetBytes("payload");
+        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)) };
+        host.EchoOffReplies.Enqueue(() => throw new TimeoutException("write timed out"));
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await ops.DownloadSdCardFileAsync("log.bin", destination);
+
+        Assert.Equal(2, host.Calls.Count(c => c == "echo-off"));
+        Assert.Equal(payload, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_EchoNeverConfirmedOff_FailsWithoutTouchingTheDestination()
+    {
+        // Review on #1084: rather than report success with command text in the file, the download
+        // fails before it sends anything it would read a file back from.
+        var host = new FakeHost { RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(Encoding.ASCII.GetBytes("payload"), EofMarker)) };
+        for (var i = 0; i < 3; i++)
+        {
+            host.EchoOffReplies.Enqueue(() => ["1"]);
+        }
+
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(() => ops.DownloadSdCardFileAsync("log.bin", destination));
+
+        Assert.Equal("SYSTem:ECHO -1", ex.Command);
+        Assert.Equal(3, host.Calls.Count(c => c == "echo-off"));
+        Assert.Empty(destination.ToArray());
+        Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:SYSTem:STORage:SD:GET", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(new[] { "-1" }, true)]
+    [InlineData(new[] { "DAQIFI> -1" }, true)]
+    [InlineData(new[] { "SYSTem:ECHO -1", "DAQIFI> -1" }, true)]
+    [InlineData(new[] { "SYSTem:ECHO -1" }, false)]
+    [InlineData(new[] { "1" }, false)]
+    [InlineData(new[] { "0" }, false)]
+    [InlineData(new[] { "-1", "1" }, false)]
+    [InlineData(new string[0], false)]
+    public void EchoIsOff_ReadsTheLastSettingInTheAnswer(string[] answer, bool off)
+        => Assert.Equal(off, SdCardOperations.EchoIsOff(answer));
 
     [Fact]
     public async Task DownloadSdCardFileAsync_NoCardThenTheFile_ProgressCountsOnlyTheFile()
@@ -2166,7 +2250,8 @@ public partial class SdCardOperationsCollaboratorTests
     public async Task DownloadSdCardFileAsync_EmptyGetBelowV390_DoesNotReadTheErrorQueue()
     {
         // Older firmware queues nothing for an open failure, so the queue cannot answer and the
-        // download puts exactly the same commands on the wire as before, in one capture.
+        // download puts exactly the same SD commands on the wire as before, in one capture. (It
+        // now runs as one operation with its echo-off step, #1083.)
         var host = HostWithEmptyGetOnV390("-256,\"File name not found\"");
         host.SupportedFeatures.Clear();
         var ops = new SdCardOperations(host);
@@ -2176,7 +2261,6 @@ public partial class SdCardOperationsCollaboratorTests
             () => ops.DownloadSdCardFileAsync("missing.bin", destination));
 
         Assert.DoesNotContain("drain", host.Calls);
-        Assert.DoesNotContain("exclusive:begin", host.Calls);
         Assert.Equal(1, host.RawCaptureCount);
         Assert.Equal(2, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"missing.bin\""));
     }
@@ -2941,10 +3025,13 @@ public partial class SdCardOperationsCollaboratorTests
             }
         }
 
-        public Task TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
+        /// <summary>What each echo-off exchange answers, in turn; echo off once they run out.</summary>
+        public Queue<Func<IReadOnlyList<string>>> EchoOffReplies { get; } = new();
+
+        public Task<IReadOnlyList<string>> TurnDeviceEchoOffAsync(CancellationToken cancellationToken)
         {
             Record("echo-off");
-            return Task.CompletedTask;
+            return Task.FromResult(EchoOffReplies.TryDequeue(out var reply) ? reply() : (IReadOnlyList<string>)["-1"]);
         }
 
         private void Record(string call)

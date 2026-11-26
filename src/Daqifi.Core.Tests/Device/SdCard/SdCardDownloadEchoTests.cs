@@ -26,15 +26,22 @@ public class SdCardDownloadEchoTests
     }
 
     [Fact]
-    public async Task TurnDeviceEchoOffAsync_WhenTheExchangeFails_LetsTheDownloadGoOn()
+    public async Task TurnDeviceEchoOffAsync_ReturnsTheAnswer_ForTheDownloadToJudge()
     {
-        // With echo already off, which initialization sets, a failed exchange changes nothing
-        // for the download; it reports its own outcome.
+        var device = new ExchangeRecordingDevice();
+
+        var answer = await device.TurnDeviceEchoOffAsync(CancellationToken.None);
+
+        Assert.Equal(["-1"], answer);
+    }
+
+    [Fact]
+    public async Task TurnDeviceEchoOffAsync_WhenTheExchangeFails_Throws()
+    {
+        // The download asks again and, failing that, refuses to start the capture.
         var device = new ExchangeRecordingDevice { Failure = new TimeoutException("no answer") };
 
-        var ex = await Record.ExceptionAsync(() => device.TurnDeviceEchoOffAsync(CancellationToken.None));
-
-        Assert.Null(ex);
+        await Assert.ThrowsAsync<TimeoutException>(() => device.TurnDeviceEchoOffAsync(CancellationToken.None));
     }
 
     [Fact]
