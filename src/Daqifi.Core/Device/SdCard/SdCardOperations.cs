@@ -2396,10 +2396,7 @@ internal sealed class SdCardOperations
                     var receiver = new SdCardFileReceiver(
                         stream,
                         zeroLengthReadMeansClosed: !_host.IsUsbConnection,
-                        idleTimeout: _host.SdCardTransferIdleTimeout)
-                    {
-                        DeviceEchoes = _host.DeviceEchoes == true,
-                    };
+                        idleTimeout: _host.SdCardTransferIdleTimeout);
                     var listedFileSizeBytes = TryGetListedFileSize(fileName);
                     long bytesReceived;
                     var retries = 0;

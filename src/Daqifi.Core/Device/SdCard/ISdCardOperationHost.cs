@@ -36,12 +36,6 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     /// </remarks>
     bool IsUsbConnection { get; }
 
-    /// <summary>
-    /// Whether the device echoes commands, as far as Core knows (see
-    /// <see cref="DaqifiDevice.DeviceEchoes"/>); <c>null</c> when it does not.
-    /// </summary>
-    bool? DeviceEchoes => null;
-
     /// <inheritdoc cref="DaqifiStreamingDevice.IsLoggingToSdCard"/>
     /// <remarks>
     /// Read from the device's one session value, so it cannot disagree with

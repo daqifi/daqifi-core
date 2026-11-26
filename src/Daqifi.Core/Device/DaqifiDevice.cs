@@ -2222,40 +2222,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </exception>
     public virtual void Send<T>(IOutboundMessage<T> message) => SendOrHoldBack(message, null);
 
-    private static readonly System.Text.RegularExpressions.Regex EchoCommand = new(
-        @"^\s*SYST(?:EM)?:ECHO\s+(?<value>-?\d+)\s*$",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    // 0 unknown, 1 on, 2 off. An int so a send on one thread and a download on another agree.
-    private int _deviceEchoes;
-
-    /// <summary>
-    /// Whether the device repeats each command back, as far as the echo commands sent to it say:
-    /// <c>false</c> after <see cref="ScpiMessageProducer.DisableDeviceEcho"/> (which initialization
-    /// sends), <c>true</c> after <see cref="ScpiMessageProducer.EnableDeviceEcho"/>, and <c>null</c>
-    /// before either. An SD download takes the echo of its GET out of the file only when this is
-    /// <c>true</c>; otherwise a first line spelled like the command is the file's own (#1078).
-    /// </summary>
-    internal bool? DeviceEchoes => Volatile.Read(ref _deviceEchoes) switch
-    {
-        1 => true,
-        2 => false,
-        _ => null,
-    };
-
-    private void NoteEchoCommand<T>(IOutboundMessage<T> message)
-    {
-        if (message is not IOutboundMessage<string> text
-            || EchoCommand.Match(text.Data) is not { Success: true } match)
-        {
-            return;
-        }
-
-        var on = int.TryParse(match.Groups["value"].ValueSpan, System.Globalization.NumberStyles.AllowLeadingSign,
-            System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0;
-        Volatile.Write(ref _deviceEchoes, on ? 1 : 2);
-    }
-
     /// <summary>
     /// The body of <see cref="Send{T}"/>.
     /// </summary>
@@ -2270,8 +2236,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // deferred, it would instead fail on a background flush where the exception is logged
         // and dropped, turning a caller's bug into a silently missing command.
         ArgumentNullException.ThrowIfNull(message);
-
-        NoteEchoCommand(message);
 
         // Remember what a running exchange sent last, so the engine can recognise the reply that
         // ends it (issue #667 item 4). Guarded by the in-exchange flag, which is AsyncLocal: a

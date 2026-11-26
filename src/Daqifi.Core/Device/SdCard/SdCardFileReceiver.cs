@@ -173,13 +173,6 @@ internal sealed class SdCardFileReceiver
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private readonly Stream _sourceStream;
-
-    /// <summary>
-    /// Whether the device echoes commands. Only then is a line that is exactly the GET as it went
-    /// out the device repeating it, and taken out of the file; with echo off, or unknown, such a
-    /// line is the file's own first line and is kept, as it always was (#1078).
-    /// </summary>
-    internal bool DeviceEchoes { get; init; }
     private readonly int _bufferSize;
     private readonly bool _zeroLengthReadMeansClosed;
     private readonly TimeSpan? _idleTimeout;
@@ -490,11 +483,8 @@ internal sealed class SdCardFileReceiver
                 return;
             }
 
-            var echo = DeviceEchoes
-                ? ClassifyReplyHead(probed.GetBuffer().AsSpan(0, (int)probed.Length), expectedEcho).EchoBytes
-                : 0;
-            var content = (int)Math.Max(0, probed.Length - echo - MaxMarkerLength);
-            await heldContent.WriteAsync(probed.GetBuffer(), echo, content, token).ConfigureAwait(false);
+            var content = (int)Math.Max(0, probed.Length - MaxMarkerLength);
+            await heldContent.WriteAsync(probed.GetBuffer(), 0, content, token).ConfigureAwait(false);
             totalBytesReceived += content;
         }
 
@@ -580,7 +570,7 @@ internal sealed class SdCardFileReceiver
                 {
                     replyHead.Write(buffer, 0, bytesRead);
 
-                    var (kind, framingBytes, echoBytes) = ClassifyReplyHead(
+                    var (kind, framingBytes) = ClassifyReplyHead(
                         replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length), expectedEcho);
 
                     // Bounded however the bytes arrive: past the limit after the framing, or past
@@ -615,16 +605,6 @@ internal sealed class SdCardFileReceiver
                         // they are not scanned for a marker (one can be spelled inside the echoed
                         // file name), not written, and not reported as progress (#1078).
                         continue;
-                    }
-
-                    // The echoed GET, and anything ahead of it, is the device repeating Core's
-                    // command: not file data, so it is neither written, counted against the
-                    // listed size, nor scanned for a marker (one can be spelled in the file name).
-                    // Blank lines after it are kept: they can be the file's own.
-                    if (DeviceEchoes && echoBytes > 0)
-                    {
-                        data = data[echoBytes..];
-                        count = data.Length;
                     }
                 }
 
@@ -880,13 +860,13 @@ internal sealed class SdCardFileReceiver
     /// </remarks>
     /// <param name="head">The bytes the reply has opened with so far.</param>
     /// <param name="echo">The GET as it went out (see <see cref="ExpectedEcho"/>).</param>
-    internal static (ReplyHeadKind Kind, int FramingBytes, int EchoBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string echo)
+    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string echo)
     {
         var text = Encoding.ASCII.GetString(head);
         var seenNoCardLine = false;
         var lineStart = 0;
         var framingBytes = 0;
-        var echoBytes = 0;
+        var echoSeen = false;
 
         while (true)
         {
@@ -900,16 +880,16 @@ internal sealed class SdCardFileReceiver
                 var partial = text.AsSpan(lineStart).Trim();
                 if (seenNoCardLine)
                 {
-                    return (IsErrorLineSoFar(partial) ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Content, framingBytes, echoBytes);
+                    return (IsErrorLineSoFar(partial) ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Content, framingBytes);
                 }
 
-                if (echoBytes == 0 && IsEchoSoFar(text.AsSpan(lineStart), echo))
+                if (!echoSeen && IsEchoSoFar(text.AsSpan(lineStart), echo))
                 {
                     framingBytes = text.Length;
-                    return (ReplyHeadKind.Undecided, framingBytes, echoBytes);
+                    return (ReplyHeadKind.Undecided, framingBytes);
                 }
 
-                return (IsAnswerLineSoFar(partial) ? ReplyHeadKind.Undecided : ReplyHeadKind.Content, framingBytes, echoBytes);
+                return (IsAnswerLineSoFar(partial) ? ReplyHeadKind.Undecided : ReplyHeadKind.Content, framingBytes);
             }
 
             var rawLine = text.AsSpan(lineStart, newline - lineStart);
@@ -934,7 +914,7 @@ internal sealed class SdCardFileReceiver
                 // and then its next line settles that it is content.
                 return (ScpiErrorLine.IsMatch(line.ToString()) && OnlyPromptsAndBlankLinesFrom(text, lineStart)
                     ? ReplyHeadKind.NoCardAnswer
-                    : ReplyHeadKind.Content, framingBytes, echoBytes);
+                    : ReplyHeadKind.Content, framingBytes);
             }
 
             if (line.IsEmpty)
@@ -946,10 +926,10 @@ internal sealed class SdCardFileReceiver
             // One GET, one echo: the first line that is exactly the bytes that went out, behind the
             // prompt. The same line again, or one that differs in case, spacing or line ending, is
             // the file's own.
-            if (echoBytes == 0 && IsEchoLine(rawLine, echo))
+            if (!echoSeen && IsEchoLine(rawLine, echo))
             {
                 framingBytes = lineStart;
-                echoBytes = lineStart;
+                echoSeen = true;
                 continue;
             }
 
@@ -959,7 +939,7 @@ internal sealed class SdCardFileReceiver
                 continue;
             }
 
-            return (ReplyHeadKind.Content, framingBytes, echoBytes);
+            return (ReplyHeadKind.Content, framingBytes);
         }
     }
 
