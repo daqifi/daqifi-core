@@ -250,6 +250,39 @@ public class ChannelCommandDroppedTests
     }
 
     [Fact]
+    public async Task TheOperationOwner_EnablesAheadOfAStartHeldBehindIt()
+    {
+        // Review on #1081: the owner's command goes out before another caller's held-back start,
+        // so the device takes it, and refusing it would block a valid configuration.
+        using var device = await HeldDevice.CreateAsync();
+        Exception? thrown = null;
+
+        await device.WhileHeldAsync(
+            device.StartStreaming,
+            inOperation: () => thrown = Record.Exception(() => device.EnableChannel(device.Analog(1))));
+
+        Assert.Null(thrown);
+        Assert.Equal("AI0 AI1", device.Enabled);
+    }
+
+    [Fact]
+    public async Task TheOperationOwner_IsRefusedWhileAStopIsHeldBehindIt()
+    {
+        // Review on #1081: the device is still acquiring when the owner's command goes out, ahead
+        // of another caller's held-back stop, so it refuses it; the owner must hear that.
+        using var device = await HeldDevice.CreateAsync();
+        device.StartStreaming();
+        Exception? thrown = null;
+
+        await device.WhileHeldAsync(
+            device.StopStreaming,
+            inOperation: () => thrown = Record.Exception(() => device.EnableChannel(device.Analog(1))));
+
+        Assert.IsType<InvalidOperationException>(thrown);
+        Assert.Equal("AI0", device.Enabled);
+    }
+
+    [Fact]
     public async Task RawAdcMask_WhileStreaming_GoesOutButIsNotRecorded()
     {
         // A raw command is still the caller's to send, but the device refuses it while streaming

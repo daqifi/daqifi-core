@@ -701,7 +701,12 @@ internal sealed class ChannelControlOperations
     /// </remarks>
     private void EnsureNotStreaming()
     {
-        if (_host.IsStreaming)
+        // Judged as of when this caller's command will go out. The flow that owns the device for
+        // an operation sends straight away, ahead of anything held back behind it, so what counts
+        // is the state on the device now; any other flow's command goes out after what has been
+        // recorded, held back or not.
+        var acquiring = _host.SendsAreNeverHeldBack ? _host.IsAcquiringOnDevice : _host.IsStreaming;
+        if (acquiring)
         {
             throw new InvalidOperationException(
                 "Channels cannot be enabled or disabled while the device is streaming or logging to the SD card: the firmware refuses the change. Stop streaming first, change the channels, then start again.");
