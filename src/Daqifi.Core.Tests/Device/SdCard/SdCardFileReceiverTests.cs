@@ -204,6 +204,61 @@ public class SdCardFileReceiverTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transfer);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public async Task ReceiveAsync_NoCardReplyBehindAnEchoLongerThanTheAnswerLimit_ThrowsNotPresent(int chunkSize)
+    {
+        // Review on #1078: a 234-character name makes the echo alone longer than the 256-byte
+        // answer limit. Arriving a byte at a time, the unfinished echo must not count against it.
+        var name = new string('n', 230) + ".bin";
+        var reply = Combine(Encoding.ASCII.GetBytes($"DAQIFI> SYSTem:STORage:SD:GET \"{name}\"\r\n"), NoCardReply);
+        using var source = new ChunkedMemoryStream(reply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10)));
+
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_FileWhoseHeadingMentionsTheGetCommand_DownloadsTheContent()
+    {
+        // Review on #1078: only the echo of this file's GET is framing. A heading that mentions
+        // SD:GET is the file's first line, so the quoted answer after it is content too.
+        var content = Combine(
+            Encoding.ASCII.GetBytes("Diagnostics for SD:GET from yesterday\r\n"),
+            NoCardReply);
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), 4096);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var received = await receiver.ReceiveAsync(destination, "diag.txt", listedFileSizeBytes: content.Length);
+
+        Assert.Equal(content.Length, received);
+        Assert.Equal(content, destination.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShortContentThenTheDeadline_LeavesTheReceivedBytesInTheStream()
+    {
+        // Review on #1078: once the first line shows the reply is file content, its bytes are
+        // written then, not held until more arrive. At the deadline they must already be there.
+        var head = Encoding.ASCII.GetBytes(new string('a', 70) + "\r\n");
+        using var source = new ThenSilentStream(head);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destination, "slow.csv", timeout: TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+        Assert.Equal(head.Length - TrailingWindow, ex.BytesReceived);
+        Assert.Equal(head[..(head.Length - TrailingWindow)], destination.ToArray());
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {

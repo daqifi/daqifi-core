@@ -542,7 +542,8 @@ internal sealed class SdCardFileReceiver
                 {
                     replyHead.Write(buffer, 0, bytesRead);
 
-                    var (kind, framingBytes) = ClassifyReplyHead(replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length));
+                    var (kind, framingBytes) = ClassifyReplyHead(
+                        replyHead.GetBuffer().AsSpan(0, (int)replyHead.Length), fileName);
 
                     // Bounded however the bytes arrive: past the limit after the framing, or past
                     // the whole probe, the opening is not the answer.
@@ -743,9 +744,18 @@ internal sealed class SdCardFileReceiver
 
                 if (replyHead is null && heldContent.HoldUntilReleased)
                 {
-                    // The opening has been settled as content: from here the holder goes back to
-                    // its ordinary limit, and releases at once if it is already past it.
-                    await heldContent.StopHoldingAsync(token).ConfigureAwait(false);
+                    // The opening has been settled as content. A listed-empty transfer goes back
+                    // to its framing limit; any other writes what it holds now, so bytes known to
+                    // be file content are in the caller's stream even if the deadline comes next.
+                    if (listedEmpty)
+                    {
+                        await heldContent.StopHoldingAsync(token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        heldContent.HoldUntilReleased = false;
+                        await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
+                    }
                 }
 
                 progress?.Report(new SdCardTransferProgress { BytesReceived = totalBytesReceived, FileName = fileName });
@@ -797,13 +807,17 @@ internal sealed class SdCardFileReceiver
     /// Decides whether a reply opens with the device's "No SD Card Detected" answer (#1077).
     /// </summary>
     /// <remarks>
-    /// Only the opening counts: blank lines, the prompt and the echo of the <c>GET</c> may come
-    /// first, and the first other complete line has to be the answer. A log that quotes the same
-    /// words further in is file content, so a text file whose first line is anything else is
-    /// never mistaken for it.
+    /// Only the opening counts: blank lines, the prompt and the echo of this file's <c>GET</c> may
+    /// come first, and the first other complete line has to be the answer. A log that quotes the
+    /// same words further in is file content, so a text file whose first line is anything else is
+    /// never mistaken for it. An unfinished last line that is still on course to be the echo counts
+    /// as framing too, so a long file name arriving a byte at a time does not use up the answer's
+    /// limit before its newline arrives.
     /// </remarks>
-    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head)
+    internal static (ReplyHeadKind Kind, int FramingBytes) ClassifyReplyHead(ReadOnlySpan<byte> head, string fileName)
     {
+        // The command exactly as ScpiMessageProducer.GetSdFile sends it, which is what echo repeats.
+        var echo = $"SYSTem:STORage:SD:GET \"{fileName}\"";
         var text = Encoding.ASCII.GetString(head);
         var seenNoCardLine = false;
         var lineStart = 0;
@@ -814,6 +828,11 @@ internal sealed class SdCardFileReceiver
             var newline = text.IndexOf('\n', lineStart);
             if (newline < 0)
             {
+                if (!seenNoCardLine && IsEchoSoFar(text.AsSpan(lineStart).Trim(), echo))
+                {
+                    framingBytes = text.Length;
+                }
+
                 return (seenNoCardLine ? ReplyHeadKind.NoCardLine : ReplyHeadKind.Undecided, framingBytes);
             }
 
@@ -836,7 +855,7 @@ internal sealed class SdCardFileReceiver
                 return (ScpiErrorLine.IsMatch(line.ToString()) ? ReplyHeadKind.NoCardAnswer : ReplyHeadKind.Content, framingBytes);
             }
 
-            if (line.IsEmpty || line.Contains("SD:GET", StringComparison.OrdinalIgnoreCase))
+            if (line.IsEmpty || line.Equals(echo, StringComparison.OrdinalIgnoreCase))
             {
                 framingBytes = lineStart;
                 continue;
@@ -850,6 +869,25 @@ internal sealed class SdCardFileReceiver
 
             return (ReplyHeadKind.Content, framingBytes);
         }
+    }
+
+    /// <summary>
+    /// Whether an unfinished line can still become the echo: a start of the prompt, or the prompt
+    /// (if any) followed by a start of the echoed command.
+    /// </summary>
+    private static bool IsEchoSoFar(ReadOnlySpan<char> partial, string echo)
+    {
+        if (PromptPrefix.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (partial.StartsWith(PromptPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            partial = partial[PromptPrefix.Length..].TrimStart();
+        }
+
+        return echo.AsSpan().StartsWith(partial, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task ReleaseHeldContentIfStillLiveAsync(
