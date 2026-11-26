@@ -1934,6 +1934,27 @@ public partial class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_NoCardThenTheFile_ProgressCountsOnlyTheFile()
+    {
+        // Review on #1078: the no-card answer held for classification was reported as 48 file
+        // bytes, then progress went back to 14. Progress counts the file only, and never goes back.
+        var payload = Encoding.ASCII.GetBytes("real log bytes");
+        var host = new FakeHost
+        {
+            RawCaptureStreamFactory = () => ScriptedStream.Of(NoCardReply, Quiet, Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+        var reported = new List<long>();
+
+        await ops.DownloadSdCardFileAsync("log.bin", destination, new InlineProgress(p => reported.Add(p.BytesReceived)));
+
+        Assert.All(reported, bytes => Assert.InRange(bytes, 0, payload.Length));
+        Assert.Equal(reported.OrderBy(b => b), reported);
+        Assert.Equal(payload.Length, reported[^1]);
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_EchoedNoCardThenTheFile_NonSeekableDestinationHoldsOnlyTheFile()
     {
         // Review on #1078 (P1): the retry writes into the same stream, which cannot be rewound, so

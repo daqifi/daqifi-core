@@ -373,6 +373,64 @@ public class SdCardFileReceiverTests
         Assert.Empty(destination.ToArray());
     }
 
+    [Theory]
+    [InlineData("archive__TRANSFER_ERROR__.bin", 1)]
+    [InlineData("archive__TRANSFER_ERROR__.bin", 4096)]
+    [InlineData("archive__END_OF_FILE__.bin", 1)]
+    [InlineData("archive__END_OF_FILE__.bin", 4096)]
+    public async Task ReceiveAsync_NoCardReplyBehindTheEchoOfANameHoldingAMarker_ThrowsNotPresent(string name, int chunkSize)
+    {
+        // Review on #1078: a marker spelled inside the echoed file name is not the end of a
+        // transfer. Nothing is decided about markers until the opening is classified.
+        var reply = Combine(Encoding.ASCII.GetBytes("DAQIFI> "), ScpiMessageProducer.GetSdFile(name).GetBytes(), NoCardReply);
+        using var source = new ChunkedMemoryStream(reply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10)));
+
+        Assert.Empty(destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public async Task ReceiveAsync_EchoOfANameHoldingAMarkerThenTheFile_KeepsEveryByte(int chunkSize)
+    {
+        // The other way round: when the opening proves to be file content, the bytes held while
+        // it was classified are kept, and a marker inside the echo does not end the transfer.
+        const string name = "archive__END_OF_FILE__.bin";
+        var content = Combine(
+            ScpiMessageProducer.GetSdFile(name).GetBytes(),
+            Encoding.ASCII.GetBytes("row,1\r\nrow,2\r\n"));
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+
+        var received = await receiver.ReceiveAsync(destination, name, timeout: TimeSpan.FromSeconds(10));
+
+        Assert.Equal(content.Length, received);
+        Assert.Equal(content, destination.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4096)]
+    public async Task ReceiveAsync_NoCardReply_ReportsNoProgress(int chunkSize)
+    {
+        // Review on #1078: bytes held while the opening is classified are not file bytes yet.
+        using var source = new ChunkedMemoryStream(NoCardReply, chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+        var reported = new List<long>();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(() => receiver.ReceiveAsync(
+            destination, "log.bin", new InlineProgress(p => reported.Add(p.BytesReceived)), timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.All(reported, bytes => Assert.Equal(0, bytes));
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {
@@ -2164,4 +2222,9 @@ public class SdCardFileReceiverTests
     }
 
     #endregion
+
+    private sealed class InlineProgress(Action<SdCardTransferProgress> handler) : IProgress<SdCardTransferProgress>
+    {
+        public void Report(SdCardTransferProgress value) => handler(value);
+    }
 }

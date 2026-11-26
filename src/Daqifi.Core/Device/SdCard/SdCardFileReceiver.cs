@@ -440,6 +440,8 @@ internal sealed class SdCardFileReceiver
                 throw NoCardAnswer(heldContent, replyHead);
             }
 
+            await HoldProbedBytesAsContentAsync().ConfigureAwait(false);
+
             if (listedEmpty && !heldContent.HasReleasedContent)
             {
                 heldContent.DiscardHeldBytes();
@@ -468,6 +470,22 @@ internal sealed class SdCardFileReceiver
                 : SdCardTransferStallReason.NoDataReceived;
 
             throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason.Value, window, cause);
+        }
+
+        // An opening still being classified when the transfer ends some other way than with the
+        // no-card answer was file content after all. Its bytes join what is held back for the
+        // destination, outside the marker window as every early end leaves it, and are counted
+        // only while the transfer is still live to write them.
+        async Task HoldProbedBytesAsContentAsync()
+        {
+            if (listedEmpty || noCardAnswerSeen || replyHead is not { Length: > 0 } probed || token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var content = (int)Math.Max(0, probed.Length - MaxMarkerLength);
+            await heldContent.WriteAsync(probed.GetBuffer(), 0, content, token).ConfigureAwait(false);
+            totalBytesReceived += content;
         }
 
         try
@@ -542,6 +560,12 @@ internal sealed class SdCardFileReceiver
 
                 replyStarted = true;
 
+                // What this iteration hands to the marker scan and the destination: the read, or,
+                // on the read that settles the opening as content, every byte held while it was
+                // being classified.
+                var data = buffer;
+                var count = bytesRead;
+
                 if (replyHead is not null)
                 {
                     replyHead.Write(buffer, 0, bytesRead);
@@ -568,9 +592,34 @@ internal sealed class SdCardFileReceiver
                             break;
                         case ReplyHeadKind.Content:
                             noCardAnswerSeen = false;
+                            data = replyHead.ToArray();
+                            count = data.Length;
                             replyHead.Dispose();
                             replyHead = null;
                             break;
+                    }
+
+                    if (replyHead is not null)
+                    {
+                        // Still being classified, so nothing about these bytes is decided yet:
+                        // they are not scanned for a marker (one can be spelled inside the echoed
+                        // file name), not written, and not reported as progress (#1078).
+                        continue;
+                    }
+
+                    // The echo and blank lines ahead of the content are framing: kept with the
+                    // file as they always were, but never where a terminal marker is looked for.
+                    if (framingBytes > 0)
+                    {
+                        await contentTarget.WriteAsync(data, 0, framingBytes, token).ConfigureAwait(false);
+                        totalBytesReceived += framingBytes;
+                        data = data[framingBytes..];
+                        count = data.Length;
+                    }
+
+                    if (count == 0)
+                    {
+                        continue;
                     }
                 }
 
@@ -585,12 +634,12 @@ internal sealed class SdCardFileReceiver
                     var bytesStillOwed = listedSize - totalBytesReceived;
                     eofFloor = bytesStillOwed <= 0
                         ? 0
-                        : (int)Math.Min(bytesStillOwed, trailingCount + bytesRead);
+                        : (int)Math.Min(bytesStillOwed, trailingCount + count);
                 }
 
                 // Check if a terminal marker is contained in or spans the new data
                 var (foundMarker, markerPosition, isTransferError, subFloorEofPosition) =
-                    FindTerminalMarker(trailingBytes, trailingCount, buffer, bytesRead, eofFloor);
+                    FindTerminalMarker(trailingBytes, trailingCount, data, count, eofFloor);
 
                 if (subFloorEofPosition >= 0 && shortReplyContentLength is null)
                 {
@@ -630,7 +679,7 @@ internal sealed class SdCardFileReceiver
                         // Write the portion of new data before the marker
                         if (newDataFileBytes > 0)
                         {
-                            await contentTarget.WriteAsync(buffer, 0, newDataFileBytes, token)
+                            await contentTarget.WriteAsync(data, 0, newDataFileBytes, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += newDataFileBytes;
                         }
@@ -674,9 +723,9 @@ internal sealed class SdCardFileReceiver
                     // A marker at or past that size is not a terminator when content follows it.
                     // Confirm both sized and unsized transfers before reporting a complete file.
                     await ConfirmMarkerEndedTheFileAsync(
-                        buffer,
+                        data,
                         markerPosition + EndOfFileMarker.Length - trailingCount,
-                        bytesRead,
+                        count,
                         fileName,
                         totalBytesReceived,
                         cancellationToken,
@@ -696,7 +745,7 @@ internal sealed class SdCardFileReceiver
 
                 // No terminal marker found — combine trailing + new data, write
                 // everything except the last MaxMarkerLength bytes (the new trailing window).
-                var combinedLen = trailingCount + bytesRead;
+                var combinedLen = trailingCount + count;
 
                 if (combinedLen >= MaxMarkerLength)
                 {
@@ -718,7 +767,7 @@ internal sealed class SdCardFileReceiver
                         var fromNew = safeCount - fromTrailing;
                         if (fromNew > 0)
                         {
-                            await contentTarget.WriteAsync(buffer, 0, fromNew, token)
+                            await contentTarget.WriteAsync(data, 0, fromNew, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += fromNew;
                         }
@@ -726,7 +775,7 @@ internal sealed class SdCardFileReceiver
 
                     // Build the new trailing window from the last MaxMarkerLength bytes of [trailing + new]
                     var newTrailingCount = MaxMarkerLength;
-                    var fromNewData = Math.Min(bytesRead, newTrailingCount);
+                    var fromNewData = Math.Min(count, newTrailingCount);
                     var fromTrailingData = newTrailingCount - fromNewData;
 
                     if (fromTrailingData > 0)
@@ -736,7 +785,7 @@ internal sealed class SdCardFileReceiver
 
                     if (fromNewData > 0)
                     {
-                        Array.Copy(buffer, bytesRead - fromNewData, trailingBytes, fromTrailingData, fromNewData);
+                        Array.Copy(data, count - fromNewData, trailingBytes, fromTrailingData, fromNewData);
                     }
 
                     trailingCount = newTrailingCount;
@@ -744,7 +793,7 @@ internal sealed class SdCardFileReceiver
                 else
                 {
                     // Combined data is still shorter than the marker — just accumulate
-                    Array.Copy(buffer, 0, trailingBytes, trailingCount, bytesRead);
+                    Array.Copy(data, 0, trailingBytes, trailingCount, count);
                     trailingCount = combinedLen;
                 }
 
@@ -778,6 +827,7 @@ internal sealed class SdCardFileReceiver
             // as they did before the hold existed. A no-card answer has been discarded already.
             try
             {
+                await HoldProbedBytesAsContentAsync().ConfigureAwait(false);
                 await ReleaseHeldContentIfStillLiveAsync(heldContent, token, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
